@@ -1,0 +1,4 @@
+# Phase 0 uses the Python standard library only.
+# Do not add py-clob-client (archived) or any SDK that can place orders.
+# Phase 0 does not read POLY_PRIVATE_KEY, POLY_API_KEY, POLY_API_SECRET,
+# or POLY_API_PASSPHRASE.
