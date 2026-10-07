@@ -1,0 +1,9 @@
+mode = "paper"
+live_enabled = false
+max_order_pct = 0.01
+max_daily_loss_pct = 0.03
+max_open_positions = 5
+min_liquidity_usd = 10000
+max_spread = 0.04
+kelly_fraction = 0.15
+require_human_gate = true
