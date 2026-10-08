@@ -3,7 +3,7 @@
 Use this when a Grok Bot chat gets long. Start a new chat. Do not carry the old transcript.
 Read this file, `docs/PHASE0_RUN.md`, and `config/risk.toml`. Then do one task below.
 
-Phase 0 is on `main` at `65a08e1`. Scanner, public book, and gated paper ledger already run.
+Phase 0 work lands on `dev` (branch from `origin/dev`; PRs use base `dev`; Poly指挥 opens dev→main PRs). Scanner, public book, and gated paper ledger already run.
 `live_enabled` is false. Do not change that. Do not read `.env`. Do not place orders.
 
 ## How to split chats

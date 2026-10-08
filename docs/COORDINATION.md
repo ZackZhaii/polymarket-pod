@@ -29,7 +29,7 @@ ROLES.md 仅作历史参考；ROLES 独有的 Researcher / ArbMerge / CryptoPuls
 | Poly做市 | Maker | 纸面报价 signal |
 | Poly风控 | RiskGate | veto |
 | Poly哨兵 | Sentinel | halt（只撤本地纸面报价） |
-| Poly执行 | Executor | 只写本地 paper ledger，必须先有 RiskGate allow；Phase 0 不新增 fill |
+| Poly执行 | Executor | 只写本地 paper ledger，必须先有 RiskGate allow；Phase 0 不新增 fill。唯一允许的例外：`paper_ledger.run_self_check` 写入的那一条带标签的假设 fill（strategy `phase0-gate-test`、market `phase0-self-check:hypothetical-allow`、`hypothetical=true`、`counts_toward_risk=false`，`new_fills` 必须为 1），只用于证明 RiskGate 的 allow 路径；不是预测，不是收益；它要先过仓位和亏损上限检查（Task M），但本身不计入之后的仓位与亏损统计 |
 | Poly技能 | （ROSTER 无；工具维护） | 维护只读 skill：market-scan / paper-fill / calibration-report |
 | Poly反思 | Reflector | ≤3 条/UTC 日提案，不改 risk.toml |
 ROSTER 中暂无 bot 的角色：Endgame（main 已有 `src/endgame.py` 信号桩）、SportsDevig（main 已有 `src/sports_devig.py` 信号桩，Task H）、Reconciler。
