@@ -12,7 +12,7 @@ import src.paper_ledger as paper_ledger
 from src.podlib import PAPER_EQUITY_USD, RISK_PATH, load_risk, utc_now
 from src.risk_gate import Intent, evaluate, risk_caps
 
-FRESH = {"open_positions": 0, "market_already_open": False, "daily_loss_usd": 0.0}
+FRESH = {"open_positions": 0, "market_already_open": False, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 def _intent(**overrides: object) -> Intent:
@@ -34,12 +34,12 @@ def _intent(**overrides: object) -> Intent:
 
 
 def _full_state(cfg: dict) -> dict:
-    return {"open_positions": int(cfg["max_open_positions"]), "market_already_open": False, "daily_loss_usd": 0.0}
+    return {"open_positions": int(cfg["max_open_positions"]), "market_already_open": False, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 def _loss_state(cfg: dict) -> dict:
     return {"open_positions": 0, "market_already_open": False,
-            "daily_loss_usd": PAPER_EQUITY_USD * float(cfg["max_daily_loss_pct"])}
+            "daily_loss_usd": PAPER_EQUITY_USD * float(cfg["max_daily_loss_pct"]), "recent_fills": [], "own_quotes": []}
 
 
 def test_hypothetical_happy_path_still_allows():
@@ -181,6 +181,7 @@ def test_ledger_self_check_intent_is_capped_by_real_fills(tmp_path, monkeypatch)
     ]
     ledger.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     monkeypatch.setattr(paper_ledger, "PAPER_PATH", ledger)
+    monkeypatch.setattr(paper_ledger, "QUOTES_PATH", tmp_path / "quotes.jsonl")
     market = "phase0-self-check:hypothetical-allow"
     state = paper_ledger.load_state(market)
     assert state["open_positions"] == int(cfg["max_open_positions"])

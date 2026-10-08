@@ -277,6 +277,25 @@ Finish when both read book time the same way and `python -m pytest` passes with 
   `ts` and is never copied into `book_ts`. No usable timestamp: the snapshot is still recorded with `book_ts=null`, the
   reason and a stderr line, and RiskGate vetoes `missing_book_ts` on it (fail closed).
 
+## Task S — structured wash/self-trade detection; a clean strategy name no longer gets through
+
+Status: done.
+
+Assigned by Poly指挥, done by grok-bot. Risk-gap backlog item 1: RiskGate caught wash/self-trade only by strategy-name
+keywords (`wash`, `self-trade`, `self_trade`, `spoof`, `layering`), so a clean name trading against itself passed.
+
+Finish when RiskGate vetoes structural wash/self-trade on top of the keyword ban and `python -m pytest` passes with no
+network and no credentials.
+
+- `src/wash_detect.py`: `wash_problems(...)` is pure and offline. Leg = market + token_id (a missing token_id is treated as
+  possibly the same token). The two tokens of an arb pair are different legs and are not flagged (Task P).
+- `cross_side_same_leg`: an uncancelled own paper quote (`quotes.jsonl` status `open`) rests on the opposite side of the
+  same leg. No time window. `self_trade_structure`: `Intent.counterparty` is our own account, a pod role or one of our strategies.
+- `wash_same_market` (hardening): an own paper fill on the opposite side of the same leg within `WASH_WINDOW_S = 300` s.
+  300 s is a code constant, not a risk.toml key; the Operator decides whether it moves. It also blocks closing a leg within 300 s.
+- Fail closed: missing history (`recent_fills` / `own_quotes`, supplied by `paper_ledger.load_state`) is `wash_input_missing`;
+  malformed rows, an unknown quote status, a bad `now`/market or an unusable counterparty is `wash_input_invalid`. Both veto.
+
 ## Paste this into a new chat
 
 ```text
@@ -288,8 +307,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task R done by grok-bot (assigned by Poly指挥). `paper_cycle` judges book age with `book_staleness`, like RiskGate.
-- Future, missing or unparseable book `ts` is now stale in `paper_cycle` (a future book used to count as fresh). Exactly 120 s is fresh.
-- `book.record` puts the book's own /book `timestamp` on the bus as `book_ts` (ISO UTC). None usable: `book_ts=null` + reason; RiskGate vetoes.
-- `python -m pytest` passed offline (397 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.
+- 2026-10-09: Task S done by grok-bot (assigned by Poly指挥). RiskGate adds structured wash/self-trade checks on top of the name keywords.
+- Same leg: own uncancelled opposite quote vetoes `cross_side_same_leg`; own opposite fill within 300 s vetoes `wash_same_market`.
+- Own account/role/strategy as counterparty vetoes `self_trade_structure`. Missing or malformed history vetoes (fail closed).
+- `python -m pytest` passed offline (445 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. No next todo. `WASH_WINDOW_S` = 300 s awaits Operator review. A single-leg fill is directional exposure, not locked profit.

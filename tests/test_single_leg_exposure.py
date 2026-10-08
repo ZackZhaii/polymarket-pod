@@ -44,6 +44,7 @@ def _ledger(tmp_path, monkeypatch, rows: list[dict]) -> None:
     path = tmp_path / "paper.jsonl"
     path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     monkeypatch.setattr(paper_ledger, "PAPER_PATH", path)
+    monkeypatch.setattr(paper_ledger, "QUOTES_PATH", tmp_path / "quotes.jsonl")
 
 
 def _intent(**overrides: object) -> Intent:

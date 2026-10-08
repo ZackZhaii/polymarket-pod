@@ -22,6 +22,7 @@ from src.podlib import (  # noqa: E402
     MARKETS_PATH,
     PAPER_EQUITY_USD,
     PAPER_PATH,
+    QUOTES_PATH,
     RISK_PATH,
     append_jsonl,
     bus,
@@ -87,6 +88,8 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     open_positions counts open legs, not markets. leg_already_open is True only
     when this exact token already has an open position; another leg of the same
     market does not count. exposure_usd is the gross sum over open legs.
+    recent_fills (every ledger row) and own_quotes (every paper quote row) are the
+    history RiskGate's structured wash / self-trade check reads (Task S).
     """
     rows = read_jsonl(PAPER_PATH)
     legs = leg_positions(rows)
@@ -102,6 +105,8 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
         "exposure_usd": sum(leg["exposure_usd"] for leg in legs.values()),
         "leg_exposure_usd": 0.0 if own is None else own["exposure_usd"],
         "daily_loss_usd": daily_fees,
+        "recent_fills": rows,
+        "own_quotes": read_jsonl(QUOTES_PATH),
     }
 
 
