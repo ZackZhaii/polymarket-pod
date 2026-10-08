@@ -86,6 +86,16 @@ Finish when `src/quant.py` scores a local fixture with Brier `mean((p-y)^2)`, em
 - No network and no credentials.
 - The proposal does not edit `config/risk.toml` or any size cap.
 
+## Task H — SportsDevig signal only
+
+Status: done.
+
+Finish when `src/sports_devig.py` removes the overround from a two-way decimal-odds fixture and emits a signal only if fair probability exceeds market price plus slippage.
+
+- Signal only. No fill, no quote, and no order.
+- A positive edge is not locked profit. One leg is directional.
+- No network. Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -97,8 +107,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: Task G done by grok-build-local. `src/quant.py` scores a local fixture with Brier `mean((p-y)^2)`.
-- At most one proposal. No fill, no order, no network. `config/risk.toml` unchanged, `live_enabled=false`.
-- `python -m pytest` passed offline. The score is not a promise of profit.
+- 2026-10-08: Task H done by grok-web. SportsDevig de-vigs two-way odds and emits a signal only.
+- No fill, no quote, no order, no network. Edge is not locked profit.
+- `python -m pytest` passed offline. `config/risk.toml` unchanged, `live_enabled=false`.
 - No todo remains. Do not add a live-trading task.
 - Next code task starts only when a human adds one here and in `docs/loop/state.json`.

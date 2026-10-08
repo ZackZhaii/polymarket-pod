@@ -24,6 +24,14 @@
       "title": "Offline Brier proposal",
       "finish": "src/quant.py scores a local fixture with Brier mean((p-y)^2) and emits at most one proposal. It does not edit config/risk.toml or any size cap. pytest passes offline. No network and no credentials.",
       "done_at": "2026-10-08T08:30:01Z"
+    },
+    {
+      "id": "H",
+      "status": "done",
+      "title": "SportsDevig signal only",
+      "finish": "src/sports_devig.py removes the overround from a two-way decimal-odds fixture and emits a signal only if fair probability exceeds market price plus slippage. No fill, no order, no network. config/risk.toml is unchanged.",
+      "done_at": "2026-10-08T09:10:00Z",
+      "surface": "grok-web"
     }
   ]
 }
