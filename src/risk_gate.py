@@ -2,6 +2,8 @@
 
 Vetoes before any simulated fill. A missing, unparseable, future or stale
 book timestamp vetoes too (src/book_staleness.py, 120 s code default).
+max_open_positions and max_daily_loss apply to every intent, hypothetical ones
+included; a missing or invalid cap or state value vetoes.
 Does not place orders, sign messages, read secrets, or edit config/risk.toml.
 """
 from __future__ import annotations
@@ -81,6 +83,42 @@ def gate_thresholds(cfg: dict) -> dict[str, float]:
     return checked
 
 
+def _cap_number(cfg: dict, key: str) -> float:
+    if key not in cfg:
+        raise RuntimeError(f"risk.toml missing cap key: {key}")
+    number = _finite_number(cfg[key])
+    if number is None:
+        raise RuntimeError(f"risk.toml cap key must be a finite number: {key}")
+    return number
+
+
+def risk_caps(cfg: dict) -> dict[str, float]:
+    """Return max_open_positions and max_daily_loss_pct, or raise RuntimeError naming the key.
+
+    Same fail-closed rule as gate_thresholds: missing, bool, string, None, inf or nan
+    raises, and there is no default. max_open_positions must be a whole number >= 0;
+    max_daily_loss_pct must be > 0. evaluate turns the error into invalid_risk_cap.
+    """
+    positions = _cap_number(cfg, "max_open_positions")
+    if positions < 0 or not positions.is_integer():
+        raise RuntimeError("risk.toml cap key out of range: max_open_positions must be a whole number >= 0")
+    loss_pct = _cap_number(cfg, "max_daily_loss_pct")
+    if loss_pct <= 0:
+        raise RuntimeError("risk.toml cap key out of range: max_daily_loss_pct must be > 0")
+    return {"max_open_positions": int(positions), "max_daily_loss_pct": loss_pct}
+
+
+def _risk_state(state: dict) -> tuple[int, float] | None:
+    """Return (open_positions, daily_loss_usd), or None when either is missing or invalid."""
+    positions = _finite_number(state.get("open_positions"))
+    loss = _finite_number(state.get("daily_loss_usd"))
+    if positions is None or positions < 0 or not positions.is_integer():
+        return None
+    if loss is None or loss < 0:
+        return None
+    return int(positions), loss
+
+
 def evaluate(
     intent: Intent,
     cfg: dict,
@@ -94,6 +132,10 @@ def evaluate(
     The book must be fresh: book_ts present, parseable, not in the future and at most
     max_book_age_s old at ``now`` (default: the clock). Otherwise it vetoes; it never
     raises for this. max_book_age_s is a code default, not a risk.toml key.
+
+    max_open_positions and max_daily_loss are checked for every intent; hypothetical=True
+    no longer skips them. A missing or invalid cap (invalid_risk_cap) or state value
+    (invalid_risk_state) vetoes instead of reading 0.
 
     Size is the 1% clip. kelly_fraction is not applied and cannot increase size.
     A single-leg fill is directional exposure, not risk-free arbitrage.
@@ -174,13 +216,21 @@ def evaluate(
     if notional <= 0:
         reasons.append("zero_notional")
 
-    if not intent.hypothetical:
-        open_positions = int(state.get("open_positions", 0))
-        already_open = bool(state.get("market_already_open"))
-        if open_positions >= int(cfg.get("max_open_positions", 0)) and not already_open:
+    # Caps apply to hypothetical intents too (backlog item 4); there is no bypass flag.
+    try:
+        caps = risk_caps(cfg)
+    except RuntimeError:
+        reasons.append("invalid_risk_cap")
+        caps = None
+    current = _risk_state(state)
+    if current is None:
+        reasons.append("invalid_risk_state")
+    if caps is not None and current is not None:
+        open_positions, daily_loss = current
+        already_open = state.get("market_already_open") is True
+        if open_positions >= caps["max_open_positions"] and not already_open:
             reasons.append("max_open_positions")
-        daily_loss = float(state.get("daily_loss_usd", 0.0))
-        if PAPER_EQUITY_USD > 0 and daily_loss / PAPER_EQUITY_USD >= float(cfg.get("max_daily_loss_pct", 0.0)):
+        if PAPER_EQUITY_USD <= 0 or daily_loss / PAPER_EQUITY_USD >= caps["max_daily_loss_pct"]:
             reasons.append("max_daily_loss")
 
     fee_usd = notional * intent.fee_rate if notional > 0 else 0.0

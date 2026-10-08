@@ -168,6 +168,24 @@ and `python -m pytest` passes with no network and no credentials.
 - `MAX_BOOK_AGE_S = 120` is a code constant. It is not read from `config/risk.toml`; moving it there is a proposal for the Operator.
 - `paper_ledger` passes `book_ts` through (self-check stamps now; CLI `--book-ts`, missing vetoes). Do not edit `config/risk.toml`.
 
+## Task M — hypothetical intents no longer skip the position and daily-loss caps
+
+Status: done.
+
+Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 4: `hypothetical=True` skipped `max_open_positions`
+and `max_daily_loss` in `risk_gate.evaluate` (gate-test strategy only, but still a bypass).
+
+Finish when both caps apply to every intent, a missing or invalid cap or state value vetoes fail closed,
+and `python -m pytest` passes with no network and no credentials.
+
+- `risk_gate.evaluate` drops the `if not intent.hypothetical` branch. Hypothetical and real intents get the same cap reasons;
+  an already-open market is still exempt from the position cap.
+- `risk_caps(cfg)` reads `max_open_positions` (whole number >= 0) and `max_daily_loss_pct` (> 0) with no default.
+  Missing, bool, string, None, inf or nan gives `invalid_risk_cap`.
+- State `open_positions` (whole number >= 0) and `daily_loss_usd` (>= 0) missing or invalid gives `invalid_risk_state`
+  instead of reading 0. `paper_ledger.load_state` always supplies both.
+- No new threshold. `config/risk.toml` is unchanged; the keys it already has are now enforced for hypothetical intents too.
+
 ## Paste this into a new chat
 
 ```text
@@ -179,8 +197,8 @@ git pull 之后只领取第一件 todo。做完释放，开 PR，不要推 main�
 
 ## Latest
 
-- 2026-10-09: Task L done by grok-bot (self-picked, backlog item 2). `src/book_staleness.py` flags a missing, unparseable, future or >120 s old book timestamp.
-- RiskGate wires it in fail closed: `Intent.book_ts` missing or bad vetoes with `missing_book_ts` / `invalid_book_ts` / `future_book_ts` / `stale_book`. 120 s is a code constant, not a risk.toml key.
-- Task K accepted on main 663ba8a: public scanner hit SSL EOF after retries at scanned=5200 and exited 3 (`stop=network_error`), nothing written, no crash.
-- `python -m pytest` passed offline (151 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task M done by grok-bot (self-picked, backlog item 4). `hypothetical=True` no longer skips `max_open_positions` / `max_daily_loss`.
+- A missing or invalid cap gives `invalid_risk_cap`; missing or invalid `open_positions` / `daily_loss_usd` gives `invalid_risk_state`. Both veto.
+- Task L accepted on main cd4d5fd (PR #8 and #9 merged): 151 passed offline, F-L done. Backlog 11 marked handled by Task J.
+- `python -m pytest` passed offline (190 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.

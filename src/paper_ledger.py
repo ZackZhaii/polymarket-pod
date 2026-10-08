@@ -134,7 +134,11 @@ def _intent(**kwargs: Any) -> Intent:
 
 
 def run_self_check(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Prove vetoes fire, and that one labeled hypothetical fill needs allow."""
+    """Prove vetoes fire, and that one labeled hypothetical fill needs allow.
+
+    The hypothetical allow is checked against the real fills' open positions and daily
+    loss like any other intent (Task M), so a full book vetoes it.
+    """
     before = len(read_jsonl(PAPER_PATH))
     drifted = dict(cfg)
     drifted["live_enabled"] = True

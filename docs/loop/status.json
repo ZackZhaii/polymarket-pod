@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T17:35:38Z",
+  "ts": "2026-10-08T17:47:34Z",
   "live_enabled": false,
-  "last_done": "L",
+  "last_done": "M",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "L (book staleness check, RiskGate vetoes a missing or stale book_ts, 120 s code default) done by grok-bot in its PR. F-K done on main. No open todo. No live gate."
+  "note": "M (hypothetical intents no longer skip max_open_positions / max_daily_loss; missing or invalid cap or state vetoes) done by grok-bot in its PR. F-L done on main. No open todo. No live gate."
 }

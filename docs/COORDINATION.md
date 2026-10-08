@@ -77,13 +77,13 @@ I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。�
 1. 自成交/对敲检测只靠策略名关键词（wash / self-trade / spoof / layering），没有基于成交对手或同市场双向挂单的检测。
 2. ~~`risk_gate.py` 没有盘口陈旧检查（不看 book 时间戳）。~~ **Task L 处理**：`Intent.book_ts` 缺失、无法解析、在未来或超过 120 s 一律 veto（`src/book_staleness.py`）。120 s 是代码常量，不在 risk.toml；是否写进 risk.toml 由 Operator 决定。
 3. ROSTER 写的 category caps（类别上限）既不在 risk.toml，也不在代码里。
-4. `hypothetical=True` 会跳过 max_open_positions 和 max_daily_loss 检查（仅 phase0-gate-test 可用，但仍是旁路）。
+4. ~~`hypothetical=True` 会跳过 max_open_positions 和 max_daily_loss 检查（仅 phase0-gate-test 可用，但仍是旁路）。~~ **Task M 处理**：两个上限对所有 intent 生效，hypothetical 不再旁路；上限缺失或无效记 `invalid_risk_cap`，state 缺失或无效记 `invalid_risk_state`，一律 veto。未改 risk.toml。
 5. 单边套利成交必须计为方向敞口：ledger/risk 需按单腿记净头寸，不能按 "套利对" 抵消。
 6. risk.toml 没有 `min_edge` 参数（Forecaster 临时用了 0.02）；现在只要求 edge > 0。
 7. risk_gate 不使用 `kelly_fraction`，所有单子一律 1% 封顶（这是保守的，但参数形同虚设）。
 8. scanner 没有最短剩余到期时间规则（今天到期的盘也会通过；2026-10-08 实跑 8,409 个通过里有 944 个剩余不到 1 天）。
 9. Sentinel 提议陈旧阈值 120s / 连续 2 次失败才报警（30s 会误报）；risk.toml 与代码尚无此参数。
 10. Endgame 需要未过滤数据：scanner 排除 >0.97 后，0.98–0.99 区间市场不会进入 scanner 输出。
-11. （审查新增）`risk_gate.evaluate` 对缺失的 `min_liquidity_usd` / `max_spread` 用默认值 0 / 1，属于缺键放行（fail-open）；scanner 新代码已是缺键报错，两者不一致。
+11. ~~（审查新增）`risk_gate.evaluate` 对缺失的 `min_liquidity_usd` / `max_spread` 用默认值 0 / 1，属于缺键放行（fail-open）；scanner 新代码已是缺键报错，两者不一致。~~ **Task J 处理**（PR #3）：缺键或非有限数值一律 `invalid_gate_threshold` veto，不再用默认值。
 12. （审查新增）Forecaster 总线名与 ROSTER 的 NewsForecaster 不一致。
 13. ~~scanner 阈值接受布尔和无穷（`max_spread = true` 读成 1.0，`1e999` 读成 inf）。~~ **已在 PR #2（Task I）修复**：只接受有限的 int/float，bool、字符串、inf、nan 都报错。
