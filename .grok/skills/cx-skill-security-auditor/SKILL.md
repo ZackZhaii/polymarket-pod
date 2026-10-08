@@ -135,6 +135,11 @@ The upstream git-URL mode (`git clone` into a temp dir, then delete it) was remo
 network calls and writes nothing. Fetching a remote skill to audit it 需 Operator 批准; after approval, put the
 files in a local directory yourself and pass that path.
 
+Containment and errors (Task V): an entry under the target that resolves outside it (a symlink or a
+junction, compared by resolved path components, never a string prefix, so `target-evil/` is not inside
+`target/`) is never read or descended into. It is listed under `skipped` and reported as a CRITICAL
+finding. Any read, decode, stat or walk error is listed under `errors` and makes the verdict FAIL.
+
 ### CI/CD Integration
 
 ```yaml

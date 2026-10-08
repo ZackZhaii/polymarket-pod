@@ -339,6 +339,28 @@ value vetoes (fail closed), and `python -m pytest` passes with no network and no
 - Tests: `tests/test_non_finite_params.py`, NaN, +inf and -inf for each parameter (fee_rate NaN and inf included).
 - No threshold change. Do not edit `config/risk.toml`.
 
+## Task V — skill security auditor: resolved-path containment; outside entries skipped and reported; errors are FAIL
+
+Status: done.
+
+Approved by Poly指挥 (security fix, ahead of Endgame #10), done by grok-bot. The auditor checked containment with
+`str(target).startswith(str(root))`, so a symlink to a sibling such as `target-evil/.env` counted as inside `target`.
+Files behind outside links were still read, and read, stat and decode errors were swallowed, so the verdict could stay PASS.
+
+Finish when containment uses resolved paths, outside entries are never read, any error is FAIL, and `python -m pytest`
+passes with no network and no credentials.
+
+- `.grok/skills/cx-skill-security-auditor/scripts/skill_security_auditor.py`: `is_within` resolves both paths (symlinks
+  included) and compares whole components with `os.path.commonpath` (normcased); another drive or an unresolvable path is outside.
+- `collect_items` walks once without following directory links. An entry that resolves outside the target (symlink, or
+  junction on Windows) is never read or descended into, is listed under `skipped` and is a CRITICAL finding
+  (`FS-SYMLINK`, or `FS-OUTSIDE`). Every scan step (filesystem, code, prompt injection, dependencies) uses that list.
+- `read_text_checked` reads bytes and decodes strict UTF-8. Any read, decode, stat or walk error is listed under `errors`
+  (JSON `errors`, `summary.errors`) and makes the verdict FAIL (exit 1). Nothing is swallowed into a PASS.
+- Tests: `tests/test_skill_auditor_containment.py` covers a prefix sibling, symlink escapes (skipped cleanly where symlinks are
+  unavailable), read/decode/stat errors that turn into FAIL, and CLI exit codes. All 39 existing skills keep identical findings and verdicts.
+- The deny list, `.grok/config.toml` and CI are unchanged. No threshold change. Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -350,8 +372,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task U done by grok-bot (approved by Poly指挥). NaN/+inf/-inf in RiskGate inputs vetoes `non_finite_<field>`; `fee_rate=NaN` can no longer skip `non_positive_edge`.
-- Non-numbers veto `invalid_<field>`; a bad `max_order_pct` vetoes `invalid_max_order_pct`. Non-finite ledger shares/notional/fee make the risk state invalid (veto).
-- `maker.quote` and `sports_devig` reject non-finite inputs. Finite inputs behave exactly as before; nothing was loosened.
-- `python -m pytest` passed offline (541 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. No next todo. Endgame #10 waits for a free slot. `WASH_WINDOW_S` (Task S) awaits the user's decision.
+- 2026-10-09: Task V done by grok-bot (approved by Poly指挥). The skill auditor checks containment by resolved path, never a string prefix (`target-evil/` is not inside `target/`).
+- Entries resolving outside the target are never read, are listed under `skipped` and are CRITICAL. Any read/decode/stat/walk error is listed under `errors` and is FAIL.
+- All 39 existing skills keep identical findings and verdicts. The deny list, `.grok/config.toml` and CI are unchanged.
+- `python -m pytest` passed offline (555 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. No next todo. Endgame #10 next in its own PR. `WASH_WINDOW_S` (Task S) awaits the user's decision.

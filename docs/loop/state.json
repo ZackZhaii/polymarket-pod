@@ -150,6 +150,15 @@
       "note": "Approved by Poly指挥 (security fix, queued before Endgame #10); done by grok-bot. Pure tightening: every check that vetoed before still vetoes; finite inputs behave exactly as before.",
       "done_at": "2026-10-08T20:25:02Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "V",
+      "status": "done",
+      "title": "Skill security auditor: resolved-path containment (no string prefix), outside entries skipped and reported, any read/decode error is FAIL",
+      "finish": ".grok/skills/cx-skill-security-auditor/scripts/skill_security_auditor.py checks containment by resolved path components (os.path.commonpath on resolved, normcased paths), never a string prefix, so target-evil/.env is not inside target. It walks without following directory links; an entry that resolves outside the target (symlink or junction) is never read or descended into, is listed under skipped and is a CRITICAL finding. Any read, decode (strict UTF-8), stat or walk error is listed under errors and makes the verdict FAIL (exit 1). Offline tests: prefix sibling, symlink escapes (skipped cleanly where symlinks are unavailable), read/decode/stat errors to FAIL, CLI exit codes. Existing skills' findings and verdicts unchanged. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold changes.",
+      "note": "Approved by Poly指挥 (security fix, ahead of Endgame #10); done by grok-bot. Pure tightening: an outside entry or an error can only add a finding or turn the verdict to FAIL.",
+      "done_at": "2026-10-08T20:28:55Z",
+      "surface": "grok-bot"
     }
   ]
 }

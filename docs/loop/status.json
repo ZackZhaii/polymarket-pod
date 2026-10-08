@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T20:25:02Z",
+  "ts": "2026-10-08T20:28:55Z",
   "live_enabled": false,
-  "last_done": "U",
+  "last_done": "V",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "U (non-finite numbers veto: NaN/inf RiskGate inputs veto non_finite_<field>, fee_rate=NaN can no longer skip the edge check; bad max_order_pct vetoes; non-finite ledger shares/notional/fee make the risk state invalid; maker and sports_devig reject non-finite inputs) done by grok-bot in its PR. F-T done on dev. Endgame #10 waits for a free slot. WASH_WINDOW_S (S) awaits the user's decision. No open todo. No live gate."
+  "note": "V (skill security auditor: containment by resolved path, never a string prefix; entries resolving outside the target are skipped, never read, and reported CRITICAL; any read/decode/stat/walk error is FAIL) done by grok-bot in its PR. F-U done on dev. Endgame #10 next in its own PR. WASH_WINDOW_S (S) awaits the user's decision. No open todo. No live gate."
 }
