@@ -361,6 +361,26 @@ passes with no network and no credentials.
   unavailable), read/decode/stat errors that turn into FAIL, and CLI exit codes. All 39 existing skills keep identical findings and verdicts.
 - The deny list, `.grok/config.toml` and CI are unchanged. No threshold change. Do not edit `config/risk.toml`.
 
+## Task X — RiskGate minimum edge: MIN_EDGE = 0.02 (code constant), edge_below_min veto (backlog #6)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. RiskGate only required edge > 0. `risk.toml` has no `min_edge`; the 0.02 bar was the
+Forecaster's temporary one (COORDINATION #6, note added in 4568f05; no code in the history ever enforced it).
+
+Finish when an edge below 0.02 vetoes, `non_positive_edge` stays, `risk.toml` is unchanged, and `python -m pytest`
+passes with no network and no credentials.
+
+- `src/risk_gate.py`: `MIN_EDGE = 0.02` is a code constant, not a `risk.toml` key. It is a threshold proposal for the user to decide
+  at M2 (like `MIN_HOURS_TO_EXPIRY` and `WASH_WINDOW_S`). A config `min_edge` cannot lower it.
+- `0 < edge < MIN_EDGE` vetoes `edge_below_min`. `edge <= 0` still vetoes `non_positive_edge` only (not doubled).
+- 0.02 is inclusive: an edge of exactly 0.02 passes. `EDGE_TOLERANCE = 1e-12` only absorbs float rounding
+  (0.425 − 0.405 = 0.01999…96). The edge is after slippage and fees.
+- Non-finite or missing inputs fail closed as in Task U (`non_finite_<field>` / `invalid_<field>`, edge −1.0).
+- Tests: `tests/test_min_edge.py` covers 0.0199 / 0.02 / 0.05 on buy and sell, fees counted, NaN/inf/None, and that config cannot lower it.
+  A trace of every `evaluate` call in the suite found no existing fixture with `0 < edge < 0.02`, so no fixture changed.
+- Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -372,8 +392,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task V done by grok-bot (approved by Poly指挥). The skill auditor checks containment by resolved path, never a string prefix (`target-evil/` is not inside `target/`).
-- Entries resolving outside the target are never read, are listed under `skipped` and are CRITICAL. Any read/decode/stat/walk error is listed under `errors` and is FAIL.
-- All 39 existing skills keep identical findings and verdicts. The deny list, `.grok/config.toml` and CI are unchanged.
-- `python -m pytest` passed offline (555 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. No next todo. Endgame #10 next in its own PR. `WASH_WINDOW_S` (Task S) awaits the user's decision.
+- 2026-10-09: Task X done by grok-bot (approved by Poly指挥). RiskGate requires edge >= `MIN_EDGE` (0.02, inclusive); `0 < edge < 0.02` vetoes `edge_below_min`.
+- `non_positive_edge` is kept for edge <= 0. Non-finite or missing inputs fail closed (Task U). A config `min_edge` cannot lower the bar.
+- `MIN_EDGE` is a code constant, not in `risk.toml`; it awaits the user's decision at M2 (with `WASH_WINDOW_S` and `MIN_HOURS_TO_EXPIRY`).
+- `python -m pytest` passed offline (583 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. No next todo. A single-leg fill is directional exposure, not locked profit.

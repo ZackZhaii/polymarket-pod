@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T20:28:55Z",
+  "ts": "2026-10-08T20:36:23Z",
   "live_enabled": false,
-  "last_done": "V",
+  "last_done": "X",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "V (skill security auditor: containment by resolved path, never a string prefix; entries resolving outside the target are skipped, never read, and reported CRITICAL; any read/decode/stat/walk error is FAIL) done by grok-bot in its PR. F-U done on dev. Endgame #10 next in its own PR. WASH_WINDOW_S (S) awaits the user's decision. No open todo. No live gate."
+  "note": "X (RiskGate minimum edge, backlog #6: MIN_EDGE = 0.02 code constant, inclusive; 0 < edge < 0.02 vetoes edge_below_min, non_positive_edge kept, non-finite inputs fail closed) done by grok-bot in its PR. F-V done on dev. MIN_EDGE and WASH_WINDOW_S (S) await the user's decision at M2. No open todo. No live gate."
 }
