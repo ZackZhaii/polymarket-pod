@@ -132,6 +132,15 @@
       "note": "Assigned by Poly指挥; done by grok-bot. Risk-gap backlog item 1. WASH_WINDOW_S = 300 s is a new code constant, not a risk.toml key; flagged for Operator review. Only tightens: no existing check is loosened.",
       "done_at": "2026-10-08T20:13:15Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "T",
+      "status": "done",
+      "title": "Task R follow-ups: book age by the exchange book_ts; no gap signal for stale markets; latest row by parsed time",
+      "finish": "src/paper_cycle.py judges book age by the row's exchange book_ts (book_ts_problem when recorded), never the recorder ts; a missing book_ts key is missing_book_ts and any non-null book_ts_problem is stale; 120 s unchanged (exactly 120 s fresh). A stale market emits no ArbBinary/NegRiskArb gap signal; its BookWatcher stale signal carries gap_signal=skipped and skip_reason=stale_book and run() returns a skip record. book_staleness.latest_by_time picks the latest market/book row by parsed recorder ts (ties keep the later row); missing or unparseable ts rows are skipped as missing_row_ts / invalid_row_ts and recorded (BookWatcher skipped_row signal plus skips). paper_ledger.realistic_no_edge uses the same selection, passes book_ts (not ts) to RiskGate and returns skipped_rows. Historical Forecaster mentions in docs unchanged. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold changes.",
+      "note": "Approved by Poly指挥 (Task R follow-ups); done by grok-bot. Only tightens: a fresh recorder ts can no longer hide a stale or missing exchange book_ts, and a stale market no longer emits a gap signal.",
+      "done_at": "2026-10-08T20:20:07Z",
+      "surface": "grok-bot"
     }
   ]
 }

@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T20:13:15Z",
+  "ts": "2026-10-08T20:20:07Z",
   "live_enabled": false,
-  "last_done": "S",
+  "last_done": "T",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "S (structured wash/self-trade detection on top of the strategy-name keyword ban: own uncancelled opposite quote on the same leg vetoes cross_side_same_leg, own counterparty vetoes self_trade_structure, own opposite fill within WASH_WINDOW_S=300 s vetoes wash_same_market; missing or malformed history vetoes) done by grok-bot in its PR. F-R done on dev. WASH_WINDOW_S awaits Operator review. No open todo. No live gate."
+  "note": "T (Task R follow-ups: paper_cycle and realistic_no_edge judge book age by the exchange book_ts, never the recorder ts; stale markets emit no gap signal, the stale signal is the skip record; latest rows chosen by parsed time, unparseable rows skipped and recorded) done by grok-bot in its PR. F-S done on dev. WASH_WINDOW_S (S) awaits the user's decision. No open todo. No live gate."
 }

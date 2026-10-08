@@ -11,6 +11,7 @@ moving it there is a proposal for the Operator.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Hashable
 from datetime import datetime, timezone
 
 MAX_BOOK_AGE_S = 120.0
@@ -102,3 +103,42 @@ def book_age_problem(
     if age > limit:
         return STALE_BOOK
     return None
+
+
+MISSING_ROW_TS = "missing_row_ts"
+INVALID_ROW_TS = "invalid_row_ts"
+
+
+def latest_by_time(
+    rows: list[dict],
+    key: Callable[[dict], Hashable | None],
+    field: str = "ts",
+) -> tuple[dict, list[dict]]:
+    """Pick the latest row per key by parsed time (Task T), never by string comparison.
+
+    ``key(row)`` returning None (or "") ignores the row. A row whose ``field`` is missing or
+    blank is skipped as missing_row_ts; one that parse_book_ts rejects (naive, date-only,
+    numeric text, bool, ...) is skipped as invalid_row_ts. Skips come back as
+    ``{"index", "key", "reason"}`` so the caller can record them. Equal times keep the later row.
+    """
+    chosen: dict = {}
+    times: dict = {}
+    skipped: list[dict] = []
+    for index, row in enumerate(rows):
+        name = key(row)
+        if name is None or name == "":
+            continue
+        value = row.get(field)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            reason = MISSING_ROW_TS
+            stamp = None
+        else:
+            stamp = parse_book_ts(value)
+            reason = INVALID_ROW_TS
+        if stamp is None:
+            skipped.append({"index": index, "key": list(name) if isinstance(name, tuple) else name, "reason": reason})
+            continue
+        if name not in times or stamp >= times[name]:
+            times[name] = stamp
+            chosen[name] = row
+    return chosen, skipped

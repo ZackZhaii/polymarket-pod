@@ -296,6 +296,26 @@ network and no credentials.
 - Fail closed: missing history (`recent_fills` / `own_quotes`, supplied by `paper_ledger.load_state`) is `wash_input_missing`;
   malformed rows, an unknown quote status, a bad `now`/market or an unusable counterparty is `wash_input_invalid`. Both veto.
 
+## Task T — Task R follow-ups: book age by the exchange book_ts; stale markets emit no gap; latest row by parsed time
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. After Task R, `paper_cycle` and `paper_ledger.realistic_no_edge` still judged
+book age by the recorder's `ts`, a stale market still emitted a gap signal, and "latest row" compared timestamp strings.
+
+Finish when book age is read from the exchange's `book_ts`, stale markets emit no gap signal, latest rows are chosen by
+parsed time, and `python -m pytest` passes with no network and no credentials.
+
+- `src/paper_cycle.py`: `_row_book_problem(row, ...)` reads the row's `book_ts` (from `book.book_timestamp`), never `ts`. No
+  `book_ts` is `missing_book_ts`; a non-null `book_ts_problem` is always stale. `STALE_AFTER_S` stays 120 (exactly 120 s is fresh).
+- A stale market emits no ArbBinary/NegRiskArb gap signal. Its BookWatcher stale signal is the skip record (`gap_signal=skipped`,
+  `skip_reason=stale_book`), and `run()` returns `skipped` / `skips`.
+- `book_staleness.latest_by_time` picks the latest market/book row by parsed recorder `ts`, not string order (ties keep the later
+  row). A missing or unparseable `ts` row is skipped as `missing_row_ts` / `invalid_row_ts` and recorded (BookWatcher
+  `skipped_row` signal plus `skips`). The newest recording wins even without a `book_ts`, so the leg turns stale (fail closed).
+- `paper_ledger.realistic_no_edge`: same selection, newest first; passes `book_ts` (not `ts`) to RiskGate; returns `skipped_rows`.
+- Historical "Forecaster" mentions in docs stay as they are. No threshold change. Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -307,8 +327,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task S done by grok-bot (assigned by Poly指挥). RiskGate adds structured wash/self-trade checks on top of the name keywords.
-- Same leg: own uncancelled opposite quote vetoes `cross_side_same_leg`; own opposite fill within 300 s vetoes `wash_same_market`.
-- Own account/role/strategy as counterparty vetoes `self_trade_structure`. Missing or malformed history vetoes (fail closed).
-- `python -m pytest` passed offline (445 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. No next todo. `WASH_WINDOW_S` = 300 s awaits Operator review. A single-leg fill is directional exposure, not locked profit.
+- 2026-10-09: Task T done by grok-bot (approved by Poly指挥). `paper_cycle` and `realistic_no_edge` judge book age by the exchange `book_ts`, never `ts`.
+- Missing or invalid `book_ts` (or a recorded `book_ts_problem`) is stale. 120 s unchanged; exactly 120 s is fresh.
+- Stale markets emit no gap signal; the BookWatcher stale signal is the skip record. Latest rows are chosen by parsed time; bad `ts` rows are skipped and recorded.
+- `python -m pytest` passed offline (479 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. No next todo. `WASH_WINDOW_S` (Task S) awaits the user's decision. A single-leg fill is directional exposure, not locked profit.
