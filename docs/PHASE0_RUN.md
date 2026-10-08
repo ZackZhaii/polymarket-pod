@@ -2,15 +2,25 @@
 
 Date: 2026-10-08 (JST). Result: pass.
 
-This machine has no `D:` drive. The isolated checkout is `$HOME/projects/polymarket-pod` (`/root/projects/polymarket-pod`). Python 3.10 venv, `pip install -r requirements.txt` (standard library only; no order SDK). No `.env` was created or read. No order, auth, or withdraw endpoint was called.
+This page records the first Phase 0 run. That run used a separate Linux checkout; it is not where work happens now. The shared checkout is `D:\projects\polymarket-pod` on the Operator's PC. Bots work in `.worktrees/<name>` from `origin/dev` (`AGENTS.md`). `requirements.txt` lists no packages (standard library only; no order SDK). No `.env` was created or read. No order, auth, or withdraw endpoint was called.
 
 ## Scanner
 
-`python src/scanner.py` exited 0.
+The scanner has changed since that run (Tasks I, K, O and Q). This is the current `src/scanner.py` on `dev`; the full filter list is in `.grok/skills/market-scan/SKILL.md`.
 
-- `active_sample=20 mode=paper live_enabled=false keys=none orders=none`
-- Printed more than 5 public questions. First lines included the 2028 Democratic nomination markets (Oprah Winfrey, Beto O'Rourke, Hillary Clinton, MrBeast, Kim Kardashian) and the 2026 Senate balance markets.
-- `data/markets.jsonl` has 20 records from the public Gamma `GET /markets` call. Highest sample liquidity was about $2.87M on the first row. That file is gitignored.
+- Public reads only. It walks Gamma `GET /markets/keyset` (`order=volume24hr`, 100 per page, `liquidity_num_min` from `min_liquidity_usd`). No keys, no orders.
+- Filters: `config/risk.toml` `min_liquidity_usd` and `max_spread`, plus the 0.03–0.97 long-tail price band.
+- Minimum time to expiry (Task O): a market needs a zoned end date at least 24 h away (`expiry_rule.MIN_HOURS_TO_EXPIRY`, a code constant, not a risk.toml key). Exactly 24 h passes; less is `near_expiry`.
+- Version rule (Task Q): Gamma `version` picks the outcome-ID field. `v2` reads `positionIds`, `v1` reads `clobTokenIds`. A missing version is rejected as `missing_version`, any other value as `unsupported_version`. Both rank right after `closed`. With a valid version but bad IDs, the row passes with empty `token_ids` and a `token_ids_problem`, so no book is fetched.
+- Stdout: `scanned= passed= stop= cap_hit= server_min_liquidity= min_hours_to_expiry= mode= live_enabled=false keys=none orders=none`, then `rejected_first=reason:count` (and `token_id_problems=` when any).
+- Exit codes (`scanner.EXIT_*`):
+  - 0: ok. It writes `data/markets.jsonl` (gitignored) and up to 50 bus signals.
+  - 1: fewer than 5 markets scanned.
+  - 2: zero markets passed the filters.
+  - 3: pagination incomplete, including a network error after `public_get` retries (Task K).
+  - Codes 1–3 write nothing.
+
+The 2026-10-08 run itself used the earlier single-page sample (`active_sample=20`, public `GET /markets`). It exited 0 and wrote 20 rows to gitignored `data/markets.jsonl`.
 
 ## Book
 

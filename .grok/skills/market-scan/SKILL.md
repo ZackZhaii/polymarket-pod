@@ -26,6 +26,7 @@ Role name on the bus: `Scanner` (`scanner.persist_markets`). ROSTER and ROLES ag
 3. Interpret `stop_reason` (`scanner.fetch_all_markets`): `exhausted` (complete), `max_markets`, `max_pages`, `no_new_rows`, `cursor_repeat` (including A->B->A), `network_error` (a page still failing after `public_get` retries; `meta["error"]` holds the `PublicGetError` text).
 4. A row is scanned only when it has a question, slug, or id (`scanner.filter_markets`). First rejection wins, in `scanner.REASONS` order (`scanner.rejection_reasons`):
    - `closed` — `closed` true.
+   - `missing_version` — Gamma `version` missing, null or empty; `unsupported_version` — any value other than exactly `v1` or `v2` (Task Q; `scanner.select_token_ids`). `v2` reads outcome IDs from `positionIds`, `v1` from `clobTokenIds`; no field is guessed from presence.
    - End date (`expiry_rule.expiry_problem`, one reason at most; `expiry_rule.MIN_HOURS_TO_EXPIRY = 24.0`, a code constant, not a risk.toml key):
      `expired` — end <= now; `missing_end_date` — `endDate` missing or blank; `invalid_end_date` — unparseable, naive, date-only or non-string;
      `near_expiry` — under 24 h left (exactly 24 h passes); `invalid_min_hours_to_expiry` — bad threshold; `invalid_now` — naive or bad clock.

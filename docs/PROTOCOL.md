@@ -8,7 +8,7 @@ Message:
 ```
 
 Rules:
-- Forecaster and Researcher never emit orders.
+- NewsForecaster and Researcher never emit orders.
 - Only Executor emits paper fills, and only after RiskGate `allow`.
 - Sentinel may emit `halt`, which cancels paper quotes.
 - Reflector proposals land in `playbook/proposals.md` and do not change live params.
