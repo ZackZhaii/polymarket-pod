@@ -13,6 +13,7 @@ def emit_gap(
     market: str,
     *,
     bus_path: Path | None = None,
+    displayed_depth: float | None = None,
 ) -> dict | None:
     signal = binary_ask_sum(yes_ask, no_ask)
     if not signal["is_gap"]:
@@ -27,6 +28,8 @@ def emit_gap(
             "gap": signal["gap"],
             "locked_profit": False,
             "one_leg_meaning": "directional",
+            "displayed_depth": displayed_depth,
+            "depth_is_not_an_order": True,
             "note": signal["note"],
         },
         path=bus_path,

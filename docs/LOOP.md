@@ -47,6 +47,16 @@ Finish when these modules import and only append to `logs/bus.jsonl`: ArbBinary,
 - ArbBinary may emit a `signal` when the displayed ask sum is below 1. It must not emit a fill.
 - Maker emits paper quote signals only. No post, no cancel on the exchange.
 
+## Task D — offline paper cycle
+
+Status: done.
+
+Finish when `python src/paper_cycle.py` reads local jsonl, emits signals only, and `python -m pytest` passes.
+
+- NegRiskArb emits a signal when three or more displayed asks sum to less than 1.
+- BookWatcher emits staleness. It does not call the exchange and does not auto-halt.
+- The cycle must not write a paper fill and must not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -59,8 +69,8 @@ Finish when these modules import and only append to `logs/bus.jsonl`: ArbBinary,
 
 ## Latest
 
-- 2026-10-08: Tasks A, B, and C are done. `python -m pytest` passed offline, 20 tests.
-- Reflector wrote one proposal in `playbook/proposals.md`. Cap is 3 per UTC day. It does not emit fills.
-- ArbBinary, Maker, Forecaster, and Sentinel only write bus lines. Sentinel halt cancels local paper quotes only.
-- `config/risk.toml` unchanged: mode=paper, live_enabled=false. No `.env` read. No order SDK. No exchange cancel.
-- Planned paper stubs are complete. Do not enable live. Next step is human review of the paper log, not a live client.
+- 2026-10-08: Task D done. Offline `python src/paper_cycle.py` ran: gaps=0, stale=5, fills=0.
+- NegRiskArb and ArbBinary now emit ask-sum signals from local books. A gap is not locked profit.
+- BookWatcher marks snapshots older than 120 seconds stale. No halt and no exchange call.
+- `python -m pytest` passed offline, 22 tests. `config/risk.toml` unchanged, `live_enabled=false`.
+- Do not install a trading client. Next step is still human review of paper logs, not live orders.

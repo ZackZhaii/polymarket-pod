@@ -27,6 +27,8 @@ Windows, if this machine has no `D:` drive, use `%USERPROFILE%\projects\polymark
 
 `python src/book.py` reads the public CLOB `/book` endpoint and records best bid, best ask, and spread in `data/books.jsonl`.
 
+`python src/paper_cycle.py` reads those local files only. It emits YES+NO or multi-outcome gap signals and a staleness signal. It does not use the network, does not write a paper fill, and does not place an order. A gap is not locked profit.
+
 `python src/paper_ledger.py` with no arguments runs a local gate self-check. A simulated fill is written only after `RiskGate` returns allow. The default check does not invent an edge on a real market: a public price compared with the same price is vetoed. The one allow path is labeled `phase0-gate-test` and is not a forecast.
 
 Operator paper intent (still simulated, still gated):
