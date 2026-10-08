@@ -240,6 +240,15 @@
       "note": "Approved by Poly指挥 (fee unification); done by grok-bot. More conservative: buy edge lower by fee_rate * slippage; sell booked fee higher by market/effective; negative fee_rate no longer a rebate. M2 pending list unchanged.",
       "done_at": "2026-10-08T21:34:13Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AF",
+      "status": "done",
+      "title": "Paper ledger integrity (src/ledger_store.py): fill ids with idempotent dedupe, atomic writes, cash/position/cost-basis conservation check; mismatch halts (backlog #20)",
+      "finish": "Fills carry fill_id; an identical repeat counts once, a different row under the same id (conflicting_fill_id) or an id-less row after id'd rows (missing_fill_id) is invalid state; legacy id-less rows get legacy:<line>:<sha256> ids. Writes are atomic (same-dir temp file, fsync, os.replace; any failure leaves the old ledger intact, tested by simulated crashes). Torn or malformed lines are invalid state. Cash = PAPER_EQUITY_USD - buys + sells - fees and per-leg shares and cost basis are stored per fill and checked within LEDGER_OPEN_EPS on load and before/after each write; fee_usd >= booked_fee_usd(ledger_fee(...)). Any problem: RiskGate vetoes invalid_risk_state, commit_if_allowed halts and books nothing. Legacy fixtures load exactly as before. No new threshold, config/risk.toml unchanged. COORDINATION #20 struck through. pytest passes offline.",
+      "note": "Approved by Poly指挥 (ledger integrity); done by grok-bot. Tightening: strict ledger reader; booked fee is max(decision fee, fee recomputed from stored values), +1e-8 USD on ~0.14% of fills. M2 pending list unchanged.",
+      "done_at": "2026-10-08T21:44:08Z",
+      "surface": "grok-bot"
     }
   ]
 }

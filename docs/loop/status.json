@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T21:34:13Z",
+  "ts": "2026-10-08T21:44:08Z",
   "live_enabled": false,
-  "last_done": "AE",
+  "last_done": "AF",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AE (one fee module src/fees.py: stress_fee for the RiskGate edge and ledger_fee for simulated booking, fee per share on the higher of market and effective price; no fee went down on a 24,624-point grid; backlog #19) done by grok-bot. Task letters after Z are AA, AB, AC, AD, AE. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S and MIN_HOURS_TO_EXPIRY. No open todo. No live gate."
+  "note": "AF (paper ledger integrity, src/ledger_store.py: fill ids with idempotent dedupe, atomic same-dir temp file + fsync + os.replace writes, cash / leg shares / cost basis conservation within LEDGER_OPEN_EPS on load and before/after each write; any problem is invalid state and halts booking; backlog #20) done by grok-bot. Task letters after Z are AA, AB, AC, AD, AE, AF. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S and MIN_HOURS_TO_EXPIRY. No open todo. No live gate."
 }

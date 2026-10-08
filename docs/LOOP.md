@@ -602,10 +602,43 @@ and `python -m pytest` passes with no network and no credentials.
 - No new threshold: fee_rate comes from the intent; there is no fee constant in code and no fee key in `config/risk.toml`.
   `docs/THRESHOLDS.md` is unchanged. Tests: `tests/test_fee_characterisation.py`, `tests/test_fees.py`.
 
+## Task AF — paper ledger integrity: fill ids, atomic writes, conservation check (backlog #20)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. The paper ledger could count a re-appended fill twice, a crash mid-append left a torn
+line that `read_jsonl` silently skipped, and nothing checked that cash and positions still added up (COORDINATION backlog #20).
+
+Finish when fills are deduped by id, writes are atomic, cash / positions / cost basis are checked on every load and write,
+any mismatch halts booking, existing ledgers load exactly as before, and `python -m pytest` passes with no network.
+
+- `src/ledger_store.py` (standard library only; imports `src.fees` and `src.thresholds`). paper_ledger reads the ledger
+  strictly through it: a malformed, non-object, undecodable or unterminated (torn) line is an integrity problem, not skipped.
+- (a) Ids: new fills carry `fill_id = uuid4().hex`. Same id + identical row (canonical JSON): ignored idempotently, counted once
+  (`duplicate_fill_rows`). Same id + different row: `conflicting_fill_id`. Bad id: `invalid_fill_id`. The old schema had no ids,
+  so id-less rows before the first id'd row are legacy rows with the derived id `legacy:<line>:<sha256(canonical JSON)>`;
+  the line number keeps two identical legacy rows two fills (no exposure hidden). An id-less row after that: `missing_fill_id`.
+- (b) Atomic write: old bytes + new line go to a temp file in the same directory, flush + fsync, a check that the ledger did
+  not change meanwhile (`ledger_changed_during_write`), `os.replace`, then a directory fsync on POSIX. Any failure removes the
+  temp file and leaves the old ledger byte-for-byte intact; tests simulate a half write, fsync and replace errors, an
+  interrupt, a concurrent writer and a stale temp file. `commit_if_allowed` returns allow False with `ledger_write_failed`.
+- (c) Conservation: replay counted rows from `PAPER_EQUITY_USD`: cash = start - buys + sells - fees; per leg shares and cost
+  basis (buy notional - sell notional; no notional = 1 USD per share, as `leg_positions`). Every id'd row stores
+  `cash_after_usd`, `leg_shares_after`, `leg_cost_basis_after_usd`; each must match within `LEDGER_OPEN_EPS`, and `fee_usd` must
+  be >= `booked_fee_usd(ledger_fee(...))` recomputed from the row (the booked fee takes the higher of that and the decision's
+  fee: +1e-8 USD on about 0.14% of fills, never lower). Checked on load, on the candidate before the write and after the replace.
+- Fail closed: any problem gives the Task U invalid state plus `ledger_problems`, so RiskGate vetoes `invalid_risk_state`;
+  `commit_if_allowed` also re-verifies inside `book` and on a problem emits an Executor -> Sentinel `halt` (no exchange
+  action), returns allow False and books nothing. The fill bus message is sent only after a verified write.
+- Legacy ledgers: `tests/fixtures/ledger/*.jsonl` (rows without notional or token, string numbers, NaN hypothetical rows,
+  identical repeats, the pre-AF commit row shape) load to exactly the values the pre-AF code returned, with LF and CRLF.
+- No new threshold: `LEDGER_OPEN_EPS` and `PAPER_EQUITY_USD` are reused (THRESHOLDS.md notes the reuse). `config/risk.toml`
+  unchanged. Tests: `tests/test_ledger_integrity.py`.
+
 ## Latest
 
-- 2026-10-09: Task AE done by grok-bot (approved by Poly指挥, backlog #19). Every fee now comes from `src/fees.py` (`stress_fee`, `ledger_fee`).
-- Fee per share is the higher of `fee_rate * market_price` and `fee_rate * effective_price`; a 24,624-point grid proves no fee went down.
-- More conservative: buy edges lower by fee_rate * slippage; sell booked fees higher by market/effective; negative fee_rate no longer a rebate.
-- `python -m pytest` passed offline (1016 passed; on Windows 1012 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task AF done by grok-bot (approved by Poly指挥, backlog #20). The paper ledger is checked by `src/ledger_store.py` (standard library only).
+- Fills carry `fill_id`: identical repeats count once, a changed row under the same id or an id-less row after id'd rows is invalid state.
+- Writes are atomic (temp file, fsync, os.replace); cash, leg shares and cost basis are conserved within LEDGER_OPEN_EPS or booking halts.
+- `python -m pytest` passed offline (1141 passed; on Windows 1137 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY.

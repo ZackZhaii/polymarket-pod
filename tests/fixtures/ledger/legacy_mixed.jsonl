@@ -1,0 +1,9 @@
+{"ts": "2026-10-08T01:00:00Z", "strategy": "legacy", "market": "m1", "token_id": "yes", "side": "buy", "shares": 24.69135802, "notional_usd": 10.0, "fee_usd": 0.2, "hypothetical": false, "counts_toward_risk": true}
+{"ts": "2026-10-08T01:05:00Z", "strategy": "legacy", "market": "m1", "token_id": "no", "side": "buy", "shares": 16.39344262, "notional_usd": 10.0, "fee_usd": 0.0, "hypothetical": false, "counts_toward_risk": true}
+{"ts": "2026-10-08T02:00:00Z", "strategy": "legacy", "market": "m1", "token_id": "yes", "side": "sell", "shares": 10.0, "notional_usd": 4.0, "fee_usd": 0.1, "hypothetical": false, "counts_toward_risk": true}
+{"ts": "2026-10-08T03:00:00Z", "market": "m2", "side": "buy", "shares": 5.0, "fee_usd": 0.0, "hypothetical": false, "counts_toward_risk": true}
+{"ts": "2026-10-08T03:30:00Z", "market": "hypo", "token_id": "t", "side": "buy", "shares": NaN, "notional_usd": 10.0, "fee_usd": 0.0, "hypothetical": true, "counts_toward_risk": false}
+{"ts": "2026-10-08T04:00:00Z", "market": "m3", "token_id": "t", "side": "buy", "shares": "12.5", "notional_usd": "5.0", "fee_usd": "0.05", "hypothetical": false}
+{"ts": "2026-10-07T23:00:00Z", "market": "m4", "token_id": "t", "side": "buy", "shares": 20.0, "notional_usd": 8.0, "fee_usd": 0.3, "hypothetical": false, "counts_toward_risk": true}
+{"ts": "2026-10-08T05:00:00Z", "market": "m5", "token_id": "t", "side": "buy", "shares": 2.0, "notional_usd": 1.0, "fee_usd": 0.01, "hypothetical": false, "counts_toward_risk": true}
+{"ts": "2026-10-08T05:00:00Z", "market": "m5", "token_id": "t", "side": "buy", "shares": 2.0, "notional_usd": 1.0, "fee_usd": 0.01, "hypothetical": false, "counts_toward_risk": true}
