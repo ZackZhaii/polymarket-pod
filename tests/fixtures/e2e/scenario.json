@@ -1,0 +1,21 @@
+{
+ "now": "2026-09-01T12:00:00Z",
+ "second_check_after_s": 60,
+ "intents": [
+  "charlie-stale",
+  "delta-nan",
+  "echo-wash",
+  "foxtrot-thin-edge",
+  "alpha-allow",
+  "bravo-allow",
+  "golf-cap"
+ ],
+ "duplicate_replay": {
+  "fill_of": "alpha-allow",
+  "then_commit": "alpha-again"
+ },
+ "corrupt_ledger": {
+  "torn_tail": "{\"fill_id\":\"e2e-torn-write\",\"ts\":\"2026-09-01T12:00:0",
+  "commit": "alpha-allow"
+ }
+}

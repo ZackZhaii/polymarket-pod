@@ -738,10 +738,39 @@ with a PASS/FAIL verdict, the criteria are M2-pending constants, and `python -m 
 - In `src/` (not `scripts/`): `python -m` from the repo root on every OS, and the guard's URL scan covers it. No new URL.
   Commands for the box: `docs/M1_ACCEPTANCE.md`. Tests: `tests/test_m1_run.py`, `tests/test_m1_report.py`.
 
+## Task AJ — End-to-end offline hard gate: scripts/e2e_offline.py, tests/test_e2e_offline.py, guard check e2e (backlog #24)
+
+Status: done.
+
+Requested by Poly指挥, done by grok-bot. Every module had unit tests, but nothing ran the real pipeline end to end on
+fixed data against a committed expected output, so loosening one stage could pass (COORDINATION backlog #24).
+
+Finish when the real pipeline runs offline on `tests/fixtures/e2e/`, matches `golden.json` exactly, breaks no invariant,
+the guard fails on any drift, golden changes only with `--update-golden`, and `python -m pytest` passes with no network.
+
+- `scripts/e2e_offline.py`: scanner rows (`scanner.scan`, `persist_markets`) -> recorded CLOB `/book` bodies through
+  `book.record`'s getter -> `paper_cycle.run` (gap/stale signals, Sentinel check 1) -> `endgame_scan` signals ->
+  `forecaster.emit_probability` -> `build_intent` -> `paper_ledger.commit_if_allowed` (RiskGate with `fees.py`, MIN_EDGE,
+  staleness, wash, non_finite, caps) -> paper fill -> `ledger_store.book` -> `verify` -> `paper_cycle.run` (check 2).
+- Only the clock (frozen `datetime` in `podlib`, `book_staleness`, `wash_detect`; every `utc_now` follows) and I/O paths
+  (temp bus/ledger/quotes/markets/books/Sentinel state, the getter, a concurrent-writer ledger path) are replaced.
+  `socket`, `urllib`, `http.client`, `podlib.urlopen` are tripwires; a swallowed touch still fails.
+- Scenarios: two allows, stale book, `NaN` ask, wash, edge 0.015, sixth leg, duplicate fill replay, ledger torn before
+  and during the call, two consecutive stale checks (Sentinel halt, that market's quote cancelled).
+- Invariants: no network, `exchange_action` none and no order flag on every bus message, fills only from an allow,
+  unique fill ids, conservation, risk.toml at the pin and byte-identical, `live_enabled` false at every stage, no default
+  data path written. Fixture clock 2026-09-01, so an unpatched clock read makes fresh books stale and breaks golden.
+- Gate: `scripts/guard.py` check `e2e` (8 checks) loads the checked repo's own harness by path and runs it in-process
+  (stdlib + src, ~0.1 s; no pytest, so it works in the M1 venv). `tests/test_e2e_offline.py` runs it plus one test per
+  scenario/invariant. Golden: `python -m pytest tests/test_e2e_offline.py --update-golden` (off by default, tested;
+  that run fails on purpose). Docs: `docs/PHASE0_RUN.md` "E2E offline gate", `tests/fixtures/e2e/README.md`.
+- Not connected in src yet: signal -> Intent (harness `build_intent`; fee_rate/slippage are fixture inputs), Endgame
+  -> Intent (no model probability), halt consumers (nothing blocks later intents after a halt). No new threshold or URL.
+
 ## Latest
 
-- 2026-10-09: Task AI done by grok-bot (requested by Poly指挥, backlog #23). M1 24 h acceptance: `python -m src.m1_run` records, `python -m src.m1_report` judges.
-- m1_run: assets from the latest scan, rotated JSONL (books/events/rest), REST /book samples, manifest with git and risk sha, graceful SIGINT/SIGTERM.
-- m1_report: coverage, book-age p50/p90/p99/max, resyncs, reconnects, REST-vs-WS match, PASS/FAIL. Box commands in `docs/M1_ACCEPTANCE.md`.
-- `python -m pytest` passed offline (1654 passed; on Windows 1650 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task AJ done by grok-bot (requested by Poly指挥, backlog #24). End-to-end offline hard gate on fixed sanitised recordings.
+- `scripts/e2e_offline.py` runs the real scanner -> recorder -> paper cycle/Sentinel -> signals -> RiskGate -> fill -> ledger_store -> conservation path; only clock and I/O paths replaced, network tripwired.
+- Exact `tests/fixtures/e2e/golden.json`; guard check `e2e` (8 checks); golden changes only with `pytest --update-golden`. Scenarios: stale, NaN, wash, thin edge, cap, replay, torn ledger, Sentinel halt.
+- `python -m pytest` passed offline (1716 passed; on Windows 1712 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S, the eight M1_* criteria.

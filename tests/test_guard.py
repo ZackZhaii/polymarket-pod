@@ -16,7 +16,7 @@ from scripts import guard
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / "scripts" / "guard.py"
 CHECKS = ["risk_sha_worktree", "risk_sha_head", "live_enabled", "banned_dependencies", "banned_imports",
-          "url_allowlist", "thresholds_doc"]
+          "url_allowlist", "thresholds_doc", "e2e"]
 PINNED = "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04"
 _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc")
 
@@ -27,7 +27,7 @@ _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc")
 def repo(tmp_path) -> Path:
     """A temp copy of everything the guard reads (not a git checkout)."""
     root = tmp_path / "repo"
-    for folder in ("config", "src", "scripts", "docs"):
+    for folder in ("config", "src", "scripts", "docs", "tests/fixtures/e2e"):
         shutil.copytree(ROOT / folder, root / folder, ignore=_IGNORE)
     for path in ROOT.glob("requirements*.txt"):
         shutil.copy2(path, root / path.name)
@@ -138,7 +138,7 @@ def test_worktree_risk_change_fails(repo):
     assert found["risk_sha_worktree"].status == "FAIL" and PINNED in found["risk_sha_worktree"].reason
     code, lines, _ = run(repo)
     assert code == 1
-    failed_only(lines, "risk_sha_worktree")
+    failed_only(lines, "risk_sha_worktree", "e2e")  # the e2e gate pins risk.toml too (Task AJ)
 
 
 def test_worktree_threshold_change_fails(repo):
@@ -589,3 +589,59 @@ def test_the_pin_matches_the_rest_of_the_repo():
     assert guard.PINNED_RISK_SHA256 == PINNED
     for rel in ("tests/test_fees.py", "docs/THRESHOLDS.md", "docs/PHASE0_RUN.md"):
         assert PINNED in (ROOT / rel).read_text(encoding="utf-8"), rel
+
+
+# ---------------------------------------------------------------- 6. e2e (Task AJ)
+
+def test_the_e2e_check_passes_on_the_real_repo_and_names_golden():
+    found = results(ROOT)["e2e"]
+    assert found.status == "PASS" and "tests/fixtures/e2e/golden.json" in found.reason, found
+
+
+def test_a_golden_edit_fails_only_e2e(repo):
+    path = repo / "tests" / "fixtures" / "e2e" / "golden.json"
+    edit(path, '"edge_below_min"', '"edge_ok"')
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "e2e")
+    assert "golden" in lines["e2e"][1]
+
+
+@pytest.mark.parametrize("rel", ["scripts/e2e_offline.py", "tests/fixtures/e2e/forecasts.json",
+                                 "tests/fixtures/e2e/golden.json"])
+def test_a_missing_harness_or_fixture_fails_e2e(repo, rel):
+    (repo / rel).unlink()
+    assert results(repo)["e2e"].status == "FAIL"
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "e2e")
+
+
+def test_a_loosened_risk_gate_rule_fails_e2e(repo):
+    edit(repo / "src" / "risk_gate.py", 'reasons.append("edge_below_min")', "pass")
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "e2e")
+
+
+def test_a_src_regression_that_fetches_quietly_fails_e2e(repo):
+    path = repo / "src" / "forecaster.py"
+    text = path.read_text(encoding="utf-8")
+    marker = "    if not 0.0 < model_prob < 1.0:\n"
+    assert text.count(marker) == 1
+    path.write_text(text.replace(marker, "    try:\n        from src.podlib import public_get\n"
+                                         "        public_get('https://clob.polymarket.com/book?token_id=1')\n"
+                                         "    except Exception:\n        pass\n" + marker), encoding="utf-8")
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "e2e")
+    assert "network touched" in lines["e2e"][1]
+
+
+def test_the_e2e_check_loads_the_checked_repos_own_harness(repo):
+    path = repo / "scripts" / "e2e_offline.py"
+    path.write_text(path.read_text(encoding="utf-8") + "\n\ndef gate(root=None):\n    return ['copy harness ran'], ''\n",
+                    encoding="utf-8")
+    found = results(repo)["e2e"]  # in-process: the real repo's scripts package is already imported
+    assert found.status == "FAIL" and "copy harness ran" in found.reason
+    assert results(ROOT)["e2e"].status == "PASS"
