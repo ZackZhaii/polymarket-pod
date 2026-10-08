@@ -88,3 +88,4 @@ I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。�
 11. ~~（审查新增）`risk_gate.evaluate` 对缺失的 `min_liquidity_usd` / `max_spread` 用默认值 0 / 1，属于缺键放行（fail-open）；scanner 新代码已是缺键报错，两者不一致。~~ **Task J 处理**（PR #3）：缺键或非有限数值一律 `invalid_gate_threshold` veto，不再用默认值。
 12. ~~（审查新增）Forecaster 总线名与 ROSTER 的 NewsForecaster 不一致。~~ **Task N 处理**：`src/forecaster.py` 用 `from="NewsForecaster"`；`podlib.ROLE_ALIASES` 把旧名 Forecaster 映射过去，`bus()` 统一写 ROSTER 名，旧调用方不报错。未改 risk.toml。
 13. ~~scanner 阈值接受布尔和无穷（`max_spread = true` 读成 1.0，`1e999` 读成 inf）。~~ **已在 PR #2（Task I）修复**：只接受有限的 int/float，bool、字符串、inf、nan 都报错。
+14. ~~（审查新增）scanner 把 Gamma 的 `"NaN"` / `"inf"` / `"-Infinity"` 解析成非有限数；NaN 比较恒为 False，NaN 的 spread、流动性、买卖价能绕过过滤通过 scanner。~~ **Task Y 处理**：`src/scanner.py` 对 best_bid、best_ask、spread、liquidity_usd、volume_usd、volume_24h_usd、outcome_prices 任一元素和 price 中任何 NaN/±inf 记 `non_finite_<field>`，不通过；排在结构性原因之后、`missing_bid_ask` 等过滤之前。退出码、输出格式和 markets.jsonl 字段不变。没有新阈值，未改 risk.toml。

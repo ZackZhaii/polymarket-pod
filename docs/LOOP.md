@@ -381,6 +381,8 @@ and `python -m pytest` passes with no network and no credentials.
 - Fail closed: drifted paper pins exit 4 before any fetch; an incomplete fetch exits 3 and writes nothing; fewer than 5 markets exit 1.
   No band market is exit 0 with no signal.
 - The scanner is untouched: default output, filters, exit codes and `data/markets.jsonl` are unchanged. Backlog #10 is struck through.
+- Since Task Y the shared `scanner.rejection_reasons` gives `non_finite_<field>` first; `band_problems` re-checks with the same
+  names as a second fail-closed guard and never counts a reason twice (`tests/test_endgame_scan.py`).
 - No threshold change. Do not edit `config/risk.toml`.
 
 ## Task X — RiskGate minimum edge: MIN_EDGE = 0.02 (code constant), edge_below_min veto (backlog #6)
@@ -403,6 +405,31 @@ passes with no network and no credentials.
   A trace of every `evaluate` call in the suite found no existing fixture with `0 < edge < 0.02`, so no fixture changed.
 - Do not edit `config/risk.toml`.
 
+## Task Y — scanner rejects non-finite numbers (NaN, +inf, -inf) as `non_finite_<field>`
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. `as_float("NaN")` returns `nan`, and every comparison with NaN is False, so a market
+with a NaN spread, liquidity, bid or ask slipped past `wide_spread`, `low_liquidity` and `missing_bid_ask` and passed the scanner.
+
+Finish when every non-finite parsed number rejects the market, exit codes and the output format are unchanged apart from the
+new reasons, `risk.toml` is unchanged, and `python -m pytest` passes with no network and no credentials.
+
+- `src/scanner.py`: `non_finite_reasons(row)` checks `best_bid`, `best_ask`, `spread`, `liquidity_usd`, `volume_usd`,
+  `volume_24h_usd`, every `outcome_prices` element and `price`. Each NaN or ±inf gives `non_finite_<field>`
+  (`NON_FINITE_FIELDS`, all in `REASONS`).
+- Ranking: after the structural reasons (`closed` … `not_accepting_orders`), before `missing_bid_ask`, `low_liquidity`,
+  `wide_spread`, `missing_price` and `long_tail_price`, so `first_reason` names the bad number, not a filter it fooled.
+- `yes_price`: a non-finite `lastTradePrice` is returned (and rejected as `non_finite_price`) instead of silently
+  falling through to `outcomePrices`. Finite markets get exactly the same price and reasons as before.
+- No new row keys: `data/markets.jsonl` rows, the summary line and exit codes 0/1/2/3 are unchanged; only rows that
+  were wrongly passing are now rejected.
+- `src/endgame_scan.py` (PR #25) calls `scanner.rejection_reasons`, so it gets the same `non_finite_*` names; its own
+  band check uses the same names and dedups. Checked with #25's code on top of Y: all tests pass.
+- Tests: `tests/test_scanner_non_finite.py` covers each field with `'NaN'`, `'nan'`, `'inf'`, `'-Infinity'` and
+  `float('nan')`, the reason order, finite bad values keeping their old reasons, and `main()` output and exit codes.
+- Do not edit `config/risk.toml`. No new threshold.
+
 ## Paste this into a new chat
 
 ```text
@@ -414,8 +441,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Tasks W and X done by grok-bot (approved by Poly指挥). W: `src/endgame_scan.py` gives Endgame the 0.98–0.99 band the scanner drops (backlog #10).
-- X: RiskGate requires edge >= `MIN_EDGE` (0.02, inclusive); `0 < edge < 0.02` vetoes `edge_below_min`; `non_positive_edge` kept (backlog #6).
-- Both fail closed on non-finite inputs. Endgame sends signals to RiskGate only (no fills, orders or ledger writes); the scanner is unchanged.
-- `python -m pytest` passed offline (616 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. No next todo. `MIN_EDGE` and `WASH_WINDOW_S` await the user's decision at M2. A single-leg fill is directional exposure, not locked profit.
+- 2026-10-09: Tasks W, X and Y done by grok-bot (approved by Poly指挥). W: read-only `src/endgame_scan.py` gives Endgame the 0.98–0.99 band (backlog #10).
+- X: RiskGate requires edge >= `MIN_EDGE` (0.02, inclusive), else `edge_below_min`. Y: the scanner rejects any parsed NaN or ±inf as `non_finite_<field>`.
+- `endgame_scan` uses Y's names through the shared rejection reasons, fails closed, and sends signals to RiskGate only; the scanner filter is unchanged.
+- `python -m pytest` passed offline (683 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. `MIN_EDGE` and `WASH_WINDOW_S` await the user's decision at M2. A single-leg fill is directional exposure, not locked profit.

@@ -7,7 +7,9 @@ as long_tail_price, so markets in Endgame's band never reached it. This path:
   no keys); an incomplete walk writes nothing (exit 3), fewer than 5 markets exit 1;
 - runs every scanner rule except the long-tail price band (closed, version, 24 h expiry,
   accepting orders, bid/ask, liquidity, spread, price), so nothing else is loosened;
-- fails closed on any non-finite price, bid, ask, spread or liquidity (Task U);
+- fails closed on any non-finite number: the shared scanner.rejection_reasons gives Task Y's
+  non_finite_<field> (bid, ask, spread, liquidity, volumes, outcome prices, price), and
+  band_problems re-checks price, bid, ask, spread and liquidity under the same names (counted once);
 - keeps only rows whose first-outcome price is inside endgame.PRICE_MIN..PRICE_MAX
   (inclusive, the same check endgame.emit makes);
 - hands each row to endgame.emit, which only emits a signal to RiskGate (48 h window).

@@ -129,6 +129,27 @@ def test_non_finite_numbers_fail_closed(extra, reason):
     assert reason in result["any_reason"], result
 
 
+@pytest.mark.parametrize(
+    ("extra", "reason"),
+    [
+        ({"spread": "NaN"}, "non_finite_spread"),
+        ({"liquidityNum": "-Infinity"}, "non_finite_liquidity_usd"),
+        ({"bestBid": float("nan"), "lastTradePrice": 0.985}, "non_finite_best_bid"),
+        ({"bestAsk": "inf"}, "non_finite_best_ask"),
+        ({"bestBid": None, "lastTradePrice": "inf"}, "non_finite_price"),
+        ({"volume24hr": "nan"}, "non_finite_volume_24h_usd"),
+        ({"outcomePrices": '["nan", "0.015"]'}, "non_finite_outcome_prices"),
+    ],
+)
+def test_shared_scanner_non_finite_reasons_first_and_counted_once(extra, reason):
+    """Task Y: the scanner's non_finite_<field> names come first; band_problems never doubles them."""
+    result = endgame_scan.endgame_candidates([_band(1, **extra)], LIMITS, TS, now=NOW)
+    assert result["candidates"] == 0
+    assert result["first_reason"] == {reason: 1}, result
+    assert result["any_reason"][reason] == 1, result
+    assert endgame_scan.OUTSIDE_BAND not in result["any_reason"], result
+
+
 def test_invalid_thresholds_fail_closed():
     with pytest.raises(RuntimeError):
         endgame_scan.endgame_candidates([_band(1)], {"min_liquidity_usd": 1.0}, TS, now=NOW)

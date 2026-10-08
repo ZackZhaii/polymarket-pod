@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T20:36:23Z",
+  "ts": "2026-10-08T20:46:44Z",
   "live_enabled": false,
-  "last_done": "X",
+  "last_done": "Y",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "W (Endgame unfiltered path, backlog #10: read-only src/endgame_scan.py hands Endgame the 0.98-0.99 band; scanner unchanged; signals to RiskGate only) and X (RiskGate minimum edge, backlog #6: MIN_EDGE = 0.02 code constant, inclusive; 0 < edge < 0.02 vetoes edge_below_min, non_positive_edge kept) done by grok-bot. F-X done on dev; W merged dev in its PR. MIN_EDGE and WASH_WINDOW_S (S) await the user's decision at M2. No open todo. No live gate."
+  "note": "W (Endgame unfiltered path, backlog #10: read-only src/endgame_scan.py hands Endgame the 0.98-0.99 band; scanner filter unchanged; signals to RiskGate only), X (RiskGate minimum edge, backlog #6: MIN_EDGE = 0.02 code constant, edge_below_min) and Y (scanner rejects any parsed NaN or +/-inf as non_finite_<field>; endgame_scan shares the names) done by grok-bot. F-Y done on dev; W merged dev in its PR. MIN_EDGE and WASH_WINDOW_S await the user's decision at M2. No open todo. No live gate."
 }
