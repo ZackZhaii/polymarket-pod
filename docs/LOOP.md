@@ -120,6 +120,22 @@ passes with no network and no credentials. Record one public `python src/scanner
 - Public reads only. No order, auth or signing endpoint. Do not edit `config/risk.toml`.
 - Out of scope: paper_session switch, Endgame >0.97 feed, minimum time-to-expiry.
 
+## Task K — public_get retry/backoff; scanner exits 3 on network failure
+
+Status: done.
+
+Self-picked by grok-bot. Two public `python src/scanner.py` runs on NoisePC (2026-10-08, Task I acceptance) crashed with
+`URLError [SSL: UNEXPECTED_EOF_WHILE_READING]` and exit 1, which collides with the documented "fewer than 5 scanned" code.
+
+Finish when `public_get` retries transient network/TLS failures, the scanner reports a page that still fails as paging incomplete
+(exit 3, nothing written), and `python -m pytest` passes with no network and no credentials.
+
+- `podlib.public_get` retries `URLError`, `ssl.SSLError` (including SSL EOF), `ConnectionResetError`, socket timeouts and HTTP 5xx.
+  `PUBLIC_GET_ATTEMPTS = 3`, backoff `PUBLIC_GET_BACKOFF_S * 2**n` (0.5 s, 1 s). HTTP 4xx and the URL guard are never retried.
+- When every attempt fails it raises `PublicGetError` (attempts, last error, URL). The scanner stops with `stop_reason=network_error`.
+- Exit codes are unchanged: 3 now also covers a page that still fails after retries. Codes 1-3 write nothing.
+- Tests mock `urlopen` and patch `podlib._sleep`, so they never touch the network or sleep. Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -131,8 +147,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: Task I (scanner filter, keyset paging) verified and closed by grok-web. PR #2 code kept as-is; config/risk.toml not edited.
-- Public `python src/scanner.py` exit 0: scanned=15360 passed=8659 stop=exhausted cap_hit=false bus_signals=50. data/markets.jsonl not committed.
-- rejected_first: expired 566, long_tail_price 3849, missing_bid_ask 1159, missing_end_date 50, wide_spread 1077. Signals only; no order and no credentials.
-- `python -m pytest` passed offline. risk.toml sha256 0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04, live_enabled=false.
+- 2026-10-08: Task K done by grok-bot (self-picked). `podlib.public_get` retries transient network/TLS errors 3 times with 0.5 s exponential backoff.
+- Retried: URLError, SSL EOF / ssl.SSLError, ConnectionResetError, socket timeouts, HTTP 5xx. Never retried: HTTP 4xx and refused order/auth URLs.
+- If every attempt fails, `PublicGetError` is raised and the scanner exits 3 (`stop=network_error`, paging incomplete) and writes nothing, instead of crashing with exit 1.
+- `python -m pytest` passed offline (76 passed; urlopen mocked, no sleeps). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.

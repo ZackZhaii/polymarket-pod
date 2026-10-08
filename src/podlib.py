@@ -1,10 +1,15 @@
 """Phase 0 shared helpers. Standard library only. No secrets. No orders."""
 from __future__ import annotations
 
+import http.client
 import json
+import socket
+import ssl
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +38,27 @@ PINS = {
 
 GAMMA_PREFIX = "https://gamma-api.polymarket.com/markets"
 BOOK_PREFIX = "https://clob.polymarket.com/book?"
+
+# public_get retries transient network/TLS failures (SSL EOF, resets, timeouts, 5xx).
+# Waits are PUBLIC_GET_BACKOFF_S * 2**n between attempts (0.5 s, 1 s). HTTP 4xx is never retried.
+PUBLIC_GET_ATTEMPTS = 3
+PUBLIC_GET_BACKOFF_S = 0.5
+_sleep = time.sleep  # tests patch this so they never sleep
+
+# OSError covers ConnectionResetError, socket.timeout/TimeoutError and ssl.SSLError (incl. SSLEOFError).
+TRANSIENT_NETWORK_ERRORS = (URLError, OSError, http.client.HTTPException, ssl.SSLError, socket.timeout)
+
+
+class PublicGetError(RuntimeError):
+    """A public read still failed on a transient network/TLS error after every retry."""
+
+    def __init__(self, url: str, attempts: int, last_error: BaseException) -> None:
+        self.url = url
+        self.attempts = attempts
+        self.last_error = last_error
+        super().__init__(
+            f"public GET failed after {attempts} attempts: {type(last_error).__name__}: {last_error} ({url})"
+        )
 
 
 def utc_now() -> str:
@@ -119,8 +145,24 @@ def bus(
     return message
 
 
-def public_get(url: str, timeout: float = 20.0) -> Any:
-    """GET a public read endpoint. Rejects order and auth URLs."""
+def _retryable(exc: BaseException) -> bool:
+    if isinstance(exc, HTTPError):
+        return exc.code >= 500
+    return isinstance(exc, TRANSIENT_NETWORK_ERRORS)
+
+
+def public_get(
+    url: str,
+    timeout: float = 20.0,
+    *,
+    attempts: int | None = None,
+    backoff_s: float | None = None,
+) -> Any:
+    """GET a public read endpoint. Rejects order and auth URLs.
+
+    Transient network/TLS errors and HTTP 5xx are retried with exponential backoff.
+    HTTP 4xx and JSON errors are raised at once. If every attempt fails, raises PublicGetError.
+    """
     if not (url.startswith(GAMMA_PREFIX) or url.startswith(BOOK_PREFIX)):
         raise RuntimeError("refusing URL outside public Gamma markets and CLOB /book")
     lowered = url.lower()
@@ -132,8 +174,19 @@ def public_get(url: str, timeout: float = 20.0) -> Any:
         headers={"User-Agent": "polymarket-pod-phase0", "Accept": "application/json"},
         method="GET",
     )
-    with urlopen(request, timeout=timeout) as response:
-        body = response.read().decode("utf-8")
+    tries = max(1, int(PUBLIC_GET_ATTEMPTS if attempts is None else attempts))
+    base = PUBLIC_GET_BACKOFF_S if backoff_s is None else float(backoff_s)
+    for attempt in range(tries):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                body = response.read().decode("utf-8")
+            break
+        except Exception as exc:  # noqa: BLE001 - filtered by _retryable
+            if not _retryable(exc):
+                raise
+            if attempt + 1 >= tries:
+                raise PublicGetError(url, tries, exc) from exc
+            _sleep(base * (2 ** attempt))
     return json.loads(body)
 
 

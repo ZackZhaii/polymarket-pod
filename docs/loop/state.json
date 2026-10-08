@@ -42,6 +42,15 @@
       "finish": "src/scanner.py walks public Gamma /markets/keyset, filters by min_liquidity_usd and max_spread from config/risk.toml plus expiry, one-sided and 0.03-0.97 long-tail rules, fails closed on missing, boolean, non-finite or invalid keys, stops on a repeated cursor or a page with no new markets, writes all passing markets to data/markets.jsonl and only the top 50 to the bus, exits 1/2/3 without writing on failure. Public run 2026-10-08 exit 0 scanned=15360 passed=8659 bus_signals=50 stop=exhausted. pytest passed offline. config/risk.toml unchanged.",
       "done_at": "2026-10-08T10:16:25Z",
       "surface": "grok-web"
+    },
+    {
+      "id": "K",
+      "status": "done",
+      "title": "public_get retry/backoff; scanner exits 3 on network failure",
+      "finish": "src/podlib.py public_get retries transient network/TLS errors (URLError, ssl.SSLError incl. SSL EOF, ConnectionResetError, socket timeouts, HTTP 5xx) PUBLIC_GET_ATTEMPTS=3 times with 0.5 s exponential backoff, never retries HTTP 4xx, and raises PublicGetError when every attempt fails. src/scanner.py stops the walk with stop_reason network_error and main() exits 3 (paging incomplete) without writing, instead of crashing with exit 1. Offline tests mock urlopen and never sleep. config/risk.toml is unchanged.",
+      "note": "Self-picked by grok-bot after two public scanner runs on NoisePC crashed with URLError [SSL: UNEXPECTED_EOF_WHILE_READING] during Task I acceptance.",
+      "done_at": "2026-10-08T10:29:48Z",
+      "surface": "grok-bot"
     }
   ]
 }
