@@ -6,6 +6,7 @@ and ranks survivors by 24h volume. Signals only; never edits risk.toml.
 """
 from __future__ import annotations
 
+import math
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -41,7 +42,7 @@ GAMMA_KEYSET = (
     "?closed=false&active=true&order=volume24hr&ascending=false"
 )
 PAGE_LIMIT = 100
-MAX_MARKETS = 20000
+MAX_MARKETS = 50000
 MAX_PAGES = 1000
 
 # Only the top N passing markets (by 24h volume) go to the bus; all go to data/markets.jsonl.
@@ -162,20 +163,27 @@ def fetch_all_markets(
     return rows, meta
 
 
+def _finite_number(key: str, value: Any) -> float:
+    """Accept only a finite int or float. Booleans, strings, inf and nan fail closed."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RuntimeError(f"risk.toml scanner thresholds must be numbers: {key}")
+    number = float(value)
+    if not math.isfinite(number):
+        raise RuntimeError(f"risk.toml scanner thresholds must be finite numbers: {key}")
+    return number
+
+
 def thresholds_from(cfg: dict[str, Any]) -> dict[str, float]:
     """Validate scanner thresholds from an already-parsed risk config. Fails closed."""
     for key in ("min_liquidity_usd", "max_spread"):
         if key not in cfg:
             raise RuntimeError(f"risk.toml missing scanner key: {key}")
-    try:
-        limits = {
-            "min_liquidity_usd": float(cfg["min_liquidity_usd"]),
-            "max_spread": float(cfg["max_spread"]),
-            "min_price": float(cfg.get("scanner_min_price", MIN_PRICE)),
-            "max_price": float(cfg.get("scanner_max_price", MAX_PRICE)),
-        }
-    except (TypeError, ValueError) as exc:
-        raise RuntimeError("risk.toml scanner thresholds must be numbers") from exc
+    limits = {
+        "min_liquidity_usd": _finite_number("min_liquidity_usd", cfg["min_liquidity_usd"]),
+        "max_spread": _finite_number("max_spread", cfg["max_spread"]),
+        "min_price": _finite_number("scanner_min_price", cfg.get("scanner_min_price", MIN_PRICE)),
+        "max_price": _finite_number("scanner_max_price", cfg.get("scanner_max_price", MAX_PRICE)),
+    }
     if limits["min_liquidity_usd"] < 0:
         raise RuntimeError("min_liquidity_usd must be >= 0")
     if limits["max_spread"] <= 0:

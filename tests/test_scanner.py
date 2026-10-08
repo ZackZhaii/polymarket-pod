@@ -313,3 +313,40 @@ def test_scanner_source_has_no_keys_or_order_paths():
     for token in ("py_clob_client", "POLY_PRIVATE_KEY", "private_key", "os.environ", "load_dotenv", "\"fill\""):
         assert token not in source
     assert "write_text" not in source and "write_bytes" not in source
+
+
+def test_boolean_and_non_finite_thresholds_fail_closed(tmp_path):
+    base_liq = "min_liquidity_usd = 10000\n"
+    base_spread = "max_spread = 0.04\n"
+    # Booleans would otherwise read as 1.0 / 0.0.
+    _expect_runtime_error(_write_risk(tmp_path, base_liq + "max_spread = true\n"), "max_spread")
+    _expect_runtime_error(_write_risk(tmp_path, "min_liquidity_usd = false\n" + base_spread), "min_liquidity_usd")
+    _expect_runtime_error(
+        _write_risk(tmp_path, base_liq + base_spread + "scanner_max_price = true\n"), "scanner_max_price"
+    )
+    # 1e999 parses to inf; inf would switch the spread filter off.
+    _expect_runtime_error(_write_risk(tmp_path, base_liq + "max_spread = 1e999\n"), "finite")
+    _expect_runtime_error(_write_risk(tmp_path, "min_liquidity_usd = 1e999\n" + base_spread), "finite")
+    _expect_runtime_error(
+        _write_risk(tmp_path, base_liq + base_spread + "scanner_min_price = -1e999\n"), "finite"
+    )
+
+
+def test_nan_and_string_numbers_fail_closed_in_parsed_config():
+    good = {"min_liquidity_usd": 10000, "max_spread": 0.04}
+    for key in ("min_liquidity_usd", "max_spread", "scanner_min_price", "scanner_max_price"):
+        for bad in (float("nan"), float("inf"), "0.04", True, None):
+            cfg = dict(good)
+            cfg[key] = bad
+            try:
+                scanner.thresholds_from(cfg)
+            except RuntimeError as exc:
+                assert key in str(exc), str(exc)
+            else:
+                raise AssertionError(f"{key}={bad!r} should fail closed")
+    assert scanner.thresholds_from(good)["max_spread"] == 0.04
+
+
+def test_market_cap_is_fifty_thousand():
+    assert scanner.MAX_MARKETS == 50000
+    assert scanner.MAX_PAGES * scanner.PAGE_LIMIT >= scanner.MAX_MARKETS
