@@ -86,13 +86,24 @@ Finish when `src/quant.py` scores a local fixture with Brier `mean((p-y)^2)`, em
 - No network and no credentials.
 - The proposal does not edit `config/risk.toml` or any size cap.
 
-## Task H — scanner filter, long-tail band, keyset paging
+## Task H — SportsDevig signal only
+
+Status: done.
+
+Finish when `src/sports_devig.py` removes the overround from a two-way decimal-odds fixture and emits a signal only if fair probability exceeds market price plus slippage.
+
+- Signal only. No fill, no quote, and no order.
+- A positive edge is not locked profit. One leg is directional.
+- No network. Do not edit `config/risk.toml`.
+
+## Task I — scanner filter, long-tail band, keyset paging
 
 Status: todo.
 
 Owner: Scanner (Poly扫描). Claim as surface `grok-bot` (any surface may verify).
-Order: placed ahead of G by operator decision 2026-10-08. G was already done (5332d4a), so H is the only todo.
-The code ships in the Task H pull request. Whoever claims H verifies it and closes it.
+Order: the operator ordered this task ahead of G on 2026-10-08. G (5332d4a) and H — SportsDevig (26667aa) were already done,
+so I is the only todo. Merging PR #2 is the human add the `## Latest` rule asks for.
+The code ships in PR #2. Whoever claims I verifies it and closes it.
 
 Finish when `src/scanner.py` walks public Gamma `/markets/keyset` (24h volume desc, `liquidity_num_min` = `min_liquidity_usd`),
 filters by `min_liquidity_usd` and `max_spread` from `config/risk.toml`, drops expired, closed, not-accepting, one-sided
@@ -120,8 +131,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: Operator added Task H (scanner filter) and ordered it ahead of G. G was already done, so H is the only todo.
-- H code is in the Task H pull request: keyset paging, risk.toml thresholds, 0.03-0.97 band, top-50 bus cap.
-- Thresholds fail closed on missing, boolean, non-finite or invalid values. `MAX_MARKETS = 50000`.
-- `python -m pytest` passed offline. `config/risk.toml` unchanged, `live_enabled=false`.
-- After merge, claim H, verify with pytest and one public scanner run, record it here, then release done.
+- 2026-10-08: Task H (SportsDevig, signal only) done by grok-web in 26667aa. Kept as-is.
+- Operator adds Task I (scanner filter, Poly扫描) through PR #2. Merging PR #2 is the human add; I is the only todo.
+- I code ships in PR #2: keyset paging, risk.toml thresholds, 0.03-0.97 band, top-50 bus cap, `MAX_MARKETS = 50000`.
+- `python -m pytest` passed offline. `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- After merge, claim I, verify with pytest and one public scanner run, record it here, then release done. No live-trading task.

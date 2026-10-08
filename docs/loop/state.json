@@ -27,10 +27,18 @@
     },
     {
       "id": "H",
+      "status": "done",
+      "title": "SportsDevig signal only",
+      "finish": "src/sports_devig.py removes the overround from a two-way decimal-odds fixture and emits a signal only if fair probability exceeds market price plus slippage. No fill, no order, no network. config/risk.toml is unchanged.",
+      "done_at": "2026-10-08T09:10:00Z",
+      "surface": "grok-web"
+    },
+    {
+      "id": "I",
       "status": "todo",
       "title": "Scanner filter, long-tail band, keyset paging",
       "owner": "Scanner",
-      "order_note": "Placed ahead of G by operator decision 2026-10-08; G was already done, so H is the first todo.",
+      "order_note": "Operator ordered this task ahead of G on 2026-10-08. G and H (SportsDevig) were already done, so I is the first todo. Merging PR #2 is the human add.",
       "finish": "src/scanner.py walks public Gamma /markets/keyset, filters by min_liquidity_usd and max_spread from config/risk.toml plus expiry, one-sided and 0.03-0.97 long-tail rules, fails closed on missing, boolean, non-finite or invalid keys, stops on a repeated cursor or a page with no new markets, writes all passing markets to data/markets.jsonl and only the top 50 to the bus, exits 1/2/3 without writing on failure, and pytest passes offline. Record one public scanner run under ## Latest. config/risk.toml is unchanged. No network in tests and no credentials."
     }
   ]
