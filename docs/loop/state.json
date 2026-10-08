@@ -105,6 +105,15 @@
       "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 5. Pure code; only tightens risk.",
       "done_at": "2026-10-08T19:11:34Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "Q",
+      "status": "done",
+      "title": "scanner picks outcome IDs by Gamma version (v2 positionIds, v1 clobTokenIds); missing or unknown version rejects the market",
+      "finish": "src/scanner.py select_token_ids(market) is pure and offline: version v2 reads positionIds and v1 reads clobTokenIds (each as a list or a JSON-encoded list), even when both fields are present and differ. A missing version (missing_version) or any value other than exactly v1/v2 (unsupported_version) is a scanner rejection reason; no field is guessed from presence. With a valid version, missing or malformed IDs, non-decimal V2 IDs and an ID count that does not match outcomes leave token_ids empty with a token_ids_problem, so no book is fetched downstream. normalize records version, token_id_source and token_ids_problem; filter_markets counts token_id_problems; exit codes are unchanged. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Queued by Poly指挥; done by grok-bot. Not a risk-gap backlog item. Rule follows docs.polymarket.com (Polymarket Protocol V2 migration: choose the ID field by version, even when both fields are present; reject missing or unsupported versions). Poly指挥 spec: fail closed on missing or unrecognized version.",
+      "done_at": "2026-10-08T19:34:24Z",
+      "surface": "grok-bot"
     }
   ]
 }

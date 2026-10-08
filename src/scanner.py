@@ -3,11 +3,14 @@
 Walks public Gamma /markets/keyset, filters by config/risk.toml
 (min_liquidity_usd, max_spread) plus long-tail and expiry rules,
 and ranks survivors by 24h volume. Signals only; never edits risk.toml.
+Outcome IDs come from positionIds for V2 markets and clobTokenIds for V1, chosen
+by Gamma's `version` (select_token_ids); a missing or unknown version rejects the market.
 A market needs a zoned end date at least MIN_HOURS_TO_EXPIRY (24 h, a code
 constant in src/expiry_rule.py) away; otherwise it fails closed.
 """
 from __future__ import annotations
 
+import json
 import math
 import sys
 from collections import Counter
@@ -65,6 +68,8 @@ EXIT_INCOMPLETE = 3
 # Order matters: the first entry that fails is the market's "first" reason.
 REASONS = (
     "closed",
+    "missing_version",
+    "unsupported_version",
     "expired",
     "missing_end_date",
     "invalid_end_date",
@@ -250,8 +255,75 @@ def yes_price(market: dict[str, Any]) -> tuple[float | None, str]:
     return None, "none"
 
 
+# Outcome IDs (docs.polymarket.com, Polymarket Protocol V2 migration): Gamma's market-level
+# `version` selects the field even when both are present. "v2" -> positionIds (array of
+# decimal strings); "v1" -> clobTokenIds (JSON-encoded array). A missing version
+# (missing_version) or any other value (unsupported_version) rejects the market; no field
+# is guessed from presence. With a valid version, bad or absent IDs leave token_ids empty
+# (token_ids_problem), so no book is fetched downstream; that is not a filter reason.
+TOKEN_FIELD_BY_VERSION = {"v1": "clobTokenIds", "v2": "positionIds"}
+VERSION_REASONS = ("missing_version", "unsupported_version")
+
+
+def _decode_ids(value: Any, *, decimal: bool) -> list[str] | None:
+    """Decode a list, or a JSON-encoded list, of outcome IDs.
+
+    Returns [] when absent or empty and None when malformed: not a list, or any
+    element that is not a non-empty string or an int (bools, floats, None and nested
+    values are malformed). With decimal=True every ID must be ASCII digits.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(value, list):
+        return None
+    ids: list[str] = []
+    for item in value:
+        if isinstance(item, bool):
+            return None
+        if isinstance(item, int):
+            text = str(item)
+        elif isinstance(item, str):
+            text = item.strip()
+        else:
+            return None
+        if not text or (decimal and not (text.isascii() and text.isdigit())):
+            return None
+        ids.append(text)
+    return ids
+
+
+def select_token_ids(market: dict[str, Any]) -> tuple[list[str], str | None, str | None]:
+    """Return (token_ids, source_field, problem) for one raw Gamma market.
+
+    problem is None, missing_version, unsupported_version, missing_token_ids,
+    invalid_token_ids or token_count_mismatch; token_ids is [] whenever problem is set.
+    missing_version and unsupported_version also reject the market (rejection_reasons).
+    """
+    version = market.get("version")
+    if version is None or version == "":
+        return [], None, "missing_version"
+    # Exact strings only (docs: "Treat versions other than v1 and v2 as unsupported").
+    if not isinstance(version, str) or version not in TOKEN_FIELD_BY_VERSION:
+        return [], None, "unsupported_version"
+    field = TOKEN_FIELD_BY_VERSION[version]
+    ids = _decode_ids(market.get(field), decimal=version == "v2")
+    if ids is None:
+        return [], field, "invalid_token_ids"
+    if not ids:
+        return [], field, "missing_token_ids"
+    outcomes = json_list(market.get("outcomes"))
+    if outcomes and len(outcomes) != len(ids):
+        return [], field, "token_count_mismatch"
+    return ids, field, None
+
+
 def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
-    tokens = [str(item) for item in json_list(market.get("clobTokenIds"))]
+    tokens, token_source, token_problem = select_token_ids(market)
     outcomes = [str(item) for item in json_list(market.get("outcomes"))]
     prices = [as_float(item) for item in json_list(market.get("outcomePrices"))]
     best_bid = as_float(market.get("bestBid"))
@@ -268,6 +340,9 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
         "slug": market.get("slug") or "",
         "condition_id": market.get("conditionId") or "",
         "token_ids": tokens,
+        "version": market.get("version") if isinstance(market.get("version"), str) else None,
+        "token_id_source": token_source,
+        "token_ids_problem": token_problem,
         "outcomes": outcomes,
         "outcome_prices": prices,
         "liquidity_usd": as_float(market.get("liquidityNum") if market.get("liquidityNum") is not None else market.get("liquidity")),
@@ -300,6 +375,8 @@ def rejection_reasons(
     reasons: list[str] = []
     if row["closed"]:
         reasons.append("closed")
+    if row["token_ids_problem"] in VERSION_REASONS:
+        reasons.append(row["token_ids_problem"])
     expiry = expiry_problem(row["end_date"], now, min_hours_to_expiry)
     if expiry is not None:
         reasons.append(expiry)
@@ -346,12 +423,15 @@ def filter_markets(
     passing: list[dict[str, Any]] = []
     first_reason: Counter = Counter()
     any_reason: Counter = Counter()
+    token_problems: Counter = Counter()
     scanned = 0
     for market in raw_markets:
         row = normalize(market, ts)
         if not (row["question"] or row["slug"] or row["id"]):
             continue
         scanned += 1
+        if row["token_ids_problem"] and row["token_ids_problem"] not in VERSION_REASONS:
+            token_problems[row["token_ids_problem"]] += 1
         reasons = rejection_reasons(row, limits, now_dt, min_hours_to_expiry)
         if reasons:
             first_reason[reasons[0]] += 1
@@ -367,6 +447,7 @@ def filter_markets(
         "rows": passing,
         "first_reason": dict(first_reason),
         "any_reason": dict(any_reason),
+        "token_id_problems": dict(token_problems),
         "limits": dict(limits),
         "min_hours_to_expiry": min_hours_to_expiry,
     }
@@ -478,6 +559,9 @@ def main(
         f"live_enabled={str(live).lower()} keys=none orders=none"
     )
     print("rejected_first=" + ", ".join(f"{k}:{v}" for k, v in sorted(result["first_reason"].items())))
+    if result.get("token_id_problems"):
+        # Not a rejection: these rows pass but carry no outcome IDs, so no book is fetched.
+        print("token_id_problems=" + ", ".join(f"{k}:{v}" for k, v in sorted(result["token_id_problems"].items())))
     if not fetch["complete"]:
         print(f"scanner failed: pagination incomplete ({fetch['stop_reason']}); nothing written", file=sys.stderr)
         if fetch.get("error"):

@@ -24,6 +24,7 @@ RAW = {
     "spread": 0.02,
     "feesEnabled": False,
     "closed": False,
+    "version": "v1",
 }
 
 

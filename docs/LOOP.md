@@ -239,6 +239,23 @@ and `python -m pytest` passes with no network and no credentials.
 - `src/risk_gate.py`: the `max_open_positions` exemption needs `leg_already_open is True`. Another open leg of the same market
   (the other side of a pair) is a new position. No new threshold. Do not edit `config/risk.toml`.
 
+## Task Q — scanner picks outcome IDs by Gamma `version`; missing or unknown version rejects the market
+
+Status: done.
+
+Queued by Poly指挥, done by grok-bot. Gamma puts Polymarket Protocol V2 outcome IDs in `positionIds`; the scanner read only
+`clobTokenIds`, so V2 markets came through with no token IDs and never got a book.
+
+Finish when the scanner picks outcome IDs by Gamma's `version`, rejects markets without a known version, and `python -m pytest` passes with
+no network and no credentials.
+
+- `src/scanner.py`: `select_token_ids(market)` returns `(token_ids, source_field, problem)`. `version` `v2` reads `positionIds`,
+  `v1` reads `clobTokenIds` (list or JSON-encoded list), even when both are present and differ (docs.polymarket.com, V2 migration).
+- `version` missing/null/empty is the rejection reason `missing_version`; any other value (exact match only, so `V2`, `v3`,
+  `2` all count) is `unsupported_version`. Both rank right after `closed`. No field is guessed from which IDs are present.
+- Valid version but missing or malformed IDs, non-decimal V2 IDs, or an ID count that does not match `outcomes`: `token_ids`
+  stays empty with a `token_ids_problem` (not a rejection, as before); no book is fetched downstream. Exit codes unchanged.
+
 ## Paste this into a new chat
 
 ```text
@@ -250,8 +267,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task P done by grok-bot (self-picked, backlog item 5). The paper ledger nets per leg (market + token_id); arb-pair tokens never offset.
-- One filled leg is one position at its full notional; a filled pair is two positions. Only a same-token sell closes a leg.
-- `max_open_positions` counts legs. The cap exemption needs the same token already open (`leg_already_open`), not just the same market.
-- `python -m pytest` passed offline (265 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task Q done by grok-bot (queued by Poly指挥). The scanner picks outcome IDs by Gamma's `version`. Task P (per-leg exposure) is on dev.
+- `v2` -> `positionIds`, `v1` -> `clobTokenIds`, even when both differ. Missing version -> `missing_version`, anything else -> `unsupported_version` (rejected).
+- Valid version but missing, malformed, non-decimal V2 or count-mismatched IDs leave `token_ids` empty, so no book is fetched (fail closed).
+- `python -m pytest` passed offline (337 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.
