@@ -29,11 +29,17 @@ proposals waiting for the user's decision at M2. Task AC moved no value and chan
 | `SPORTS_DEVIG_ASSUMED_SLIPPAGE` | `0.005` | price | SportsDevig signals only if fair probability exceeds the price plus this slippage. | `src/thresholds.py`; re-exported as `sports_devig.ASSUMED_SLIPPAGE` | Task H (26667aa) | no |
 | `LEDGER_OPEN_EPS` | `1e-09` | shares | A leg with at most this many open shares counts as closed (position count). Also the paper-ledger conservation tolerance (Task AF: cash, leg shares and cost basis per fill). | `src/thresholds.py`; re-exported as `paper_ledger.OPEN_EPS` | Task P (bbde4e2) | no |
 | `REFLECTOR_MAX_PER_UTC_DAY` | `3` | proposals/day | Reflector writes at most this many proposals per UTC day. | `src/thresholds.py`; re-exported as `reflector.MAX_PER_UTC_DAY` | Task B (bd06620) | no |
+| `WS_BACKOFF_BASE_S` | `1.0` | s | WebSocket recorder reconnect backoff base: `base * 2**attempt`, reset after a healthy connection. Operational, not a risk threshold. | `src/thresholds.py` | Task AG | no (operational) |
+| `WS_BACKOFF_CAP_S` | `60.0` | s | Cap on the WebSocket recorder reconnect backoff. Operational, not a risk threshold. | `src/thresholds.py` | Task AG | no (operational) |
+| `WS_RESYNC_TIMEOUT_S` | `30.0` | s | An asset waiting this long for a fresh snapshot (after subscribe or a detected gap) makes the recorder reconnect. Also the connect timeout. A waiting asset writes no book rows (its invalidation row is already stale), so this never makes a book look fresh. Operational. | `src/thresholds.py` | Task AG | no (operational) |
+| `WS_PING_INTERVAL_S` | `10.0` | s | Application heartbeat: the text frame `PING` this often (Polymarket market-channel docs). Operational. | `src/thresholds.py` | Task AG, docs.polymarket.com | no (operational) |
+| `WS_ROW_REFRESH_S` | `30.0` | s (exchange time) | A live book with an unchanged top still gets a new row once the exchange time of its latest applied event is this far past the last row, so `book_ts` keeps up with a live stream. Rows lag the stream by at most this, never lead it. Staleness-relevant; must stay below `MAX_BOOK_AGE_S`. | `src/thresholds.py` | Task AG | yes |
 
 Relations checked when `src/thresholds.py` is imported (an explicit `RuntimeError`, not `assert`):
 `SENTINEL_STALE_S == MAX_BOOK_AGE_S`, `PAPER_CYCLE_STALE_AFTER_S == MAX_BOOK_AGE_S`,
 `SENTINEL_STALE_CONSECUTIVE` a whole number >= 1, `0 <= SCANNER_MIN_PRICE < SCANNER_MAX_PRICE <= 1`,
-`SCANNER_MAX_PRICE < ENDGAME_PRICE_MIN <= ENDGAME_PRICE_MAX < 1`, `0 < MIN_HOURS_TO_EXPIRY < ENDGAME_WINDOW_HOURS`.
+`SCANNER_MAX_PRICE < ENDGAME_PRICE_MIN <= ENDGAME_PRICE_MAX < 1`, `0 < MIN_HOURS_TO_EXPIRY < ENDGAME_WINDOW_HOURS`,
+`0 < WS_BACKOFF_BASE_S <= WS_BACKOFF_CAP_S`, `0 < WS_PING_INTERVAL_S < WS_RESYNC_TIMEOUT_S`, `0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S`.
 `src/sentinel.py` keeps its own `SENTINEL_STALE_S != MAX_BOOK_AGE_S` guard as well.
 
 ## Operational limits (stay in their modules)

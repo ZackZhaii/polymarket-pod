@@ -27,6 +27,11 @@ Windows, if this machine has no `D:` drive, use `%USERPROFILE%\projects\polymark
 
 `python src/book.py` reads the public CLOB `/book` endpoint and records best bid, best ask, and spread in `data/books.jsonl`.
 
+Optional (M1): `python -m src.ws_recorder --assets TOKEN_ID ... --max-runtime 300` records the public CLOB
+WebSocket market channel into the same `data/books.jsonl` row format (read-only, no auth, no orders).
+It needs the optional `websockets` package: `pip install -r requirements-ws.txt`. Exit codes: 0 ok,
+1 no book recorded, 2 usage error, 3 `websockets` not installed, 4 output write failed.
+
 `python src/paper_cycle.py` reads those local files only. It emits YES+NO or multi-outcome gap signals and a staleness signal. It does not use the network, does not write a paper fill, and does not place an order. A gap is not locked profit.
 
 `python src/paper_session.py` is one observation pass: the scanner's filtered public Gamma walk (`scanner.scan`, same rules and fail-closed exits), public CLOB `/book` for the first five passing markets, then `paper_cycle`, which judges book age from the CLOB timestamp at a clock read after the books. It appends `logs/sessions.jsonl` and does not write a paper fill. Run it when you want another paper sample. It does not start live trading.

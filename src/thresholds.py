@@ -60,6 +60,23 @@ LEDGER_OPEN_EPS = 1e-9
 # Task B: at most this many Reflector proposals per UTC day.
 REFLECTOR_MAX_PER_UTC_DAY = 3
 
+# --- WebSocket book recorder (Task AG, M1): operational timing, not risk thresholds ----------
+# None of these makes a book look fresher: freshness is always the exchange book_ts against
+# MAX_BOOK_AGE_S, and a book that is resyncing writes an invalidation row (stale at once).
+# Reconnect backoff after a disconnect or failed connect: base * 2**attempt, capped.
+WS_BACKOFF_BASE_S = 1.0
+WS_BACKOFF_CAP_S = 60.0
+# How long an asset may wait for a fresh snapshot (after subscribe or a detected gap) before
+# the recorder drops the connection and reconnects.
+WS_RESYNC_TIMEOUT_S = 30.0
+# Application heartbeat: send the text frame PING this often (docs.polymarket.com market channel).
+WS_PING_INTERVAL_S = 10.0
+# Staleness-relevant: a live book whose top of book does not change still gets a new row once the
+# EXCHANGE time of the latest applied event is this far past the last written row, so a deep but
+# quiet-top book does not look stale while its deltas keep arriving. Rows can only lag reality by
+# this much (never lead it); it must stay well below MAX_BOOK_AGE_S.
+WS_ROW_REFRESH_S = 30.0
+
 
 def consistency_problems() -> list[str]:
     """Relations the values must keep. Import fails if any is broken (explicit, survives -O)."""
@@ -76,6 +93,12 @@ def consistency_problems() -> list[str]:
         problems.append("Endgame band must sit above the scanner band and below 1")
     if not 0.0 < MIN_HOURS_TO_EXPIRY < ENDGAME_WINDOW_HOURS:
         problems.append("Endgame window must be non-empty: 0 < MIN_HOURS_TO_EXPIRY < ENDGAME_WINDOW_HOURS")
+    if not 0.0 < WS_BACKOFF_BASE_S <= WS_BACKOFF_CAP_S:
+        problems.append("WebSocket backoff must satisfy 0 < WS_BACKOFF_BASE_S <= WS_BACKOFF_CAP_S")
+    if not 0.0 < WS_PING_INTERVAL_S < WS_RESYNC_TIMEOUT_S:
+        problems.append("WebSocket timing must satisfy 0 < WS_PING_INTERVAL_S < WS_RESYNC_TIMEOUT_S")
+    if not 0.0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S:
+        problems.append("WS_ROW_REFRESH_S must satisfy 0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S")
     return problems
 
 

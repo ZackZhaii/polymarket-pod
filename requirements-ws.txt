@@ -1,0 +1,5 @@
+# OPTIONAL (Task AG, M1). Only for the read-only WebSocket book recorder: python -m src.ws_recorder
+# Not a trading dependency (Poly指挥 ruling 2026-10-09): public CLOB market channel only, no auth,
+# no keys, no order endpoints. The Phase 0 core (requirements.txt) and the test suite do not need it.
+# Exact pin. Never add py-clob-client or any other order-capable package here.
+websockets==17.2.0

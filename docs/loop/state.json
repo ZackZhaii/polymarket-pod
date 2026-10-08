@@ -249,6 +249,15 @@
       "note": "Approved by Poly指挥 (ledger integrity); done by grok-bot. Tightening: strict ledger reader; booked fee is max(decision fee, fee recomputed from stored values), +1e-8 USD on ~0.14% of fills. M2 pending list unchanged.",
       "done_at": "2026-10-08T21:44:08Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AG",
+      "status": "done",
+      "title": "Read-only WebSocket order-book recorder for the public CLOB market channel (src/ws_recorder.py): pure core + injectable transport, gap/inconsistency resync, append-safe JSONL rows for book_staleness / paper_cycle / StaleWatch; websockets optional and pinned (backlog #21)",
+      "finish": "BookCore applies book snapshots and price_change deltas per asset, book_ts is the exchange ms timestamp (book.book_timestamp), never receive time. Invalid or non-finite values, timestamp regression, crossed book, unknown level removal, best_bid/best_ask mismatch, tick mismatch, market mismatch or malformed messages mark the asset for resync: its state is discarded, an invalidation row (no prices, book_ts_problem invalid_book_ts) is written if it was live, and no book row is written until a fresh snapshot. Any disconnect invalidates every asset; reconnect uses exponential backoff with a cap. URL allowlist (wss + exact host + /ws/market) and outgoing-frame allowlist enforced in code; no auth, no headers, no user channel, no order-capable package. websockets==17.2.0 only in requirements-ws.txt, imported lazily in the adapter. CLI python -m src.ws_recorder --assets ... --max-runtime ... with exit codes 0-4. New timing constants in src/thresholds.py and THRESHOLDS.md. config/risk.toml unchanged. COORDINATION #21 struck through. pytest passes offline (fake transport, no network).",
+      "note": "Approved by Poly指挥 (websockets ruled a non-trading dependency, mergeable routinely with checks (a)-(d)); done by grok-bot. Tightening: invalidation rows make consumers fail closed at once. WS_ROW_REFRESH_S is staleness-relevant and joins the M2 pending list; the other WS_* constants are operational.",
+      "done_at": "2026-10-08T21:56:10Z",
+      "surface": "grok-bot"
     }
   ]
 }

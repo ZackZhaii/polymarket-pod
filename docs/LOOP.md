@@ -635,10 +635,46 @@ any mismatch halts booking, existing ledgers load exactly as before, and `python
 - No new threshold: `LEDGER_OPEN_EPS` and `PAPER_EQUITY_USD` are reused (THRESHOLDS.md notes the reuse). `config/risk.toml`
   unchanged. Tests: `tests/test_ledger_integrity.py`.
 
+## Task AG — read-only WebSocket order-book recorder, public market channel (backlog #21)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. `book.py` only polls REST, so the book can move between polls; M1 needs a live,
+read-only recorder that never keeps writing a book it can no longer vouch for (COORDINATION backlog #21).
+
+Finish when a pure core turns market-channel messages into per-asset books with exchange timestamps, any gap or
+inconsistency forces a fresh snapshot before rows resume, the rows feed `book_staleness` / `paper_cycle` / `StaleWatch`
+unchanged, the dependency is optional and fenced by (a)-(d), and `python -m pytest` passes with no network.
+
+- `src/ws_recorder.py`. Sources (in the module docstring): docs.polymarket.com market channel and WSS overview pages.
+  URL `wss://ws-subscriptions-clob.polymarket.com/ws/market`; subscribe `{"assets_ids": [...], "type": "market",
+  "initial_dump": true}`; text `PING` every `WS_PING_INTERVAL_S`; events book, price_change, tick_size_change,
+  last_trade_price (others are counted and ignored). The initial dump arrives as a JSON list of book events.
+- Core (`BookCore`, no clock, no I/O): book snapshot replaces the asset's book; price_change deltas (size "0" removes)
+  apply to copies per asset, so nothing is half-applied. `book_ts` = exchange ms timestamp via `book.book_timestamp`.
+  No sequence numbers exist and the hash algorithm is undocumented (the hash is recorded, not verified), so gaps are
+  detected from the documented fields: invalid/non-finite price or size, timestamp regression, crossed book, removal of an
+  unknown level, reported best_bid/best_ask differing from the local book, tick or market mismatch, malformed message.
+- Resync: the asset's state is discarded, a live asset gets one invalidation row (no prices, `book_ts_problem=invalid_book_ts`,
+  `ws_state=resync`, so consumers fail closed at once: a tightening), and no book row is written until a fresh snapshot.
+  The runner unsubscribes + resubscribes that asset; no snapshot within `WS_RESYNC_TIMEOUT_S` means reconnect. Any
+  disconnect invalidates every asset; reconnects back off `min(WS_BACKOFF_CAP_S, WS_BACKOFF_BASE_S * 2**n)`.
+- Rows: a superset of `book.snapshot` (plus `ws_event`, `ws_state`, `book_hash`), written on a snapshot, a top-of-book
+  change or every `WS_ROW_REFRESH_S` of exchange time. Append-safe: O_APPEND, one write per line, a torn last line is
+  sealed on open, NaN refused. market_id / question / outcome come from `data/markets.jsonl`; no bus messages.
+- Safety (Poly指挥: websockets is not a trading dependency if all hold): (a) `websockets==17.2.0` only in optional
+  `requirements-ws.txt`, imported lazily inside the adapter; (b) `check_market_url` before any connect: exact wss,
+  host and path; (c) no headers, `check_outgoing_frame` allows only PING and public market (un)subscribe frames;
+  (d) tests scan requirements files and src imports for order-capable packages.
+- CLI `python -m src.ws_recorder --assets ID [ID ...] --max-runtime S [--out] [--markets]`: exit 0 rows written,
+  1 no snapshot, 2 usage, 3 websockets missing, 4 write failed. New constants: `WS_BACKOFF_BASE_S`, `WS_BACKOFF_CAP_S`,
+  `WS_RESYNC_TIMEOUT_S`, `WS_PING_INTERVAL_S` (operational) and `WS_ROW_REFRESH_S` (staleness, M2 pending).
+  `config/risk.toml` unchanged. Tests: `tests/test_ws_recorder.py` (fake transport only).
+
 ## Latest
 
-- 2026-10-09: Task AF done by grok-bot (approved by Poly指挥, backlog #20). The paper ledger is checked by `src/ledger_store.py` (standard library only).
-- Fills carry `fill_id`: identical repeats count once, a changed row under the same id or an id-less row after id'd rows is invalid state.
-- Writes are atomic (temp file, fsync, os.replace); cash, leg shares and cost basis are conserved within LEDGER_OPEN_EPS or booking halts.
-- `python -m pytest` passed offline (1141 passed; on Windows 1137 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY.
+- 2026-10-09: Task AG done by grok-bot (approved by Poly指挥, backlog #21). `src/ws_recorder.py` records the public CLOB market channel read-only.
+- Pure core: snapshots + deltas, exchange book_ts; any gap, bad value or disconnect discards the asset until a fresh snapshot (invalidation row, fail closed).
+- websockets==17.2.0 is optional (`requirements-ws.txt`), lazy in the adapter; URL and outgoing-frame allowlists, no headers, no order-capable packages (tested).
+- `python -m pytest` passed offline (1351 passed; on Windows 1347 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S.
