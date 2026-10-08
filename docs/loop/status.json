@@ -1,0 +1,9 @@
+{
+  "ts": "2026-10-08T08:20:00Z",
+  "live_enabled": false,
+  "last_done": "F",
+  "next": "G",
+  "claim": null,
+  "cadence_minutes": 30,
+  "note": "F is done. G is the only open task. No live gate."
+}

@@ -70,7 +70,7 @@ Finish when `python src/paper_session.py` can record one public read, then the o
 
 ## Task F — Endgame signal only
 
-Status: todo.
+Status: done.
 
 Finish when `src/endgame.py` emits a signal for a fixture price between 0.98 and 0.99 whose market ends within 48 hours, and `python -m pytest` passes with no network and no credentials.
 
@@ -97,8 +97,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: 三端链接已写进 main。本机 Grok Build、网页端、Grok Bot 只通过本仓库交接。
-- 开工读 AGENTS.md 和 docs/LINK.md。领取用 `python src/loop_claim.py`，一次一件，3 小时锁定。
-- 队列里下一件是 Task F，再下一件是 Task G。这两件都还是 todo。
-- 队列空了就停。不要自行把实盘或交易客户端写进队列。
-- `config/risk.toml` 未改，`live_enabled=false`。
+- 2026-10-08: Task F done by grok-web. Endgame only signals inside 0.98-0.99 and 48 hours.
+- No fill, no order, no network. `config/risk.toml` unchanged, `live_enabled=false`.
+- Monitor cadence is 30 minutes. Claim lock is 1 hour so a stuck claim can be recovered.
+- Next todo is Task G. One task only. Do not start a second task in the same run.
+- Queue empty means stop. Do not add a live-trading task.

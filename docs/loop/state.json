@@ -1,14 +1,22 @@
 {
   "schema": 1,
   "branch": "main",
-  "claim_hours": 3,
+  "claim_hours": 1,
+  "cadence_minutes": 30,
   "claim": null,
+  "assignment": {
+    "grok-web": "first open todo when the claim is free",
+    "grok-build-local": "same queue; stop if grok-web holds the claim",
+    "grok-bot": "same queue; one new chat, one task"
+  },
   "tasks": [
     {
       "id": "F",
-      "status": "todo",
+      "status": "done",
       "title": "Endgame signal only",
-      "finish": "src/endgame.py emits a signal when a fixture price is between 0.98 and 0.99 and the market ends within 48 hours. It never emits a fill or an order. pytest passes with no network and no credentials. config/risk.toml is unchanged."
+      "finish": "src/endgame.py emits a signal when a fixture price is between 0.98 and 0.99 and the market ends within 48 hours. It never emits a fill or an order. pytest passes with no network and no credentials. config/risk.toml is unchanged.",
+      "done_at": "2026-10-08T08:20:00Z",
+      "surface": "grok-web"
     },
     {
       "id": "G",
