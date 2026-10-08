@@ -18,6 +18,7 @@ import pytest
 
 from src import book as book_module
 from src import paper_cycle, sentinel
+from scripts import guard
 from src import ws_recorder as w
 from src.book_staleness import INVALID_BOOK_TS, book_age_problem, parse_book_ts
 from src.podlib import read_jsonl
@@ -911,8 +912,14 @@ def test_the_adapter_refuses_a_bad_frame_before_sending(monkeypatch):
 # --- steering (d): no order-capable package in requirements or imports ---------------------------
 
 
-ORDER_CAPABLE = {"py_clob_client", "py_order_utils", "py_builder_signing_sdk", "clob_client", "polymarket_apis",
-                 "web3", "eth_account", "eth_keys", "ccxt", "polymarket"}
+# Task AH: the list lives in scripts/guard.py (single source of truth); it may only grow.
+AG_ORDER_CAPABLE = {"py_clob_client", "py_order_utils", "py_builder_signing_sdk", "clob_client", "polymarket_apis",
+                    "web3", "eth_account", "eth_keys", "ccxt", "polymarket"}
+ORDER_CAPABLE = guard.ORDER_CAPABLE
+
+
+def test_the_guard_list_is_the_single_source_and_only_grows():
+    assert ORDER_CAPABLE >= AG_ORDER_CAPABLE
 
 
 def _norm(name: str) -> str:
@@ -926,6 +933,7 @@ def test_no_order_capable_package_in_any_requirements_file():
         for line in _requirement_lines(path):
             assert _norm(line) not in ORDER_CAPABLE, (path.name, line)
             assert "clob" not in _norm(line), (path.name, line)
+            assert guard.banned_requirement(line) is None, (path.name, line)
 
 
 def test_no_order_capable_import_anywhere_in_src():
@@ -940,6 +948,8 @@ def test_no_order_capable_import_anywhere_in_src():
                 continue
             for root in roots:
                 assert root.lower() not in ORDER_CAPABLE, (path.name, root)
+        for _, module in guard.imported_modules(tree):
+            assert guard.banned_module(module) is None, (path.name, module)
 
 
 def test_recorder_source_has_no_auth_or_order_code():

@@ -643,7 +643,7 @@ Approved by Poly指挥, done by grok-bot. `book.py` only polls REST, so the book
 read-only recorder that never keeps writing a book it can no longer vouch for (COORDINATION backlog #21).
 
 Finish when a pure core turns market-channel messages into per-asset books with exchange timestamps, any gap or
-inconsistency forces a fresh snapshot before rows resume, the rows feed `book_staleness` / `paper_cycle` / `StaleWatch`
+inconsistency writes one price-less invalidation row and forces a fresh snapshot before priced rows resume, the rows feed `book_staleness` / `paper_cycle` / `StaleWatch`
 unchanged, the dependency is optional and fenced by (a)-(d), and `python -m pytest` passes with no network.
 
 - `src/ws_recorder.py`. Sources (in the module docstring): docs.polymarket.com market channel and WSS overview pages.
@@ -656,7 +656,8 @@ unchanged, the dependency is optional and fenced by (a)-(d), and `python -m pyte
   detected from the documented fields: invalid/non-finite price or size, timestamp regression, crossed book, removal of an
   unknown level, reported best_bid/best_ask differing from the local book, tick or market mismatch, malformed message.
 - Resync: the asset's state is discarded, a live asset gets one invalidation row (no prices, `book_ts_problem=invalid_book_ts`,
-  `ws_state=resync`, so consumers fail closed at once: a tightening), and no book row is written until a fresh snapshot.
+  `ws_state=resync`, so consumers fail closed at once: a tightening, approved by Poly指挥), and after that row nothing
+  more is written for the asset (no priced row, no second marker) until a fresh snapshot.
   The runner unsubscribes + resubscribes that asset; no snapshot within `WS_RESYNC_TIMEOUT_S` means reconnect. Any
   disconnect invalidates every asset; reconnects back off `min(WS_BACKOFF_CAP_S, WS_BACKOFF_BASE_S * 2**n)`.
 - Rows: a superset of `book.snapshot` (plus `ws_event`, `ws_state`, `book_hash`), written on a snapshot, a top-of-book
@@ -671,10 +672,40 @@ unchanged, the dependency is optional and fenced by (a)-(d), and `python -m pyte
   `WS_RESYNC_TIMEOUT_S`, `WS_PING_INTERVAL_S` (operational) and `WS_ROW_REFRESH_S` (staleness, M2 pending).
   `config/risk.toml` unchanged. Tests: `tests/test_ws_recorder.py` (fake transport only).
 
+## Task AH — local M0 guard script: scripts/guard.py (backlog #22)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. The M0 safety rules (risk.toml pin, `live_enabled=false`, no order-capable
+package, public read-only URLs only, THRESHOLDS.md in sync) were spread over many tests; there was no one command to run
+before and after a change (COORDINATION backlog #22).
+
+Finish when `python scripts/guard.py` runs offline from any cwd inside the repo, prints one PASS/FAIL line per check with
+the reason, exits 0 only if all pass, each check fails on a deliberately bad temp copy, and the real repo passes.
+
+- `scripts/guard.py`, standard library only (plus the repo's own `src.podlib.parse_risk_toml` and `src.thresholds`, so
+  risk.toml and the constants are read exactly as the app reads them). Read-only: no writes, no bytecode, no network.
+- Checks: `risk_sha_worktree` (CRLF normalised) and `risk_sha_head` (`git show HEAD:config/risk.toml`; SKIP without git
+  or outside a checkout, FAIL with `--require-git`); `live_enabled` (the bool false, plus the other `podlib.PINS`);
+  `banned_dependencies` (requirements*.txt, pyproject.toml); `banned_imports` (src/ and scripts/, including literal
+  `importlib.import_module` / `__import__`); `url_allowlist` (src/); `thresholds_doc`.
+- Single sources: `ORDER_CAPABLE` (Task AG's list plus the relayer and EIP-712 signing helpers) and the Task AC table
+  parser (`markdown_tables`) live in the guard; `tests/test_ws_recorder.py` and `tests/test_thresholds.py` use them.
+- URL allowlist, built from what `src/` uses today: `https://gamma-api.polymarket.com/markets`, `/markets/keyset`,
+  `https://clob.polymarket.com/book`, `wss://ws-subscriptions-clob.polymarket.com/ws/market`. Order/auth paths, the user
+  channel, relayer hosts, ports, user info, credentials in the query, host-less URL pieces and other hosts fail.
+  Docstrings and comments may also link docs.polymarket.com and github.com. The Data API is not used, so not allowed.
+- `thresholds_doc` mirrors Task AC: every constant once with value and type, the relations, documented re-exports (also
+  through podlib) and every renamed import documented, operational rows, risk.toml rows, the pinned sha in the doc.
+- Exit codes: 0 all pass (`risk_sha_head` may SKIP), 1 a check failed, 2 usage error or no repo root. How to run:
+  `docs/PHASE0_RUN.md` (Guard). No CI config added: CI stays with the user. Tests: `tests/test_guard.py`.
+- Also (Poly指挥): AG's doc sentences (`src/ws_recorder.py` docstring, this file, THRESHOLDS.md, state.json) now say a
+  live asset that loses sync gets one price-less invalidation row, then nothing until a fresh snapshot.
+
 ## Latest
 
-- 2026-10-09: Task AG done by grok-bot (approved by Poly指挥, backlog #21). `src/ws_recorder.py` records the public CLOB market channel read-only.
-- Pure core: snapshots + deltas, exchange book_ts; any gap, bad value or disconnect discards the asset until a fresh snapshot (invalidation row, fail closed).
-- websockets==17.2.0 is optional (`requirements-ws.txt`), lazy in the adapter; URL and outgoing-frame allowlists, no headers, no order-capable packages (tested).
-- `python -m pytest` passed offline (1351 passed; on Windows 1347 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task AH done by grok-bot (approved by Poly指挥, backlog #22). `python scripts/guard.py` is the local M0 guard (stdlib, offline, read-only).
+- Checks: risk.toml sha (worktree + HEAD), live_enabled=false, banned deps/imports, src URL allowlist, THRESHOLDS.md vs src/thresholds.py.
+- One PASS/FAIL line each; exit 0 all pass, 1 a check failed, 2 usage. ORDER_CAPABLE and the AC table parser now live in the guard. No CI added.
+- `python -m pytest` passed offline (1517 passed; on Windows 1513 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S.

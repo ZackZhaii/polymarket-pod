@@ -56,6 +56,33 @@ The 2026-10-08 run itself used the earlier single-page sample (`active_sample=20
 
 SHA256 before and after the run: `0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04`.
 
+## Guard (M0)
+
+Run the local guard before and after any change, from any folder inside the repo. It is offline, read-only and
+standard library only:
+
+```
+python scripts/guard.py                 # or: python ../scripts/guard.py from docs/, etc.
+python scripts/guard.py --root PATH     # check another checkout (PATH may be any folder inside it)
+python scripts/guard.py --require-git   # treat a missing git / HEAD as FAIL instead of SKIP
+```
+
+It prints one `PASS`/`FAIL` line per check with the reason, then a summary line:
+
+- `risk_sha_worktree`, `risk_sha_head`: `config/risk.toml` sha256 is `0aea23af…bc04`, for the working-tree file
+  (CRLF normalised) and for `git show HEAD:config/risk.toml`. Without git or outside a checkout the HEAD line is `SKIP`.
+- `live_enabled`: `live_enabled = false` (read with `src.podlib.parse_risk_toml`) and the other `podlib.PINS` hold.
+- `banned_dependencies`, `banned_imports`: no py-clob-client, other clob package, web3, eth_account or other
+  order-capable package (`ORDER_CAPABLE` in `scripts/guard.py`, the single list) in `requirements*.txt` /
+  `pyproject.toml`, or imported anywhere in `src/` or `scripts/`.
+- `url_allowlist`: every URL in `src/` code is an allowlisted public read-only endpoint (Gamma `/markets` and
+  `/markets/keyset`, CLOB `/book`, the WS market channel); order/auth paths, the user channel, ports, credentials in
+  the query and other hosts fail. Docstrings and comments may also link docs.polymarket.com and github.com.
+- `thresholds_doc`: `docs/THRESHOLDS.md` agrees with `src/thresholds.py` (Task AC table parser).
+
+Exit codes: 0 every check passed (`risk_sha_head` may be `SKIP`), 1 a check failed, 2 usage error or no repo root.
+It writes nothing and adds no CI: running it in CI is the user's decision.
+
 ## Git
 
 `git status` does not list `.env`. Ignored paths include `.env`, `data/`, and `logs/`.
