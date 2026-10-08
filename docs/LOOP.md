@@ -134,6 +134,22 @@ Finish when `src/risk_gate.py` has no default for `min_liquidity_usd` or `max_sp
 - A present but nan, inf or bool intent liquidity or spread vetoes with `invalid_liquidity` or `invalid_spread`.
 - Do not edit `config/risk.toml`. Parameter ideas go into the pull request text as a proposal only.
 
+## Task K — public_get retry/backoff; scanner exits 3 on network failure
+
+Status: done.
+
+Self-picked by grok-bot. Two public `python src/scanner.py` runs on NoisePC (2026-10-08, Task I acceptance) crashed with
+`URLError [SSL: UNEXPECTED_EOF_WHILE_READING]` and exit 1, which collides with the documented "fewer than 5 scanned" code.
+
+Finish when `public_get` retries transient network/TLS failures, the scanner reports a page that still fails as paging incomplete
+(exit 3, nothing written), and `python -m pytest` passes with no network and no credentials.
+
+- `podlib.public_get` retries `URLError`, `ssl.SSLError` (including SSL EOF), `ConnectionResetError`, socket timeouts and HTTP 5xx.
+  `PUBLIC_GET_ATTEMPTS = 3`, backoff `PUBLIC_GET_BACKOFF_S * 2**n` (0.5 s, 1 s). HTTP 4xx and the URL guard are never retried.
+- When every attempt fails it raises `PublicGetError` (attempts, last error, URL). The scanner stops with `stop_reason=network_error`.
+- Exit codes are unchanged: 3 now also covers a page that still fails after retries. Codes 1-3 write nothing.
+- Tests mock `urlopen` and patch `podlib._sleep`, so they never touch the network or sleep. Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -145,8 +161,8 @@ git pull 之后只领取第一件 todo。做完释放，开 PR，不要推 main�
 
 ## Latest
 
-- 2026-10-08: Task I (scanner filter) verified and closed by grok-web: public `python src/scanner.py` exit 0, scanned=15360 passed=8659 stop=exhausted bus_signals=50.
-- Task J (risk_gate fails closed, PR #3) done: no default for `min_liquidity_usd` / `max_spread`; bad thresholds veto with `invalid_gate_threshold`, nan/inf/bool intent quotes veto too.
-- PR #3 merged main again after I closed; queue keeps I done and J done. data/markets.jsonl not committed. Signals only; no order and no credentials.
-- `python -m pytest` passed offline (83 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-08: Task K done by grok-bot (self-picked). `podlib.public_get` retries URLError, SSL EOF / ssl.SSLError, resets, timeouts and HTTP 5xx 3 times (0.5 s, 1 s backoff); never HTTP 4xx.
+- If every attempt fails, `PublicGetError` is raised and the scanner exits 3 (`stop=network_error`, paging incomplete) and writes nothing, instead of crashing with exit 1.
+- Task J (risk_gate fails closed) merged via PR #3; I (public scanner exit 0, scanned=15360 passed=8659) and J stay done. Signals only; no order and no credentials.
+- `python -m pytest` passed offline (100 passed; urlopen mocked, no sleeps). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.

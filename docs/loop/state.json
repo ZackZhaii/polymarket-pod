@@ -51,6 +51,15 @@
       "note": "Risk-gap backlog item 11. Letter I is left for the scanner pull request (PR #2) so the two branches do not collide.",
       "done_at": "2026-10-08T09:20:33Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "K",
+      "status": "done",
+      "title": "public_get retry/backoff; scanner exits 3 on network failure",
+      "finish": "src/podlib.py public_get retries transient network/TLS errors (URLError, ssl.SSLError incl. SSL EOF, ConnectionResetError, socket timeouts, HTTP 5xx) PUBLIC_GET_ATTEMPTS=3 times with 0.5 s exponential backoff, never retries HTTP 4xx, and raises PublicGetError when every attempt fails. src/scanner.py stops the walk with stop_reason network_error and main() exits 3 (paging incomplete) without writing, instead of crashing with exit 1. Offline tests mock urlopen and never sleep. config/risk.toml is unchanged.",
+      "note": "Self-picked by grok-bot after two public scanner runs on NoisePC crashed with URLError [SSL: UNEXPECTED_EOF_WHILE_READING] during Task I acceptance.",
+      "done_at": "2026-10-08T10:29:48Z",
+      "surface": "grok-bot"
     }
   ]
 }

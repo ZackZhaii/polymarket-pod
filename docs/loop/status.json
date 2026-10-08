@@ -1,9 +1,9 @@
 {
   "ts": "2026-10-08T10:30:00Z",
   "live_enabled": false,
-  "last_done": "J",
+  "last_done": "K",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "I (scanner filter) done by grok-web: public scanner exit 0, scanned 15360, passed 8659, bus 50. J (risk_gate fails closed) done in PR #3. No open todo. No live gate."
+  "note": "K (public_get retry, scanner exit 3 on network failure) done by grok-bot. I and J done (J merged via PR #3). No open todo. No live gate."
 }

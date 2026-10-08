@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 from src.podlib import (  # noqa: E402
     MARKETS_PATH,
     RISK_PATH,
+    PublicGetError,
     append_jsonl,
     as_float,
     bus,
@@ -52,7 +53,7 @@ BUS_TOP_N = 50
 MIN_PRICE = 0.03
 MAX_PRICE = 0.97
 
-# main() exit codes.
+# main() exit codes. 3 also covers a page that still fails after public_get's retries.
 EXIT_OK = 0
 EXIT_TOO_FEW_SCANNED = 1
 EXIT_NONE_PASSED = 2
@@ -96,6 +97,8 @@ def fetch_all_markets(
     unclosed universe is >200k markets). Rows are still re-checked client-side.
     Stalls (a repeated cursor, or a page with no unseen market) stop the walk and
     are reported as incomplete instead of spinning up to max_pages requests.
+    A page that still fails after public_get's retries stops the walk with
+    stop_reason "network_error" (incomplete, so main() exits 3 and writes nothing).
     """
     get = getter or public_get
     rows: list[dict] = []
@@ -104,6 +107,7 @@ def fetch_all_markets(
     cursor = ""
     pages = 0
     stop = "exhausted"
+    error = ""
     base = f"{GAMMA_KEYSET}&limit={int(page_limit)}"
     if server_min_liquidity is not None:
         base += f"&liquidity_num_min={float(server_min_liquidity):g}"
@@ -118,7 +122,12 @@ def fetch_all_markets(
         if cursor:
             used_cursors.add(cursor)
             url += "&after_cursor=" + quote(cursor, safe="")
-        data = get(url)
+        try:
+            data = get(url)
+        except PublicGetError as exc:
+            stop = "network_error"
+            error = str(exc)
+            break
         pages += 1
         if isinstance(data, dict):
             batch = data.get("markets") or data.get("data") or []
@@ -160,6 +169,8 @@ def fetch_all_markets(
         "max_markets": max_markets,
         "server_min_liquidity": server_min_liquidity,
     }
+    if error:
+        meta["error"] = error
     return rows, meta
 
 
@@ -439,6 +450,8 @@ def main(
     print("rejected_first=" + ", ".join(f"{k}:{v}" for k, v in sorted(result["first_reason"].items())))
     if not fetch["complete"]:
         print(f"scanner failed: pagination incomplete ({fetch['stop_reason']}); nothing written", file=sys.stderr)
+        if fetch.get("error"):
+            print(f"scanner network error: {fetch['error']}", file=sys.stderr)
         return EXIT_INCOMPLETE
     if result["scanned"] < 5:
         print("scanner failed: fewer than 5 public markets", file=sys.stderr)
