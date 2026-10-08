@@ -7,7 +7,9 @@ Phase 0：只读扫描 + 纸面信号。`config/risk.toml` 固定 mode=paper、l
 - 真相源：GitHub `ZackZhaii/polymarket-pod` 的 `main`（本文写于 26667aa 之上）。
 - 任务队列：`docs/loop/state.json`（机器可读，`src/loop_claim.py` 领取/释放）+ `docs/LOOP.md`（人读）。两处必须同时更新。
 - 规则：一个对话只领一件、只领第一件 todo（loop_claim 强制顺序），做完释放并在 `## Latest` 写五行。
-- 新任务只由 Operator 加入。bot 不自造任务，不加实盘任务。
+- 新任务进队列：Operator 直接写；或 bot 从下方 Risk gaps backlog 挑纯代码项，开 PR 登记（LOOP.md + state.json）。合并 PR = Operator 加入，关闭 PR = 拒绝。bot 不自造清单外任务，不加实盘任务。
+- 自选任务 PR 同时最多 2 个等审查（协调方要求的文档/验收 PR 不计入）。任务字母用 `main` 和未关闭 PR 都没用过的下一个。
+- 写 git 只在 `.worktrees/<名字>` 的 worktree 里（`.git/info/exclude`），做完 `git worktree remove`。主目录归 Operator 本机 Grok Build，只有它在主目录 pull。提交用 `git -c user.name=ZackZhaii -c user.email=17690114@qq.com commit ...`，不改全局配置。
 - `D:\AI_Workspace\OpenClaw\workspace\polymarket-pod` 是平行草稿树，不合并。
 - **分支 `docs/grok-link` / PR #1：不合并（operator decision 2026-10-08）。** 其中 "Task F — Grok link" 的字母与 main 上 Task F（Endgame）冲突，以 main 为准。
 
@@ -52,6 +54,7 @@ ROSTER 中暂无 bot 的角色：Endgame（main 已有 `src/endgame.py` 信号�
 
 **人工加入规则：** main 的 `## Latest` 写着 "Next code task starts only when a human adds one here and in `docs/loop/state.json`"。
 Task I 通过 PR #2 加入，**Operator 合并 PR #2 就是这次 "human add"**。合并前 I 不在 main 上，任何 bot 都不能领取。
+（2026-10-09 起：bot 从 backlog 提的任务 PR 被合并，同样算 human add，见“唯一协调面”。）
 
 I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。领取 I 的一方只做验收：离线跑 `python -m pytest`，
 跑一次 `python src/scanner.py`（公开只读），把退出码、通过数和总线行数写进 `docs/LOOP.md` 的 `## Latest`，然后 release --done。
@@ -70,7 +73,7 @@ I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。�
   只许开分支并开 PR。不许 `git push origin main`，不许 bot 自己合并。人合并前，其他入口仍看 `main`。
 - 本决定之前，`93b87c0`（claim I）和 `0cdf741`（release I）已经直接进入 `main`。Task I 在 `main` 上是 done。本 PR 不回滚这两笔，也不再改队列状态。
 
-## Risk gaps backlog（只记录，不在 Phase 0 改 risk.toml；每条需 Operator 另立任务）
+## Risk gaps backlog（只记录，不在 Phase 0 改 risk.toml；纯代码项 bot 可开 PR 提出，合并即立项，关闭即拒绝）
 1. 自成交/对敲检测只靠策略名关键词（wash / self-trade / spoof / layering），没有基于成交对手或同市场双向挂单的检测。
 2. ~~`risk_gate.py` 没有盘口陈旧检查（不看 book 时间戳）。~~ **Task L 处理**：`Intent.book_ts` 缺失、无法解析、在未来或超过 120 s 一律 veto（`src/book_staleness.py`）。120 s 是代码常量，不在 risk.toml；是否写进 risk.toml 由 Operator 决定。
 3. ROSTER 写的 category caps（类别上限）既不在 risk.toml，也不在代码里。

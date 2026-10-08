@@ -6,12 +6,12 @@
 
 ## 每次开工
 
-1. `git pull --ff-only`
+1. 同步 `main`：Operator 本机 Grok Build 在主目录 `git pull --ff-only`；bot 和其他执行者只 `git fetch origin`，再从 `origin/main` 开 worktree（见下方“写 git”）
 2. 读 `docs/LINK.md`、`docs/LOOP.md`、`docs/loop/state.json`、`config/risk.toml`
 3. `python src/loop_claim.py status`
 4. `live_enabled` 不是 false，或风控钉被改过：停止，不要改文件
 5. 有未过期的别人领取：停止
-6. 没有 `todo`：停止。不要发明实盘任务
+6. 没有 `todo`：停止。只可按下方“自选任务”开 PR。不要发明实盘任务，也不要发明清单外的任务
 7. 否则只领取队列第一件 `todo`。锁定 1 小时。做完这一件，pytest，释放。队列状态只走 PR，禁止直接推 `main`，禁止自己合并。人合并后停止。不要在同一轮做第二件。监控是每 30 分钟看一次，有人持有未过期领取就停。
 
 领取和释放：
@@ -22,6 +22,20 @@ python src/loop_claim.py release --surface grok-build-local --done
 ```
 
 网页端把 surface 写成 `grok-web`，Grok Bot 写成 `grok-bot`。
+
+## 写 git
+
+- 写 git 的执行者都在独立 worktree 里干活：`git worktree add .worktrees/<名字> ...`，做完 `git worktree remove`。
+  `.worktrees/` 写进 `.git/info/exclude`，不写 `.gitignore`
+- 主目录留给 Operator 本机 Grok Build。只有它可以在主目录 `git pull`；别的执行者在主目录只做 `git fetch` 和 worktree 增删
+- 提交身份：`git -c user.name=ZackZhaii -c user.email=17690114@qq.com commit ...`。不改全局 git 配置
+
+## 自选任务
+
+- bot 只能从 `docs/COORDINATION.md` 的风险缺口清单（Risk gaps backlog）挑纯代码项，不许自造清单外的任务
+- 以 PR 提出：同一个 PR 把任务登记进 `docs/LOOP.md` 和 `docs/loop/state.json`。人合并 PR 就是 Operator 加入队列，关闭 PR 就是拒绝
+- 同时最多 2 个自选任务 PR 等审查。协调方要求的文档 PR、验收 PR 不计入
+- 任务字母：开 PR 时用 `main` 和所有未关闭 PR 都没用过的下一个字母
 
 ## 硬约束
 
