@@ -186,6 +186,15 @@
       "note": "Approved by Poly指挥 (after X, before backlog #9); done by grok-bot. Pure tightening: every market rejected before is still rejected; finite markets get the same reasons as before.",
       "done_at": "2026-10-08T20:46:44Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "Z",
+      "status": "done",
+      "title": "Sentinel stale-book alarm (backlog #9): 120 s per check, paper halt after 2 consecutive stale or failed checks",
+      "finish": "src/sentinel.py has code constants SENTINEL_STALE_S = 120 (equal to book_staleness.MAX_BOOK_AGE_S) and SENTINEL_STALE_CONSECUTIVE = 2, not risk.toml keys (M2 proposals). StaleWatch.check counts consecutive stale or failed checks per market (book_age_problem: missing, unparseable, non-finite or future book_ts, a broken now, or failed=True all count as stale), calls sentinel.halt once when the streak reaches 2 (paper quotes of that market cancelled, exchange_action none), and resets on a fresh check. Limits can only be made stricter; a malformed saved state raises. Every per-check block is unchanged: RiskGate still vetoes a single stale book and paper_cycle still makes no gap signal from it. Before Z nothing raised a Sentinel alarm automatically, so nothing is loosened. Offline tests. COORDINATION #9 struck through. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Approved by Poly指挥 (backlog #9, after Y); done by grok-bot. Pure addition: a new alarm only. SENTINEL_STALE_S and SENTINEL_STALE_CONSECUTIVE await the user's decision at M2.",
+      "done_at": "2026-10-08T20:55:25Z",
+      "surface": "grok-bot"
     }
   ]
 }

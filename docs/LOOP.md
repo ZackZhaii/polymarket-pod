@@ -430,6 +430,30 @@ new reasons, `risk.toml` is unchanged, and `python -m pytest` passes with no net
   `float('nan')`, the reason order, finite bad values keeping their old reasons, and `main()` output and exit codes.
 - Do not edit `config/risk.toml`. No new threshold.
 
+## Task Z — Sentinel stale-book alarm: 120 s per check, paper halt after 2 consecutive stale or failed checks (backlog #9)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. Sentinel proposed a 120 s staleness limit and an alarm only after 2 consecutive
+failures (30 s gave false alarms; COORDINATION #9). Before this task `src/sentinel.py` only had a manual `halt`; nothing
+raised a Sentinel alarm automatically, so adding a 2-in-a-row alarm loosens nothing.
+
+Finish when Sentinel halts after 2 consecutive stale or failed checks, every per-check block is unchanged, `risk.toml`
+is unchanged, and `python -m pytest` passes with no network and no credentials.
+
+- `src/sentinel.py`: `SENTINEL_STALE_S = 120` (equal to RiskGate's `MAX_BOOK_AGE_S`) and `SENTINEL_STALE_CONSECUTIVE = 2`
+  are code constants, not `risk.toml` keys. They are threshold proposals for the user at M2. A caller may only make them stricter.
+- `StaleWatch.check(market, book_ts, now, failed=False)`: stale is any `book_age_problem` reason (missing, unparseable,
+  non-finite or future `book_ts`), a `now` that is not an aware datetime, or `failed=True` (fail closed). Exactly 120 s is fresh.
+- At 2 stale checks in a row for a market it calls `sentinel.halt` once (that market's paper quotes cancelled,
+  `exchange_action=none`, reason `stale_book_consecutive: ...`). Later stale checks do not halt again; a fresh check resets.
+- Per-check blocks are untouched: RiskGate still vetoes a single stale book, and `paper_cycle` still sends no gap signal and
+  the BookWatcher stale signal for every stale check. `StaleWatch` is not wired into `paper_cycle` yet (a caller feeds it).
+- `to_dict` / `from_dict` keep the streak between runs; a malformed state raises instead of quietly resetting.
+- Tests: `tests/test_sentinel_stale.py` (one stale no alarm, two halt once, reset, per market, missing/NaN/inf/naive/future
+  stamps, failed checks, the 120 s boundary, RiskGate still vetoing one stale book, stricter-only limits, state round trip).
+- Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -441,8 +465,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Tasks W, X and Y done by grok-bot (approved by Poly指挥). W: read-only `src/endgame_scan.py` gives Endgame the 0.98–0.99 band (backlog #10).
-- X: RiskGate requires edge >= `MIN_EDGE` (0.02, inclusive), else `edge_below_min`. Y: the scanner rejects any parsed NaN or ±inf as `non_finite_<field>`.
-- `endgame_scan` uses Y's names through the shared rejection reasons, fails closed, and sends signals to RiskGate only; the scanner filter is unchanged.
-- `python -m pytest` passed offline (683 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. `MIN_EDGE` and `WASH_WINDOW_S` await the user's decision at M2. A single-leg fill is directional exposure, not locked profit.
+- 2026-10-09: Tasks W, X, Y and Z done by grok-bot (approved by Poly指挥). W: read-only `src/endgame_scan.py` gives Endgame the 0.98–0.99 band (backlog #10).
+- X: edge >= `MIN_EDGE` (0.02) or `edge_below_min`. Y: the scanner rejects parsed NaN/±inf as `non_finite_<field>`, and `endgame_scan` inherits those reasons.
+- Z: Sentinel halts a market (paper quotes only) after 2 consecutive stale or failed book checks; RiskGate still vetoes every single stale book.
+- `python -m pytest` passed offline (729 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. `SENTINEL_STALE_S` (120), `SENTINEL_STALE_CONSECUTIVE` (2), `MIN_EDGE` and `WASH_WINDOW_S` await the user's decision at M2.

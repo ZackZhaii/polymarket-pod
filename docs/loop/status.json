@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T20:46:44Z",
+  "ts": "2026-10-08T20:55:25Z",
   "live_enabled": false,
-  "last_done": "Y",
+  "last_done": "Z",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "W (Endgame unfiltered path, backlog #10: read-only src/endgame_scan.py hands Endgame the 0.98-0.99 band; scanner filter unchanged; signals to RiskGate only), X (RiskGate minimum edge, backlog #6: MIN_EDGE = 0.02 code constant, edge_below_min) and Y (scanner rejects any parsed NaN or +/-inf as non_finite_<field>; endgame_scan shares the names) done by grok-bot. F-Y done on dev; W merged dev in its PR. MIN_EDGE and WASH_WINDOW_S await the user's decision at M2. No open todo. No live gate."
+  "note": "W (Endgame unfiltered path, backlog #10: read-only src/endgame_scan.py hands Endgame the 0.98-0.99 band; scanner filter unchanged; inherits Y's non_finite_<field> reasons; signals to RiskGate only), X (MIN_EDGE = 0.02, backlog #6), Y (scanner non_finite_<field>) and Z (Sentinel halt after 2 consecutive stale or failed book checks, backlog #9) done by grok-bot. F-Z done on dev; W merged dev in its PR. SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, MIN_EDGE and WASH_WINDOW_S await the user's decision at M2. No open todo. No live gate."
 }
