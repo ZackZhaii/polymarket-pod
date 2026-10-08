@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T09:10:00Z",
+  "ts": "2026-10-08T09:55:00Z",
   "live_enabled": false,
-  "last_done": "H",
-  "next": null,
+  "last_done": "J",
+  "next": "I",
   "claim": null,
   "cadence_minutes": 30,
-  "note": "H is done. Queue is empty. No live gate."
+  "note": "J (risk_gate fails closed) is done. I (scanner filter, merged via PR #2) is the only todo, awaiting acceptance. No live gate."
 }
