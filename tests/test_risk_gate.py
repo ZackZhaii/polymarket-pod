@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import sys
 
+import pytest
+
 import src.gaps as gaps
 import src.risk_gate as risk_gate
 from src.podlib import RISK_PATH, load_risk
-from src.risk_gate import Intent, evaluate
+from src.risk_gate import Intent, evaluate, gate_thresholds
 
 STATE = {"open_positions": 0, "market_already_open": False, "daily_loss_usd": 0.0}
 
@@ -88,3 +90,101 @@ def test_banned_strategy_names_are_vetoed():
         decision = evaluate(_intent(strategy=name), cfg, STATE)
         assert decision.allow is False
         assert "banned_behavior" in decision.reasons
+
+
+_BAD_GATE_VALUES = (
+    True,
+    False,
+    "0.04",
+    None,
+    float("inf"),
+    float("-inf"),
+    float("nan"),
+)
+
+
+def _assert_gate_rejected(cfg: dict, key: str) -> None:
+    decision = evaluate(_intent(), cfg, STATE)
+    assert decision.allow is False
+    assert "invalid_gate_threshold" in decision.reasons
+    with pytest.raises(RuntimeError) as caught:
+        gate_thresholds(cfg)
+    assert key in str(caught.value)
+
+
+@pytest.mark.parametrize("key", ("min_liquidity_usd", "max_spread"))
+def test_missing_gate_key_fails_closed(key: str) -> None:
+    before = RISK_PATH.read_bytes()
+    cfg = dict(load_risk())
+    del cfg[key]
+    _assert_gate_rejected(cfg, key)
+    with pytest.raises(RuntimeError, match="missing gate key"):
+        gate_thresholds(cfg)
+    assert RISK_PATH.read_bytes() == before
+
+
+@pytest.mark.parametrize("key", ("min_liquidity_usd", "max_spread"))
+@pytest.mark.parametrize("bad", _BAD_GATE_VALUES)
+def test_non_finite_gate_values_fail_closed(key: str, bad: object) -> None:
+    before = RISK_PATH.read_bytes()
+    cfg = dict(load_risk())
+    cfg[key] = bad
+    _assert_gate_rejected(cfg, key)
+    assert RISK_PATH.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("key", "bad"),
+    (
+        ("max_spread", 0),
+        ("max_spread", -0.01),
+        ("min_liquidity_usd", -1),
+    ),
+)
+def test_out_of_range_gate_bounds_fail_closed(key: str, bad: float) -> None:
+    before = RISK_PATH.read_bytes()
+    cfg = dict(load_risk())
+    cfg[key] = bad
+    _assert_gate_rejected(cfg, key)
+    assert RISK_PATH.read_bytes() == before
+
+
+def test_finite_int_and_float_thresholds_still_allow() -> None:
+    before = RISK_PATH.read_bytes()
+    cfg = dict(load_risk())
+    cfg["min_liquidity_usd"] = 10000
+    cfg["max_spread"] = 0.04
+    assert gate_thresholds(cfg) == {"min_liquidity_usd": 10000.0, "max_spread": 0.04}
+    decision = evaluate(_intent(), cfg, STATE)
+    assert decision.allow is True
+    assert decision.reasons == []
+    assert RISK_PATH.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    (
+        ("spread", float("nan"), "invalid_spread"),
+        ("liquidity_usd", float("nan"), "invalid_liquidity"),
+        ("spread", True, "invalid_spread"),
+    ),
+)
+def test_bad_intent_quote_fails_closed(field: str, value: object, reason: str) -> None:
+    before = RISK_PATH.read_bytes()
+    cfg = dict(load_risk())
+    decision = evaluate(_intent(**{field: value}), cfg, STATE)
+    assert decision.allow is False
+    assert reason in decision.reasons
+    assert "spread_above_max" not in decision.reasons
+    assert "negative_spread" not in decision.reasons
+    assert "liquidity_below_min" not in decision.reasons
+    assert RISK_PATH.read_bytes() == before
+
+
+def test_negative_intent_spread_is_vetoed_even_with_bad_config() -> None:
+    cfg = dict(load_risk())
+    cfg["max_spread"] = float("nan")
+    decision = evaluate(_intent(spread=-0.01), cfg, STATE)
+    assert decision.allow is False
+    assert "invalid_gate_threshold" in decision.reasons
+    assert "negative_spread" in decision.reasons

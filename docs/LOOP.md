@@ -120,6 +120,20 @@ passes with no network and no credentials. Record one public `python src/scanner
 - Public reads only. No order, auth or signing endpoint. Do not edit `config/risk.toml`.
 - Out of scope: paper_session switch, Endgame >0.97 feed, minimum time-to-expiry.
 
+## Task J — risk_gate fails closed on missing thresholds
+
+Status: done.
+
+Risk-gap backlog item 11. Letter I is left for the scanner pull request (PR #2) so the two branches do not collide.
+
+Finish when `src/risk_gate.py` has no default for `min_liquidity_usd` or `max_spread`, a bad threshold can only veto, and `python -m pytest` passes with no network and no credentials.
+
+- `gate_thresholds(cfg)` accepts only a finite int or float, like the scanner thresholds. A missing key, bool, string, None, inf or nan raises `RuntimeError`.
+- `min_liquidity_usd < 0` or `max_spread <= 0` also raises. There is no looser default.
+- `evaluate` turns that error into the `invalid_gate_threshold` veto. It never raises for this and never allows.
+- A present but nan, inf or bool intent liquidity or spread vetoes with `invalid_liquidity` or `invalid_spread`.
+- Do not edit `config/risk.toml`. Parameter ideas go into the pull request text as a proposal only.
+
 ## Paste this into a new chat
 
 ```text
@@ -131,8 +145,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: Task I (scanner filter, keyset paging) verified and closed by grok-web. PR #2 code kept as-is; config/risk.toml not edited.
-- Public `python src/scanner.py` exit 0: scanned=15360 passed=8659 stop=exhausted cap_hit=false bus_signals=50. data/markets.jsonl not committed.
-- rejected_first: expired 566, long_tail_price 3849, missing_bid_ask 1159, missing_end_date 50, wide_spread 1077. Signals only; no order and no credentials.
-- `python -m pytest` passed offline. risk.toml sha256 0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04, live_enabled=false.
+- 2026-10-08: Task I (scanner filter) verified and closed by grok-web: public `python src/scanner.py` exit 0, scanned=15360 passed=8659 stop=exhausted bus_signals=50.
+- Task J (risk_gate fails closed, PR #3) done: no default for `min_liquidity_usd` / `max_spread`; bad thresholds veto with `invalid_gate_threshold`, nan/inf/bool intent quotes veto too.
+- PR #3 merged main again after I closed; queue keeps I done and J done. data/markets.jsonl not committed. Signals only; no order and no credentials.
+- `python -m pytest` passed offline (83 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.
