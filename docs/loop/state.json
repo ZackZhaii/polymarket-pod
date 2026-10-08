@@ -3,12 +3,7 @@
   "branch": "main",
   "claim_hours": 1,
   "cadence_minutes": 30,
-  "claim": {
-    "surface": "grok-web",
-    "task": "I",
-    "since": "2026-10-08T10:14:07Z",
-    "until": "2026-10-08T11:14:07Z"
-  },
+  "claim": null,
   "assignment": {
     "grok-web": "first open todo when the claim is free",
     "grok-build-local": "same queue; stop if grok-web holds the claim",
@@ -40,11 +35,13 @@
     },
     {
       "id": "I",
-      "status": "doing",
+      "status": "done",
       "title": "Scanner filter, long-tail band, keyset paging",
       "owner": "Scanner",
       "order_note": "Operator ordered this task ahead of G on 2026-10-08. G and H (SportsDevig) were already done, so I is the first todo. Merging PR #2 is the human add.",
-      "finish": "src/scanner.py walks public Gamma /markets/keyset, filters by min_liquidity_usd and max_spread from config/risk.toml plus expiry, one-sided and 0.03-0.97 long-tail rules, fails closed on missing, boolean, non-finite or invalid keys, stops on a repeated cursor or a page with no new markets, writes all passing markets to data/markets.jsonl and only the top 50 to the bus, exits 1/2/3 without writing on failure, and pytest passes offline. Record one public scanner run under ## Latest. config/risk.toml is unchanged. No network in tests and no credentials."
+      "finish": "src/scanner.py walks public Gamma /markets/keyset, filters by min_liquidity_usd and max_spread from config/risk.toml plus expiry, one-sided and 0.03-0.97 long-tail rules, fails closed on missing, boolean, non-finite or invalid keys, stops on a repeated cursor or a page with no new markets, writes all passing markets to data/markets.jsonl and only the top 50 to the bus, exits 1/2/3 without writing on failure. Public run 2026-10-08 exit 0 scanned=15360 passed=8659 bus_signals=50 stop=exhausted. pytest passed offline. config/risk.toml unchanged.",
+      "done_at": "2026-10-08T10:16:25Z",
+      "surface": "grok-web"
     }
   ]
 }

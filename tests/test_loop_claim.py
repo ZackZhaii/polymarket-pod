@@ -82,14 +82,13 @@ def test_pin_guard_rejects_live_without_editing_the_file():
     assert RISK_PATH.read_bytes() == before
 
 
-def test_repo_queue_releases_task_i_first():
-    """The committed queue must hand out I (scanner filter) first. Works on a copy; the file is not written."""
+def test_repo_queue_has_i_done_and_no_open_task():
+    """After I closes, the committed queue has no claim and no todo. The file is not written."""
     path = loop_claim.STATE_PATH
     before = path.read_bytes()
     state = json.loads(before.decode("utf-8"))
     assert state.get("claim") is None
-    assert loop_claim.next_todo(state)["id"] == "I"
-    trial = copy.deepcopy(state)
-    loop_claim.claim_state(trial, "grok-bot", "I", NOW)
-    assert trial["claim"]["task"] == "I"
+    task_i = next(task for task in state["tasks"] if task["id"] == "I")
+    assert task_i["status"] == "done"
+    assert loop_claim.next_todo(state) is None
     assert path.read_bytes() == before

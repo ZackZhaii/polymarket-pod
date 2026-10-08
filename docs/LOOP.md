@@ -98,7 +98,7 @@ Finish when `src/sports_devig.py` removes the overround from a two-way decimal-o
 
 ## Task I — scanner filter, long-tail band, keyset paging
 
-Status: todo.
+Status: done.
 
 Owner: Scanner (Poly扫描). Claim as surface `grok-bot` (any surface may verify).
 Order: the operator ordered this task ahead of G on 2026-10-08. G (5332d4a) and H — SportsDevig (26667aa) were already done,
@@ -131,8 +131,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: Task H (SportsDevig, signal only) done by grok-web in 26667aa. Kept as-is.
-- Operator adds Task I (scanner filter, Poly扫描) through PR #2. Merging PR #2 is the human add; I is the only todo.
-- I code ships in PR #2: keyset paging, risk.toml thresholds, 0.03-0.97 band, top-50 bus cap, `MAX_MARKETS = 50000`.
-- `python -m pytest` passed offline. `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- After merge, claim I, verify with pytest and one public scanner run, record it here, then release done. No live-trading task.
+- 2026-10-08: Task I (scanner filter, keyset paging) verified and closed by grok-web. PR #2 code kept as-is; config/risk.toml not edited.
+- Public `python src/scanner.py` exit 0: scanned=15360 passed=8659 stop=exhausted cap_hit=false bus_signals=50. data/markets.jsonl not committed.
+- rejected_first: expired 566, long_tail_price 3849, missing_bid_ask 1159, missing_end_date 50, wide_spread 1077. Signals only; no order and no credentials.
+- `python -m pytest` passed offline. risk.toml sha256 0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04, live_enabled=false.
+- Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.
