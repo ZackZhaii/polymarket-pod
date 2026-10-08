@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T21:44:08Z",
+  "ts": "2026-10-08T21:56:10Z",
   "live_enabled": false,
-  "last_done": "AF",
+  "last_done": "AG",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AF (paper ledger integrity, src/ledger_store.py: fill ids with idempotent dedupe, atomic same-dir temp file + fsync + os.replace writes, cash / leg shares / cost basis conservation within LEDGER_OPEN_EPS on load and before/after each write; any problem is invalid state and halts booking; backlog #20) done by grok-bot. Task letters after Z are AA, AB, AC, AD, AE, AF. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S and MIN_HOURS_TO_EXPIRY. No open todo. No live gate."
+  "note": "AG (read-only WebSocket order-book recorder for the public CLOB market channel, src/ws_recorder.py: pure core with exchange book_ts, gap/inconsistency/disconnect resync with invalidation rows and capped exponential backoff, append-safe JSONL rows for book_staleness / paper_cycle / StaleWatch; websockets==17.2.0 optional in requirements-ws.txt with URL and frame allowlists; backlog #21) done by grok-bot. Task letters after Z are AA, AB, AC, AD, AE, AF, AG. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY and WS_ROW_REFRESH_S. No open todo. No live gate."
 }

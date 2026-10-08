@@ -35,6 +35,12 @@ EXPECTED = {
     "SPORTS_DEVIG_ASSUMED_SLIPPAGE": 0.005,
     "LEDGER_OPEN_EPS": 1e-9,
     "REFLECTOR_MAX_PER_UTC_DAY": 3,
+    # Task AG: new WebSocket recorder timing (not moved from anywhere; first values).
+    "WS_BACKOFF_BASE_S": 1.0,
+    "WS_BACKOFF_CAP_S": 60.0,
+    "WS_RESYNC_TIMEOUT_S": 30.0,
+    "WS_PING_INTERVAL_S": 10.0,
+    "WS_ROW_REFRESH_S": 30.0,
 }
 
 # Old import paths that callers and tests use; each must stay the very same object.
@@ -68,7 +74,7 @@ REEXPORTS = {
 }
 
 M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
-              "MIN_HOURS_TO_EXPIRY"}
+              "MIN_HOURS_TO_EXPIRY", "WS_ROW_REFRESH_S"}
 HEADER = ["Name", "Value", "Unit", "Meaning", "Where", "Source", "M2 pending"]
 
 
@@ -217,6 +223,10 @@ def test_relations_hold():
         ("ENDGAME_PRICE_MIN = 0.98", "ENDGAME_PRICE_MIN = 0.96"),
         ("ENDGAME_PRICE_MAX = 0.99", "ENDGAME_PRICE_MAX = 1.0"),
         ("MIN_HOURS_TO_EXPIRY = 24.0", "MIN_HOURS_TO_EXPIRY = 48.0"),
+        ("WS_BACKOFF_CAP_S = 60.0", "WS_BACKOFF_CAP_S = 0.5"),
+        ("WS_BACKOFF_BASE_S = 1.0", "WS_BACKOFF_BASE_S = 0.0"),
+        ("WS_PING_INTERVAL_S = 10.0", "WS_PING_INTERVAL_S = 30.0"),
+        ("WS_ROW_REFRESH_S = 30.0", "WS_ROW_REFRESH_S = 120.0"),
     ],
 )
 def test_an_inconsistent_edit_fails_at_import(line, replacement):
