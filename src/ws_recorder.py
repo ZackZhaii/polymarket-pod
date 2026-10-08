@@ -35,8 +35,10 @@ What the protocol gives for integrity, and what this recorder does with it:
   not the tick we hold (``tick_size_mismatch``); a non-finite or out-of-range price, size, tick
   or timestamp, a bad side, a duplicate level or a malformed message (``invalid_*``,
   ``malformed_message``). A frame that is not JSON resyncs every asset (``undecodable_message``).
-- Resync = discard the asset's local book and wait for a fresh ``book`` snapshot; deltas for it
-  are ignored until then. The recorder asks for one (unsubscribe + subscribe for that asset); if
+- Resync = if the asset was live, write one price-less invalidation row at once (see Rows below),
+  then discard its local book and wait for a fresh ``book`` snapshot; deltas for it are ignored and
+  no further row is written for it until then (the invalidation row is the only row a resyncing
+  asset ever gets, and it can only make the book look stale, never fresh). The recorder asks for one (unsubscribe + subscribe for that asset); if
   none arrives within WS_RESYNC_TIMEOUT_S it reconnects. Any disconnect resyncs every asset.
   Reconnects back off exponentially: WS_BACKOFF_BASE_S * 2**attempt, capped at WS_BACKOFF_CAP_S,
   reset after a connection on which every asset was live.
@@ -199,7 +201,10 @@ class AssetBook:
     awaiting_since: float | None = None
 
     def discard(self, since: float | None) -> None:
-        """Resync: drop every piece of local book state and wait for a fresh snapshot."""
+        """Resync: drop every piece of local book state and wait for a fresh snapshot.
+
+        The caller (BookCore._resync) has already written the invalidation row if the asset was live.
+        """
         self.state = AWAITING
         self.market = None
         self.bids = {}

@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T21:56:10Z",
+  "ts": "2026-10-08T22:11:50Z",
   "live_enabled": false,
-  "last_done": "AG",
+  "last_done": "AH",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AG (read-only WebSocket order-book recorder for the public CLOB market channel, src/ws_recorder.py: pure core with exchange book_ts, gap/inconsistency/disconnect resync with invalidation rows and capped exponential backoff, append-safe JSONL rows for book_staleness / paper_cycle / StaleWatch; websockets==17.2.0 optional in requirements-ws.txt with URL and frame allowlists; backlog #21) done by grok-bot. Task letters after Z are AA, AB, AC, AD, AE, AF, AG. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY and WS_ROW_REFRESH_S. No open todo. No live gate."
+  "note": "AH (local M0 guard, scripts/guard.py: standard library only, offline, read-only; one PASS/FAIL line per check: risk.toml sha256 pin for the working tree and git HEAD, live_enabled=false and the podlib PINS, no order-capable dependency or import, src URL allowlist of the public read-only endpoints in use, THRESHOLDS.md vs src/thresholds.py; exit 0/1/2; no CI config; backlog #22) done by grok-bot. Task letters after Z are AA, AB, AC, AD, AE, AF, AG, AH. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY and WS_ROW_REFRESH_S. No open todo. No live gate."
 }

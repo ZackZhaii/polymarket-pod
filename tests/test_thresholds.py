@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import src.thresholds as thresholds
+from scripts import guard
 from src.podlib import RISK_PATH, parse_risk_toml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,27 +85,13 @@ def _resolve(dotted: str):
 
 
 def _tables() -> dict[str, list[dict[str, str]]]:
-    """Section heading -> rows of the markdown table under it."""
-    tables: dict[str, list[dict[str, str]]] = {}
-    section = ""
-    header: list[str] | None = None
-    for line in DOC.read_text(encoding="utf-8").splitlines():
-        if line.startswith("## "):
-            section, header = line[3:].strip(), None
-            continue
-        if not line.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if header is None:
-            header = cells
-            assert header == HEADER, (section, header)
-            tables[section] = []
-        elif set("".join(cells)) <= set("-: "):
-            continue
-        else:
-            assert len(cells) == len(header), (section, line)
-            tables[section].append(dict(zip(header, cells)))
-    return tables
+    """Section heading -> rows of the markdown table under it.
+
+    Task AH: the parser lives in scripts/guard.py (markdown_tables) so the guard and this test read
+    the doc the same way; it raises on a wrong header or a row with the wrong number of cells.
+    """
+    assert guard.THRESHOLDS_HEADER == HEADER
+    return guard.markdown_tables(DOC.read_text(encoding="utf-8"), HEADER)
 
 
 def _table(prefix: str) -> list[dict[str, str]]:
