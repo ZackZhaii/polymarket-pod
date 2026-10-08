@@ -17,6 +17,8 @@ No wash trades, no self-trades, no spoofing, no withdraw, no size-up, no geo-byp
 
 ## Task A — tests
 
+Status: done.
+
 Finish when `python -m pytest` passes with no network and no credentials.
 
 - Add stdlib-only tests for YES+NO ask sum and multi-outcome ask sum.
@@ -53,4 +55,8 @@ Finish when these modules import and only append to `logs/bus.jsonl`: ArbBinary,
 
 ## Latest
 
-- 2026-10-08: Phase 0 scanner, book, and paper ledger are on main `65a08e1`. Tasks A, B, and C are open. Risk file still paper, `live_enabled=false`.
+- 2026-10-08: Task A done. `python -m pytest` passed offline, 12 tests, no credentials.
+- YES+NO and multi-outcome ask sums live in `src/gaps.py`. A gap is a signal, not locked profit.
+- RiskGate veto tests cover pin drift, non-positive edge, wide spread, and banned strategy names.
+- `config/risk.toml` unchanged: mode=paper, live_enabled=false. No `.env` read. No order SDK.
+- Tasks B and C remain open. The next chat should do Task B only, then stop.

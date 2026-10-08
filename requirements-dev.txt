@@ -1,0 +1,3 @@
+# Test runner only. Phase 0 runtime stays on the standard library.
+# Do not add py-clob-client or any SDK that can place orders.
+pytest==8.3.5
