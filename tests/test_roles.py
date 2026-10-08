@@ -35,7 +35,7 @@ def test_arb_binary_signals_a_gap_and_never_fills(tmp_path):
 def test_forecaster_emits_probability_only(tmp_path):
     bus_path = tmp_path / "bus.jsonl"
     message = forecaster.emit_probability(market="m1", model_prob=0.42, bus_path=bus_path)
-    assert message["from"] == "Forecaster"
+    assert message["from"] == "NewsForecaster"
     assert message["type"] == "signal"
     assert message["payload"]["order"] is False
     try:

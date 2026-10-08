@@ -186,6 +186,22 @@ and `python -m pytest` passes with no network and no credentials.
   instead of reading 0. `paper_ledger.load_state` always supplies both.
 - No new threshold. `config/risk.toml` is unchanged; the keys it already has are now enforced for hypothetical intents too.
 
+## Task N — Forecaster bus name matches ROSTER (NewsForecaster)
+
+Status: done.
+
+Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 12: `src/forecaster.py` wrote `from="Forecaster"`,
+but docs/ROSTER.md and docs/COORDINATION.md call the role NewsForecaster.
+
+Finish when the forecaster emits the ROSTER name, older callers and older bus lines still work,
+and `python -m pytest` passes with no network and no credentials.
+
+- `forecaster.BUS_NAME = "NewsForecaster"`; `emit_probability` uses it. Still probability only, never an order or a fill.
+- `podlib.ROLE_ALIASES = {"Forecaster": "NewsForecaster"}` and `canonical_role(name)`. `bus()` writes the canonical
+  `from` / `to`, so a script still passing `Forecaster` keeps working and the line says NewsForecaster.
+- Existing `logs/bus.jsonl` lines are not rewritten; readers compare via `canonical_role`. No code reader matched on the old name.
+- No risk parameter. `config/risk.toml` is unchanged.
+
 ## Paste this into a new chat
 
 ```text
@@ -197,8 +213,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/main 开 worktr
 
 ## Latest
 
-- 2026-10-09: Task M done by grok-bot (self-picked, backlog item 4). `hypothetical=True` no longer skips `max_open_positions` / `max_daily_loss`.
-- A missing or invalid cap gives `invalid_risk_cap`; missing or invalid `open_positions` / `daily_loss_usd` gives `invalid_risk_state`. Both veto.
-- Task L accepted on main cd4d5fd (PR #8 and #9 merged): 151 passed offline, F-L done. Backlog 11 marked handled by Task J.
-- `python -m pytest` passed offline (190 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task N done by grok-bot (self-picked, backlog item 12). `src/forecaster.py` now emits `from="NewsForecaster"`, the ROSTER name.
+- `podlib.canonical_role` maps the legacy `Forecaster`; `bus()` writes the canonical name, so old callers keep working. Old bus lines are not rewritten.
+- PR #10 and Task M accepted on main 5e3eefc: 190 passed offline, F-M done; hypothetical intents veto on both caps, invalid_risk_cap / invalid_risk_state veto.
+- `python -m pytest` passed offline (196 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.
