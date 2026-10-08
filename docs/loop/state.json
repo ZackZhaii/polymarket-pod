@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "branch": "main",
+  "claim_hours": 3,
+  "claim": null,
+  "tasks": [
+    {
+      "id": "F",
+      "status": "todo",
+      "title": "Endgame signal only",
+      "finish": "src/endgame.py emits a signal when a fixture price is between 0.98 and 0.99 and the market ends within 48 hours. It never emits a fill or an order. pytest passes with no network and no credentials. config/risk.toml is unchanged."
+    },
+    {
+      "id": "G",
+      "status": "todo",
+      "title": "Offline Brier proposal",
+      "finish": "src/quant.py scores a local fixture with Brier mean((p-y)^2) and emits at most one proposal. It does not edit config/risk.toml or any size cap. pytest passes offline. No network and no credentials."
+    }
+  ]
+}

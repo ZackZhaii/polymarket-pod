@@ -60,3 +60,5 @@ Expected pins: `mode=paper`, `live_enabled=false`, `require_human_gate=true`, `m
 `git status` must not list `.env`. Real keys stay out of git. `.env.example` only has empty names, and Phase 0/1 do not read them.
 
 See `docs/ROSTER.md` and `docs/PHASE0_RUN.md`.
+
+三端一起推进时，以 GitHub `main` 为唯一交接：本机 Grok Build 读 `AGENTS.md`，网页端和 Grok Bot 读 `docs/prompts/`。队列在 `docs/loop/state.json`。规则在 `docs/LINK.md`。一次一件，做完就停。实盘开关保持关闭。

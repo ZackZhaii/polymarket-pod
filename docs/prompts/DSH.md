@@ -1,5 +1,7 @@
 # Paste into a NEW DSH / DeepSeek harness session
 
+如果也碰这个仓库，先读 `docs/LINK.md`，一次只做 `docs/loop/state.json` 里的一件 todo。不要改 `live_enabled`。
+
 Project root: the cloned polymarket-pod only.
 
 Task:

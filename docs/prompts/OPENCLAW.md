@@ -1,5 +1,7 @@
 # Paste into a NEW OpenClaw workspace: polymarket-pod
 
+调度已改到 `docs/LINK.md`。不要在这里另开一条会改 `live_enabled` 的队列。
+
 Isolated agents. No shared memory with coffee ops.
 
 Agents:

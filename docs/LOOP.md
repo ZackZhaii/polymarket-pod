@@ -68,20 +68,37 @@ Finish when `python src/paper_session.py` can record one public read, then the o
 - `live_enabled` stays false. The command does not read `.env` and does not call an order endpoint.
 - A gap remains a signal, not locked profit.
 
+## Task F — Endgame signal only
+
+Status: todo.
+
+Finish when `src/endgame.py` emits a signal for a fixture price between 0.98 and 0.99 whose market ends within 48 hours, and `python -m pytest` passes with no network and no credentials.
+
+- Signal only. No fill and no order.
+- Do not edit `config/risk.toml`.
+
+## Task G — offline Brier proposal
+
+Status: todo.
+
+Finish when `src/quant.py` scores a local fixture with Brier `mean((p-y)^2)`, emits at most one proposal, and `python -m pytest` passes offline.
+
+- No network and no credentials.
+- The proposal does not edit `config/risk.toml` or any size cap.
+
 ## Paste this into a new chat
 
 ```text
-你是 polymarket-pod 的纸面工程代理。只在本仓库工作。
-先读 docs/LOOP.md、docs/PHASE0_RUN.md、config/risk.toml。
-只做 LOOP.md 里还没勾掉的下一件任务。做完就停。
+你是 polymarket-pod 的纸面循环入口。先读 AGENTS.md、docs/LINK.md、docs/LOOP.md、docs/loop/state.json、config/risk.toml。
+git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 禁止读 .env 和任何密钥。禁止改 live_enabled。禁止下单、提现、自动加仓。
 禁止对敲、自成交、刷量、幌骗。单边成交不是无风险套利。不承诺收益。
 ```
 
 ## Latest
 
-- 2026-10-08: Task E done. `python src/paper_session.py` is one public read plus the offline cycle.
-- Session log is `logs/sessions.jsonl`. Fills stay 0. No order endpoint and no `.env` read.
-- `python -m pytest` passed offline. `config/risk.toml` unchanged, `live_enabled=false`.
-- This starts the paper observation the plan already required. It is not a live gate.
-- Do not install a trading client. Do not set `live_enabled` to true.
+- 2026-10-08: 三端链接已写进 main。本机 Grok Build、网页端、Grok Bot 只通过本仓库交接。
+- 开工读 AGENTS.md 和 docs/LINK.md。领取用 `python src/loop_claim.py`，一次一件，3 小时锁定。
+- 队列里下一件是 Task F，再下一件是 Task G。这两件都还是 todo。
+- 队列空了就停。不要自行把实盘或交易客户端写进队列。
+- `config/risk.toml` 未改，`live_enabled=false`。
