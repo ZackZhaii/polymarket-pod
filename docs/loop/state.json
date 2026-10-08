@@ -195,6 +195,15 @@
       "note": "Approved by Poly指挥 (backlog #9, after Y); done by grok-bot. Pure addition: a new alarm only. SENTINEL_STALE_S and SENTINEL_STALE_CONSECUTIVE await the user's decision at M2.",
       "done_at": "2026-10-08T20:55:25Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AB",
+      "status": "done",
+      "title": "paper_session uses the current scanner path; book age from the CLOB book_ts at an evaluation clock (backlog #16)",
+      "finish": "src/paper_session.py calls scanner.scan with scanner.thresholds_from(cfg) (keyset paging, liquidity pre-filter, version-aware outcome IDs, non_finite_*, expiry, spread, liquidity and long-tail rules) instead of fetch_markets + visible_rows. Only passing rows are persisted (bus signals for the top BUS_TOP_N) and only the first 5 passing markets with outcome IDs are booked. A bad threshold, a failed read, incomplete paging, fewer than 5 scanned or nothing passing writes nothing (fail closed). paper_cycle judges book age from each row's CLOB book_ts (never the recorder ts) at clock() (default eval_clock, UTC milliseconds) read once after the books are recorded; missing, unparseable or future book_ts and a broken clock stay stale; exactly 120 s is fresh. Offline tests. COORDINATION #16 struck through. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Approved by Poly指挥 (astra's review finding); done by grok-bot. Tightening only: the session now applies every scanner rejection and fail-closed exit, and book age is measured after the reads. No new threshold.",
+      "done_at": "2026-10-08T21:08:47Z",
+      "surface": "grok-bot"
     }
   ]
 }

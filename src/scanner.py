@@ -41,7 +41,7 @@ from src.podlib import (  # noqa: E402
 )
 from src.expiry_rule import MIN_HOURS_TO_EXPIRY, expiry_problem  # noqa: E402
 
-# Legacy single page. Still used by paper_session (top 20 by liquidity, unfiltered).
+# Legacy single page (top 20 by liquidity, unfiltered). No caller since Task AB moved paper_session to scan().
 GAMMA = (
     "https://gamma-api.polymarket.com/markets"
     "?closed=false&limit=20&order=liquidityNum&ascending=false"
@@ -510,7 +510,7 @@ def persist_markets(
 ) -> int:
     """Append every row to markets_path; emit a bus signal for the first bus_limit rows.
 
-    bus_limit=None keeps the old one-signal-per-row behaviour (paper_session, 20 rows).
+    bus_limit=None keeps the old one-signal-per-row behaviour; paper_session and main() pass BUS_TOP_N.
     """
     for index, row in enumerate(rows):
         append_jsonl(markets_path, row)

@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T20:55:25Z",
+  "ts": "2026-10-08T21:08:47Z",
   "live_enabled": false,
-  "last_done": "Z",
+  "last_done": "AB",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "W (Endgame unfiltered path, backlog #10: read-only src/endgame_scan.py hands Endgame the 0.98-0.99 band; scanner filter unchanged; inherits Y's non_finite_<field> reasons; signals to RiskGate only), X (MIN_EDGE = 0.02, backlog #6), Y (scanner non_finite_<field>) and Z (Sentinel halt after 2 consecutive stale or failed book checks, backlog #9) done by grok-bot. F-Z done on dev; W merged dev in its PR. SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, MIN_EDGE and WASH_WINDOW_S await the user's decision at M2. No open todo. No live gate."
+  "note": "AB (paper_session uses scanner.scan and judges book age from the CLOB book_ts at a clock read after the books, backlog #16, from astra's review) done by grok-bot. F-Z done on dev. SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, MIN_EDGE and WASH_WINDOW_S await the user's decision at M2. No open todo. No live gate."
 }
