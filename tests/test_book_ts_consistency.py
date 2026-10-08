@@ -45,9 +45,10 @@ def _cycle(tmp_path: Path, book_ts: object, *, now: str = NOW_S, missing: bool =
     _write(markets, [{"ts": NOW_S, "id": "m1", "token_ids": ["y", "n"]}])
     rows = []
     for token, ask in (("y", 0.60), ("n", 0.50)):
-        row = {"market_id": "m1", "token_id": token, "best_ask": ask, "best_ask_size": 5}
+        # Recorder clock in ts; the book's own exchange time in book_ts, which is what is judged (Task T).
+        row = {"ts": NOW_S, "market_id": "m1", "token_id": token, "best_ask": ask, "best_ask_size": 5}
         if not missing:
-            row["ts"] = book_ts
+            row["book_ts"] = book_ts
         rows.append(row)
     _write(books, rows)
     result = paper_cycle.run(markets_path=markets, books_path=books, bus_path=bus_path, now=now, **kwargs)
@@ -139,7 +140,7 @@ def test_unparseable_book_timestamp_fails_closed(tmp_path, value, reason):
     assert _stale_reasons(tmp_path, value) == [reason]
 
 
-def test_missing_ts_key_fails_closed(tmp_path):
+def test_missing_book_ts_key_fails_closed(tmp_path):
     assert _stale_reasons(tmp_path, None, missing=True) == ["missing_book_ts"]
 
 

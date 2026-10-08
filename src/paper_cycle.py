@@ -1,7 +1,10 @@
 """Offline paper cycle.
 
 Reads local market and book jsonl. Emits gap and staleness signals only.
-Book age uses src/book_staleness.py, the same parser and boundary as RiskGate.
+Book age uses src/book_staleness.py, the same parser and boundary as RiskGate, and is read
+from the exchange's book_ts (book.book_timestamp), never the recorder's ts (Task T).
+A stale market gets no gap signal: the BookWatcher stale signal is its skip record.
+The latest market/book row is chosen by parsed time; unparseable rows are skipped and recorded.
 No network, no orders, no paper fills, no edits to config/risk.toml.
 """
 from __future__ import annotations
@@ -15,7 +18,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src import arb_binary, neg_risk  # noqa: E402
-from src.book_staleness import INVALID_NOW, book_age_problem, parse_book_ts  # noqa: E402
+from src.book_staleness import (  # noqa: E402
+    INVALID_BOOK_TS,
+    INVALID_NOW,
+    MISSING_BOOK_TS,
+    book_age_problem,
+    latest_by_time,
+    parse_book_ts,
+)
 from src.podlib import (  # noqa: E402
     BOOKS_PATH,
     MARKETS_PATH,
@@ -47,8 +57,9 @@ def run(
         return {"ok": False, "reason": "phase0_pin", "signals": 0, "gaps": 0, "stale": 0, "fills": 0}
     now_s = now or utc_now()
     now_at = parse_book_ts(now_s)
-    markets = _latest_by(read_jsonl(markets_path), "id")
-    books = _latest_books(read_jsonl(books_path))
+    skips: list[dict] = []
+    markets = _latest_by(read_jsonl(markets_path), "id", skips, bus_path)
+    books = _latest_books(read_jsonl(books_path), skips, bus_path)
     gaps = 0
     stale = 0
     for market_id, market in markets.items():
@@ -60,7 +71,7 @@ def run(
             book = books.get((market_id, token))
             if book is None:
                 continue
-            problem = _book_problem(book.get("ts"), now_at, stale_after_s)
+            problem = _row_book_problem(book, now_at, stale_after_s)
             if problem is not None:
                 stale_reasons.add(problem)
             ask = book.get("best_ask")
@@ -78,11 +89,17 @@ def run(
                     "stale": True,
                     "stale_after_s": stale_after_s,
                     "stale_reasons": sorted(stale_reasons),
+                    "gap_signal": "skipped",
+                    "skip_reason": "stale_book",
                     "exchange_action": "none",
                 },
                 path=bus_path,
             )
+            skips.append({"market": market_id, "kind": "stale_market", "reason": "stale_book",
+                          "stale_reasons": sorted(stale_reasons)})
             stale += 1
+            # A stale market gets no gap/spread signal at all (Task T).
+            continue
         message = _gap_message(asks, market_id, depths, bus_path)
         if message is not None:
             if message["type"] != "signal":
@@ -96,6 +113,8 @@ def run(
         "gaps": gaps,
         "stale": stale,
         "fills": 0,
+        "skipped": len(skips),
+        "skips": skips,
     }
 
 
@@ -108,28 +127,65 @@ def _gap_message(asks: list[float], market_id: str, depths: list[float | None], 
     return None
 
 
-def _latest_by(rows: list[dict], key: str) -> dict[str, dict]:
-    chosen: dict[str, dict] = {}
-    for row in rows:
-        name = str(row.get(key) or "")
-        if not name:
-            continue
-        prev = chosen.get(name)
-        if prev is None or str(row.get("ts") or "") >= str(prev.get("ts") or ""):
-            chosen[name] = row
+def _record_skipped_rows(skipped: list[dict], rows: list[dict], source: str, skips: list[dict],
+                         bus_path: Path | None) -> None:
+    """Record each row dropped for an unusable ts: one skip entry and one BookWatcher signal."""
+    for item in skipped:
+        row = rows[item["index"]]
+        market = str((row.get("market_id") if source == "books" else row.get("id")) or "")
+        token = str(row.get("token_id") or "") if source == "books" else ""
+        entry = {"kind": "skipped_row", "source": source, "market": market, "token_id": token, "reason": item["reason"]}
+        skips.append(entry)
+        bus(
+            "BookWatcher",
+            "Sentinel",
+            "signal",
+            market,
+            {"skipped_row": True, "source": source, "token_id": token, "reason": item["reason"],
+             "exchange_action": "none"},
+            path=bus_path,
+        )
+
+
+def _latest_by(rows: list[dict], key: str, skips: list[dict] | None = None,
+               bus_path: Path | None = None) -> dict[str, dict]:
+    """Latest row per ``key`` by parsed ``ts`` (not string order). Unparseable rows are skipped."""
+    chosen, skipped = latest_by_time(rows, lambda row: str(row.get(key) or ""))
+    if skips is not None:
+        _record_skipped_rows(skipped, rows, "markets", skips, bus_path)
     return chosen
 
 
-def _latest_books(rows: list[dict]) -> dict[tuple[str, str], dict]:
-    chosen: dict[tuple[str, str], dict] = {}
-    for row in rows:
-        key = (str(row.get("market_id") or ""), str(row.get("token_id") or ""))
-        if not key[0] or not key[1]:
-            continue
-        prev = chosen.get(key)
-        if prev is None or str(row.get("ts") or "") >= str(prev.get("ts") or ""):
-            chosen[key] = row
+def _latest_books(rows: list[dict], skips: list[dict] | None = None,
+                  bus_path: Path | None = None) -> dict[tuple[str, str], dict]:
+    """Latest book row per (market, token) by the recorder's parsed ``ts``.
+
+    The newest recording wins even when its book_ts is missing, so a newer snapshot with
+    no usable book time makes the leg stale instead of letting an older one look fresh.
+    """
+
+    def _key(row: dict) -> tuple[str, str] | None:
+        pair = (str(row.get("market_id") or ""), str(row.get("token_id") or ""))
+        return pair if pair[0] and pair[1] else None
+
+    chosen, skipped = latest_by_time(rows, _key)
+    if skips is not None:
+        _record_skipped_rows(skipped, rows, "books", skips, bus_path)
     return chosen
+
+
+def _row_book_problem(book: dict, now_at: datetime | None, stale_after_s: object) -> str | None:
+    """Book age from the exchange's book_ts on the row, never the recorder ts (Task T).
+
+    A recorded book_ts_problem always counts as stale: missing_book_ts / invalid_book_ts as
+    recorded, any other value as invalid_book_ts. No book_ts key is missing_book_ts.
+    """
+    if now_at is None:
+        return INVALID_NOW
+    if "book_ts_problem" in book and book["book_ts_problem"] is not None:
+        problem = book["book_ts_problem"]
+        return problem if problem in (MISSING_BOOK_TS, INVALID_BOOK_TS) else INVALID_BOOK_TS
+    return _book_problem(book.get("book_ts"), now_at, stale_after_s)
 
 
 def _book_problem(ts: object, now_at: datetime | None, stale_after_s: object) -> str | None:

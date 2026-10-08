@@ -38,6 +38,8 @@ def _book(url: str) -> dict:
         "tick_size": "0.01",
         "min_order_size": "5",
         "market": "cond-1",
+        # The exchange's own /book time (Unix ms) = the session's now; age is read from this (Task T).
+        "timestamp": "1791439200000",
     }
 
 

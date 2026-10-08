@@ -32,15 +32,15 @@ def test_cycle_emits_gap_and_stale_signals_but_no_fills(tmp_path):
     _write(
         books,
         [
-            {"ts": fresh, "market_id": "binary-gap", "token_id": "y", "best_ask": 0.40, "best_ask_size": 50},
-            {"ts": fresh, "market_id": "binary-gap", "token_id": "n", "best_ask": 0.40, "best_ask_size": 20},
-            {"ts": fresh, "market_id": "multi-gap", "token_id": "a", "best_ask": 0.30, "best_ask_size": 10},
-            {"ts": fresh, "market_id": "multi-gap", "token_id": "b", "best_ask": 0.30, "best_ask_size": 8},
-            {"ts": fresh, "market_id": "multi-gap", "token_id": "c", "best_ask": 0.25, "best_ask_size": 12},
-            {"ts": fresh, "market_id": "no-gap", "token_id": "p", "best_ask": 0.60, "best_ask_size": 5},
-            {"ts": fresh, "market_id": "no-gap", "token_id": "q", "best_ask": 0.50, "best_ask_size": 5},
-            {"ts": old, "market_id": "stale", "token_id": "s1", "best_ask": 0.60, "best_ask_size": 5},
-            {"ts": old, "market_id": "stale", "token_id": "s2", "best_ask": 0.50, "best_ask_size": 5},
+            {"ts": fresh, "book_ts": fresh, "market_id": "binary-gap", "token_id": "y", "best_ask": 0.40, "best_ask_size": 50},
+            {"ts": fresh, "book_ts": fresh, "market_id": "binary-gap", "token_id": "n", "best_ask": 0.40, "best_ask_size": 20},
+            {"ts": fresh, "book_ts": fresh, "market_id": "multi-gap", "token_id": "a", "best_ask": 0.30, "best_ask_size": 10},
+            {"ts": fresh, "book_ts": fresh, "market_id": "multi-gap", "token_id": "b", "best_ask": 0.30, "best_ask_size": 8},
+            {"ts": fresh, "book_ts": fresh, "market_id": "multi-gap", "token_id": "c", "best_ask": 0.25, "best_ask_size": 12},
+            {"ts": fresh, "book_ts": fresh, "market_id": "no-gap", "token_id": "p", "best_ask": 0.60, "best_ask_size": 5},
+            {"ts": fresh, "book_ts": fresh, "market_id": "no-gap", "token_id": "q", "best_ask": 0.50, "best_ask_size": 5},
+            {"ts": old, "book_ts": old, "market_id": "stale", "token_id": "s1", "best_ask": 0.60, "best_ask_size": 5},
+            {"ts": old, "book_ts": old, "market_id": "stale", "token_id": "s2", "best_ask": 0.50, "best_ask_size": 5},
         ],
     )
     result = paper_cycle.run(

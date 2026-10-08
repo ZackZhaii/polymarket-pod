@@ -26,7 +26,10 @@ Phase 0 paper. Stdlib only. No keys. Bus append-only (`podlib.append_jsonl`). Re
 - Write with `podlib.utc_now()` → `"%Y-%m-%dT%H:%M:%SZ"` (always `Z`).
 - **Canonical parse (proposal, needs code PR):** prefer `book_staleness.parse_book_ts` rules for every `ts` / `book_ts`: ISO with time + zone (`Z` or offset), aware datetime, or finite epoch seconds. Reject naive, date-only, numeric strings, bool, nan, inf.
 - **Known drift (do not paper over):**
-  - `paper_cycle._book_problem` delegates to `book_staleness.book_age_problem` (Task R): fresh means `0 <= age <= 120` s; a future, missing or unparseable `ts`, an unparseable `now` and a broken limit all count as stale, and the stale signal carries `stale_reasons`.
+  - `paper_cycle._book_problem` delegates to `book_staleness.book_age_problem` (Task R): fresh means `0 <= age <= 120` s; a future, missing or unparseable time, an unparseable `now` and a broken limit all count as stale, and the stale signal carries `stale_reasons`.
+  - Task T: `paper_cycle` (`_row_book_problem`) and `paper_ledger.realistic_no_edge` judge age by the row's exchange `book_ts`, never the recorder `ts`. No `book_ts` key → `missing_book_ts`; a non-null `book_ts_problem` always counts as stale (`missing_book_ts` / `invalid_book_ts` as recorded, anything else `invalid_book_ts`).
+  - Task T: a stale market gets **no** ArbBinary/NegRiskArb gap signal; the BookWatcher → Sentinel stale signal is its skip record (`gap_signal="skipped"`, `skip_reason="stale_book"`), and `run()` returns it in `skips`.
+  - Task T: the latest market/book row is chosen by `book_staleness.latest_by_time` (parsed recorder `ts`, not string order; ties keep the later row). Rows with a missing or unparseable `ts` are skipped (`missing_row_ts` / `invalid_row_ts`): BookWatcher → Sentinel `signal` with `skipped_row=true, source, token_id, reason, exchange_action=none`, plus an entry in `skips`. `realistic_no_edge` returns them as `skipped_rows`.
   - `book_staleness.parse_book_ts`: broader ISO / epoch; rejects naive.
   - `scanner.parse_utc`: `Z` → `+00:00`, else `fromisoformat`, else naive `strptime` **treated as UTC** (still lenient; not touched by Task R).
   - `book.record` bus payload carries `book_ts` and `book_ts_problem` (Task R). `book_ts` is the exchange's own CLOB `/book` `timestamp` (Unix ms string, or a non-negative int, or an aware ISO string), converted by `book.book_timestamp` to ISO 8601 UTC with milliseconds and `Z`. When unusable it is `null` and `book_ts_problem` is `missing_book_ts` or `invalid_book_ts` (floats, signs, decimals, bools, naive times); otherwise `book_ts_problem` is `null`. The recorder clock `ts` is never used as `book_ts`.
@@ -40,7 +43,7 @@ Required keys: `ts`, `from`, `to`, `type`, `market`, `payload`.
 | type | who may emit | notes |
 |---|---|---|
 | signal | Scanner, BookWatcher (book to RiskGate; stale to Sentinel), NewsForecaster, ArbBinary, NegRiskArb, Maker, Endgame, SportsDevig, RiskGate (allow path) | payload role-specific |
-| veto | RiskGate | reasons list |
+| veto | RiskGate | reasons list (wash/self-trade reasons below) |
 | fill | Executor only | `risk_decision=allow` |
 | proposal | QuantResearcher, Reflector (both to `Operator`) | `changes_risk_toml=false`; never mutates risk.toml |
 | halt | Sentinel | `exchange_action=none` |
@@ -69,6 +72,8 @@ def validate_bus_line(row: dict) -> list[str]:
     # fill: from==Executor and payload.risk_decision==allow
     return problems
 ```
+
+**Wash / self-trade veto reasons (Task S, `src/wash_detect.py`, on top of the `banned_behavior` name keywords; either fires = veto):** `cross_side_same_leg` (an uncancelled own paper quote, `quotes.jsonl` status `open`, on the opposite side of the same leg = market + token_id), `self_trade_structure` (`Intent.counterparty` is our own account, role or strategy), `wash_same_market` (own opposite-side paper fill on the same leg within `WASH_WINDOW_S`), `wash_input_missing` (state lacks `recent_fills` / `own_quotes`), `wash_input_invalid` (malformed history, unknown quote status, bad `now`/market, unusable counterparty). `paper_ledger.load_state` supplies `recent_fills` and `own_quotes`. `WASH_WINDOW_S = 300` s is a code constant and only a proposal pending the user's decision at M2; it is not a risk.toml key.
 
 `book_ts` means the exchange's own book timestamp, never the recorder clock `ts`. Never copy `ts` into `book_ts`. If the book had none, carry `book_ts: null` plus `book_ts_problem`; RiskGate then vetoes `missing_book_ts` (fail closed).
 

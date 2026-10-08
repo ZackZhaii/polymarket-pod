@@ -40,11 +40,19 @@ Phase 0: paper only. `sentinel.halt` rewrites `logs/quotes.jsonl` and emits `hal
 
 ### Stale book
 
-1. Detect: `book_staleness.book_age_problem`; `paper_cycle._book_problem` uses the same check (Task R): older than `STALE_AFTER_S` (120 s; exactly 120 s is fresh), future, missing or unparseable `ts` are stale.
-2. Bus: BookWatcher → Sentinel `stale=true`, `stale_after_s`, `stale_reasons`, `exchange_action=none` (`paper_cycle.run`).
+1. Detect: `book_staleness.book_age_problem`; `paper_cycle._book_problem` uses the same check (Task R) on the row's exchange `book_ts`, never the recorder `ts` (Task T): older than `STALE_AFTER_S` (120 s; exactly 120 s is fresh), future, missing or unparseable `book_ts`, or any recorded `book_ts_problem` is stale.
+2. Bus: BookWatcher → Sentinel `stale=true`, `stale_after_s`, `stale_reasons`, `gap_signal=skipped`, `skip_reason=stale_book`, `exchange_action=none` (`paper_cycle.run`). A stale market emits no gap signal (Task T). Rows with an unusable recorder `ts` show up as BookWatcher `skipped_row=true` signals (`missing_row_ts` / `invalid_row_ts`).
 3. Exchange time: `book.record` carries the `/book` `timestamp` as `book_ts`; `book_ts=null` with `book_ts_problem` means the exchange gave none (or an unusable one).
 4. RiskGate vetoes missing/stale `book_ts` — expected, not a SEV-1.
 5. If mass stale: check clock skew; re-run `book.py`; do not loosen 120 s without Operator proposal (Task L).
+
+### Wash / self-trade vetoes (Task S)
+
+1. Symptom: RiskGate vetoes with `cross_side_same_leg`, `self_trade_structure` or `wash_same_market` even though the strategy name is clean, or `wash_input_missing` / `wash_input_invalid` on every intent.
+2. `cross_side_same_leg`: an own paper quote is still `open` on the opposite side of the same leg in `logs/quotes.jsonl`. Expected while it rests; `sentinel.halt(reason=..., market=...)` cancels paper quotes. Never edit the quote file by hand.
+3. `wash_same_market`: an own opposite-side paper fill on the same leg within `WASH_WINDOW_S` (300 s code constant; a proposal pending the user's decision at M2, not a risk.toml key). Expected; do not shorten the window to get a fill through.
+4. `wash_input_missing` / `wash_input_invalid`: the caller did not pass `paper_ledger.load_state` history, or a same-market row in `paper.jsonl` / `quotes.jsonl` is malformed (bad side, unparseable `ts`, unknown quote status). Fail closed by design: SEV-4, fix the producer or the row via a PR; never bypass the check.
+5. `banned_behavior` (name keywords) still fires independently.
 
 ### API down
 

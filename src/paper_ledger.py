@@ -30,7 +30,8 @@ from src.podlib import (  # noqa: E402
     read_jsonl,
     utc_now,
 )
-from src.risk_gate import Decision, Intent, evaluate
+from src.book_staleness import latest_by_time, parse_book_ts  # noqa: E402
+from src.risk_gate import Decision, Intent, evaluate  # noqa: E402
 
 DIRECTIONAL = "Single-leg fill is directional exposure, not risk-free arbitrage."
 
@@ -256,12 +257,24 @@ def run_self_check(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
-    """Use a public book price with model_prob == price. Must veto. Not a forecast."""
+    """Use a public book price with model_prob == price. Must veto. Not a forecast.
+
+    Task T: candidates are the latest row per leg by the recorder's parsed ``ts`` (times, not
+    strings), newest first; rows with a missing or unparseable ``ts`` are skipped and returned in
+    ``skipped_rows``. Book age is the exchange's ``book_ts`` on the row, never ``ts``; a row
+    without one reaches RiskGate as book_ts=None and vetoes missing_book_ts (fail closed).
+    """
     books = read_jsonl(BOOKS_PATH)
     markets = {str(row.get("id")): row for row in read_jsonl(MARKETS_PATH)}
+    latest, skipped = latest_by_time(
+        books, lambda row: (str(row.get("market_id") or ""), str(row.get("token_id") or ""))
+    )
+    ordered = sorted(
+        latest.values(), key=lambda row: parse_book_ts(row.get("ts")), reverse=True  # type: ignore[arg-type,return-value]
+    )
     fallback = None
     chosen = None
-    for book in reversed(books):
+    for book in ordered:
         ask = book.get("best_ask")
         spread = book.get("spread")
         if not isinstance(ask, (int, float)) or not isinstance(spread, (int, float)):
@@ -273,7 +286,8 @@ def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
         if not isinstance(liquidity, (int, float)):
             continue
         candidate = (book, float(liquidity))
-        fallback = candidate
+        if fallback is None:
+            fallback = candidate
         # Prefer a touch that stays inside (0, 1) after the default slippage.
         if 0.0 < float(ask) + 0.005 < 1.0:
             chosen = candidate
@@ -296,11 +310,13 @@ def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
             spread=float(book["spread"]),
             token_id=str(book.get("token_id") or ""),
             hypothetical=False,
-            book_ts=book.get("ts"),
+            # The exchange's own book time (Task R/T), never the recorder's ts.
+            book_ts=book.get("book_ts"),
             note="Public ask used as both model and price. Must not fill. Not a forecast.",
         ),
         cfg,
     )
+    result["skipped_rows"] = skipped
     return result
 
 

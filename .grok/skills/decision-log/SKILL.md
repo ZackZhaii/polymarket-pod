@@ -47,7 +47,7 @@ Cite: `risk_gate.Intent`, CLI in `paper_ledger.build_parser` (`--book-ts`; omitt
 
 ### 3. Risk rules hit
 
-`Decision.reasons` is copied verbatim into the bus payload as `reasons` (`paper_ledger._decision_payload`). Full reason vocabulary is listed in the `paper-fill` skill (phase0_pin, banned_behavior, book_* , max_open_positions, max_daily_loss, …).
+`Decision.reasons` is copied verbatim into the bus payload as `reasons` (`paper_ledger._decision_payload`). Full reason vocabulary is listed in the `paper-fill` skill (phase0_pin, banned_behavior, book_* , max_open_positions, max_daily_loss, …). Task S adds the structured wash/self-trade reasons from `src/wash_detect.py`: `cross_side_same_leg`, `self_trade_structure`, `wash_same_market`, `wash_input_missing`, `wash_input_invalid` (log them verbatim like any other reason). `wash_same_market` uses `WASH_WINDOW_S = 300` s, a code constant that is only a proposal pending the user's decision at M2. The history behind these vetoes (`recent_fills`, `own_quotes` from `paper_ledger.load_state`) is not in the bus payload.
 
 ### 4. Verdict and separation
 
