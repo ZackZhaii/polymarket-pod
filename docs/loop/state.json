@@ -195,6 +195,15 @@
       "note": "Approved by Poly指挥 (backlog #9, after Y); done by grok-bot. Pure addition: a new alarm only. SENTINEL_STALE_S and SENTINEL_STALE_CONSECUTIVE await the user's decision at M2.",
       "done_at": "2026-10-08T20:55:25Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AA",
+      "status": "done",
+      "title": "Sentinel StaleWatch wired into paper_cycle (backlog #15): the stale streak persists in logs/sentinel_stale.json",
+      "finish": "paper_cycle.run checks every market with at least one booked token once per run at SENTINEL_STALE_S (120 s; a looser stale_after_s cannot reset it) and keeps the StaleWatch streak in podlib.SENTINEL_STATE_PATH (logs/sentinel_stale.json; sentinel_state_path and quotes_path are injectable). An unreadable, corrupt or malformed state file, a state file missing after a prior run (.seen marker) or a failed save counts as a stale check (fail closed); a first run with no file and no marker starts at 0. Writes are atomic (temp file in the same folder, fsync, os.replace). Two stale checks in a row call sentinel.halt once (that market's paper quotes only, exchange_action none); a fresh check resets. Per-check stale signals, skipped gaps and RiskGate vetoes are unchanged. Task letters after Z are AA, AB, AC. Offline tests. COORDINATION #15 struck through. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Approved by Poly指挥 (after #25 W merged); done by grok-bot. Tightening only: every new path fails closed and no per-check block changes. No new threshold.",
+      "done_at": "2026-10-08T21:05:01Z",
+      "surface": "grok-bot"
     }
   ]
 }

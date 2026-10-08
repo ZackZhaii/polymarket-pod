@@ -22,6 +22,8 @@ SESSIONS_PATH = LOG_DIR / "sessions.jsonl"
 MARKETS_PATH = DATA_DIR / "markets.jsonl"
 BOOKS_PATH = DATA_DIR / "books.jsonl"
 QUOTES_PATH = LOG_DIR / "quotes.jsonl"
+# Sentinel StaleWatch streaks between paper_cycle runs (Task AA). Not a risk.toml key.
+SENTINEL_STATE_PATH = LOG_DIR / "sentinel_stale.json"
 
 # Local paper bankroll. Not a wallet. Sizing never exceeds the 1% clip.
 PAPER_EQUITY_USD = 1000.0
