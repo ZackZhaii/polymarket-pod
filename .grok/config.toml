@@ -16,5 +16,14 @@ deny = [
   "Bash(git push origin main*)", "Bash(git push --force*)",
   "MCPTool(github__merge_pull_request)", "MCPTool(github__push_files)",
   "MCPTool(github__create_or_update_file)", "MCPTool(github__delete_file)",
+  # batch2: official/third-party Polymarket SDKs, MCP servers and CLI trading verbs; destructive git; PR merge
+  "Bash(pip install polymarket-client*)", "Bash(python -m pip install polymarket-client*)",
+  "Bash(pip install py-clob-client-v2*)", "Bash(pip install py-sdk*)",
+  "Bash(npm install @polymarket/*)", "Bash(npx polymarket-mcp-server*)",
+  "Bash(npm install @carbon-copy/polymarket-mcp*)", "Bash(polymarket wallet*)",
+  "Bash(polymarket approve*)", "Bash(polymarket clob create-order*)",
+  "Bash(polymarket clob market-order*)", "Bash(polymarket ctf*)",
+  "Bash(git reset --hard*)", "Bash(git clean*)",
+  "Bash(git branch -D*)", "Bash(gh pr merge*)",
 ]
 ask = ["Edit(config/risk.toml)"]
