@@ -1,4 +1,5 @@
-"""Task AE (backlog #19): characterisation of today's fees, before they are unified.
+"""Task AE (backlog #19): characterisation of the fees before they were unified, and the guarantee
+that no fee went down.
 
 RiskGate charges fees in two places: the edge stress (``fee_rate * market_price`` per share,
 subtracted from the edge) and the booked fee (``Decision.fee_usd = notional_usd * fee_rate``),
@@ -7,7 +8,10 @@ which paper_ledger writes as ``round(fee_usd, 8)`` and sums into daily_loss_usd.
 RECORDED holds outputs captured from dev before any fee change. The frozen copies
 below (old_stress_fee, old_ledger_fee, old_edge) are checked against RECORDED and against
 evaluate() on a grid of prices (including near 0 and 1), sizes, fee rates, slippages and
-sides, valid and invalid. Offline, no credentials.
+sides, valid and invalid. The first commit of Task AE asserted equality with today's code; after
+src/fees.py every path must give a fee >= its old value on every point (stress fee per share,
+booked fee_usd, ledger fee_usd), so every edge is <= its old value and nothing newly allows.
+Offline, no credentials.
 """
 from __future__ import annotations
 
@@ -17,9 +21,11 @@ from datetime import datetime, timezone
 
 import pytest
 
+import src.fees as fees
 import src.paper_ledger as paper_ledger
 from src.podlib import load_risk, utc_now
 from src.risk_gate import Intent, evaluate
+from src.thresholds import EDGE_TOLERANCE, MIN_EDGE
 
 NOW = "2026-10-08T08:00:00Z"
 NOW_DT = datetime(2026, 10, 8, 8, tzinfo=timezone.utc)
@@ -121,7 +127,7 @@ def _same(a: float, b: float) -> bool:
     return a == b or (math.isnan(a) and math.isnan(b))
 
 
-# --- the frozen copies are today's code ------------------------------------------------------
+# --- the frozen copies are the old code (recorded before Task AE) ------------------------------
 
 
 @pytest.mark.parametrize("point", RECORDED, ids=[f"rec{i}" for i in range(len(RECORDED))])
@@ -132,26 +138,65 @@ def test_frozen_copies_reproduce_the_recorded_values(point):
     assert old_ledger_fee(decision.notional_usd, f) == fee_usd
 
 
+def _old_allow(decision, old: float) -> bool:
+    """Would the old code have allowed? Only the edge reasons depend on the fee."""
+    others = set(decision.reasons) - {"non_positive_edge", "edge_below_min", "invalid_fee"}
+    return not others and old > 0 and not old < MIN_EDGE - EDGE_TOLERANCE
+
+
 @pytest.mark.parametrize("point", RECORDED, ids=[f"rec{i}" for i in range(len(RECORDED))])
-def test_recorded_values_are_todays_values(point):
+def test_recorded_points_never_get_cheaper(point):
     side, p, m, s, f, size, edge, fee_usd, allow = point
     decision = _evaluate(side, p, m, s, f, size)
-    assert (decision.edge, decision.fee_usd, decision.allow) == (edge, fee_usd, allow), decision.reasons
+    assert decision.fee_usd >= fee_usd, decision
+    assert decision.edge <= edge, decision
+    assert allow or not decision.allow, decision.reasons  # nothing newly allows
+    assert fees.booked_fee_usd(decision.fee_usd) >= old_booked_fee(fee_usd)
 
 
-def test_grid_matches_the_frozen_copies():
+def test_grid_no_fee_goes_down_and_nothing_newly_allows():
     cfg = load_risk()
     assert len(GRID) == 24624
     for point in GRID:
         side, p, m, s, f, size = point
         decision = _evaluate(side, p, m, s, f, size, cfg)
-        assert _same(decision.edge, old_edge(side, p, m, s, f, decision.effective_price)), point
-        assert decision.fee_usd == old_ledger_fee(decision.notional_usd, f), point
+        old = old_edge(side, p, m, s, f, decision.effective_price)
         assert math.isfinite(decision.edge) and math.isfinite(decision.fee_usd), point
+        assert decision.edge <= old, (point, decision.edge, old)
+        assert decision.fee_usd >= old_ledger_fee(decision.notional_usd, f), point
+        assert fees.booked_fee_usd(decision.fee_usd) >= old_booked_fee(old_ledger_fee(decision.notional_usd, f)), point
+        if decision.allow:
+            assert _old_allow(decision, old), point
+
+
+def test_grid_stress_fee_never_below_the_old_stress_fee():
+    """stress_fee >= fee_rate * market_price wherever it gives a number; None only fails closed."""
+    for side, _p, m, s, f, _size in GRID:
+        effective = _num(m) + _num(s) if side == "buy" else _num(m) - _num(s) if side == "sell" else _num(m)
+        new = fees.stress_fee(f, m, effective)
+        old = old_stress_fee(f, m)
+        if new is None:
+            assert _bad(f) or _bad(m) or not math.isfinite(effective), (side, m, s, f)
+        else:
+            assert new >= old, (side, m, s, f, new, old)
+
+
+def test_grid_ledger_fee_never_below_the_old_ledger_fee():
+    for side, _p, m, s, f, size in GRID:
+        effective = _num(m) + _num(s) if side == "buy" else _num(m) - _num(s) if side == "sell" else _num(m)
+        for notional in (0.0, 1e-9, 3.0, 10.0, -1.0):
+            shares = notional / effective if math.isfinite(effective) and effective > 0 else 0.0
+            new = fees.ledger_fee(f, m, effective, notional, shares)
+            old = old_ledger_fee(notional, f)
+            if new is None:
+                assert _bad(f), (m, s, f, notional)
+                assert 0.0 >= old  # RiskGate reports 0.0 then, which is still >= the old fee
+            else:
+                assert new >= old, (side, m, s, f, notional, new, old)
 
 
 @pytest.mark.parametrize("point", [r for r in RECORDED if r[-1]], ids=lambda r: f"{r[0]}-{r[2]}-{r[4]}")
-def test_ledger_books_todays_fee(tmp_path, monkeypatch, point):
+def test_ledger_never_books_less_than_before(tmp_path, monkeypatch, point):
     monkeypatch.setattr(paper_ledger, "PAPER_PATH", tmp_path / "paper.jsonl")
     monkeypatch.setattr(paper_ledger, "QUOTES_PATH", tmp_path / "quotes.jsonl")
     monkeypatch.setattr(paper_ledger, "bus", lambda *args, **kwargs: None)
@@ -161,5 +206,5 @@ def test_ledger_books_todays_fee(tmp_path, monkeypatch, point):
                     token_id="t", book_ts=utc_now())
     result = paper_ledger.commit_if_allowed(intent, load_risk())
     assert result["allow"] is True
-    assert result["fill"]["fee_usd"] == old_booked_fee(fee_usd)
-    assert paper_ledger.load_state("ae", "t")["daily_loss_usd"] == old_booked_fee(fee_usd)
+    assert result["fill"]["fee_usd"] >= old_booked_fee(fee_usd)
+    assert paper_ledger.load_state("ae", "t")["daily_loss_usd"] >= old_booked_fee(fee_usd)
