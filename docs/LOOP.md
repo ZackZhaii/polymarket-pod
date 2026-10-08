@@ -96,6 +96,30 @@ Finish when `src/sports_devig.py` removes the overround from a two-way decimal-o
 - A positive edge is not locked profit. One leg is directional.
 - No network. Do not edit `config/risk.toml`.
 
+## Task I — scanner filter, long-tail band, keyset paging
+
+Status: todo.
+
+Owner: Scanner (Poly扫描). Claim as surface `grok-bot` (any surface may verify).
+Order: the operator ordered this task ahead of G on 2026-10-08. G (5332d4a) and H — SportsDevig (26667aa) were already done,
+so I is the only todo. Merging PR #2 is the human add the `## Latest` rule asks for.
+The code ships in PR #2. Whoever claims I verifies it and closes it.
+
+Finish when `src/scanner.py` walks public Gamma `/markets/keyset` (24h volume desc, `liquidity_num_min` = `min_liquidity_usd`),
+filters by `min_liquidity_usd` and `max_spread` from `config/risk.toml`, drops expired, closed, not-accepting, one-sided
+and long-tail (YES mid < 0.03 or > 0.97) markets, reports first-reason rejection counts, and `python -m pytest`
+passes with no network and no credentials. Record one public `python src/scanner.py` run (exit code, passed, bus lines) under `## Latest`.
+
+- Missing, non-numeric, boolean, non-finite or invalid scanner keys raise: `max_spread <= 0`, `min_liquidity_usd < 0`,
+  or a band outside `0 <= scanner_min_price < scanner_max_price <= 1`. No looser default.
+- Paging stops on a repeated cursor (including A->B->A) or a page with no new markets, and reports `stop_reason`.
+- `MAX_MARKETS = 50000`. Today's filtered universe is about 15,000 markets (about 150 pages).
+- Every passing market goes to `data/markets.jsonl`. Only the top 50 by 24h volume become Scanner `signal` lines.
+- Exit codes: 0 ok, 1 fewer than 5 scanned, 2 nothing passed, 3 paging incomplete (cap or stall).
+  Codes 1-3 write nothing to `data/markets.jsonl` or the bus.
+- Public reads only. No order, auth or signing endpoint. Do not edit `config/risk.toml`.
+- Out of scope: paper_session switch, Endgame >0.97 feed, minimum time-to-expiry.
+
 ## Paste this into a new chat
 
 ```text
@@ -107,8 +131,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: Task H done by grok-web. SportsDevig de-vigs two-way odds and emits a signal only.
-- No fill, no quote, no order, no network. Edge is not locked profit.
-- `python -m pytest` passed offline. `config/risk.toml` unchanged, `live_enabled=false`.
-- No todo remains. Do not add a live-trading task.
-- Next code task starts only when a human adds one here and in `docs/loop/state.json`.
+- 2026-10-08: Task H (SportsDevig, signal only) done by grok-web in 26667aa. Kept as-is.
+- Operator adds Task I (scanner filter, Poly扫描) through PR #2. Merging PR #2 is the human add; I is the only todo.
+- I code ships in PR #2: keyset paging, risk.toml thresholds, 0.03-0.97 band, top-50 bus cap, `MAX_MARKETS = 50000`.
+- `python -m pytest` passed offline. `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- After merge, claim I, verify with pytest and one public scanner run, record it here, then release done. No live-trading task.

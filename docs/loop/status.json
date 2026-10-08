@@ -2,8 +2,8 @@
   "ts": "2026-10-08T09:10:00Z",
   "live_enabled": false,
   "last_done": "H",
-  "next": null,
+  "next": "I",
   "claim": null,
   "cadence_minutes": 30,
-  "note": "H is done. Queue is empty. No live gate."
+  "note": "H (SportsDevig) is done. Operator adds Task I (scanner filter) via PR #2; I is the only todo. No live gate."
 }
