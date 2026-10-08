@@ -69,6 +69,15 @@
       "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 2; 120 s is Sentinel's proposal (item 9). The threshold is a code constant; moving it into config/risk.toml is a proposal for the Operator.",
       "done_at": "2026-10-08T17:35:38Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "M",
+      "status": "done",
+      "title": "hypothetical intents no longer skip max_open_positions / max_daily_loss",
+      "finish": "risk_gate.evaluate checks max_open_positions and max_daily_loss for every intent; hypothetical=True no longer skips them (an already-open market stays exempt from the position cap). risk_caps(cfg) reads max_open_positions (whole number >= 0) and max_daily_loss_pct (> 0) with no default; missing, bool, string, None, inf or nan vetoes with invalid_risk_cap. Missing or invalid state open_positions / daily_loss_usd vetoes with invalid_risk_state instead of reading 0. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 4. No new threshold; the existing risk.toml caps now apply to hypothetical intents too.",
+      "done_at": "2026-10-08T17:47:34Z",
+      "surface": "grok-bot"
     }
   ]
 }
