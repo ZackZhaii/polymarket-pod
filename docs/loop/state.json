@@ -267,6 +267,15 @@
       "note": "Approved by Poly指挥 (M0 guard); done by grok-bot. Not wired into CI (CI is KEY and stays with the user). Data API is not allowlisted because src/ does not use it today. M2 pending list unchanged.",
       "done_at": "2026-10-08T22:11:50Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AI",
+      "status": "done",
+      "title": "M1 24-hour acceptance tooling: read-only long-run recorder entry (python -m src.m1_run: assets from the latest scanner batch, rotation, graceful SIGINT/SIGTERM, run manifest, REST /book samples, reconnect/resync events) and offline report (python -m src.m1_report: coverage, book-age percentiles, resyncs, reconnects, REST-vs-WS match, PASS/FAIL) (backlog #23)",
+      "finish": "src.m1_run records the public WS market channel through the unchanged ws_recorder rules (new optional stop and on_event hooks only) for --max-runtime seconds into rotated append-only JSONL (books/, events/, rest/) under a new run dir, samples the public CLOB /book via book.snapshot every M1_REST_EVERY_S for the first M1_REST_ASSETS assets, and writes manifest.json atomically at start and end (times, assets, versions, git sha, risk.toml sha256 at start and end, live_enabled, files, counts, exit code). Assets come from data/markets.jsonl only (latest batch by parsed ts, version-aware token_ids, top N). SIGINT/SIGTERM stop within WS_STOP_POLL_S, exit 5. src.m1_report reads only the run dir and writes report.md and report.json with per-asset coverage (book_age_problem rule on a 1 s grid), book-age p50/p90/p99/max, resyncs by reason, reconnects, REST-vs-WS best bid/ask match by nearest exchange book_ts, and a PASS/FAIL verdict against M2-pending criteria in src/thresholds.py and THRESHOLDS.md. docs/M1_ACCEPTANCE.md has the box commands. config/risk.toml unchanged. COORDINATION #23 struck through. pytest passes offline (fake transport, fake clock, synthetic run dirs).",
+      "note": "Requested by Poly指挥 (Poly指挥 runs the 24 h on the box); done by grok-bot. The eight M1 criteria (M1_MIN_RUN_S, M1_MIN_COVERAGE, M1_MAX_RECONNECTS, M1_MAX_GAP_RESYNCS_PER_ASSET, M1_REST_MATCH_WINDOW_S, M1_MIN_REST_MATCHED, M1_MAX_TOP_MISMATCH_RATE, M1_MAX_REST_UNMATCHED_RATE) are conservative first values and join the M2 pending list; run defaults and WS_STOP_POLL_S are operational. No new URL, no order code.",
+      "done_at": "2026-10-08T22:30:57Z",
+      "surface": "grok-bot"
     }
   ]
 }

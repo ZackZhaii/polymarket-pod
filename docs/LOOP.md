@@ -702,10 +702,46 @@ the reason, exits 0 only if all pass, each check fails on a deliberately bad tem
 - Also (Poly指挥): AG's doc sentences (`src/ws_recorder.py` docstring, this file, THRESHOLDS.md, state.json) now say a
   live asset that loses sync gets one price-less invalidation row, then nothing until a fresh snapshot.
 
+## Task AI — M1 24-hour acceptance tooling: src/m1_run.py, src/m1_report.py (backlog #23)
+
+Status: done.
+
+Requested by Poly指挥, done by grok-bot. M1 is accepted on a 24-hour read-only run of the Task AG recorder on the box;
+there was no long-run entry (rotation, graceful stop, provenance) and no way to judge a run (COORDINATION backlog #23).
+
+Finish when `python -m src.m1_run --out RUN_DIR --max-runtime 86400` records books, events and REST samples with a run
+manifest and stops cleanly on SIGINT/SIGTERM, `python -m src.m1_report RUN_DIR` turns a run dir into report.md/report.json
+with a PASS/FAIL verdict, the criteria are M2-pending constants, and `python -m pytest` passes with no network.
+
+- `src/m1_run.py`: assets from `data/markets.jsonl` only (latest scan batch by parsed ts, 24h-volume order, version-aware
+  `token_ids` without `token_ids_problem`, `--top` markets, both tokens; `--assets` overrides). It never scans Gamma.
+  Writes `books/`, `events/`, `rest/` as `<stream>-NNNNNN.jsonl` through `JsonlAppender`, rotated by size (`--rotate-mb`)
+  or age (`--rotate-s`). A daemon thread samples the public CLOB `/book` via `book.snapshot` at start and every
+  `--rest-every` s for the first `--rest-assets` assets. `manifest.json` (atomic replace) at start and end: times (ms),
+  elapsed, assets with metadata, selection, settings, thresholds, Python/websockets/schema versions, git sha + dirty,
+  risk.toml sha256 and `live_enabled` at start and end with the pin, files, counts, exit code, stop signal.
+- Exit codes: 0 ran to the deadline with a snapshot, 1 no snapshot, 2 usage (also a non-empty `--out`), 3 websockets
+  missing (checked before anything is written), 4 write failed (books, events, REST or manifest), 5 SIGINT/SIGTERM.
+- `src/ws_recorder.py`: `Recorder` gets two optional hooks. `stop` is polled at least every `WS_STOP_POLL_S` (also during
+  backoff); a stop ends the run like the deadline (no invalidation rows). `on_event` receives connected, connect_failed,
+  disconnected, backoff, resync (asset, reason), resubscribe, live and end. Without them nothing changes (AG tests as before).
+- `src/m1_report.py`: offline, reads only the run dir. Per-asset coverage = share of 1 s points (`M1_REPORT_STEP_S`) where
+  the latest WS row is a live book with `0 <= t - book_ts <= MAX_BOOK_AGE_S` (the `book_age_problem` rule, integer µs);
+  book-age p50/p90/p99/max; resyncs by reason (gap versus `disconnect_*`), reconnects, connect failures; REST vs WS by
+  nearest exchange `book_ts` within `M1_REST_MATCH_WINDOW_S`, best bid/ask equal at 6 decimals, mismatches listed; integrity
+  (listed files present, no unreadable line, counts equal the manifest). Exit 0 PASS, 1 FAIL, 2 usage.
+- Criteria (M2 pending, conservative): `M1_MIN_RUN_S` 86340, `M1_MIN_COVERAGE` 0.99 per asset, p99 age <= `MAX_BOOK_AGE_S`,
+  `M1_MAX_RECONNECTS` 48, `M1_MAX_GAP_RESYNCS_PER_ASSET` 24, `M1_MIN_REST_MATCHED` 50, `M1_MAX_TOP_MISMATCH_RATE` 0.02,
+  `M1_MAX_REST_UNMATCHED_RATE` 0.10, `M1_REST_MATCH_WINDOW_S` 30; plus completed run, risk pin at start and end, integrity.
+  Operational: `M1_TOP_MARKETS` 5, `M1_ROTATE_BYTES` 64 MiB, `M1_ROTATE_S` 3600, `M1_REST_EVERY_S` 600, `M1_REST_ASSETS` 4,
+  `M1_REPORT_STEP_S` 1, `WS_STOP_POLL_S` 1. Relations checked at import (THRESHOLDS.md).
+- In `src/` (not `scripts/`): `python -m` from the repo root on every OS, and the guard's URL scan covers it. No new URL.
+  Commands for the box: `docs/M1_ACCEPTANCE.md`. Tests: `tests/test_m1_run.py`, `tests/test_m1_report.py`.
+
 ## Latest
 
-- 2026-10-09: Task AH done by grok-bot (approved by Poly指挥, backlog #22). `python scripts/guard.py` is the local M0 guard (stdlib, offline, read-only).
-- Checks: risk.toml sha (worktree + HEAD), live_enabled=false, banned deps/imports, src URL allowlist, THRESHOLDS.md vs src/thresholds.py.
-- One PASS/FAIL line each; exit 0 all pass, 1 a check failed, 2 usage. ORDER_CAPABLE and the AC table parser now live in the guard. No CI added.
-- `python -m pytest` passed offline (1517 passed; on Windows 1513 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S.
+- 2026-10-09: Task AI done by grok-bot (requested by Poly指挥, backlog #23). M1 24 h acceptance: `python -m src.m1_run` records, `python -m src.m1_report` judges.
+- m1_run: assets from the latest scan, rotated JSONL (books/events/rest), REST /book samples, manifest with git and risk sha, graceful SIGINT/SIGTERM.
+- m1_report: coverage, book-age p50/p90/p99/max, resyncs, reconnects, REST-vs-WS match, PASS/FAIL. Box commands in `docs/M1_ACCEPTANCE.md`.
+- `python -m pytest` passed offline (1654 passed; on Windows 1650 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S, the eight M1_* criteria.

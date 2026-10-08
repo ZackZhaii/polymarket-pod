@@ -87,6 +87,11 @@ It writes nothing and adds no CI: running it in CI is the user's decision.
 
 `git status` does not list `.env`. Ignored paths include `.env`, `data/`, and `logs/`.
 
+## M1 acceptance (Task AI)
+
+The 24-hour read-only WebSocket book run and its offline report are `python -m src.m1_run` and
+`python -m src.m1_report`. Commands, outputs and the M2-pending acceptance criteria: `docs/M1_ACCEPTANCE.md`.
+
 ## Not in this phase
 
 No live trading, no key material, no CLOB authentication, no withdraw, no automatic size-up, and no geo-bypass steps. A single-leg fill is directional exposure, not risk-free arbitrage. Nothing here is a promise of profit.
