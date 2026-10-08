@@ -161,6 +161,15 @@
       "surface": "grok-bot"
     },
     {
+      "id": "W",
+      "status": "done",
+      "title": "Endgame unfiltered path (backlog #10): read-only, fail-closed endgame_scan hands Endgame the 0.98-0.99 band",
+      "finish": "src/endgame_scan.py fetches the same public Gamma keyset pages as the scanner (GET only, no keys), applies every scanner rule except long_tail_price (closed, version, 24 h expiry, accepting orders, bid/ask, liquidity, spread, price), fails closed on non-finite price/bid/ask/spread/liquidity, keeps only first-outcome prices inside endgame.PRICE_MIN..PRICE_MAX (inclusive) and hands them to endgame.emit (signal to RiskGate only, 48 h window; no fill, order or ledger write). Incomplete fetch exits 3 and writes nothing, fewer than 5 markets exit 1, drifted paper pins exit 4 before any fetch. The scanner's default output, filters, exit codes and data/markets.jsonl are unchanged. Backlog #10 struck through in COORDINATION.md. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold changes.",
+      "note": "Approved by Poly指挥 (Endgame backlog #10); done by grok-bot. Paper only: a new read-only second path; nothing in the scanner or RiskGate is loosened or bypassed.",
+      "done_at": "2026-10-08T20:33:13Z",
+      "surface": "grok-bot"
+    },
+    {
       "id": "X",
       "status": "done",
       "title": "RiskGate minimum edge (backlog #6): MIN_EDGE = 0.02 code constant, edge_below_min veto; non_positive_edge kept",

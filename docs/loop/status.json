@@ -5,5 +5,5 @@
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "Z (Sentinel stale-book alarm, backlog #9: SENTINEL_STALE_S = 120 and SENTINEL_STALE_CONSECUTIVE = 2 code constants; paper halt after 2 consecutive stale or failed checks, reset on fresh; per-check RiskGate veto unchanged) done by grok-bot in its PR. F-Y done on dev; W (Endgame scan) in PR #25. SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, MIN_EDGE and WASH_WINDOW_S await the user's decision at M2. No open todo. No live gate."
+  "note": "W (Endgame unfiltered path, backlog #10: read-only src/endgame_scan.py hands Endgame the 0.98-0.99 band; scanner filter unchanged; inherits Y's non_finite_<field> reasons; signals to RiskGate only), X (MIN_EDGE = 0.02, backlog #6), Y (scanner non_finite_<field>) and Z (Sentinel halt after 2 consecutive stale or failed book checks, backlog #9) done by grok-bot. F-Z done on dev; W merged dev in its PR. SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, MIN_EDGE and WASH_WINDOW_S await the user's decision at M2. No open todo. No live gate."
 }

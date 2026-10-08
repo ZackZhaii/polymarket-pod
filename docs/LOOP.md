@@ -361,6 +361,30 @@ passes with no network and no credentials.
   unavailable), read/decode/stat errors that turn into FAIL, and CLI exit codes. All 39 existing skills keep identical findings and verdicts.
 - The deny list, `.grok/config.toml` and CI are unchanged. No threshold change. Do not edit `config/risk.toml`.
 
+## Task W — Endgame unfiltered path: a read-only, fail-closed second scan for the 0.98–0.99 band (backlog #10)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. The scanner drops prices above `scanner_max_price` (0.97) as `long_tail_price`,
+so markets in Endgame's 0.98–0.99 band never reached Endgame (COORDINATION backlog #10).
+
+Finish when Endgame gets its band through a separate read-only path, the scanner is unchanged, nothing bypasses RiskGate,
+and `python -m pytest` passes with no network and no credentials.
+
+- `src/endgame_scan.py` (`python src/endgame_scan.py`): fetches the same public Gamma keyset pages through
+  `scanner.fetch_all_markets` (GET only, no keys). It applies every scanner rule except `long_tail_price`: closed, version,
+  24 h expiry, accepting orders, bid/ask, liquidity, spread and price.
+- Any non-finite price, bid, ask, spread or liquidity fails closed (`non_finite_<field>`). Only first-outcome prices inside
+  `endgame.PRICE_MIN..PRICE_MAX` (inclusive) stay; others are `outside_endgame_band`.
+- Candidates go to `endgame.emit`: a signal to RiskGate only, within Endgame's 48 h window. With the scanner's 24 h minimum
+  this leaves 24–48 h to resolution. There is no fill, order or ledger write, and RiskGate still decides every intent.
+- Fail closed: drifted paper pins exit 4 before any fetch; an incomplete fetch exits 3 and writes nothing; fewer than 5 markets exit 1.
+  No band market is exit 0 with no signal.
+- The scanner is untouched: default output, filters, exit codes and `data/markets.jsonl` are unchanged. Backlog #10 is struck through.
+- Since Task Y the shared `scanner.rejection_reasons` gives `non_finite_<field>` first; `band_problems` re-checks with the same
+  names as a second fail-closed guard and never counts a reason twice (`tests/test_endgame_scan.py`).
+- No threshold change. Do not edit `config/risk.toml`.
+
 ## Task X — RiskGate minimum edge: MIN_EDGE = 0.02 (code constant), edge_below_min veto (backlog #6)
 
 Status: done.
@@ -441,8 +465,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task Z done by grok-bot (approved by Poly指挥). Sentinel halts a market (paper quotes only) after 2 consecutive stale or failed book checks.
-- Stale is RiskGate's rule at 120 s; a missing, unparseable, non-finite or future `book_ts` or a failed check counts as stale. A fresh check resets.
-- Per-check blocks are unchanged: RiskGate still vetoes one stale book, `paper_cycle` still skips its gap signal. Nothing is loosened.
-- `python -m pytest` passed offline (689 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Tasks W, X, Y and Z done by grok-bot (approved by Poly指挥). W: read-only `src/endgame_scan.py` gives Endgame the 0.98–0.99 band (backlog #10).
+- X: edge >= `MIN_EDGE` (0.02) or `edge_below_min`. Y: the scanner rejects parsed NaN/±inf as `non_finite_<field>`, and `endgame_scan` inherits those reasons.
+- Z: Sentinel halts a market (paper quotes only) after 2 consecutive stale or failed book checks; RiskGate still vetoes every single stale book.
+- `python -m pytest` passed offline (729 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. `SENTINEL_STALE_S` (120), `SENTINEL_STALE_CONSECUTIVE` (2), `MIN_EDGE` and `WASH_WINDOW_S` await the user's decision at M2.
