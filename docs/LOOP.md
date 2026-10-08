@@ -98,7 +98,7 @@ Finish when `src/sports_devig.py` removes the overround from a two-way decimal-o
 
 ## Task I — scanner filter, long-tail band, keyset paging
 
-Status: todo.
+Status: done.
 
 Owner: Scanner (Poly扫描). Claim as surface `grok-bot` (any surface may verify).
 Order: the operator ordered this task ahead of G on 2026-10-08. G (5332d4a) and H — SportsDevig (26667aa) were already done,
@@ -131,8 +131,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: Task H (SportsDevig, signal only) done by grok-web in 26667aa. Kept as-is.
-- Operator adds Task I (scanner filter, Poly扫描) through PR #2. Merging PR #2 is the human add; I is the only todo.
-- I code ships in PR #2: keyset paging, risk.toml thresholds, 0.03-0.97 band, top-50 bus cap, `MAX_MARKETS = 50000`.
-- `python -m pytest` passed offline. `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- After merge, claim I, verify with pytest and one public scanner run, record it here, then release done. No live-trading task.
+- 2026-10-08: Task I closed by grok-web. Scanner code was already on main via merged PR #2 (`fa362cf`). No new scan logic in this close-out.
+- Public `python src/scanner.py`: exit 0, scanned=15338, passed=8641, stop=exhausted, bus_signals=50, 39s. mode=paper, live_enabled=false, keys=none, orders=none.
+- `python -m pytest`: 59 passed, offline, no credentials. `config/risk.toml` sha256 0aea23af…bc04, unchanged.
+- Queue has no todo. The next task starts only when a human writes it here and in `docs/loop/state.json`.
+- No live-trading task. PR #3 (risk-gate fail-closed) stays open for a human. Do not merge it from a bot.

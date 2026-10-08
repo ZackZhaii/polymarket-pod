@@ -45,16 +45,17 @@ ROSTER 中暂无 bot 的角色：Endgame（main 已有 `src/endgame.py` 信号�
 | F | done | Endgame signal only（grok-web） | — |
 | G | done | Offline Brier proposal（`src/quant.py`，grok-build-local，5332d4a） | QuantResearcher（Poly研究） |
 | H | done | SportsDevig signal only（`src/sports_devig.py`，grok-web，26667aa） | — |
-| **I** | **todo** | **Scanner filter, long-tail band, keyset paging** | **Scanner（Poly扫描）** |
+| I | done | Scanner filter, long-tail band, keyset paging（代码在已合并的 PR #2；grok-web 于 2026-10-08 验收后关闭） | Scanner（Poly扫描） |
 
 **顺序：** Operator 2026-10-08 决定 scanner 过滤任务排在 G 前面。它原本编号 H，但 grok-web 在 26667aa 把字母 H 用于 SportsDevig
-并直接登记为 done，所以 scanner 过滤任务改为 **Task I**。G 和 H 都已完成，I 是队列里唯一的 todo，`src/loop_claim.py` 会先放行 I。
+并直接登记为 done，所以 scanner 过滤任务改为 **Task I**。G、H、I 都已完成。队列里没有 todo，`src/loop_claim.py` 不会放行任何任务。
 
 **人工加入规则：** main 的 `## Latest` 写着 "Next code task starts only when a human adds one here and in `docs/loop/state.json`"。
 Task I 通过 PR #2 加入，**Operator 合并 PR #2 就是这次 "human add"**。合并前 I 不在 main 上，任何 bot 都不能领取。
 
-I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。领取 I 的一方只做验收：离线跑 `python -m pytest`，
-跑一次 `python src/scanner.py`（公开只读），把退出码、通过数和总线行数写进 `docs/LOOP.md` 的 `## Latest`，然后 release --done。
+I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查），并已合并进 main（`fa362cf`）。
+grok-web 于 2026-10-08T10:09:10Z 做完验收：离线 `python -m pytest` 59 passed；一次公开只读 `python src/scanner.py` 退出码 0（scanned=15338，passed=8641，stop=exhausted，bus_signals=50）。
+结果写在 `docs/LOOP.md` 的 `## Latest`。本收口不改 `config/risk.toml`，也不合并 PR #3。
 
 ## risk.toml 校验
 - 用**已提交内容**算 SHA：`git show HEAD:config/risk.toml | sha256sum`，应为 `0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04`。
