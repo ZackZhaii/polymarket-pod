@@ -33,7 +33,7 @@ ROLES.md 仅作历史参考；ROLES 独有的 Researcher / ArbMerge / CryptoPuls
 | Poly反思 | Reflector | ≤3 条/UTC 日提案，不改 risk.toml |
 ROSTER 中暂无 bot 的角色：Endgame（main 已有 `src/endgame.py` 信号桩）、SportsDevig（main 已有 `src/sports_devig.py` 信号桩，Task H）、Reconciler。
 
-注：`src/forecaster.py` 现用 `from="Forecaster"`，ROSTER 里叫 NewsForecaster —— 记入 backlog，改名需单独任务。
+注：`src/forecaster.py` 的总线名已改为 ROSTER 的 NewsForecaster（Task N）。旧名 Forecaster 经 `podlib.canonical_role` 映射，`bus()` 写入时统一成 NewsForecaster；旧的 `logs/bus.jsonl` 行不改写。
 注：loop_claim 的 surface 只有 grok-build-local / grok-web / grok-bot；Poly* bot 领取时用 `grok-bot`。
 
 ## 总线
@@ -85,5 +85,5 @@ I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。�
 9. Sentinel 提议陈旧阈值 120s / 连续 2 次失败才报警（30s 会误报）；risk.toml 与代码尚无此参数。
 10. Endgame 需要未过滤数据：scanner 排除 >0.97 后，0.98–0.99 区间市场不会进入 scanner 输出。
 11. ~~（审查新增）`risk_gate.evaluate` 对缺失的 `min_liquidity_usd` / `max_spread` 用默认值 0 / 1，属于缺键放行（fail-open）；scanner 新代码已是缺键报错，两者不一致。~~ **Task J 处理**（PR #3）：缺键或非有限数值一律 `invalid_gate_threshold` veto，不再用默认值。
-12. （审查新增）Forecaster 总线名与 ROSTER 的 NewsForecaster 不一致。
+12. ~~（审查新增）Forecaster 总线名与 ROSTER 的 NewsForecaster 不一致。~~ **Task N 处理**：`src/forecaster.py` 用 `from="NewsForecaster"`；`podlib.ROLE_ALIASES` 把旧名 Forecaster 映射过去，`bus()` 统一写 ROSTER 名，旧调用方不报错。未改 risk.toml。
 13. ~~scanner 阈值接受布尔和无穷（`max_spread = true` 读成 1.0，`1e999` 读成 inf）。~~ **已在 PR #2（Task I）修复**：只接受有限的 int/float，bool、字符串、inf、nan 都报错。

@@ -186,6 +186,22 @@ and `python -m pytest` passes with no network and no credentials.
   instead of reading 0. `paper_ledger.load_state` always supplies both.
 - No new threshold. `config/risk.toml` is unchanged; the keys it already has are now enforced for hypothetical intents too.
 
+## Task N — Forecaster bus name matches ROSTER (NewsForecaster)
+
+Status: done.
+
+Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 12: `src/forecaster.py` wrote `from="Forecaster"`,
+but docs/ROSTER.md and docs/COORDINATION.md call the role NewsForecaster.
+
+Finish when the forecaster emits the ROSTER name, older callers and older bus lines still work,
+and `python -m pytest` passes with no network and no credentials.
+
+- `forecaster.BUS_NAME = "NewsForecaster"`; `emit_probability` uses it. Still probability only, never an order or a fill.
+- `podlib.ROLE_ALIASES = {"Forecaster": "NewsForecaster"}` and `canonical_role(name)`. `bus()` writes the canonical
+  `from` / `to`, so a script still passing `Forecaster` keeps working and the line says NewsForecaster.
+- Existing `logs/bus.jsonl` lines are not rewritten; readers compare via `canonical_role`. No code reader matched on the old name.
+- No risk parameter. `config/risk.toml` is unchanged.
+
 ## Task O — scanner minimum time-to-expiry; markets closer than 24 h do not pass
 
 Status: done.
@@ -217,6 +233,6 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/main 开 worktr
 
 - 2026-10-09: Task O done by grok-bot (self-picked, backlog item 8). The scanner drops markets with under 24 h to expiry (`near_expiry`).
 - Fail closed: a missing, unparseable, naive, date-only, non-string or past end date never passes. 24 h is a code constant, not a risk.toml key.
-- PR #10 and Task M accepted on main 5e3eefc (190 passed, F-M done). Task N (Forecaster -> NewsForecaster) is in review as PR #12.
-- `python -m pytest` passed offline (238 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Task N merged into dev b43d84d: `src/forecaster.py` emits `from="NewsForecaster"`; the legacy `Forecaster` maps via `podlib.canonical_role`.
+- `python -m pytest` passed offline (244 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.

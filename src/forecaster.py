@@ -1,9 +1,14 @@
-"""Forecaster stub. Probability only. Never emits an order or a fill."""
+"""NewsForecaster stub (docs/ROSTER.md). Probability only. Never emits an order or a fill.
+
+The bus name used to be "Forecaster"; podlib.canonical_role maps that legacy name here.
+"""
 from __future__ import annotations
 
 from pathlib import Path
 
 from src.podlib import bus
+
+BUS_NAME = "NewsForecaster"
 
 
 def emit_probability(
@@ -16,7 +21,7 @@ def emit_probability(
     if not 0.0 < model_prob < 1.0:
         raise ValueError("model_prob out of range")
     return bus(
-        "Forecaster",
+        BUS_NAME,
         "RiskGate",
         "signal",
         market,
