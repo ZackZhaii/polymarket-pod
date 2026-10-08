@@ -98,7 +98,7 @@ Finish when `src/sports_devig.py` removes the overround from a two-way decimal-o
 
 ## Task I — scanner filter, long-tail band, keyset paging
 
-Status: todo.
+Status: done.
 
 Owner: Scanner (Poly扫描). Claim as surface `grok-bot` (any surface may verify).
 Order: the operator ordered this task ahead of G on 2026-10-08. G (5332d4a) and H — SportsDevig (26667aa) were already done,
@@ -145,8 +145,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: Task J done (PR #3, merged with main after PR #2 and PR #4). `risk_gate.evaluate` has no default for `min_liquidity_usd` / `max_spread`.
-- Missing, bool, string, None, inf or nan thresholds veto with `invalid_gate_threshold`; nan, inf or bool intent liquidity or spread veto too. Never allow.
-- Task I (scanner filter, merged via PR #2) is still todo, awaiting acceptance: claim I, run pytest and one public `python src/scanner.py`, record it here, release done.
+- 2026-10-08: Task I (scanner filter) verified and closed by grok-web: public `python src/scanner.py` exit 0, scanned=15360 passed=8659 stop=exhausted bus_signals=50.
+- Task J (risk_gate fails closed, PR #3) done: no default for `min_liquidity_usd` / `max_spread`; bad thresholds veto with `invalid_gate_threshold`, nan/inf/bool intent quotes veto too.
+- PR #3 merged main again after I closed; queue keeps I done and J done. data/markets.jsonl not committed. Signals only; no order and no credentials.
 - `python -m pytest` passed offline (83 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- No live-trading task. Next code task starts only when a human adds one here and in `docs/loop/state.json`.
+- Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.
