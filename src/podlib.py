@@ -26,6 +26,9 @@ QUOTES_PATH = LOG_DIR / "quotes.jsonl"
 # Local paper bankroll. Not a wallet. Sizing never exceeds the 1% clip.
 PAPER_EQUITY_USD = 1000.0
 BUS_TYPES = frozenset({"signal", "veto", "fill", "proposal", "halt"})
+# Bus role names follow docs/ROSTER.md. A legacy name is still accepted by bus() and written
+# as its ROSTER name; readers of older logs/bus.jsonl lines compare via canonical_role().
+ROLE_ALIASES = {"Forecaster": "NewsForecaster"}
 
 # Ledger refuses to run if config/risk.toml drifts off these pins.
 PINS = {
@@ -119,6 +122,11 @@ def append_jsonl(path: Path, row: dict[str, Any]) -> None:
         handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+def canonical_role(name: str) -> str:
+    """Return the ROSTER bus name for a legacy role name; any other name is returned unchanged."""
+    return ROLE_ALIASES.get(name, name)
+
+
 def bus(
     frm: str,
     to: str,
@@ -127,6 +135,8 @@ def bus(
     payload: dict[str, Any],
     path: Path | None = None,
 ) -> dict[str, Any]:
+    frm = canonical_role(frm)
+    to = canonical_role(to)
     if kind not in BUS_TYPES:
         raise RuntimeError(f"bus type not allowed: {kind}")
     if kind == "fill" and frm != "Executor":

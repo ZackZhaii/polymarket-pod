@@ -78,6 +78,15 @@
       "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 4. No new threshold; the existing risk.toml caps now apply to hypothetical intents too.",
       "done_at": "2026-10-08T17:47:34Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "N",
+      "status": "done",
+      "title": "Forecaster bus name matches ROSTER (NewsForecaster)",
+      "finish": "src/forecaster.py emits from=NewsForecaster (forecaster.BUS_NAME), the docs/ROSTER.md name. podlib.ROLE_ALIASES maps the legacy Forecaster name and canonical_role(name) returns the ROSTER name; bus() writes the canonical from/to so older callers keep working. Old logs/bus.jsonl lines are not rewritten; readers compare via canonical_role. NewsForecaster still cannot emit a fill. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 12. Pure code; no risk parameter.",
+      "done_at": "2026-10-08T18:43:58Z",
+      "surface": "grok-bot"
     }
   ]
 }

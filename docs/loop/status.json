@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T17:47:34Z",
+  "ts": "2026-10-08T18:43:58Z",
   "live_enabled": false,
-  "last_done": "M",
+  "last_done": "N",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "M (hypothetical intents no longer skip max_open_positions / max_daily_loss; missing or invalid cap or state vetoes) done by grok-bot in its PR. F-L done on main. No open todo. No live gate."
+  "note": "N (Forecaster bus name is now ROSTER's NewsForecaster; legacy name mapped by podlib.canonical_role) done by grok-bot in its PR. F-M done on main. No open todo. No live gate."
 }

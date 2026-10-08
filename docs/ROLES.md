@@ -7,7 +7,7 @@ All agents are new. They do not reuse an existing chat team. Group chat is alert
 | Scanner | Gamma market discovery, rank by volume/liquidity/expiry | No |
 | BookWatcher | CLOB order book and spread | No |
 | Researcher | News, official data, sportsbook odds. No orders | No |
-| Forecaster | Blind probability, then confront market. Brier/Platt | No |
+| NewsForecaster | Blind probability, then confront market. Brier/Platt | No |
 | ArbMerge | YES+NO or multi-outcome sum gaps. Single-leg fill is directional | Signal only |
 | Maker | Post-only quotes, inventory skew, news pull | Signal only until live gate |
 | CryptoPulse | Short-window BTC/ETH up-down. Last to enable | Signal only |
