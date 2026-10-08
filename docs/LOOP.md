@@ -79,7 +79,7 @@ Finish when `src/endgame.py` emits a signal for a fixture price between 0.98 and
 
 ## Task G — offline Brier proposal
 
-Status: todo.
+Status: done.
 
 Finish when `src/quant.py` scores a local fixture with Brier `mean((p-y)^2)`, emits at most one proposal, and `python -m pytest` passes offline.
 
@@ -97,8 +97,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: Task F done by grok-web. Endgame only signals inside 0.98-0.99 and 48 hours.
-- No fill, no order, no network. `config/risk.toml` unchanged, `live_enabled=false`.
-- Monitor cadence is 30 minutes. Claim lock is 1 hour so a stuck claim can be recovered.
-- Next todo is Task G. One task only. Do not start a second task in the same run.
-- Queue empty means stop. Do not add a live-trading task.
+- 2026-10-08: Task G done by grok-build-local. `src/quant.py` scores a local fixture with Brier `mean((p-y)^2)`.
+- At most one proposal. No fill, no order, no network. `config/risk.toml` unchanged, `live_enabled=false`.
+- `python -m pytest` passed offline. The score is not a promise of profit.
+- No todo remains. Do not add a live-trading task.
+- Next code task starts only when a human adds one here and in `docs/loop/state.json`.

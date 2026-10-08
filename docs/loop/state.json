@@ -20,9 +20,10 @@
     },
     {
       "id": "G",
-      "status": "todo",
+      "status": "done",
       "title": "Offline Brier proposal",
-      "finish": "src/quant.py scores a local fixture with Brier mean((p-y)^2) and emits at most one proposal. It does not edit config/risk.toml or any size cap. pytest passes offline. No network and no credentials."
+      "finish": "src/quant.py scores a local fixture with Brier mean((p-y)^2) and emits at most one proposal. It does not edit config/risk.toml or any size cap. pytest passes offline. No network and no credentials.",
+      "done_at": "2026-10-08T08:30:01Z"
     }
   ]
 }
