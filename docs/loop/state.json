@@ -276,6 +276,15 @@
       "note": "Requested by Poly指挥 (Poly指挥 runs the 24 h on the box); done by grok-bot. The eight M1 criteria (M1_MIN_RUN_S, M1_MIN_COVERAGE, M1_MAX_RECONNECTS, M1_MAX_GAP_RESYNCS_PER_ASSET, M1_REST_MATCH_WINDOW_S, M1_MIN_REST_MATCHED, M1_MAX_TOP_MISMATCH_RATE, M1_MAX_REST_UNMATCHED_RATE) are conservative first values and join the M2 pending list; run defaults and WS_STOP_POLL_S are operational. No new URL, no order code.",
       "done_at": "2026-10-08T22:30:57Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AJ",
+      "status": "done",
+      "title": "End-to-end offline hard gate: the real pipeline (scanner rows -> /book recorder -> paper cycle and Sentinel -> Endgame / NewsForecaster signals -> Intent -> RiskGate -> paper fill -> ledger_store -> conservation -> Sentinel halt) on fixed sanitised recordings in tests/fixtures/e2e/, exact golden.json, guard check e2e (backlog #24)",
+      "finish": "scripts/e2e_offline.py runs the real modules on tests/fixtures/e2e/ (Gamma rows, CLOB /book bodies, forecasts, ledger and quote start state, scenario) with only the clock (frozen datetime in podlib, book_staleness, wash_detect) and I/O paths (temp bus, ledger, quotes, markets, books, Sentinel state; the /book getter; a concurrent-writer ledger path) replaced, socket/urllib/http.client/podlib.urlopen as tripwires. The run matches golden.json exactly (every allow/veto with reasons, fills, cash, positions, Sentinel halts, bus counts) and breaks no invariant (no network, exchange_action none, fills only from an allow, unique fill ids, conservation, risk.toml pinned and byte-identical, live_enabled false at every stage, no default data path written). Scenarios: two allows, stale book, NaN ask, wash, edge below MIN_EDGE, position cap, duplicate fill replay, ledger torn before and during the call, two consecutive stale checks. tests/test_e2e_offline.py; guard check e2e (8 checks); golden changes only with pytest --update-golden (off by default, tested). docs/PHASE0_RUN.md section. No new threshold, no new URL. config/risk.toml unchanged. COORDINATION #24 struck through.",
+      "note": "by Poly指挥; done by grok-bot. Not connected in src yet (the gate glues or stops): no module turns a NewsForecaster signal into an Intent (build_intent in the harness; fee_rate and slippage are fixture inputs), Endgame signals carry no model probability, nothing consumes a Sentinel or Executor halt. The guard runs the gate in-process (stdlib + src, ~0.1 s) instead of spawning pytest, so it also works in the M1 venv without pytest.",
+      "done_at": "2026-10-08T22:51:21Z",
+      "surface": "grok-bot"
     }
   ]
 }

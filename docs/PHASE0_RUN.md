@@ -79,9 +79,52 @@ It prints one `PASS`/`FAIL` line per check with the reason, then a summary line:
   `/markets/keyset`, CLOB `/book`, the WS market channel); order/auth paths, the user channel, ports, credentials in
   the query and other hosts fail. Docstrings and comments may also link docs.polymarket.com and github.com.
 - `thresholds_doc`: `docs/THRESHOLDS.md` agrees with `src/thresholds.py` (Task AC table parser).
+- `e2e`: the end-to-end offline gate below (Task AJ). It loads the checked repo's own `scripts/e2e_offline.py`,
+  runs the real pipeline on `tests/fixtures/e2e/` and compares it exactly with `golden.json`. About 0.1 s; no
+  pytest needed.
 
 Exit codes: 0 every check passed (`risk_sha_head` may be `SKIP`), 1 a check failed, 2 usage error or no repo root.
-It writes nothing and adds no CI: running it in CI is the user's decision.
+It writes nothing in the repo (the `e2e` check keeps its scratch files in a temp folder outside the repo and
+removes it) and adds no CI: running it in CI is the user's decision.
+
+## E2E offline gate (Task AJ)
+
+A hard gate on the whole paper pipeline, offline, on fixed sanitised recordings (`tests/fixtures/e2e/`, see its
+README). Run both before merging:
+
+```
+python scripts/guard.py                          # check e2e: the pipeline vs golden.json (stdlib + src only)
+python -m pytest tests/test_e2e_offline.py       # the same run plus one test per scenario and invariant
+```
+
+Stages, all real modules (`scripts/e2e_offline.py`): Gamma rows -> `scanner.scan` -> `scanner.persist_markets`;
+recorded CLOB `/book` bodies -> `book.record` (through its getter hook) -> `paper_cycle.run` (gap/stale signals,
+Sentinel StaleWatch check 1) -> `endgame_scan` signals; forecasts -> `forecaster.emit_probability` -> Intent ->
+`paper_ledger.commit_if_allowed` (RiskGate with `fees.py`, MIN_EDGE, staleness, wash, non_finite, caps) -> paper
+fill -> `ledger_store.book` -> `ledger_store.verify` (conservation) -> `paper_cycle.run` (Sentinel check 2).
+Only the clock (frozen `datetime` in `podlib`, `book_staleness`, `wash_detect`) and I/O paths (temp bus, ledger,
+quotes, markets, books and Sentinel state; the `/book` getter; a concurrent-writer ledger path) are replaced.
+`socket`, `urllib`, `http.client` and `podlib.urlopen` are tripwires: a touch fails the gate even if caught.
+
+Scenarios: two allows (one fee-free, one with fees), a stale book (veto `stale_book`, no fill), a `NaN` ask from
+the recorder (veto `non_finite_market_price` ...), wash against a fill 2 minutes old (`wash_same_market`), edge
+0.015 (`edge_below_min`), a sixth leg (`max_open_positions`), a duplicate fill replay (deduped, cash and positions
+unchanged, the next fill books once), a ledger torn before the call (`invalid_risk_state`, nothing booked) and
+during the call (Executor halt `ledger_integrity`, nothing booked), and two consecutive stale checks (Sentinel
+halt, that market's paper quote cancelled). Every run also checks: no network, every bus message
+`exchange_action` none and no order flag, fills only from a RiskGate allow, unique fill ids, risk.toml at the pin
+and byte-identical, `live_enabled` false at every stage, no default `data/` or `logs/` path written.
+
+Not connected in code yet (the gate builds or skips them, and says so): no src module turns a NewsForecaster
+signal into an Intent (`build_intent` in the harness does: model_prob from the signal, price/spread/book_ts from
+the book row, liquidity from the scanner row; fee_rate and slippage are fixture inputs); Endgame signals carry no
+model probability, so they stop at the signal; nothing consumes a Sentinel or Executor halt yet (later intents
+are not blocked by it).
+
+Golden updates are explicit: `python -m pytest tests/test_e2e_offline.py --update-golden` rewrites
+`tests/fixtures/e2e/golden.json`, and that run fails on purpose. Review `git diff tests/fixtures/e2e/golden.json`
+and rerun without the flag. The flag is off by default (a test checks it); the guard, a plain pytest run and
+environment variables never write golden.
 
 ## Git
 

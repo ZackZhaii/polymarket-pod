@@ -1,0 +1,90 @@
+[
+ {
+  "label": "charlie-stale",
+  "market": "e2e-charlie",
+  "outcome_index": 0,
+  "side": "buy",
+  "model_prob": 0.4,
+  "fee_rate": 0.0,
+  "assumed_slippage": 0.005,
+  "strategy": "news-forecaster",
+  "note": "e2e fixture forecast (charlie-stale)"
+ },
+ {
+  "label": "delta-nan",
+  "market": "e2e-delta",
+  "outcome_index": 0,
+  "side": "buy",
+  "model_prob": 0.6,
+  "fee_rate": 0.0,
+  "assumed_slippage": 0.005,
+  "strategy": "news-forecaster",
+  "note": "e2e fixture forecast (delta-nan)"
+ },
+ {
+  "label": "echo-wash",
+  "market": "e2e-echo",
+  "outcome_index": 0,
+  "side": "sell",
+  "model_prob": 0.45,
+  "fee_rate": 0.0,
+  "assumed_slippage": 0.005,
+  "strategy": "news-forecaster",
+  "note": "e2e fixture forecast (echo-wash)"
+ },
+ {
+  "label": "foxtrot-thin-edge",
+  "market": "e2e-foxtrot",
+  "outcome_index": 0,
+  "side": "buy",
+  "model_prob": 0.53,
+  "fee_rate": 0.0,
+  "assumed_slippage": 0.005,
+  "strategy": "news-forecaster",
+  "note": "e2e fixture forecast (foxtrot-thin-edge)"
+ },
+ {
+  "label": "alpha-allow",
+  "market": "e2e-alpha",
+  "outcome_index": 0,
+  "side": "buy",
+  "model_prob": 0.47,
+  "fee_rate": 0.0,
+  "assumed_slippage": 0.005,
+  "strategy": "news-forecaster",
+  "note": "e2e fixture forecast (alpha-allow)"
+ },
+ {
+  "label": "bravo-allow",
+  "market": "e2e-bravo",
+  "outcome_index": 0,
+  "side": "buy",
+  "model_prob": 0.7,
+  "fee_rate": 0.02,
+  "assumed_slippage": 0.005,
+  "strategy": "news-forecaster",
+  "note": "e2e fixture forecast (bravo-allow)"
+ },
+ {
+  "label": "golf-cap",
+  "market": "e2e-golf",
+  "outcome_index": 0,
+  "side": "buy",
+  "model_prob": 0.55,
+  "fee_rate": 0.0,
+  "assumed_slippage": 0.005,
+  "strategy": "news-forecaster",
+  "note": "e2e fixture forecast (golf-cap)"
+ },
+ {
+  "label": "alpha-again",
+  "market": "e2e-alpha",
+  "outcome_index": 0,
+  "side": "buy",
+  "model_prob": 0.47,
+  "fee_rate": 0.0,
+  "assumed_slippage": 0.005,
+  "strategy": "news-forecaster",
+  "note": "e2e fixture forecast (alpha-again)"
+ }
+]

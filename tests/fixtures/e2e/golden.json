@@ -1,0 +1,542 @@
+{
+  "books": {
+    "recorded": 14,
+    "rows": [
+      {
+        "best_ask": 0.41,
+        "best_bid": 0.39,
+        "book_ts": "2026-09-01T11:59:55.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-alpha",
+        "outcome": "Yes",
+        "spread": 0.02,
+        "token_id": "71001"
+      },
+      {
+        "best_ask": 0.61,
+        "best_bid": 0.59,
+        "book_ts": "2026-09-01T11:59:55.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-alpha",
+        "outcome": "No",
+        "spread": 0.02,
+        "token_id": "71002"
+      },
+      {
+        "best_ask": 0.61,
+        "best_bid": 0.59,
+        "book_ts": "2026-09-01T11:59:55.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-bravo",
+        "outcome": "Yes",
+        "spread": 0.02,
+        "token_id": "72001"
+      },
+      {
+        "best_ask": 0.41,
+        "best_bid": 0.39,
+        "book_ts": "2026-09-01T11:59:55.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-bravo",
+        "outcome": "No",
+        "spread": 0.02,
+        "token_id": "72002"
+      },
+      {
+        "best_ask": 0.31,
+        "best_bid": 0.29,
+        "book_ts": "2026-09-01T11:50:00.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-charlie",
+        "outcome": "Yes",
+        "spread": 0.02,
+        "token_id": "73001"
+      },
+      {
+        "best_ask": 0.71,
+        "best_bid": 0.69,
+        "book_ts": "2026-09-01T11:50:00.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-charlie",
+        "outcome": "No",
+        "spread": 0.02,
+        "token_id": "73002"
+      },
+      {
+        "best_ask": "NaN",
+        "best_bid": 0.49,
+        "book_ts": "2026-09-01T11:59:55.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-delta",
+        "outcome": "Yes",
+        "spread": "NaN",
+        "token_id": "74001"
+      },
+      {
+        "best_ask": 0.51,
+        "best_bid": 0.49,
+        "book_ts": "2026-09-01T11:59:55.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-delta",
+        "outcome": "No",
+        "spread": 0.02,
+        "token_id": "74002"
+      },
+      {
+        "best_ask": 0.56,
+        "best_bid": 0.54,
+        "book_ts": "2026-09-01T11:59:55.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-echo",
+        "outcome": "Yes",
+        "spread": 0.02,
+        "token_id": "75001"
+      },
+      {
+        "best_ask": 0.46,
+        "best_bid": 0.44,
+        "book_ts": "2026-09-01T11:59:55.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-echo",
+        "outcome": "No",
+        "spread": 0.02,
+        "token_id": "75002"
+      },
+      {
+        "best_ask": 0.51,
+        "best_bid": 0.49,
+        "book_ts": "2026-09-01T11:59:55.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-foxtrot",
+        "outcome": "Yes",
+        "spread": 0.02,
+        "token_id": "76001"
+      },
+      {
+        "best_ask": 0.48,
+        "best_bid": 0.47,
+        "book_ts": "2026-09-01T11:59:55.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-foxtrot",
+        "outcome": "No",
+        "spread": 0.01,
+        "token_id": "76002"
+      },
+      {
+        "best_ask": 0.46,
+        "best_bid": 0.44,
+        "book_ts": "2026-09-01T11:59:55.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-golf",
+        "outcome": "Yes",
+        "spread": 0.02,
+        "token_id": "77001"
+      },
+      {
+        "best_ask": 0.56,
+        "best_bid": 0.54,
+        "book_ts": "2026-09-01T11:59:55.000Z",
+        "book_ts_problem": null,
+        "market_id": "e2e-golf",
+        "outcome": "No",
+        "spread": 0.02,
+        "token_id": "77002"
+      }
+    ]
+  },
+  "bus": {
+    "counts": {
+      "ArbBinary>RiskGate:signal": 2,
+      "BookWatcher>RiskGate:signal": 14,
+      "BookWatcher>Sentinel:signal": 2,
+      "Endgame>RiskGate:signal": 1,
+      "Executor>Sentinel:fill": 3,
+      "Executor>Sentinel:halt": 1,
+      "NewsForecaster>RiskGate:signal": 10,
+      "RiskGate>Executor:signal": 4,
+      "RiskGate>Executor:veto": 6,
+      "Scanner>BookWatcher:signal": 7,
+      "Sentinel>Executor:halt": 1
+    },
+    "fills": 3,
+    "halts": [
+      {
+        "from": "Executor",
+        "market": "e2e-alpha",
+        "reason": "ledger_integrity",
+        "to": "Sentinel"
+      },
+      {
+        "from": "Sentinel",
+        "market": "e2e-charlie",
+        "reason": "stale_book_consecutive: 2 consecutive stale or failed book checks (last: stale_book)",
+        "to": "Executor"
+      }
+    ]
+  },
+  "clock": {
+    "now": "2026-09-01T12:00:00Z",
+    "second_check": "2026-09-01T12:01:00Z"
+  },
+  "corrupt_at_start": {
+    "allow": false,
+    "booked_rows": 0,
+    "edge": 0.055,
+    "fee_usd": 0.0,
+    "halted": false,
+    "label": "alpha-allow",
+    "ledger_unchanged": true,
+    "market": "e2e-alpha",
+    "reasons": [
+      "invalid_risk_state"
+    ],
+    "side": "buy",
+    "token_id": "71001"
+  },
+  "corrupt_mid_write": {
+    "allow": false,
+    "booked_rows": 0,
+    "edge": 0.055,
+    "fee_usd": 0.0,
+    "halt_reason": "ledger_integrity",
+    "halted": true,
+    "label": "alpha-allow",
+    "ledger_is_start_plus_tear": true,
+    "ledger_problems": [
+      "unterminated_last_row",
+      "malformed_row:4"
+    ],
+    "market": "e2e-alpha",
+    "reasons": [],
+    "side": "buy",
+    "token_id": "71001"
+  },
+  "cycle_1": {
+    "fills": 0,
+    "gaps": 1,
+    "ok": true,
+    "sentinel_checked": 7,
+    "sentinel_halts": [],
+    "stale": 1,
+    "stale_markets": [
+      "e2e-charlie"
+    ],
+    "state_problem": null,
+    "write_problem": null
+  },
+  "cycle_2": {
+    "fills": 0,
+    "gaps": 1,
+    "ok": true,
+    "sentinel_checked": 7,
+    "sentinel_halts": [
+      "e2e-charlie"
+    ],
+    "stale": 1,
+    "stale_markets": [
+      "e2e-charlie"
+    ],
+    "state_problem": null,
+    "write_problem": null
+  },
+  "decisions": [
+    {
+      "allow": false,
+      "booked_rows": 0,
+      "edge": 0.085,
+      "fee_usd": 0.0,
+      "halted": false,
+      "label": "charlie-stale",
+      "market": "e2e-charlie",
+      "reasons": [
+        "stale_book"
+      ],
+      "side": "buy",
+      "token_id": "73001"
+    },
+    {
+      "allow": false,
+      "booked_rows": 0,
+      "edge": -1.0,
+      "fee_usd": 0.0,
+      "halted": false,
+      "label": "delta-nan",
+      "market": "e2e-delta",
+      "reasons": [
+        "non_finite_market_price",
+        "market_price_out_of_range",
+        "invalid_spread",
+        "effective_price_out_of_range",
+        "non_positive_edge"
+      ],
+      "side": "buy",
+      "token_id": "74001"
+    },
+    {
+      "allow": false,
+      "booked_rows": 0,
+      "edge": 0.085,
+      "fee_usd": 0.0,
+      "halted": false,
+      "label": "echo-wash",
+      "market": "e2e-echo",
+      "reasons": [
+        "wash_same_market"
+      ],
+      "side": "sell",
+      "token_id": "75001"
+    },
+    {
+      "allow": false,
+      "booked_rows": 0,
+      "edge": 0.015,
+      "fee_usd": 0.0,
+      "halted": false,
+      "label": "foxtrot-thin-edge",
+      "market": "e2e-foxtrot",
+      "reasons": [
+        "edge_below_min"
+      ],
+      "side": "buy",
+      "token_id": "76001"
+    },
+    {
+      "allow": true,
+      "booked_rows": 1,
+      "edge": 0.055,
+      "fee_usd": 0.0,
+      "fill": {
+        "cash_after_usd": 959.8,
+        "effective_price": 0.415,
+        "fee_usd": 0.0,
+        "hypothetical": false,
+        "leg_cost_basis_after_usd": 10.0,
+        "leg_shares_after": 24.09638554,
+        "market_price": 0.41,
+        "notional_usd": 10.0,
+        "risk_decision": "allow",
+        "shares": 24.09638554,
+        "ts": "2026-09-01T12:00:00Z"
+      },
+      "halted": false,
+      "label": "alpha-allow",
+      "market": "e2e-alpha",
+      "reasons": [],
+      "side": "buy",
+      "token_id": "71001"
+    },
+    {
+      "allow": true,
+      "booked_rows": 1,
+      "edge": 0.0727,
+      "fee_usd": 0.2,
+      "fill": {
+        "cash_after_usd": 949.6,
+        "effective_price": 0.615,
+        "fee_usd": 0.2,
+        "hypothetical": false,
+        "leg_cost_basis_after_usd": 10.0,
+        "leg_shares_after": 16.2601626,
+        "market_price": 0.61,
+        "notional_usd": 10.0,
+        "risk_decision": "allow",
+        "shares": 16.2601626,
+        "ts": "2026-09-01T12:00:00Z"
+      },
+      "halted": false,
+      "label": "bravo-allow",
+      "market": "e2e-bravo",
+      "reasons": [],
+      "side": "buy",
+      "token_id": "72001"
+    },
+    {
+      "allow": false,
+      "booked_rows": 0,
+      "edge": 0.085,
+      "fee_usd": 0.0,
+      "halted": false,
+      "label": "golf-cap",
+      "market": "e2e-golf",
+      "reasons": [
+        "max_open_positions"
+      ],
+      "side": "buy",
+      "token_id": "77001"
+    }
+  ],
+  "duplicate_replay": {
+    "cash_unchanged": true,
+    "duplicates_ignored": 1,
+    "ledger": {
+      "cash_usd": 939.6,
+      "duplicates_ignored": 1,
+      "lines": 7,
+      "open_legs": 5,
+      "positions": {
+        "e2e-alpha|71001": {
+          "cost_basis_usd": 20.0,
+          "shares": 48.19277108
+        },
+        "e2e-bravo|72001": {
+          "cost_basis_usd": 10.0,
+          "shares": 16.2601626
+        },
+        "e2e-echo|75001": {
+          "cost_basis_usd": 10.0,
+          "shares": 19.04761905
+        },
+        "e2e-hist-one|70101": {
+          "cost_basis_usd": 10.0,
+          "shares": 19.8019802
+        },
+        "e2e-hist-two|70201": {
+          "cost_basis_usd": 10.0,
+          "shares": 39.21568627
+        }
+      },
+      "problems": [],
+      "unique_rows": 6
+    },
+    "lines": 6,
+    "load_state": {
+      "duplicate_fill_rows": 1,
+      "ledger_problems": [],
+      "leg_already_open": true,
+      "open_positions": 5
+    },
+    "positions_unchanged": true,
+    "problems": [],
+    "then": {
+      "allow": true,
+      "booked_rows": 1,
+      "edge": 0.055,
+      "fee_usd": 0.0,
+      "fill": {
+        "cash_after_usd": 939.6,
+        "effective_price": 0.415,
+        "fee_usd": 0.0,
+        "hypothetical": false,
+        "leg_cost_basis_after_usd": 20.0,
+        "leg_shares_after": 48.19277108,
+        "market_price": 0.41,
+        "notional_usd": 10.0,
+        "risk_decision": "allow",
+        "shares": 24.09638554,
+        "ts": "2026-09-01T12:00:00Z"
+      },
+      "halted": false,
+      "label": "alpha-again",
+      "market": "e2e-alpha",
+      "reasons": [],
+      "side": "buy",
+      "token_id": "71001"
+    },
+    "unique_rows": 5
+  },
+  "endgame": {
+    "candidates": [
+      "e2e-hotel"
+    ],
+    "first_reason": {
+      "low_liquidity": 1,
+      "missing_version": 1,
+      "outside_endgame_band": 7
+    },
+    "signals": [
+      {
+        "exchange_action": "none",
+        "market": "e2e-hotel",
+        "outcome": "Yes",
+        "outcome_index": 0,
+        "price": 0.985,
+        "token_id": "78001"
+      }
+    ]
+  },
+  "invariants": {
+    "booked_fill_ids": 3,
+    "live_checks": 13,
+    "live_enabled": [
+      "False"
+    ],
+    "network_attempts": 0,
+    "risk_sha256": "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04"
+  },
+  "ledger_after_intents": {
+    "cash_usd": 949.6,
+    "duplicates_ignored": 0,
+    "lines": 5,
+    "open_legs": 5,
+    "positions": {
+      "e2e-alpha|71001": {
+        "cost_basis_usd": 10.0,
+        "shares": 24.09638554
+      },
+      "e2e-bravo|72001": {
+        "cost_basis_usd": 10.0,
+        "shares": 16.2601626
+      },
+      "e2e-echo|75001": {
+        "cost_basis_usd": 10.0,
+        "shares": 19.04761905
+      },
+      "e2e-hist-one|70101": {
+        "cost_basis_usd": 10.0,
+        "shares": 19.8019802
+      },
+      "e2e-hist-two|70201": {
+        "cost_basis_usd": 10.0,
+        "shares": 39.21568627
+      }
+    },
+    "problems": [],
+    "unique_rows": 5
+  },
+  "quotes_after": [
+    {
+      "cancelled_by": "Sentinel",
+      "cancelled_ts": "2026-09-01T12:01:00Z",
+      "market": "e2e-charlie",
+      "price": 0.28,
+      "side": "buy",
+      "status": "cancelled",
+      "token_id": "73001"
+    },
+    {
+      "cancelled_by": null,
+      "cancelled_ts": null,
+      "market": "e2e-foxtrot",
+      "price": 0.47,
+      "side": "buy",
+      "status": "open",
+      "token_id": "76001"
+    },
+    {
+      "cancelled_by": "Sentinel",
+      "cancelled_ts": "2026-09-01T11:45:00Z",
+      "market": "e2e-golf",
+      "price": 0.48,
+      "side": "sell",
+      "status": "cancelled",
+      "token_id": "77001"
+    }
+  ],
+  "scanner": {
+    "first_reason": {
+      "long_tail_price": 1,
+      "low_liquidity": 1,
+      "missing_version": 1
+    },
+    "passed": [
+      "e2e-alpha",
+      "e2e-bravo",
+      "e2e-charlie",
+      "e2e-delta",
+      "e2e-echo",
+      "e2e-foxtrot",
+      "e2e-golf"
+    ],
+    "scanned": 10
+  }
+}

@@ -13,7 +13,8 @@ It prints one line per check, ``PASS <check>: <reason>`` or ``FAIL <check>: <rea
     1  at least one check failed
     2  usage error, or no repo root (a folder holding src/ and config/) at or above the start path
 
-Checks (nothing is written, nothing is fetched, no network):
+Checks (nothing in the repo is written, nothing is fetched, no network; check 6 keeps its scratch
+files in a temp folder outside the repo and removes it):
 
 1. risk_sha_worktree / risk_sha_head: sha256 of config/risk.toml equals PINNED_RISK_SHA256, for
    the working-tree file (CRLF normalised to LF, as git stores it with autocrlf) and for the
@@ -36,6 +37,13 @@ Checks (nothing is written, nothing is fetched, no network):
    re-exports are the modules' ``from src.thresholds import NAME as ALIAS`` lines (and every
    renamed import is documented), operational rows match their modules, the risk.toml rows match
    the file, and the doc names the pinned sha.
+6. e2e (Task AJ): the end-to-end offline gate. Loads the checked repo's own scripts/e2e_offline.py
+   by path and runs its gate(): the real pipeline (scanner -> /book recorder -> paper cycle and
+   Sentinel -> Endgame / NewsForecaster signals -> RiskGate -> paper fill -> ledger_store ->
+   conservation -> Sentinel halt) on tests/fixtures/e2e/ with a frozen clock and network
+   tripwires, compared exactly with golden.json. Its scratch files live in a throwaway temp folder
+   outside the repo that is removed afterwards; golden.json is never written here (only
+   ``python -m pytest tests/test_e2e_offline.py --update-golden`` writes it). About 0.1 s, no pytest.
 """
 from __future__ import annotations
 
@@ -43,6 +51,7 @@ import argparse
 import ast
 import hashlib
 import importlib
+import importlib.util
 import io
 import os
 import re
@@ -181,6 +190,9 @@ def check_risk_sha_head(root: Path, require_git: bool = False) -> Result:
     if digest != PINNED_RISK_SHA256:
         return Result(name, FAIL, f"HEAD:{RISK_REL} sha256 {digest} != pinned {PINNED_RISK_SHA256}")
     return Result(name, PASS, f"HEAD:{RISK_REL} sha256 {digest} matches the pin")
+
+
+E2E_HARNESS_REL = "scripts/e2e_offline.py"
 
 
 # ---------------------------------------------------------------- 2. live_enabled
@@ -626,6 +638,45 @@ def check_thresholds_doc(root: Path) -> Result:
 
 # ---------------------------------------------------------------- runner
 
+# ---------------------------------------------------------------- 6. e2e (Task AJ)
+
+def _load_e2e(root: Path):
+    """Load ``root``'s own scripts/e2e_offline.py by path (never another checkout's cached copy).
+
+    Its src imports resolve like check_live_enabled's (root first on sys.path in a fresh process).
+    No bytecode is written while it loads.
+    """
+    path = root / E2E_HARNESS_REL
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    name = "_guard_e2e_" + hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:16]
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {E2E_HARNESS_REL}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    saved = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    finally:
+        sys.dont_write_bytecode = saved
+    return module
+
+
+def check_e2e(root: Path) -> Result:
+    name = "e2e"
+    if not (root / E2E_HARNESS_REL).is_file():
+        return Result(name, FAIL, f"{E2E_HARNESS_REL} is missing")
+    problems, summary = _load_e2e(root).gate(root)
+    if problems:
+        return Result(name, FAIL, _summary(problems))
+    return Result(name, PASS, f"offline pipeline matches tests/fixtures/e2e/golden.json: {summary}")
+
+
 def run_checks(root: Path, require_git: bool = False) -> list[Result]:
     checks = [
         lambda: check_risk_sha_worktree(root),
@@ -635,10 +686,11 @@ def run_checks(root: Path, require_git: bool = False) -> list[Result]:
         lambda: check_banned_imports(root),
         lambda: check_url_allowlist(root),
         lambda: check_thresholds_doc(root),
+        lambda: check_e2e(root),
     ]
     results = []
     names = ["risk_sha_worktree", "risk_sha_head", "live_enabled", "banned_dependencies", "banned_imports",
-             "url_allowlist", "thresholds_doc"]
+             "url_allowlist", "thresholds_doc", "e2e"]
     for name, check in zip(names, checks):
         try:
             results.append(check())
@@ -655,7 +707,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="guard.py",
         description="M0 guard: offline, read-only safety checks (risk.toml pin, live_enabled, banned "
-                    "packages and imports, URL allowlist, THRESHOLDS.md).",
+                    "packages and imports, URL allowlist, THRESHOLDS.md, the end-to-end offline gate).",
         epilog="Exit codes: 0 all checks pass (risk_sha_head may SKIP without git); 1 a check failed; "
                "2 usage error or no repo root found.",
     )
