@@ -67,6 +67,10 @@ class AuditReport:
     files_scanned: int = 0
     scripts_scanned: int = 0
     md_files_scanned: int = 0
+    # Read / stat / decode / walk errors. Any error makes the verdict FAIL (never a silent PASS).
+    errors: list = field(default_factory=list)
+    # Entries under the target that resolve outside it (relative paths). Never read; reported.
+    skipped: list = field(default_factory=list)
 
     @property
     def critical_count(self):
@@ -82,7 +86,7 @@ class AuditReport:
 
     @property
     def verdict(self):
-        if self.critical_count > 0:
+        if self.critical_count > 0 or self.errors:
             return "FAIL"
         if self.high_count > 0:
             return "WARN"
@@ -98,6 +102,8 @@ class AuditReport:
                 "high": self.high_count,
                 "info": self.info_count,
                 "total": len(self.findings),
+                "errors": len(self.errors),
+                "skipped": len(self.skipped),
             },
             "stats": {
                 "files_scanned": self.files_scanned,
@@ -105,6 +111,8 @@ class AuditReport:
                 "md_files_scanned": self.md_files_scanned,
             },
             "findings": [f.to_dict() for f in self.findings],
+            "errors": list(self.errors),
+            "skipped": list(self.skipped),
         }
 
 
@@ -594,11 +602,110 @@ MD_EXTENSIONS = {".md", ".mdx", ".markdown"}
 ALL_SCAN_EXTENSIONS = CODE_EXTENSIONS | MD_EXTENSIONS
 
 
+# =============================================================================
+# Containment and error-tracked reads (Task V)
+# =============================================================================
+
+
+def is_within(path: Path, root: Path) -> bool:
+    """True only when ``path`` resolves (symlinks included) to ``root`` or below it.
+
+    Compares whole path components, never a string prefix: ``target-evil/.env`` is not
+    inside ``target``. A path on another drive, or one that cannot be resolved, is outside.
+    """
+    try:
+        resolved_root = os.path.normcase(str(Path(root).resolve()))
+        resolved = os.path.normcase(str(Path(path).resolve()))
+        return os.path.commonpath([resolved_root, resolved]) == resolved_root
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
+def _rel(path: Path, root: Path) -> str:
+    try:
+        return str(Path(path).relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def _error(report: AuditReport, path: Path, kind: str, exc: BaseException):
+    root = Path(report.skill_path)
+    report.errors.append(f"{_rel(path, root)}: {kind}: {type(exc).__name__}: {exc}")
+
+
+def read_text_checked(path: Path, report: AuditReport) -> Optional[str]:
+    """UTF-8 text of a file inside the target, or None after recording the error.
+
+    A read error or a decode error is recorded in ``report.errors`` (verdict FAIL);
+    nothing is replaced or skipped silently. Newlines are normalised like read_text().
+    """
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        _error(report, path, "read error", exc)
+        return None
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        _error(report, path, "decode error", exc)
+        return None
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def collect_items(skill_path: Path, report: AuditReport) -> list:
+    """Every entry under the target that stays inside it, as (path, is_file) pairs.
+
+    Walks without following directory links. An entry that resolves outside the target
+    (a symlink, or a junction on Windows) is skipped, never read or descended into, and
+    reported: a CRITICAL finding plus ``report.skipped``. ``.git`` is skipped as before.
+    """
+    root = Path(skill_path)
+    items = []
+
+    def on_error(exc: OSError):
+        _error(report, Path(exc.filename or root), "walk error", exc)
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False, onerror=on_error):
+        if ".git" in dirnames:
+            dirnames.remove(".git")
+        here = Path(dirpath)
+        keep_dirs = []
+        for name, is_file in [(d, False) for d in sorted(dirnames)] + [(f, True) for f in sorted(filenames)]:
+            item = here / name
+            if not is_within(item, root):
+                rel = _rel(item, root)
+                report.skipped.append(rel)
+                try:
+                    target = str(item.resolve())
+                except (OSError, ValueError, RuntimeError) as exc:
+                    target = f"<unresolvable: {type(exc).__name__}>"
+                link = item.is_symlink()
+                report.findings.append(
+                    Finding(
+                        severity=Severity.CRITICAL,
+                        category="FS-SYMLINK" if link else "FS-OUTSIDE",
+                        file=rel,
+                        line=0,
+                        pattern=f"→ {target}",
+                        risk="Entry resolves outside the skill directory — directory traversal risk; not read",
+                        fix="Remove symlinks/junctions pointing outside the skill directory",
+                    )
+                )
+                continue
+            if not is_file:
+                if item.is_symlink():
+                    is_file = item.is_file()  # an inside link to a file; do not descend into links
+                else:
+                    keep_dirs.append(name)
+            items.append((item, is_file))
+        dirnames[:] = keep_dirs
+    return items
+
+
 def scan_file_code(filepath: Path, report: AuditReport):
     """Scan a code file for dangerous patterns."""
-    try:
-        content = filepath.read_text(encoding="utf-8", errors="replace")
-    except Exception:
+    content = read_text_checked(filepath, report)
+    if content is None:
         return
 
     lines = content.split("\n")
@@ -636,9 +743,8 @@ def scan_file_code(filepath: Path, report: AuditReport):
 
 def scan_file_prompt_injection(filepath: Path, report: AuditReport):
     """Scan a markdown file for prompt injection patterns."""
-    try:
-        content = filepath.read_text(encoding="utf-8", errors="replace")
-    except Exception:
+    content = read_text_checked(filepath, report)
+    if content is None:
         return
 
     lines = content.split("\n")
@@ -659,15 +765,16 @@ def scan_file_prompt_injection(filepath: Path, report: AuditReport):
                 )
 
 
-def scan_dependencies(skill_path: Path, report: AuditReport):
+def scan_dependencies(skill_path: Path, report: AuditReport, items: Optional[list] = None):
     """Scan dependency files for supply chain risks."""
-    # Check requirements.txt
+    if items is None:
+        items = collect_items(skill_path, report)
+    inside_files = [path for path, is_file in items if is_file]
+    # Check requirements.txt (only when it is inside the target; an outside link was skipped)
     req_file = skill_path / "requirements.txt"
-    if req_file.exists():
-        try:
-            lines = req_file.read_text().split("\n")
-        except Exception:
-            return
+    content = read_text_checked(req_file, report) if req_file in inside_files else None
+    if content is not None:
+        lines = content.split("\n")
 
         all_typosquats = {}
         for real_pkg, fakes in TYPOSQUAT_TARGETS.items():
@@ -711,12 +818,11 @@ def scan_dependencies(skill_path: Path, report: AuditReport):
                 )
 
     # Check for pip/npm install in code
-    for code_file in skill_path.rglob("*"):
+    for code_file in inside_files:
         if code_file.suffix.lower() not in CODE_EXTENSIONS:
             continue
-        try:
-            content = code_file.read_text(encoding="utf-8", errors="replace")
-        except Exception:
+        content = read_text_checked(code_file, report)
+        if content is None:
             continue
 
         for i, line in enumerate(content.split("\n"), 1):
@@ -746,15 +852,13 @@ def scan_dependencies(skill_path: Path, report: AuditReport):
                 )
 
 
-def scan_filesystem(skill_path: Path, report: AuditReport):
+def scan_filesystem(skill_path: Path, report: AuditReport, items: Optional[list] = None):
     """Scan the skill directory structure for suspicious files."""
-    for item in skill_path.rglob("*"):
+    if items is None:
+        items = collect_items(skill_path, report)
+    for item, is_file in items:
         rel = item.relative_to(skill_path)
         rel_str = str(rel)
-
-        # Skip .git directory
-        if ".git" in rel.parts:
-            continue
 
         report.files_scanned += 1
 
@@ -778,7 +882,7 @@ def scan_filesystem(skill_path: Path, report: AuditReport):
             )
 
         # Binary files
-        if item.is_file() and item.suffix.lower() in (
+        if is_file and item.suffix.lower() in (
             ".exe", ".dll", ".so", ".dylib", ".bin", ".elf",
             ".com", ".msi", ".deb", ".rpm", ".apk",
         ):
@@ -794,10 +898,17 @@ def scan_filesystem(skill_path: Path, report: AuditReport):
                 )
             )
 
-        # Large files (>1MB)
-        if item.is_file():
+        # Large files (>1MB) and SUID/SGID bits; a stat error is recorded (verdict FAIL)
+        mode = None
+        if is_file:
             try:
-                size = item.stat().st_size
+                info = item.stat()
+            except OSError as exc:
+                _error(report, item, "stat error", exc)
+                info = None
+            if info is not None:
+                size = info.st_size
+                mode = info.st_mode
                 if size > 1_000_000:
                     report.findings.append(
                         Finding(
@@ -810,32 +921,13 @@ def scan_filesystem(skill_path: Path, report: AuditReport):
                             fix="Review file contents. Consider if this file is necessary",
                         )
                     )
-            except OSError:
-                pass
 
-        # Symlinks
-        if item.is_symlink():
-            try:
-                target = item.resolve()
-                if not str(target).startswith(str(skill_path.resolve())):
-                    report.findings.append(
-                        Finding(
-                            severity=Severity.CRITICAL,
-                            category="FS-SYMLINK",
-                            file=rel_str,
-                            line=0,
-                            pattern=f"→ {target}",
-                            risk="Symlink points outside skill directory — directory traversal risk",
-                            fix="Remove symlinks pointing outside the skill directory",
-                        )
-                    )
-            except (OSError, ValueError):
-                pass
+        # Symlinks pointing outside the target never reach here: collect_items skips and
+        # reports them (FS-SYMLINK, CRITICAL) by resolved-path containment, not a string prefix.
 
         # SUID/SGID bits
-        if item.is_file():
-            try:
-                mode = item.stat().st_mode
+        if mode is not None:
+            if True:
                 if mode & (stat.S_ISUID | stat.S_ISGID):
                     report.findings.append(
                         Finding(
@@ -848,16 +940,16 @@ def scan_filesystem(skill_path: Path, report: AuditReport):
                             fix="Remove SUID/SGID bits: chmod u-s,g-s <file>",
                         )
                     )
-            except OSError:
-                pass
 
 
 def scan_skill(skill_path: Path) -> AuditReport:
     """Run full security audit on a skill directory."""
+    skill_path = Path(skill_path).resolve()
     report = AuditReport(
         skill_name=skill_path.name,
         skill_path=str(skill_path),
     )
+    items = collect_items(skill_path, report)
 
     # Check SKILL.md exists
     skill_md = skill_path / "SKILL.md"
@@ -874,27 +966,23 @@ def scan_skill(skill_path: Path) -> AuditReport:
             )
         )
 
-    # 1. Filesystem scan
-    scan_filesystem(skill_path, report)
+    # 1. Filesystem scan (only entries that stay inside the target)
+    scan_filesystem(skill_path, report, items)
 
     # 2. Code scanning
-    for code_file in skill_path.rglob("*"):
-        if ".git" in code_file.parts:
-            continue
-        if code_file.is_file() and code_file.suffix.lower() in CODE_EXTENSIONS:
+    for code_file, is_file in items:
+        if is_file and code_file.suffix.lower() in CODE_EXTENSIONS:
             report.scripts_scanned += 1
             scan_file_code(code_file, report)
 
     # 3. Prompt injection scanning
-    for md_file in skill_path.rglob("*"):
-        if ".git" in md_file.parts:
-            continue
-        if md_file.is_file() and md_file.suffix.lower() in MD_EXTENSIONS:
+    for md_file, is_file in items:
+        if is_file and md_file.suffix.lower() in MD_EXTENSIONS:
             report.md_files_scanned += 1
             scan_file_prompt_injection(md_file, report)
 
     # 4. Dependency scanning
-    scan_dependencies(skill_path, report)
+    scan_dependencies(skill_path, report, items)
 
     return report
 
@@ -923,7 +1011,16 @@ def print_report(report: AuditReport):
     )
     print("╚" + "═" * 54 + "╝")
 
-    if not report.findings:
+    if report.errors:
+        print("\n  ❌ Errors (any error makes the verdict FAIL):")
+        for error in report.errors:
+            print(f"   - {error}")
+    if report.skipped:
+        print("\n  Skipped (resolves outside the skill directory; not read):")
+        for rel in report.skipped:
+            print(f"   - {rel}")
+
+    if not report.findings and not report.errors:
         print("\n  No security issues found. Skill is safe to install.\n")
         return
 
