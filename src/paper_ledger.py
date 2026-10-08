@@ -5,11 +5,13 @@ No CLOB authentication, no order POST, no withdraw, no size-up.
 A single-leg fill is directional exposure, not risk-free arbitrage.
 Positions are netted per leg (market + token_id); the tokens of an arb pair never
 offset each other (backlog item 5, Task P).
+Task AF (backlog #20): the ledger is read strictly, fills carry ids and are deduped, writes are
+atomic and cash / positions are conservation-checked on every load and write (src/ledger_store.py).
+Any integrity problem is an invalid risk state and halts booking.
 """
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,61 +27,27 @@ from src.podlib import (  # noqa: E402
     PAPER_PATH,
     QUOTES_PATH,
     RISK_PATH,
-    append_jsonl,
     bus,
     load_risk,
     read_jsonl,
     utc_now,
 )
 from src.book_staleness import latest_by_time, parse_book_ts  # noqa: E402
-from src.fees import booked_fee_usd  # noqa: E402 - Task AE: one fee module
+from src.fees import booked_fee_usd, ledger_fee  # noqa: E402 - Task AE: one fee module
+from src import ledger_store  # noqa: E402 - Task AF: ledger integrity
+from src.ledger_store import (  # noqa: E402,F401 - Task AF: moved here, re-exported unchanged
+    LEDGER_NUMBER_FIELDS,
+    LedgerIntegrityError,
+    leg_key,
+    non_finite_ledger_rows,
+)
+from src.ledger_store import counts as _counts  # noqa: E402 - Task AF: moved, same rule
 from src.risk_gate import Decision, Intent, evaluate  # noqa: E402
 
 DIRECTIONAL = "Single-leg fill is directional exposure, not risk-free arbitrage."
 
 
 from src.thresholds import LEDGER_OPEN_EPS as OPEN_EPS  # noqa: E402 - Task AC
-
-
-def _counts(row: dict[str, Any]) -> bool:
-    return not row.get("hypothetical") and row.get("counts_toward_risk") is not False
-
-
-def leg_key(market: object, token_id: object) -> tuple[str, str]:
-    """A leg is one token in one market. No token_id means an unknown leg of that market.
-
-    The unknown leg nets only with other rows that also lack a token_id; it never
-    offsets a named token.
-    """
-    return (str(market or ""), str(token_id or ""))
-
-
-LEDGER_NUMBER_FIELDS = ("shares", "notional_usd", "fee_usd")
-
-
-def non_finite_ledger_rows(rows: list[dict[str, Any]]) -> list[int]:
-    """Task U: indexes of counted rows whose shares / notional_usd / fee_usd is NaN, inf or garbage.
-
-    A NaN share count makes abs(net) > OPEN_EPS False, which would hide an open leg,
-    and a NaN fee poisons the daily total. Absent (None) values keep their old meaning.
-    """
-    bad: list[int] = []
-    for index, row in enumerate(rows):
-        if not _counts(row):
-            continue
-        for field in LEDGER_NUMBER_FIELDS:
-            value = row.get(field)
-            if value is None:
-                continue
-            try:
-                number = float(value)
-            except (TypeError, ValueError):
-                bad.append(index)
-                break
-            if not math.isfinite(number):
-                bad.append(index)
-                break
-    return bad
 
 
 def leg_positions(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, float]]:
@@ -121,11 +89,16 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     market does not count. exposure_usd is the gross sum over open legs.
     recent_fills (every ledger row) and own_quotes (every paper quote row) are the
     history RiskGate's structured wash / self-trade check reads (Task S).
+    Task AF: rows come from the strict ledger reader, deduped by fill_id. Any integrity problem
+    (parse, ids, Task U numbers, conservation) is listed in ledger_problems and gives the same
+    invalid state as Task U, so RiskGate vetoes invalid_risk_state and nothing more is booked.
     """
-    rows = read_jsonl(PAPER_PATH)
+    _, ledger = ledger_store.read_ledger(PAPER_PATH)
+    rows = ledger.rows
     bad_rows = non_finite_ledger_rows(rows)
-    if bad_rows:
-        # Fail closed (Task U): RiskGate vetoes invalid_risk_state; nothing is netted.
+    problems = ledger_store.verify(ledger)
+    if bad_rows or problems:
+        # Fail closed (Task U / AF): RiskGate vetoes invalid_risk_state; nothing is netted.
         return {
             "open_positions": None,
             "leg_already_open": False,
@@ -133,6 +106,8 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
             "leg_exposure_usd": None,
             "daily_loss_usd": None,
             "non_finite_ledger_rows": bad_rows,
+            "ledger_problems": problems,
+            "duplicate_fill_rows": ledger.duplicates_ignored,
             "recent_fills": rows,
             "own_quotes": read_jsonl(QUOTES_PATH),
         }
@@ -149,13 +124,20 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
         "exposure_usd": sum(leg["exposure_usd"] for leg in legs.values()),
         "leg_exposure_usd": 0.0 if own is None else own["exposure_usd"],
         "daily_loss_usd": daily_fees,
+        "ledger_problems": [],
+        "duplicate_fill_rows": ledger.duplicates_ignored,
         "recent_fills": rows,
         "own_quotes": read_jsonl(QUOTES_PATH),
     }
 
 
 def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
-    """Ask RiskGate. Append a paper fill only when the same call allows it."""
+    """Ask RiskGate. Append a paper fill only when the same call allows it.
+
+    Task AF: the fill gets a fill_id and the post-fill cash / leg state, and is written atomically
+    by ledger_store.book after the whole ledger is re-verified. An integrity problem halts (a halt
+    bus message, allow False, nothing booked); a failed write leaves the old ledger intact.
+    """
     state = load_state(intent.market, intent.token_id)
     decision = evaluate(intent, cfg, state)
     summary = _decision_payload(intent, decision)
@@ -168,7 +150,17 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
     # Re-check the in-memory decision. A bus line is not enough on its own.
     if decision.allow is not True:
         raise RuntimeError("refusing fill without a fresh RiskGate allow")
+    effective_price = round(decision.effective_price, 8)
+    notional_usd = round(decision.notional_usd, 8)
+    shares = round(decision.shares, 8)
+    # Task AF: the booked fee is also never below ledger_fee recomputed from the values the row
+    # stores (they are rounded), so the conservation check can recompute it exactly. Higher wins.
+    stored_fee = ledger_fee(intent.fee_rate, intent.market_price, effective_price, notional_usd, shares)
+    fee_usd = booked_fee_usd(decision.fee_usd)
+    if stored_fee is not None:
+        fee_usd = max(fee_usd, booked_fee_usd(stored_fee))
     fill = {
+        "fill_id": ledger_store.new_fill_id(),
         "ts": utc_now(),
         "strategy": intent.strategy,
         "market": intent.market,
@@ -180,10 +172,10 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
         "edge_formula": decision.formula,
         "assumed_slippage": intent.assumed_slippage,
         "fee_rate": intent.fee_rate,
-        "fee_usd": booked_fee_usd(decision.fee_usd),
-        "effective_price": round(decision.effective_price, 8),
-        "notional_usd": round(decision.notional_usd, 8),
-        "shares": round(decision.shares, 8),
+        "fee_usd": fee_usd,
+        "effective_price": effective_price,
+        "notional_usd": notional_usd,
+        "shares": shares,
         "spread": intent.spread,
         "liquidity_usd": intent.liquidity_usd,
         "book_ts": intent.book_ts,
@@ -192,9 +184,24 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
         "risk_decision": "allow",
         "note": f"{DIRECTIONAL} {intent.note}".strip(),
     }
-    append_jsonl(PAPER_PATH, fill)
+    try:
+        fill = ledger_store.book(PAPER_PATH, fill)
+    except LedgerIntegrityError as exc:
+        return _halt(intent, summary, "ledger_integrity", exc.problems)
+    except OSError as exc:
+        return _halt(intent, summary, "ledger_write_failed", [f"{type(exc).__name__}: {exc}"])
     bus("Executor", "Sentinel", "fill", intent.market, fill)
     return {"allow": True, "fill": fill}
+
+
+def _halt(intent: Intent, summary: dict[str, Any], reason: str, problems: list[str]) -> dict[str, Any]:
+    """Task AF: no fill. Report a halt (paper only, no exchange action) and return allow False."""
+    payload = {"reason": reason, "ledger_problems": problems, "exchange_action": "none",
+               "strategy": intent.strategy, "token_id": intent.token_id}
+    bus("Executor", "Sentinel", "halt", intent.market, payload)
+    decision = dict(summary, decision="halt")
+    return {"allow": False, "halted": True, "halt_reason": reason, "ledger_problems": problems,
+            "decision": decision}
 
 
 def _decision_payload(intent: Intent, decision: Decision) -> dict[str, Any]:
@@ -437,7 +444,11 @@ def main(argv: list[str] | None = None) -> int:
             print("missing operator fields: " + ", ".join(missing), file=sys.stderr)
             return 2
         result = run_cli_intent(args, cfg)
-        print(("ALLOW" if result["allow"] else "VETO"), result.get("fill") or result.get("decision"))
+        label = "ALLOW" if result["allow"] else "HALT" if result.get("halted") else "VETO"
+        print(label, result.get("fill") or result.get("decision"))
+        if result.get("halted"):
+            print(f"paper ledger halted: {result['halt_reason']} {result['ledger_problems']}", file=sys.stderr)
+            return 1
         if RISK_PATH.read_bytes() != before_bytes:
             print("risk.toml changed during paper run; refusing", file=sys.stderr)
             return 1
