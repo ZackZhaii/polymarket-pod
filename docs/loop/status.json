@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T19:34:24Z",
+  "ts": "2026-10-08T19:53:50Z",
   "live_enabled": false,
-  "last_done": "Q",
+  "last_done": "R",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "Q (scanner reads V2 outcome IDs from positionIds; Gamma version selects the field; missing or unknown version rejects the market) done by grok-bot in its PR. F-P done on dev. No open todo. No live gate."
+  "note": "R (paper_cycle judges book age with book_staleness like RiskGate; book.record puts the book own /book timestamp on the bus as book_ts, null plus reason when missing) done by grok-bot in its PR. F-Q done on dev. No open todo. No live gate."
 }
