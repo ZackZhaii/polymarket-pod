@@ -5,6 +5,11 @@ Book age uses src/book_staleness.py, the same parser and boundary as RiskGate, a
 from the exchange's book_ts (book.book_timestamp), never the recorder's ts (Task T).
 A stale market gets no gap signal: the BookWatcher stale signal is its skip record.
 The latest market/book row is chosen by parsed time; unparseable rows are skipped and recorded.
+Task AA: every market with at least one recorded book is also fed to Sentinel's StaleWatch, whose
+streaks persist in logs/sentinel_stale.json (SENTINEL_STATE_PATH, written atomically). Two stale or
+failed checks in a row halt that market's paper quotes. A missing (after a prior run), unreadable,
+corrupt or malformed state file, or a failed write, counts as one more stale check (fail closed).
+This only adds the alarm: the per-check stale signal and the skipped gap signal are unchanged.
 No network, no orders, no paper fills, no edits to config/risk.toml.
 """
 from __future__ import annotations
@@ -17,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src import arb_binary, neg_risk  # noqa: E402
+from src import arb_binary, neg_risk, sentinel  # noqa: E402
 from src.book_staleness import (  # noqa: E402
     INVALID_BOOK_TS,
     INVALID_NOW,
@@ -29,7 +34,9 @@ from src.book_staleness import (  # noqa: E402
 from src.podlib import (  # noqa: E402
     BOOKS_PATH,
     MARKETS_PATH,
+    QUOTES_PATH,
     RISK_PATH,
+    SENTINEL_STATE_PATH,
     bus,
     load_risk,
     pin_problems,
@@ -49,6 +56,8 @@ def run(
     now: str | None = None,
     stale_after_s: int = STALE_AFTER_S,
     cfg: dict | None = None,
+    sentinel_state_path: Path | None = None,
+    quotes_path: Path | None = None,
 ) -> dict:
     before = RISK_PATH.read_bytes()
     loaded = cfg if cfg is not None else load_risk()
@@ -60,6 +69,14 @@ def run(
     skips: list[dict] = []
     markets = _latest_by(read_jsonl(markets_path), "id", skips, bus_path)
     books = _latest_books(read_jsonl(books_path), skips, bus_path)
+    state_path = sentinel_state_path if sentinel_state_path is not None else SENTINEL_STATE_PATH
+    watch, state_problem = sentinel.load_watch(
+        state_path,
+        bus_path=bus_path,
+        quotes_path=quotes_path if quotes_path is not None else QUOTES_PATH,
+    )
+    checked: list[str] = []
+    halts: list[str] = []
     gaps = 0
     stale = 0
     for market_id, market in markets.items():
@@ -67,6 +84,7 @@ def run(
         asks: list[float] = []
         depths: list[float | None] = []
         stale_reasons: set[str] = set()
+        sentinel_reasons: set[str] = set()
         for token in tokens:
             book = books.get((market_id, token))
             if book is None:
@@ -74,11 +92,20 @@ def run(
             problem = _row_book_problem(book, now_at, stale_after_s)
             if problem is not None:
                 stale_reasons.add(problem)
+            # Sentinel judges at its own 120 s too, so a looser stale_after_s never resets a streak.
+            sentinel_problem = problem or _row_book_problem(book, now_at, sentinel.SENTINEL_STALE_S)
+            if sentinel_problem is not None:
+                sentinel_reasons.add(sentinel_problem)
             ask = book.get("best_ask")
             if isinstance(ask, (int, float)) and 0.0 < float(ask) < 1.0:
                 asks.append(float(ask))
                 size = book.get("best_ask_size")
                 depths.append(float(size) if isinstance(size, (int, float)) else None)
+        if any(books.get((market_id, token)) is not None for token in tokens):
+            checked.append(market_id)
+            if state_problem is not None:
+                _sentinel_record(watch, market_id, state_problem, halts)
+            _sentinel_record(watch, market_id, min(sentinel_reasons) if sentinel_reasons else None, halts)
         if stale_reasons:
             bus(
                 "BookWatcher",
@@ -105,6 +132,11 @@ def run(
             if message["type"] != "signal":
                 raise RuntimeError("paper cycle refused a non-signal")
             gaps += 1
+    write_problem = sentinel.save_watch(watch, state_path)
+    if write_problem is not None:
+        # This run's streaks are lost, so the failed write is one more stale check now (fail closed).
+        for market_id in checked:
+            _sentinel_record(watch, market_id, write_problem, halts)
     _assert_risk_unchanged(before)
     return {
         "ok": True,
@@ -115,7 +147,20 @@ def run(
         "fills": 0,
         "skipped": len(skips),
         "skips": skips,
+        "sentinel": {
+            "checked": len(checked),
+            "state_problem": state_problem,
+            "write_problem": write_problem,
+            "halts": halts,
+            "state_path": str(state_path),
+        },
     }
+
+
+def _sentinel_record(watch: sentinel.StaleWatch, market_id: str, problem: str | None, halts: list[str]) -> None:
+    result = watch.record(market_id, problem)
+    if result["halt"] is not None:
+        halts.append(market_id)
 
 
 def _gap_message(asks: list[float], market_id: str, depths: list[float | None], bus_path: Path | None) -> dict | None:

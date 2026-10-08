@@ -23,7 +23,7 @@ Bus role: `Sentinel`, and it may emit only `halt` (`sentinel.halt` -> `podlib.bu
 
 ## Steps
 
-1. What the stub does today: cancel matching open rows in `logs/quotes.jsonl`, then emit `halt`. Quotes arrive from `maker.quote` (`status=open`, `venue=paper`). `StaleWatch` escalates book staleness to that halt; it is not yet wired into `paper_cycle`, so a caller must feed it checks. Nothing else is monitored.
+1. What the stub does today: cancel matching open rows in `logs/quotes.jsonl`, then emit `halt`. Quotes arrive from `maker.quote` (`status=open`, `venue=paper`). `StaleWatch` escalates book staleness to that halt; since Task AA `paper_cycle` feeds it once per booked market per run and keeps the streak in `logs/sentinel_stale.json` (a bad or missing state file counts as stale). Nothing else is monitored.
 2. Freshness you can actually check, with other modules, before asking for a halt:
    - Bus file `logs/bus.jsonl` exists and its last `ts` parses as UTC `Z`. There is no freshness threshold in code: do not invent one.
    - Book snapshots: `book_staleness.book_age_problem` at `MAX_BOOK_AGE_S = 120`, and `paper_cycle` which already emits `stale=true` to `Sentinel` after 120 s. BookWatcher does not auto-halt.

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -30,6 +32,14 @@ SENTINEL_STALE_CONSECUTIVE = 2
 
 CHECK_FAILED = "check_failed"
 STALE_ALARM = "stale_book_consecutive"
+
+# Task AA: StaleWatch state between paper_cycle runs. Any problem with it counts as a stale check.
+STATE_UNREADABLE = "state_unreadable"
+STATE_CORRUPT = "state_corrupt"
+STATE_MALFORMED = "state_malformed"
+STATE_MISSING = "state_missing"
+STATE_WRITE_FAILED = "state_write_failed"
+STATE_PROBLEMS = (STATE_UNREADABLE, STATE_CORRUPT, STATE_MALFORMED, STATE_MISSING, STATE_WRITE_FAILED)
 
 
 def halt(
@@ -129,13 +139,23 @@ class StaleWatch:
         ``failed=True`` (the check itself could not run, e.g. no book) counts as stale.
         ``now`` must be an aware datetime; anything else counts as stale (invalid_now).
         """
-        key = str(market or "")
         if failed:
             problem: str | None = CHECK_FAILED
         elif not isinstance(now, datetime):
             problem = "invalid_now"
         else:
             problem = book_age_problem(book_ts, now, self.max_age_s)
+        return self.record(market, problem)
+
+    def record(self, market: str, problem: str | None) -> dict:
+        """Record one check whose per-check problem the caller already worked out.
+
+        ``problem`` None is a fresh check (resets the streak); any non-empty string is stale.
+        Anything else (an empty string, a non-string) is treated as a failed check, fail closed.
+        """
+        key = str(market or "")
+        if problem is not None and (not isinstance(problem, str) or not problem):
+            problem = CHECK_FAILED
         if problem is None:
             self.streaks.pop(key, None)
             self.alarmed.discard(key)
@@ -191,6 +211,73 @@ class StaleWatch:
                 raise ValueError("bad alarmed entry")
             watch.alarmed.add(key)
         return watch
+
+
+def state_marker(path: Path) -> Path:
+    """Written next to the state file after the first successful save, so a later run can tell
+    "first run" (no file, no marker) from "file lost after a prior run" (marker, no file)."""
+    return path.with_name(path.name + ".seen")
+
+
+def load_watch(
+    path: Path,
+    *,
+    bus_path: Path | None = None,
+    quotes_path: Path | None = None,
+) -> tuple[StaleWatch, str | None]:
+    """Return ``(watch, problem)``. problem is None on a clean load or a true first run.
+
+    A first run (no state file and no marker) starts every streak at 0. Otherwise a missing file
+    after a prior run, a read error, invalid JSON or a malformed state all return a fresh watch
+    plus the problem, and the caller must count that problem as a stale check (fail closed).
+    """
+    fresh = StaleWatch(bus_path=bus_path, quotes_path=quotes_path)
+    try:
+        if not path.exists():
+            if state_marker(path).exists():
+                return fresh, STATE_MISSING
+            return fresh, None
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return fresh, STATE_UNREADABLE
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return fresh, STATE_CORRUPT
+    try:
+        return StaleWatch.from_dict(data, bus_path=bus_path, quotes_path=quotes_path), None
+    except (ValueError, TypeError):
+        return fresh, STATE_MALFORMED
+
+
+def save_watch(watch: StaleWatch, path: Path) -> str | None:
+    """Write the state atomically (temp file in the same folder, fsync, then os.replace) and
+    then the marker. Returns None on success, else STATE_WRITE_FAILED (never raises)."""
+    tmp_name = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        body = json.dumps(watch.to_dict(), ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n"
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=path.parent, prefix=path.name + ".", suffix=".tmp", delete=False
+        ) as handle:
+            tmp_name = handle.name
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+        tmp_name = None
+        marker = state_marker(path)
+        if not marker.exists():
+            marker.write_text("1\n", encoding="utf-8")
+    except (OSError, ValueError, TypeError):
+        return STATE_WRITE_FAILED
+    finally:
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+    return None
 
 
 if SENTINEL_STALE_S != MAX_BOOK_AGE_S:  # pragma: no cover - guards a future edit
