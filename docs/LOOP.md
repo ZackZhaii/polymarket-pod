@@ -361,6 +361,28 @@ passes with no network and no credentials.
   unavailable), read/decode/stat errors that turn into FAIL, and CLI exit codes. All 39 existing skills keep identical findings and verdicts.
 - The deny list, `.grok/config.toml` and CI are unchanged. No threshold change. Do not edit `config/risk.toml`.
 
+## Task W — Endgame unfiltered path: a read-only, fail-closed second scan for the 0.98–0.99 band (backlog #10)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. The scanner drops prices above `scanner_max_price` (0.97) as `long_tail_price`,
+so markets in Endgame's 0.98–0.99 band never reached Endgame (COORDINATION backlog #10).
+
+Finish when Endgame gets its band through a separate read-only path, the scanner is unchanged, nothing bypasses RiskGate,
+and `python -m pytest` passes with no network and no credentials.
+
+- `src/endgame_scan.py` (`python src/endgame_scan.py`): fetches the same public Gamma keyset pages through
+  `scanner.fetch_all_markets` (GET only, no keys). It applies every scanner rule except `long_tail_price`: closed, version,
+  24 h expiry, accepting orders, bid/ask, liquidity, spread and price.
+- Any non-finite price, bid, ask, spread or liquidity fails closed (`non_finite_<field>`). Only first-outcome prices inside
+  `endgame.PRICE_MIN..PRICE_MAX` (inclusive) stay; others are `outside_endgame_band`.
+- Candidates go to `endgame.emit`: a signal to RiskGate only, within Endgame's 48 h window. With the scanner's 24 h minimum
+  this leaves 24–48 h to resolution. There is no fill, order or ledger write, and RiskGate still decides every intent.
+- Fail closed: drifted paper pins exit 4 before any fetch; an incomplete fetch exits 3 and writes nothing; fewer than 5 markets exit 1.
+  No band market is exit 0 with no signal.
+- The scanner is untouched: default output, filters, exit codes and `data/markets.jsonl` are unchanged. Backlog #10 is struck through.
+- No threshold change. Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -372,8 +394,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task V done by grok-bot (approved by Poly指挥). The skill auditor checks containment by resolved path, never a string prefix (`target-evil/` is not inside `target/`).
-- Entries resolving outside the target are never read, are listed under `skipped` and are CRITICAL. Any read/decode/stat/walk error is listed under `errors` and is FAIL.
-- All 39 existing skills keep identical findings and verdicts. The deny list, `.grok/config.toml` and CI are unchanged.
-- `python -m pytest` passed offline (555 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. No next todo. Endgame #10 next in its own PR. `WASH_WINDOW_S` (Task S) awaits the user's decision.
+- 2026-10-09: Task W done by grok-bot (approved by Poly指挥). `src/endgame_scan.py` gives Endgame the 0.98–0.99 band the scanner drops as `long_tail_price` (backlog #10).
+- It applies every other scanner rule, fails closed on non-finite numbers, and sends only Endgame signals to RiskGate. There are no fills, orders or ledger writes.
+- Drifted pins exit 4, an incomplete fetch exits 3, and fewer than 5 markets exit 1. The scanner's output, filters, exit codes and `data/markets.jsonl` are unchanged.
+- `python -m pytest` passed offline (588 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. No next todo. `WASH_WINDOW_S` (Task S) awaits the user's decision. A single-leg fill is directional exposure, not locked profit.

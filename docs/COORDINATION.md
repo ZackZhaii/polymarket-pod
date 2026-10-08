@@ -84,7 +84,7 @@ I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。�
 7. risk_gate 不使用 `kelly_fraction`，所有单子一律 1% 封顶（这是保守的，但参数形同虚设）。
 8. ~~scanner 没有最短剩余到期时间规则（今天到期的盘也会通过；2026-10-08 实跑 8,409 个通过里有 944 个剩余不到 1 天）。~~ **Task O 处理**：剩余不足 24 h 记 `near_expiry`，不通过；end date 缺失、无法解析、无时区、仅日期、非字符串或已过期一律不通过（`src/expiry_rule.py`）。24 h 是代码常量 `MIN_HOURS_TO_EXPIRY`，不在 risk.toml；是否写进 risk.toml 由 Operator 决定。
 9. Sentinel 提议陈旧阈值 120s / 连续 2 次失败才报警（30s 会误报）；risk.toml 与代码尚无此参数。
-10. Endgame 需要未过滤数据：scanner 排除 >0.97 后，0.98–0.99 区间市场不会进入 scanner 输出。
+10. ~~Endgame 需要未过滤数据：scanner 排除 >0.97 后，0.98–0.99 区间市场不会进入 scanner 输出。~~ **Task W 处理**：新增只读第二路径 `src/endgame_scan.py`：用 scanner 同一公开 Gamma 抓取，除 `long_tail_price` 外 scanner 规则全部照用，非有限数值一律拒绝（fail closed），只保留 0.98–0.99 区间（含端点）交给 `endgame.emit`，只发给 RiskGate 的信号，不成交、不下单、不写账本。分页不完整退出 3 且不写任何东西，pin 漂移退出 4。scanner 默认输出、过滤和退出码不变。未改 risk.toml。
 11. ~~（审查新增）`risk_gate.evaluate` 对缺失的 `min_liquidity_usd` / `max_spread` 用默认值 0 / 1，属于缺键放行（fail-open）；scanner 新代码已是缺键报错，两者不一致。~~ **Task J 处理**（PR #3）：缺键或非有限数值一律 `invalid_gate_threshold` veto，不再用默认值。
 12. ~~（审查新增）Forecaster 总线名与 ROSTER 的 NewsForecaster 不一致。~~ **Task N 处理**：`src/forecaster.py` 用 `from="NewsForecaster"`；`podlib.ROLE_ALIASES` 把旧名 Forecaster 映射过去，`bus()` 统一写 ROSTER 名，旧调用方不报错。未改 risk.toml。
 13. ~~scanner 阈值接受布尔和无穷（`max_spread = true` 读成 1.0，`1e999` 读成 inf）。~~ **已在 PR #2（Task I）修复**：只接受有限的 int/float，bool、字符串、inf、nan 都报错。

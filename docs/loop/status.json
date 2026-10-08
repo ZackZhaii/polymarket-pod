@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T20:28:55Z",
+  "ts": "2026-10-08T20:33:13Z",
   "live_enabled": false,
-  "last_done": "V",
+  "last_done": "W",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "V (skill security auditor: containment by resolved path, never a string prefix; entries resolving outside the target are skipped, never read, and reported CRITICAL; any read/decode/stat/walk error is FAIL) done by grok-bot in its PR. F-U done on dev. Endgame #10 next in its own PR. WASH_WINDOW_S (S) awaits the user's decision. No open todo. No live gate."
+  "note": "W (Endgame unfiltered path, backlog #10: read-only src/endgame_scan.py hands Endgame the 0.98-0.99 band with every other scanner rule, non-finite numbers fail closed, signals to RiskGate only; scanner output, filters and exit codes unchanged) done by grok-bot in its PR. F-V done on dev. WASH_WINDOW_S (S) awaits the user's decision. No open todo. No live gate."
 }
