@@ -83,7 +83,7 @@ def test_pin_guard_rejects_live_without_editing_the_file():
 
 
 def test_repo_queue_has_i_done_and_no_open_task():
-    """After I, J, K, L, M and N close, the committed queue has no claim and no todo. The file is not written."""
+    """After I, J, K, L, M, N and O close, the committed queue has no claim and no todo. The file is not written."""
     path = loop_claim.STATE_PATH
     before = path.read_bytes()
     state = json.loads(before.decode("utf-8"))
@@ -100,5 +100,7 @@ def test_repo_queue_has_i_done_and_no_open_task():
     assert task_m["status"] == "done"
     task_n = next(task for task in state["tasks"] if task["id"] == "N")
     assert task_n["status"] == "done"
+    task_o = next(task for task in state["tasks"] if task["id"] == "O")
+    assert task_o["status"] == "done"
     assert loop_claim.next_todo(state) is None
     assert path.read_bytes() == before

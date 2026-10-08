@@ -3,6 +3,8 @@
 Walks public Gamma /markets/keyset, filters by config/risk.toml
 (min_liquidity_usd, max_spread) plus long-tail and expiry rules,
 and ranks survivors by 24h volume. Signals only; never edits risk.toml.
+A market needs a zoned end date at least MIN_HOURS_TO_EXPIRY (24 h, a code
+constant in src/expiry_rule.py) away; otherwise it fails closed.
 """
 from __future__ import annotations
 
@@ -31,6 +33,7 @@ from src.podlib import (  # noqa: E402
     public_get,
     utc_now,
 )
+from src.expiry_rule import MIN_HOURS_TO_EXPIRY, expiry_problem  # noqa: E402
 
 # Legacy single page. Still used by paper_session (top 20 by liquidity, unfiltered).
 GAMMA = (
@@ -64,6 +67,10 @@ REASONS = (
     "closed",
     "expired",
     "missing_end_date",
+    "invalid_end_date",
+    "near_expiry",
+    "invalid_min_hours_to_expiry",
+    "invalid_now",
     "not_accepting_orders",
     "missing_bid_ask",
     "low_liquidity",
@@ -279,16 +286,23 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
     }
 
 
-def rejection_reasons(row: dict[str, Any], limits: dict[str, float], now: datetime) -> list[str]:
-    """Every failed rule for one normalized row, in REASONS order."""
+def rejection_reasons(
+    row: dict[str, Any],
+    limits: dict[str, float],
+    now: datetime,
+    min_hours_to_expiry: float = MIN_HOURS_TO_EXPIRY,
+) -> list[str]:
+    """Every failed rule for one normalized row, in REASONS order.
+
+    End dates go through expiry_problem: missing, unparseable, naive, date-only,
+    non-string, past, or closer than min_hours_to_expiry all fail closed.
+    """
     reasons: list[str] = []
     if row["closed"]:
         reasons.append("closed")
-    end = parse_utc(row["end_date"])
-    if end is None:
-        reasons.append("missing_end_date")
-    elif end <= now:
-        reasons.append("expired")
+    expiry = expiry_problem(row["end_date"], now, min_hours_to_expiry)
+    if expiry is not None:
+        reasons.append(expiry)
     if row["accepting_orders"] is False:
         reasons.append("not_accepting_orders")
     bid, ask = row["best_bid"], row["best_ask"]
@@ -321,8 +335,13 @@ def filter_markets(
     limits: dict[str, float],
     ts: str,
     now: datetime | None = None,
+    min_hours_to_expiry: float = MIN_HOURS_TO_EXPIRY,
 ) -> dict[str, Any]:
-    """Split raw Gamma rows into passing rows (24h volume desc) and rejection counts."""
+    """Split raw Gamma rows into passing rows (24h volume desc) and rejection counts.
+
+    now defaults to the scan timestamp. min_hours_to_expiry is a code default, not a
+    risk.toml key; a bad value rejects every market (invalid_min_hours_to_expiry).
+    """
     now_dt = now or parse_utc(ts) or datetime.now(timezone.utc)
     passing: list[dict[str, Any]] = []
     first_reason: Counter = Counter()
@@ -333,7 +352,7 @@ def filter_markets(
         if not (row["question"] or row["slug"] or row["id"]):
             continue
         scanned += 1
-        reasons = rejection_reasons(row, limits, now_dt)
+        reasons = rejection_reasons(row, limits, now_dt, min_hours_to_expiry)
         if reasons:
             first_reason[reasons[0]] += 1
             any_reason.update(reasons)
@@ -349,6 +368,7 @@ def filter_markets(
         "first_reason": dict(first_reason),
         "any_reason": dict(any_reason),
         "limits": dict(limits),
+        "min_hours_to_expiry": min_hours_to_expiry,
     }
 
 
@@ -401,6 +421,8 @@ def scan(
     ts: str | None = None,
     max_markets: int = MAX_MARKETS,
     server_prefilter: bool = True,
+    now: datetime | None = None,
+    min_hours_to_expiry: float = MIN_HOURS_TO_EXPIRY,
 ) -> dict[str, Any]:
     """Fetch (or take) raw markets and filter them. No writes."""
     limits = limits if limits is not None else load_thresholds(risk_path)
@@ -421,7 +443,7 @@ def scan(
             "max_markets": None,
             "server_min_liquidity": None,
         }
-    result = filter_markets(raw_markets, limits, stamp)
+    result = filter_markets(raw_markets, limits, stamp, now=now, min_hours_to_expiry=min_hours_to_expiry)
     result["fetch"] = meta
     return result
 
@@ -434,9 +456,16 @@ def main(
     max_markets: int = MAX_MARKETS,
     bus_top_n: int = BUS_TOP_N,
     ts: str | None = None,
+    min_hours_to_expiry: float = MIN_HOURS_TO_EXPIRY,
 ) -> int:
     cfg = load_risk()
-    result = scan(getter=getter, limits=thresholds_from(cfg), max_markets=max_markets, ts=ts)
+    result = scan(
+        getter=getter,
+        limits=thresholds_from(cfg),
+        max_markets=max_markets,
+        ts=ts,
+        min_hours_to_expiry=min_hours_to_expiry,
+    )
     rows = result["rows"]
     fetch = result["fetch"]
     mode = cfg.get("mode")
@@ -444,7 +473,8 @@ def main(
     print(
         f"scanned={result['scanned']} passed={result['passed']} "
         f"stop={fetch['stop_reason']} cap_hit={str(fetch['cap_hit']).lower()} "
-        f"server_min_liquidity={fetch['server_min_liquidity']} mode={mode} "
+        f"server_min_liquidity={fetch['server_min_liquidity']} "
+        f"min_hours_to_expiry={result['min_hours_to_expiry']:g} mode={mode} "
         f"live_enabled={str(live).lower()} keys=none orders=none"
     )
     print("rejected_first=" + ", ".join(f"{k}:{v}" for k, v in sorted(result["first_reason"].items())))

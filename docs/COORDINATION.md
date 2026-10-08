@@ -82,7 +82,7 @@ I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。�
 5. 单边套利成交必须计为方向敞口：ledger/risk 需按单腿记净头寸，不能按 "套利对" 抵消。
 6. risk.toml 没有 `min_edge` 参数（Forecaster 临时用了 0.02）；现在只要求 edge > 0。
 7. risk_gate 不使用 `kelly_fraction`，所有单子一律 1% 封顶（这是保守的，但参数形同虚设）。
-8. scanner 没有最短剩余到期时间规则（今天到期的盘也会通过；2026-10-08 实跑 8,409 个通过里有 944 个剩余不到 1 天）。
+8. ~~scanner 没有最短剩余到期时间规则（今天到期的盘也会通过；2026-10-08 实跑 8,409 个通过里有 944 个剩余不到 1 天）。~~ **Task O 处理**：剩余不足 24 h 记 `near_expiry`，不通过；end date 缺失、无法解析、无时区、仅日期、非字符串或已过期一律不通过（`src/expiry_rule.py`）。24 h 是代码常量 `MIN_HOURS_TO_EXPIRY`，不在 risk.toml；是否写进 risk.toml 由 Operator 决定。
 9. Sentinel 提议陈旧阈值 120s / 连续 2 次失败才报警（30s 会误报）；risk.toml 与代码尚无此参数。
 10. Endgame 需要未过滤数据：scanner 排除 >0.97 后，0.98–0.99 区间市场不会进入 scanner 输出。
 11. ~~（审查新增）`risk_gate.evaluate` 对缺失的 `min_liquidity_usd` / `max_spread` 用默认值 0 / 1，属于缺键放行（fail-open）；scanner 新代码已是缺键报错，两者不一致。~~ **Task J 处理**（PR #3）：缺键或非有限数值一律 `invalid_gate_threshold` veto，不再用默认值。

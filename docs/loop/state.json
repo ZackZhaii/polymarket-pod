@@ -87,6 +87,15 @@
       "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 12. Pure code; no risk parameter.",
       "done_at": "2026-10-08T18:43:58Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "O",
+      "status": "done",
+      "title": "scanner minimum time-to-expiry; markets closer than 24 h do not pass",
+      "finish": "src/expiry_rule.py expiry_problem(end_date, now, min_hours) is pure and offline and returns near_expiry when the market ends in less than MIN_HOURS_TO_EXPIRY = 24 h (the boundary passes), expired when it has ended, missing_end_date when absent, and invalid_end_date when the end date is not an ISO 8601 string with a time and a zone (naive, date-only, numeric, bool and other non-strings fail closed); a bad min_hours or now is a reason too. scanner.filter_markets / scan / main apply it with an injectable min_hours_to_expiry and now; exit codes are unchanged. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 8. The threshold is a code constant; moving it into config/risk.toml is a proposal for the Operator.",
+      "done_at": "2026-10-08T18:56:46Z",
+      "surface": "grok-bot"
     }
   ]
 }

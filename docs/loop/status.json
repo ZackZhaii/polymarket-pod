@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T18:43:58Z",
+  "ts": "2026-10-08T18:56:46Z",
   "live_enabled": false,
-  "last_done": "N",
+  "last_done": "O",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "N (Forecaster bus name is now ROSTER's NewsForecaster; legacy name mapped by podlib.canonical_role) done by grok-bot in its PR. F-M done on main. No open todo. No live gate."
+  "note": "O (scanner minimum time-to-expiry: under 24 h or a bad end date does not pass; 24 h code default) done by grok-bot in its PR. F-N done on dev. No open todo. No live gate."
 }
