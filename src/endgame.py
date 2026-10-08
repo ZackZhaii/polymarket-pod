@@ -31,29 +31,36 @@ def emit(
     *,
     now: str,
     bus_path: Path | None = None,
+    outcome_index: int | None = None,
+    outcome: str | None = None,
+    token_id: str | None = None,
 ) -> dict | None:
+    """Signal to RiskGate only. With outcome_index (Task AD) the payload names the outcome
+    and its token; a selection without a token id emits nothing (fail closed)."""
     if not PRICE_MIN <= float(price) <= PRICE_MAX:
         return None
     remaining = hours_until(end_date, now)
     if remaining is None or remaining < 0 or remaining > WINDOW_HOURS:
         return None
-    return bus(
-        "Endgame",
-        "RiskGate",
-        "signal",
-        market,
-        {
-            "price": float(price),
-            "end_date": end_date,
-            "hours_to_end": round(remaining, 6),
-            "band_low": PRICE_MIN,
-            "band_high": PRICE_MAX,
-            "locked_profit": False,
-            "one_leg_meaning": "directional",
-            "exchange_action": "none",
-        },
-        path=bus_path,
-    )
+    payload = {
+        "price": float(price),
+        "end_date": end_date,
+        "hours_to_end": round(remaining, 6),
+        "band_low": PRICE_MIN,
+        "band_high": PRICE_MAX,
+        "locked_profit": False,
+        "one_leg_meaning": "directional",
+        "exchange_action": "none",
+    }
+    if outcome_index is not None:
+        if isinstance(outcome_index, bool) or not isinstance(outcome_index, int) or outcome_index < 0:
+            return None
+        if not isinstance(token_id, str) or not token_id:
+            return None
+        payload["outcome_index"] = outcome_index
+        payload["outcome"] = outcome
+        payload["token_id"] = token_id
+    return bus("Endgame", "RiskGate", "signal", market, payload, path=bus_path)
 
 
 def _parse(value: str) -> datetime | None:

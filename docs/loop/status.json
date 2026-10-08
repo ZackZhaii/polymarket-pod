@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T21:18:32Z",
+  "ts": "2026-10-08T21:24:17Z",
   "live_enabled": false,
-  "last_done": "AC",
+  "last_done": "AD",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AC (risk and threshold code constants gathered in src/thresholds.py with unchanged values; docs/THRESHOLDS.md lists every threshold, kept in sync by tests/test_thresholds.py; backlog #17) done by grok-bot. F-AB done on dev. Task letters after Z are AA, AB, AC. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S and MIN_HOURS_TO_EXPIRY. No open todo. No live gate."
+  "note": "AD (endgame_scan also selects a market whose second outcome is in the ENDGAME_PRICE_MIN..MAX band; both prices needed, both_outcomes_in_band and other_outcome_above_band reject, signals name outcome_index, outcome and token_id; backlog #18) done by grok-bot. Task letters after Z are AA, AB, AC, AD. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S and MIN_HOURS_TO_EXPIRY. No open todo. No live gate."
 }

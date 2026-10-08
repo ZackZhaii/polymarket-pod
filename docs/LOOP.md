@@ -550,10 +550,35 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 禁止对敲、自成交、刷量、幌骗。单边成交不是无风险套利。不承诺收益。
 ```
 
+## Task AD — endgame_scan also selects the second outcome (backlog #18)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. `endgame_scan` only checked the first outcome against Endgame's band, so a market
+whose second outcome sat at 0.98–0.99 never reached Endgame (COORDINATION backlog #18).
+
+Finish when a market is selected if exactly one of its two outcomes is in the band, signals name the outcome and token,
+nothing else is loosened, and `python -m pytest` passes with no network and no credentials.
+
+- `endgame_scan.band_decision` returns (problems, selection). Outcome 0 is `scanner.yes_price` (unchanged), outcome 1 is
+  Gamma's `outcomePrices[1]`. The band is `ENDGAME_PRICE_MIN..ENDGAME_PRICE_MAX` from `src/thresholds.py` (inclusive); no new numbers.
+- Both prices are needed for the decision: missing is `missing_price`, non-finite is `non_finite_price` /
+  `non_finite_outcome_prices` (existing names, counted once). Both in the band is `both_outcomes_in_band`; one in the band and
+  the other above it is `other_outcome_above_band`. Neither is picked.
+- The selected outcome needs its own token id (version-aware `scanner.select_token_ids`), else the scanner's token problem
+  name (`missing_token_ids`, `invalid_token_ids`, `token_count_mismatch`).
+- Rows carry `endgame_outcome_index`, `endgame_outcome`, `endgame_token_id` and `endgame_price`; the result has `selected_outcomes`.
+  `endgame.emit` adds `outcome_index`, `outcome` and `token_id` to the RiskGate signal when given (payload unchanged otherwise)
+  and emits nothing for a selection without a token id.
+- Same scanner rules, 24–48 h window, `MIN_SCANNED_MARKETS` and exit codes. Tightening: first-outcome rows now also need a
+  finite second price and their own token id.
+- Tests: `tests/test_endgame_second_outcome.py`. `tests/test_endgame_scan.py` fixtures now carry Gamma's `outcomes`,
+  `outcomePrices` and `clobTokenIds`; no assertion changed.
+
 ## Latest
 
-- 2026-10-09: Task AC done by grok-bot (approved by Poly指挥, backlog #17). Risk and threshold code constants now live in `src/thresholds.py`.
-- No value or behaviour changed; old names (`risk_gate.MIN_EDGE`, `endgame.PRICE_MIN`, `paper_cycle.STALE_AFTER_S`, ...) are the same objects.
-- `docs/THRESHOLDS.md` lists every threshold (code, operational, risk.toml read-only); `tests/test_thresholds.py` keeps it in sync.
-- `python -m pytest` passed offline (850 passed; on Windows 846 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task AD done by grok-bot (approved by Poly指挥, backlog #18). `endgame_scan` also selects a market whose second outcome is in the band.
+- Same band (`ENDGAME_PRICE_MIN/MAX`), no new numbers; missing or non-finite prices, both outcomes in the band, or no token for the outcome reject.
+- Signals to RiskGate name `outcome_index`, `outcome` and `token_id`. Scanner rules, 24–48 h window, minimum 5 markets and exit codes unchanged.
+- `python -m pytest` passed offline (911 passed; on Windows 907 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY.
