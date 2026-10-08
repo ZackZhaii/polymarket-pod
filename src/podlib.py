@@ -26,7 +26,7 @@ QUOTES_PATH = LOG_DIR / "quotes.jsonl"
 SENTINEL_STATE_PATH = LOG_DIR / "sentinel_stale.json"
 
 # Local paper bankroll. Not a wallet. Sizing never exceeds the 1% clip.
-PAPER_EQUITY_USD = 1000.0
+from src.thresholds import PAPER_EQUITY_USD  # noqa: E402 - Task AC: value in src/thresholds.py
 BUS_TYPES = frozenset({"signal", "veto", "fill", "proposal", "halt"})
 # Bus role names follow docs/ROSTER.md. A legacy name is still accepted by bus() and written
 # as its ROSTER name; readers of older logs/bus.jsonl lines compare via canonical_role().

@@ -5,7 +5,7 @@ explicit zone (``Z`` or an offset), and it is at least MIN_HOURS_TO_EXPIRY hours
 ``now``. Anything else fails closed: missing, unparseable, naive (no zone), date-only,
 non-string (numbers, bools, None), already past, or too close.
 
-MIN_HOURS_TO_EXPIRY is a code constant. It is not read from config/risk.toml; moving it
+MIN_HOURS_TO_EXPIRY is a code constant (src/thresholds.py since Task AC). It is not read from config/risk.toml; moving it
 there is a proposal for the Operator. No network, no keys, no orders.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 # 24 h: a market resolving within a day has little time left to re-check its book, and
 # resolution / oracle timing risk dominates. Conservative; the Operator may tune it.
-MIN_HOURS_TO_EXPIRY = 24.0
+from src.thresholds import MIN_HOURS_TO_EXPIRY  # noqa: E402 - Task AC: value in src/thresholds.py
 
 MISSING_END_DATE = "missing_end_date"
 INVALID_END_DATE = "invalid_end_date"

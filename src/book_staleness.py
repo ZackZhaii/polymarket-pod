@@ -14,7 +14,7 @@ import math
 from collections.abc import Callable, Hashable
 from datetime import datetime, timezone
 
-MAX_BOOK_AGE_S = 120.0
+from src.thresholds import MAX_BOOK_AGE_S  # Task AC: value in src/thresholds.py
 
 MISSING_BOOK_TS = "missing_book_ts"
 INVALID_BOOK_TS = "invalid_book_ts"

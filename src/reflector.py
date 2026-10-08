@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
 from src.podlib import RISK_PATH, bus, utc_now  # noqa: E402
 
 PROPOSALS_PATH = ROOT / "playbook" / "proposals.md"
-MAX_PER_UTC_DAY = 3
+from src.thresholds import REFLECTOR_MAX_PER_UTC_DAY as MAX_PER_UTC_DAY  # noqa: E402 - Task AC
 HEADER = (
     "# Proposals\n\n"
     "Reflector only. These notes do not change config/risk.toml or any size cap.\n"

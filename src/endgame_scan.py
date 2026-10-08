@@ -33,7 +33,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src import endgame  # noqa: E402
-from src.expiry_rule import MIN_HOURS_TO_EXPIRY  # noqa: E402
+from src.thresholds import MIN_HOURS_TO_EXPIRY, MIN_SCANNED_MARKETS  # noqa: E402 - Task AC
 from src.podlib import load_risk, pin_problems, utc_now  # noqa: E402
 from src.scanner import (  # noqa: E402
     EXIT_INCOMPLETE,
@@ -166,8 +166,8 @@ def main(
     if not fetch["complete"]:
         print(f"endgame_scan failed: pagination incomplete ({fetch['stop_reason']}); nothing written", file=sys.stderr)
         return EXIT_INCOMPLETE
-    if result["scanned"] < 5:
-        print("endgame_scan failed: fewer than 5 public markets", file=sys.stderr)
+    if result["scanned"] < MIN_SCANNED_MARKETS:
+        print(f"endgame_scan failed: fewer than {MIN_SCANNED_MARKETS} public markets", file=sys.stderr)
         return EXIT_TOO_FEW_SCANNED
     signals = emit_signals(result["rows"], stamp, bus_path=bus_path)
     for row in result["rows"][:10]:

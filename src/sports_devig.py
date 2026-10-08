@@ -10,7 +10,7 @@ from pathlib import Path
 
 from src.podlib import bus
 
-ASSUMED_SLIPPAGE = 0.005
+from src.thresholds import SPORTS_DEVIG_ASSUMED_SLIPPAGE as ASSUMED_SLIPPAGE  # noqa: E402 - Task AC
 
 
 def fair_two_way(odds_a: float, odds_b: float) -> tuple[float, float] | None:

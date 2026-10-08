@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from src.book_staleness import parse_book_ts
 
 # Code constant, not a risk.toml key. Threshold for the Operator to review (like Task O's 24 h).
-WASH_WINDOW_S = 300.0
+from src.thresholds import WASH_WINDOW_S  # noqa: E402 - Task AC: value in src/thresholds.py
 
 CROSS_SIDE_SAME_LEG = "cross_side_same_leg"
 SELF_TRADE_STRUCTURE = "self_trade_structure"
