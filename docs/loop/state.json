@@ -60,6 +60,15 @@
       "note": "Self-picked by grok-bot after two public scanner runs on NoisePC crashed with URLError [SSL: UNEXPECTED_EOF_WHILE_READING] during Task I acceptance.",
       "done_at": "2026-10-08T10:29:48Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "L",
+      "status": "done",
+      "title": "order book staleness check; RiskGate vetoes a missing or stale book_ts",
+      "finish": "src/book_staleness.py book_age_problem(book_ts, now, max_age_s) is pure and offline and returns a veto reason when the book timestamp is missing, unparseable (naive, date-only, numeric text, bool, nan, inf), in the future, or older than MAX_BOOK_AGE_S = 120 s (boundary is fresh); a bad max_age_s or now also returns a reason. Intent gains book_ts and risk_gate.evaluate(..., now=None, max_book_age_s=120) vetoes fail closed with missing_book_ts / invalid_book_ts / future_book_ts / stale_book / invalid_max_book_age. paper_ledger passes book_ts through (self-check stamps now, --book-ts on the CLI). pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 2; 120 s is Sentinel's proposal (item 9). The threshold is a code constant; moving it into config/risk.toml is a proposal for the Operator.",
+      "done_at": "2026-10-08T17:35:38Z",
+      "surface": "grok-bot"
     }
   ]
 }

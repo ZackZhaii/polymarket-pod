@@ -72,7 +72,7 @@ I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。�
 
 ## Risk gaps backlog（只记录，不在 Phase 0 改 risk.toml；每条需 Operator 另立任务）
 1. 自成交/对敲检测只靠策略名关键词（wash / self-trade / spoof / layering），没有基于成交对手或同市场双向挂单的检测。
-2. `risk_gate.py` 没有盘口陈旧检查（不看 book 时间戳）。
+2. ~~`risk_gate.py` 没有盘口陈旧检查（不看 book 时间戳）。~~ **Task L 处理**：`Intent.book_ts` 缺失、无法解析、在未来或超过 120 s 一律 veto（`src/book_staleness.py`）。120 s 是代码常量，不在 risk.toml；是否写进 risk.toml 由 Operator 决定。
 3. ROSTER 写的 category caps（类别上限）既不在 risk.toml，也不在代码里。
 4. `hypothetical=True` 会跳过 max_open_positions 和 max_daily_loss 检查（仅 phase0-gate-test 可用，但仍是旁路）。
 5. 单边套利成交必须计为方向敞口：ledger/risk 需按单腿记净头寸，不能按 "套利对" 抵消。

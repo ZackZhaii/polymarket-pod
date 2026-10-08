@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T10:30:00Z",
+  "ts": "2026-10-08T17:35:38Z",
   "live_enabled": false,
-  "last_done": "K",
+  "last_done": "L",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "K (public_get retry, scanner exit 3 on network failure) done by grok-bot. I and J done (J merged via PR #3). No open todo. No live gate."
+  "note": "L (book staleness check, RiskGate vetoes a missing or stale book_ts, 120 s code default) done by grok-bot in its PR. F-K done on main. No open todo. No live gate."
 }

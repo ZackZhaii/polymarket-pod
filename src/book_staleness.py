@@ -1,0 +1,104 @@
+"""Order book staleness check for Phase 0 (Task L).
+
+Pure and offline: no network, no clock reads unless the caller omits ``now``,
+no file access, no orders. RiskGate.evaluate uses it fail-closed, so a missing,
+unparseable, future or old book timestamp can only veto.
+
+MAX_BOOK_AGE_S is a code constant (Sentinel's 120 s proposal, COORDINATION risk
+backlog items 2 and 9). It is deliberately not read from config/risk.toml;
+moving it there is a proposal for the Operator.
+"""
+from __future__ import annotations
+
+import math
+from datetime import datetime, timezone
+
+MAX_BOOK_AGE_S = 120.0
+
+MISSING_BOOK_TS = "missing_book_ts"
+INVALID_BOOK_TS = "invalid_book_ts"
+FUTURE_BOOK_TS = "future_book_ts"
+STALE_BOOK = "stale_book"
+INVALID_MAX_BOOK_AGE = "invalid_max_book_age"
+INVALID_NOW = "invalid_now"
+
+
+def _finite_number(value: object) -> float | None:
+    """Accept only a finite int or float. Bools, strings, nan and inf are rejected."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def parse_book_ts(value: object) -> datetime | None:
+    """Return an aware UTC datetime, or None when the value is not a usable timestamp.
+
+    Accepted: an ISO 8601 string with a date, a time and a zone (``Z`` or an offset),
+    an aware datetime, or finite epoch seconds as int/float. Naive times, date-only
+    strings, numeric strings, bools, nan and inf are rejected rather than guessed.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            return None
+        return value.astimezone(timezone.utc)
+    if isinstance(value, (int, float)):
+        number = _finite_number(value)
+        if number is None:
+            return None
+        try:
+            return datetime.fromtimestamp(number, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        if "T" not in text:
+            return None
+        if text.endswith(("Z", "z")):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+    return None
+
+
+def book_age_problem(
+    book_ts: object,
+    now: object = None,
+    max_age_s: object = MAX_BOOK_AGE_S,
+) -> str | None:
+    """Return None when the book is fresh, else a veto reason.
+
+    Fresh means ``0 <= now - book_ts <= max_age_s`` (the boundary itself is fresh,
+    matching paper_cycle's ``age > stale_after_s``). A bad ``max_age_s`` or ``now``
+    also returns a reason, so a broken caller can never make a book look fresh.
+    """
+    limit = _finite_number(max_age_s)
+    if limit is None or limit <= 0:
+        return INVALID_MAX_BOOK_AGE
+    if now is None:
+        current = datetime.now(timezone.utc)
+    else:
+        # Only an aware datetime is accepted for now; anything else is a broken caller.
+        current = parse_book_ts(now) if isinstance(now, datetime) else None
+        if current is None:
+            return INVALID_NOW
+    if book_ts is None or (isinstance(book_ts, str) and not book_ts.strip()):
+        return MISSING_BOOK_TS
+    stamp = parse_book_ts(book_ts)
+    if stamp is None:
+        return INVALID_BOOK_TS
+    age = (current - stamp).total_seconds()
+    if age < 0:
+        return FUTURE_BOOK_TS
+    if age > limit:
+        return STALE_BOOK
+    return None

@@ -1,13 +1,15 @@
 """RiskGate for Phase 0 paper intents.
 
-Vetoes before any simulated fill. Does not place orders, sign messages,
-read secrets, or edit config/risk.toml.
+Vetoes before any simulated fill. A missing, unparseable, future or stale
+book timestamp vetoes too (src/book_staleness.py, 120 s code default).
+Does not place orders, sign messages, read secrets, or edit config/risk.toml.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
 
+from src.book_staleness import MAX_BOOK_AGE_S, book_age_problem
 from src.podlib import PAPER_EQUITY_USD, pin_problems
 
 BANNED_STRATEGY_TOKENS = ("wash", "self-trade", "self_trade", "spoof", "layering")
@@ -29,6 +31,8 @@ class Intent:
     token_id: str = ""
     hypothetical: bool = False
     note: str = ""
+    # UTC time of the order book snapshot behind market_price/spread. Missing means veto.
+    book_ts: str | float | None = None
 
 
 @dataclass
@@ -77,8 +81,19 @@ def gate_thresholds(cfg: dict) -> dict[str, float]:
     return checked
 
 
-def evaluate(intent: Intent, cfg: dict, state: dict) -> Decision:
+def evaluate(
+    intent: Intent,
+    cfg: dict,
+    state: dict,
+    *,
+    now: object = None,
+    max_book_age_s: object = MAX_BOOK_AGE_S,
+) -> Decision:
     """Return allow only when every Phase 0 check passes.
+
+    The book must be fresh: book_ts present, parseable, not in the future and at most
+    max_book_age_s old at ``now`` (default: the clock). Otherwise it vetoes; it never
+    raises for this. max_book_age_s is a code default, not a risk.toml key.
 
     Size is the 1% clip. kelly_fraction is not applied and cannot increase size.
     A single-leg fill is directional exposure, not risk-free arbitrage.
@@ -125,6 +140,10 @@ def evaluate(intent: Intent, cfg: dict, state: dict) -> Decision:
         reasons.append("negative_spread")
     elif thresholds is not None and spread > thresholds["max_spread"]:
         reasons.append("spread_above_max")
+
+    book_problem = book_age_problem(intent.book_ts, now, max_book_age_s)
+    if book_problem is not None:
+        reasons.append(book_problem)
 
     if intent.side == "buy":
         effective = intent.market_price + intent.assumed_slippage
