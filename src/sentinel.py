@@ -21,14 +21,14 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from src.book_staleness import MAX_BOOK_AGE_S, book_age_problem
+from src.book_staleness import book_age_problem
 from src.podlib import QUOTES_PATH, bus, read_jsonl, utc_now
+from src.thresholds import MAX_BOOK_AGE_S, SENTINEL_STALE_CONSECUTIVE, SENTINEL_STALE_S  # Task AC: values in src/thresholds.py
 
 # Sentinel's proposal (COORDINATION #9): a book older than 120 s is stale, and the alarm fires only
 # after 2 consecutive stale or failed checks (30 s gave false alarms). Code constants, not risk.toml
 # keys; the user decides at M2. The per-check limit equals RiskGate's MAX_BOOK_AGE_S.
-SENTINEL_STALE_S = 120.0
-SENTINEL_STALE_CONSECUTIVE = 2
+# SENTINEL_STALE_S and SENTINEL_STALE_CONSECUTIVE are imported above from src/thresholds.py (Task AC).
 
 CHECK_FAILED = "check_failed"
 STALE_ALARM = "stale_book_consecutive"

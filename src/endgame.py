@@ -10,9 +10,10 @@ from pathlib import Path
 
 from src.podlib import bus
 
-PRICE_MIN = 0.98
-PRICE_MAX = 0.99
-WINDOW_HOURS = 48.0
+# Task AC: values in src/thresholds.py; the old names stay for callers and tests.
+from src.thresholds import ENDGAME_PRICE_MAX as PRICE_MAX  # noqa: E402
+from src.thresholds import ENDGAME_PRICE_MIN as PRICE_MIN  # noqa: E402
+from src.thresholds import ENDGAME_WINDOW_HOURS as WINDOW_HOURS  # noqa: E402
 
 
 def hours_until(end_date: str, now: str) -> float | None:

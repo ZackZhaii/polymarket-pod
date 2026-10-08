@@ -213,6 +213,15 @@
       "note": "Approved by Poly指挥 (astra's review finding); done by grok-bot. Tightening only: the session now applies every scanner rejection and fail-closed exit, and book age is measured after the reads. No new threshold.",
       "done_at": "2026-10-08T21:08:47Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AC",
+      "status": "done",
+      "title": "One module for the risk and threshold code constants (src/thresholds.py) and docs/THRESHOLDS.md (backlog #17)",
+      "finish": "src/thresholds.py holds every risk and threshold code constant with unchanged values (MAX_BOOK_AGE_S, MIN_EDGE, EDGE_TOLERANCE, PAPER_EQUITY_USD, PAPER_CYCLE_STALE_AFTER_S, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, SCANNER_MIN_PRICE, SCANNER_MAX_PRICE, MIN_SCANNED_MARKETS, ENDGAME_PRICE_MIN, ENDGAME_PRICE_MAX, ENDGAME_WINDOW_HOURS, SPORTS_DEVIG_ASSUMED_SLIPPAGE, LEDGER_OPEN_EPS, REFLECTOR_MAX_PER_UTC_DAY). Modules import them and keep their old names as the same objects. Import-time relation checks (SENTINEL_STALE_S == MAX_BOOK_AGE_S and others); sentinel keeps its own guard. docs/THRESHOLDS.md lists every threshold (name, value, unit, meaning, where, source, M2 pending), the operational limits, and the risk.toml values read-only. tests/test_thresholds.py keeps doc, module, old names and risk.toml in sync. COORDINATION #17 struck through. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and none of its parameters moves into code.",
+      "note": "Approved by Poly指挥 (task 3, threshold module); done by grok-bot. Refactor only: no value or behaviour changes. M2 pending list unchanged.",
+      "done_at": "2026-10-08T21:18:32Z",
+      "surface": "grok-bot"
     }
   ]
 }

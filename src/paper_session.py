@@ -38,7 +38,7 @@ from src.podlib import (  # noqa: E402
 
 BOOK_LIMIT = 5
 # Same floor as scanner.main (EXIT_TOO_FEW_SCANNED): fewer public markets means a broken read.
-SESSION_MIN_SCANNED = 5
+from src.thresholds import MIN_SCANNED_MARKETS as SESSION_MIN_SCANNED  # noqa: E402 - Task AC
 
 
 def eval_clock() -> str:

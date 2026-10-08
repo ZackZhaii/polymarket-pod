@@ -515,6 +515,32 @@ passes with no network and no credentials.
   keeps every assertion; its fixture adds four scanner-rejected markets for the 5-market floor and a clock.
 - Do not edit `config/risk.toml`.
 
+## Task AC — one module for the risk and threshold code constants; docs/THRESHOLDS.md (backlog #17)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. The threshold code constants were spread over a dozen modules with no single list,
+so a value could drift from its twin or from the docs. This task gathers them; no value and no behaviour changes.
+
+Finish when every risk and threshold code constant lives in `src/thresholds.py`, the old names still work, `docs/THRESHOLDS.md`
+lists every threshold and a test keeps both in sync, `risk.toml` is unchanged, and `python -m pytest` passes with no network
+and no credentials.
+
+- `src/thresholds.py` (imports nothing from `src`): `MAX_BOOK_AGE_S`, `MIN_EDGE`, `EDGE_TOLERANCE`, `PAPER_EQUITY_USD`,
+  `PAPER_CYCLE_STALE_AFTER_S`, `SENTINEL_STALE_S`, `SENTINEL_STALE_CONSECUTIVE`, `WASH_WINDOW_S`, `MIN_HOURS_TO_EXPIRY`,
+  `SCANNER_MIN_PRICE`, `SCANNER_MAX_PRICE`, `MIN_SCANNED_MARKETS`, `ENDGAME_PRICE_MIN`, `ENDGAME_PRICE_MAX`,
+  `ENDGAME_WINDOW_HOURS`, `SPORTS_DEVIG_ASSUMED_SLIPPAGE`, `LEDGER_OPEN_EPS`, `REFLECTOR_MAX_PER_UTC_DAY`.
+- Modules import them and keep their old names as the same objects (`risk_gate.MIN_EDGE`, `paper_cycle.STALE_AFTER_S`,
+  `endgame.PRICE_MIN`, `paper_session.SESSION_MIN_SCANNED`, ...). The literal `5` in `scanner.main` and `endgame_scan.main`
+  became `MIN_SCANNED_MARKETS` (same messages, same exit codes).
+- Import-time relations (explicit `RuntimeError`): `SENTINEL_STALE_S == MAX_BOOK_AGE_S`, `PAPER_CYCLE_STALE_AFTER_S == MAX_BOOK_AGE_S`,
+  the scanner band, the Endgame band above it, and a non-empty 24–48 h Endgame window. `src/sentinel.py` keeps its own guard.
+- `docs/THRESHOLDS.md`: one table of code constants (value, unit, meaning, where, source task, M2 pending), the operational
+  limits that stay in their modules, and the `risk.toml` values read-only (governed by the file and its sha).
+- Tests: `tests/test_thresholds.py` (frozen values, every old name, doc rows vs module and re-exports, M2 column,
+  operational rows, risk.toml rows vs the file, each relation firing on a bad edit, no second literal definition in `src`).
+- Do not edit `config/risk.toml`; its parameters are not moved into code. No threshold value changes.
+
 ## Paste this into a new chat
 
 ```text
@@ -526,8 +552,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Tasks AA and AB done by grok-bot (approved by Poly指挥). AA (backlog #15): `paper_cycle` feeds Sentinel's `StaleWatch`; the streak lives in `logs/sentinel_stale.json` (atomic write) and 2 stale runs in a row halt that market's paper quotes.
-- AA: an unreadable, corrupt, malformed or vanished state file, or a failed save, counts as stale (fail closed). Task letters after Z are AA, AB, AC, …
-- AB (backlog #16, astra's review): `paper_session` uses `scanner.scan`; only passing markets are persisted and booked; bad thresholds, incomplete paging or fewer than 5 scanned write nothing.
-- AB: book age comes from the CLOB `book_ts` at a millisecond clock read after the books; missing, unparseable or future stamps stay stale. `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- `python -m pytest` passed offline (783 passed; on Windows 779 passed, 4 symlink tests skipped). Queue empty. No new threshold; the M2 list is unchanged.
+- 2026-10-09: Task AC done by grok-bot (approved by Poly指挥, backlog #17). Risk and threshold code constants now live in `src/thresholds.py`.
+- No value or behaviour changed; old names (`risk_gate.MIN_EDGE`, `endgame.PRICE_MIN`, `paper_cycle.STALE_AFTER_S`, ...) are the same objects.
+- `docs/THRESHOLDS.md` lists every threshold (code, operational, risk.toml read-only); `tests/test_thresholds.py` keeps it in sync.
+- `python -m pytest` passed offline (850 passed; on Windows 846 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY.

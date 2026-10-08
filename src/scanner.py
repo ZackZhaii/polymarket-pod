@@ -39,7 +39,8 @@ from src.podlib import (  # noqa: E402
     public_get,
     utc_now,
 )
-from src.expiry_rule import MIN_HOURS_TO_EXPIRY, expiry_problem  # noqa: E402
+from src.expiry_rule import expiry_problem  # noqa: E402
+from src.thresholds import MIN_HOURS_TO_EXPIRY, MIN_SCANNED_MARKETS  # noqa: E402 - Task AC
 
 # Legacy single page (top 20 by liquidity, unfiltered). No caller since Task AB moved paper_session to scan().
 GAMMA = (
@@ -59,8 +60,8 @@ MAX_PAGES = 1000
 BUS_TOP_N = 50
 
 # Long-tail band. Optional risk.toml overrides: scanner_min_price, scanner_max_price.
-MIN_PRICE = 0.03
-MAX_PRICE = 0.97
+from src.thresholds import SCANNER_MAX_PRICE as MAX_PRICE  # noqa: E402 - Task AC
+from src.thresholds import SCANNER_MIN_PRICE as MIN_PRICE  # noqa: E402 - Task AC
 
 # main() exit codes. 3 also covers a page that still fails after public_get's retries.
 EXIT_OK = 0
@@ -607,8 +608,8 @@ def main(
         if fetch.get("error"):
             print(f"scanner network error: {fetch['error']}", file=sys.stderr)
         return EXIT_INCOMPLETE
-    if result["scanned"] < 5:
-        print("scanner failed: fewer than 5 public markets", file=sys.stderr)
+    if result["scanned"] < MIN_SCANNED_MARKETS:
+        print(f"scanner failed: fewer than {MIN_SCANNED_MARKETS} public markets", file=sys.stderr)
         return EXIT_TOO_FEW_SCANNED
     if not rows:
         print("scanner failed: zero markets passed the filters", file=sys.stderr)

@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T21:08:47Z",
+  "ts": "2026-10-08T21:18:32Z",
   "live_enabled": false,
-  "last_done": "AB",
+  "last_done": "AC",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AA (Sentinel StaleWatch wired into paper_cycle, backlog #15: streak in logs/sentinel_stale.json, atomic write, any state problem counts as stale) and AB (paper_session uses scanner.scan and judges book age from the CLOB book_ts at a clock read after the books, backlog #16, from astra's review) done by grok-bot. F-Z done on dev. Task letters after Z are AA, AB, AC. SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, MIN_EDGE and WASH_WINDOW_S await the user's decision at M2. No open todo. No live gate."
+  "note": "AC (risk and threshold code constants gathered in src/thresholds.py with unchanged values; docs/THRESHOLDS.md lists every threshold, kept in sync by tests/test_thresholds.py; backlog #17) done by grok-bot. F-AB done on dev. Task letters after Z are AA, AB, AC. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S and MIN_HOURS_TO_EXPIRY. No open todo. No live gate."
 }

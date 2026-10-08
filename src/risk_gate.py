@@ -15,8 +15,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from src.book_staleness import MAX_BOOK_AGE_S, book_age_problem
+from src.book_staleness import book_age_problem
 from src.podlib import PAPER_EQUITY_USD, pin_problems
+from src.thresholds import EDGE_TOLERANCE, MAX_BOOK_AGE_S, MIN_EDGE  # Task AC: values in src/thresholds.py
 from src.wash_detect import wash_problems
 
 BANNED_STRATEGY_TOKENS = ("wash", "self-trade", "self_trade", "spoof", "layering")
@@ -120,8 +121,7 @@ def risk_caps(cfg: dict) -> dict[str, float]:
 # risk.toml key: a threshold proposal for the user to decide at M2 (like MIN_HOURS_TO_EXPIRY
 # and WASH_WINDOW_S). 0.02 is the bar the Forecaster used as a stopgap. Inclusive: an edge of
 # exactly 0.02 passes; EDGE_TOLERANCE only absorbs float rounding (0.425 - 0.405 = 0.01999...96).
-MIN_EDGE = 0.02
-EDGE_TOLERANCE = 1e-12
+# MIN_EDGE and EDGE_TOLERANCE are imported above from src/thresholds.py (Task AC).
 
 NUMERIC_INTENT_FIELDS = ("model_prob", "market_price", "assumed_slippage", "fee_rate")
 

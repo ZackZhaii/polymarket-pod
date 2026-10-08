@@ -45,7 +45,7 @@ from src.podlib import (  # noqa: E402
 )
 
 # Same value as book_staleness.MAX_BOOK_AGE_S (RiskGate). Not a risk.toml key.
-STALE_AFTER_S = 120
+from src.thresholds import PAPER_CYCLE_STALE_AFTER_S as STALE_AFTER_S  # noqa: E402 - Task AC
 
 
 def run(

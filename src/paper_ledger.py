@@ -37,7 +37,7 @@ from src.risk_gate import Decision, Intent, evaluate  # noqa: E402
 DIRECTIONAL = "Single-leg fill is directional exposure, not risk-free arbitrage."
 
 
-OPEN_EPS = 1e-9
+from src.thresholds import LEDGER_OPEN_EPS as OPEN_EPS  # noqa: E402 - Task AC
 
 
 def _counts(row: dict[str, Any]) -> bool:
