@@ -3,6 +3,8 @@
 Simulated fills are written only after RiskGate.evaluate returns allow.
 No CLOB authentication, no order POST, no withdraw, no size-up.
 A single-leg fill is directional exposure, not risk-free arbitrage.
+Positions are netted per leg (market + token_id); the tokens of an arb pair never
+offset each other (backlog item 5, Task P).
 """
 from __future__ import annotations
 
@@ -32,29 +34,80 @@ from src.risk_gate import Decision, Intent, evaluate
 DIRECTIONAL = "Single-leg fill is directional exposure, not risk-free arbitrage."
 
 
-def load_state(market: str) -> dict[str, Any]:
-    shares: dict[str, float] = {}
+OPEN_EPS = 1e-9
+
+
+def _counts(row: dict[str, Any]) -> bool:
+    return not row.get("hypothetical") and row.get("counts_toward_risk") is not False
+
+
+def leg_key(market: object, token_id: object) -> tuple[str, str]:
+    """A leg is one token in one market. No token_id means an unknown leg of that market.
+
+    The unknown leg nets only with other rows that also lack a token_id; it never
+    offsets a named token.
+    """
+    return (str(market or ""), str(token_id or ""))
+
+
+def leg_positions(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, float]]:
+    """Net shares per leg, plus exposure at the leg's average fill price.
+
+    Only a buy and a sell of the same token offset each other (closing). The two
+    tokens of an arb pair are separate legs and never offset each other, so a
+    single filled leg is a full directional position (backlog item 5).
+    Exposure is abs(net shares) * (gross notional / gross shares) over that leg's
+    rows; a row without notional_usd is valued at 1 USD per share, the most a
+    binary token can pay out.
+    """
+    legs: dict[tuple[str, str], dict[str, float]] = {}
+    for row in rows:
+        if not _counts(row):
+            continue
+        qty = float(row.get("shares") or 0.0)
+        notional = row.get("notional_usd")
+        gross_usd = abs(qty) * 1.0 if notional is None else abs(float(notional))
+        leg = legs.setdefault(leg_key(row.get("market"), row.get("token_id")),
+                              {"shares": 0.0, "gross_shares": 0.0, "gross_usd": 0.0})
+        leg["shares"] += qty if row.get("side") == "buy" else -qty
+        leg["gross_shares"] += abs(qty)
+        leg["gross_usd"] += gross_usd
+    for leg in legs.values():
+        open_qty = abs(leg["shares"])
+        if open_qty <= OPEN_EPS or leg["gross_shares"] <= 0:
+            leg["exposure_usd"] = 0.0
+        else:
+            leg["exposure_usd"] = open_qty * leg["gross_usd"] / leg["gross_shares"]
+    return legs
+
+
+def load_state(market: str, token_id: str = "") -> dict[str, Any]:
+    """Risk state for an intent on one leg (market + token_id).
+
+    open_positions counts open legs, not markets. leg_already_open is True only
+    when this exact token already has an open position; another leg of the same
+    market does not count. exposure_usd is the gross sum over open legs.
+    """
+    rows = read_jsonl(PAPER_PATH)
+    legs = leg_positions(rows)
     daily_fees = 0.0
     today = utc_now()[:10]
-    for row in read_jsonl(PAPER_PATH):
-        if row.get("hypothetical") or row.get("counts_toward_risk") is False:
-            continue
-        name = str(row.get("market") or "")
-        qty = float(row.get("shares") or 0.0)
-        signed = qty if row.get("side") == "buy" else -qty
-        shares[name] = shares.get(name, 0.0) + signed
-        if str(row.get("ts") or "").startswith(today):
+    for row in rows:
+        if _counts(row) and str(row.get("ts") or "").startswith(today):
             daily_fees += float(row.get("fee_usd") or 0.0)
+    own = legs.get(leg_key(market, token_id))
     return {
-        "open_positions": sum(1 for qty in shares.values() if abs(qty) > 1e-9),
-        "market_already_open": abs(shares.get(market, 0.0)) > 1e-9,
+        "open_positions": sum(1 for leg in legs.values() if abs(leg["shares"]) > OPEN_EPS),
+        "leg_already_open": own is not None and abs(own["shares"]) > OPEN_EPS,
+        "exposure_usd": sum(leg["exposure_usd"] for leg in legs.values()),
+        "leg_exposure_usd": 0.0 if own is None else own["exposure_usd"],
         "daily_loss_usd": daily_fees,
     }
 
 
 def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
     """Ask RiskGate. Append a paper fill only when the same call allows it."""
-    state = load_state(intent.market)
+    state = load_state(intent.market, intent.token_id)
     decision = evaluate(intent, cfg, state)
     summary = _decision_payload(intent, decision)
     if not decision.allow:

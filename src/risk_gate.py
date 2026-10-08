@@ -3,7 +3,8 @@
 Vetoes before any simulated fill. A missing, unparseable, future or stale
 book timestamp vetoes too (src/book_staleness.py, 120 s code default).
 max_open_positions and max_daily_loss apply to every intent, hypothetical ones
-included; a missing or invalid cap or state value vetoes.
+included; a missing or invalid cap or state value vetoes. Open positions are legs
+(market + token), so each filled leg of an arb pair takes its own slot.
 Does not place orders, sign messages, read secrets, or edit config/risk.toml.
 """
 from __future__ import annotations
@@ -137,6 +138,10 @@ def evaluate(
     no longer skips them. A missing or invalid cap (invalid_risk_cap) or state value
     (invalid_risk_state) vetoes instead of reading 0.
 
+    The position-cap exemption needs state["leg_already_open"] is True: this exact
+    token is already held. Another open leg of the same market (the other side of
+    an arb pair) does not exempt it; that is a new directional position (Task P).
+
     Size is the 1% clip. kelly_fraction is not applied and cannot increase size.
     A single-leg fill is directional exposure, not risk-free arbitrage.
     """
@@ -227,7 +232,7 @@ def evaluate(
         reasons.append("invalid_risk_state")
     if caps is not None and current is not None:
         open_positions, daily_loss = current
-        already_open = state.get("market_already_open") is True
+        already_open = state.get("leg_already_open") is True
         if open_positions >= caps["max_open_positions"] and not already_open:
             reasons.append("max_open_positions")
         if PAPER_EQUITY_USD <= 0 or daily_loss / PAPER_EQUITY_USD >= caps["max_daily_loss_pct"]:

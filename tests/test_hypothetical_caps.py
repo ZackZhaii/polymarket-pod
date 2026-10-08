@@ -71,9 +71,9 @@ def test_hypothetical_and_real_intents_get_the_same_cap_reasons(state_fn):
     assert set(real.reasons) & caps == set(hypo.reasons) & caps != set()
 
 
-def test_already_open_market_is_exempt_from_the_position_cap_for_both():
+def test_already_open_leg_is_exempt_from_the_position_cap_for_both():
     cfg = load_risk()
-    state = dict(_full_state(cfg), market_already_open=True)
+    state = dict(_full_state(cfg), leg_already_open=True)
     assert evaluate(_intent(), cfg, state).allow is True
     assert evaluate(_intent(strategy="task-m-real", hypothetical=False), cfg, state).allow is True
 

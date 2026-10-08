@@ -96,6 +96,15 @@
       "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 8. The threshold is a code constant; moving it into config/risk.toml is a proposal for the Operator.",
       "done_at": "2026-10-08T18:56:46Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "P",
+      "status": "done",
+      "title": "single-leg arb fill counts as directional exposure; positions net per leg, never per pair",
+      "finish": "src/paper_ledger.py nets paper fills per leg (market + token_id): only a buy and a sell of the same token offset each other, the two tokens of an arb pair never do, and a row without token_id is its own unknown leg. load_state(market, token_id) reports open_positions as open legs, leg_already_open for that exact token, and exposure_usd / leg_exposure_usd at each leg's average fill price (1 USD per share when notional is missing). risk_gate.evaluate exempts the max_open_positions cap only when state leg_already_open is True; another open leg of the same market does not exempt. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold is added.",
+      "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 5. Pure code; only tightens risk.",
+      "done_at": "2026-10-08T19:11:34Z",
+      "surface": "grok-bot"
     }
   ]
 }
