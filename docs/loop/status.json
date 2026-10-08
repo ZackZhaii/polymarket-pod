@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T19:11:34Z",
+  "ts": "2026-10-08T19:34:24Z",
   "live_enabled": false,
-  "last_done": "P",
+  "last_done": "Q",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "P (single-leg arb fill is directional exposure: positions net per leg, never per pair; cap exemption only for the same token) done by grok-bot in its PR. F-O done on dev. No open todo. No live gate."
+  "note": "Q (scanner reads V2 outcome IDs from positionIds; Gamma version selects the field; missing or unknown version rejects the market) done by grok-bot in its PR. F-P done on dev. No open todo. No live gate."
 }

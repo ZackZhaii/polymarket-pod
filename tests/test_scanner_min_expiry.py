@@ -32,6 +32,7 @@ def _market(market_id: str, end_date: object, volume: float = 1.0) -> dict:
         "endDate": end_date,
         "closed": False,
         "acceptingOrders": True,
+        "version": "v1",
     }
 
 

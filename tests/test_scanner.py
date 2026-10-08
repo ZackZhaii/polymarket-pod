@@ -33,6 +33,7 @@ def _passing(index: int, volume: float) -> dict:
         "endDate": "2026-12-31T00:00:00Z",
         "closed": False,
         "acceptingOrders": True,
+        "version": "v1",
     }
 
 
