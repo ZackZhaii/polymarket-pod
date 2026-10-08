@@ -123,6 +123,15 @@
       "note": "Assigned by Poly指挥; done by grok-bot. Doc/code conflicts 2 and 3 from the batch 2+3 skills PR. Only tightens: a future book is no longer fresh in paper_cycle.",
       "done_at": "2026-10-08T19:53:50Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "S",
+      "status": "done",
+      "title": "structured wash/self-trade detection beyond strategy-name keywords",
+      "finish": "src/wash_detect.py wash_problems is pure and offline; risk_gate.evaluate calls it on top of the BANNED_STRATEGY_TOKENS keyword ban (either fires = veto). On the same market and the same leg (market + token_id; a missing token_id is treated as possibly the same token): an uncancelled own paper quote (quotes.jsonl status open) on the opposite side vetoes cross_side_same_leg (no time window); an own paper fill on the opposite side within WASH_WINDOW_S = 300 s (future-stamped counts as inside) vetoes wash_same_market; Intent.counterparty naming our own account, pod role (Maker/Executor) or one of our strategies vetoes self_trade_structure. Fail closed: missing recent_fills/own_quotes vetoes wash_input_missing; malformed history, unknown quote status, bad now/market or an unusable counterparty vetoes wash_input_invalid. paper_ledger.load_state supplies recent_fills and own_quotes. The two tokens of an arb pair are not flagged. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Assigned by Poly指挥; done by grok-bot. Risk-gap backlog item 1. WASH_WINDOW_S = 300 s is a new code constant, not a risk.toml key; flagged for Operator review. Only tightens: no existing check is loosened.",
+      "done_at": "2026-10-08T20:13:15Z",
+      "surface": "grok-bot"
     }
   ]
 }

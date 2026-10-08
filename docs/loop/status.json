@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T19:53:50Z",
+  "ts": "2026-10-08T20:13:15Z",
   "live_enabled": false,
-  "last_done": "R",
+  "last_done": "S",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "R (paper_cycle judges book age with book_staleness like RiskGate; book.record puts the book own /book timestamp on the bus as book_ts, null plus reason when missing) done by grok-bot in its PR. F-Q done on dev. No open todo. No live gate."
+  "note": "S (structured wash/self-trade detection on top of the strategy-name keyword ban: own uncancelled opposite quote on the same leg vetoes cross_side_same_leg, own counterparty vetoes self_trade_structure, own opposite fill within WASH_WINDOW_S=300 s vetoes wash_same_market; missing or malformed history vetoes) done by grok-bot in its PR. F-R done on dev. WASH_WINDOW_S awaits Operator review. No open todo. No live gate."
 }

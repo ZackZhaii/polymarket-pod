@@ -5,6 +5,9 @@ book timestamp vetoes too (src/book_staleness.py, 120 s code default).
 max_open_positions and max_daily_loss apply to every intent, hypothetical ones
 included; a missing or invalid cap or state value vetoes. Open positions are legs
 (market + token), so each filled leg of an arb pair takes its own slot.
+Wash / self-trade: the strategy-name keyword ban stays, and src/wash_detect.py adds
+structured checks on top (opposite resting quote or recent opposite fill on the same leg,
+own counterparty). Either firing vetoes; missing or invalid history vetoes too.
 Does not place orders, sign messages, read secrets, or edit config/risk.toml.
 """
 from __future__ import annotations
@@ -14,6 +17,7 @@ from dataclasses import dataclass
 
 from src.book_staleness import MAX_BOOK_AGE_S, book_age_problem
 from src.podlib import PAPER_EQUITY_USD, pin_problems
+from src.wash_detect import wash_problems
 
 BANNED_STRATEGY_TOKENS = ("wash", "self-trade", "self_trade", "spoof", "layering")
 EDGE_FORMULA_BUY = "model_prob - (market_price + assumed_slippage) - fee_rate * market_price"
@@ -36,6 +40,9 @@ class Intent:
     note: str = ""
     # UTC time of the order book snapshot behind market_price/spread. Missing means veto.
     book_ts: str | float | None = None
+    # Who is on the other side of the fill (counterparty or maker), when known. Paper fills
+    # against the public book have none (None). Our own account/role/strategy means veto.
+    counterparty: str | None = None
 
 
 @dataclass
@@ -142,6 +149,13 @@ def evaluate(
     token is already held. Another open leg of the same market (the other side of
     an arb pair) does not exempt it; that is a new directional position (Task P).
 
+    Wash / self-trade (Task S): besides the keyword ban, state must carry the paper
+    history ``recent_fills`` and ``own_quotes`` (paper_ledger.load_state does). An
+    uncancelled own quote on the opposite side of the same leg (cross_side_same_leg), an
+    own counterparty (self_trade_structure) or an opposite fill on the same leg within
+    WASH_WINDOW_S (wash_same_market) vetoes. Missing history is wash_input_missing,
+    malformed history wash_input_invalid; both veto.
+
     Size is the 1% clip. kelly_fraction is not applied and cannot increase size.
     A single-leg fill is directional exposure, not risk-free arbitrage.
     """
@@ -153,6 +167,18 @@ def evaluate(
     strategy = intent.strategy.lower()
     if any(token in strategy for token in BANNED_STRATEGY_TOKENS):
         reasons.append("banned_behavior")
+    # Structured check on top of the keyword ban (Task S). A clean name does not exempt.
+    reasons.extend(
+        wash_problems(
+            market=intent.market,
+            token_id=intent.token_id,
+            side=intent.side,
+            strategy=intent.strategy,
+            counterparty=intent.counterparty,
+            state=state,
+            now=now,
+        )
+    )
     if intent.hypothetical and intent.strategy != "phase0-gate-test":
         reasons.append("hypothetical_strategy_not_allowed")
     if intent.side not in {"buy", "sell"}:
