@@ -7,7 +7,7 @@ import pytest
 
 import src.gaps as gaps
 import src.risk_gate as risk_gate
-from src.podlib import RISK_PATH, load_risk
+from src.podlib import RISK_PATH, load_risk, utc_now
 from src.risk_gate import Intent, evaluate, gate_thresholds
 
 STATE = {"open_positions": 0, "market_already_open": False, "daily_loss_usd": 0.0}
@@ -25,6 +25,7 @@ def _intent(**overrides: object) -> Intent:
         "liquidity_usd": 20000.0,
         "spread": 0.01,
         "hypothetical": False,
+        "book_ts": utc_now(),
     }
     fields.update(overrides)
     return Intent(**fields)  # type: ignore[arg-type]

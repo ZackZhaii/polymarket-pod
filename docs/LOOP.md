@@ -150,6 +150,24 @@ Finish when `public_get` retries transient network/TLS failures, the scanner rep
 - Exit codes are unchanged: 3 now also covers a page that still fails after retries. Codes 1-3 write nothing.
 - Tests mock `urlopen` and patch `podlib._sleep`, so they never touch the network or sleep. Do not edit `config/risk.toml`.
 
+## Task L — order book staleness check; RiskGate vetoes a missing or stale book
+
+Status: done.
+
+Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 2: `risk_gate.py` never looked at the book timestamp.
+120 s is Sentinel's proposal (backlog item 9).
+
+Finish when a pure, offline helper flags a missing, unparseable, future or old book timestamp, RiskGate vetoes on it fail closed,
+and `python -m pytest` passes with no network and no credentials.
+
+- `src/book_staleness.py`: `book_age_problem(book_ts, now, max_age_s)` returns `None` when `0 <= age <= max_age_s`, else
+  `missing_book_ts`, `invalid_book_ts`, `future_book_ts` or `stale_book`. A bad `max_age_s` or `now` returns a reason too.
+- Accepted: ISO 8601 with a time and a zone (`Z` or offset), an aware datetime, or finite epoch seconds. Naive, date-only,
+  numeric text, bool, nan and inf are invalid, not guessed.
+- `Intent.book_ts` is new. `evaluate(..., now=None, max_book_age_s=MAX_BOOK_AGE_S)` adds the reason and never allows on it.
+- `MAX_BOOK_AGE_S = 120` is a code constant. It is not read from `config/risk.toml`; moving it there is a proposal for the Operator.
+- `paper_ledger` passes `book_ts` through (self-check stamps now; CLI `--book-ts`, missing vetoes). Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -161,8 +179,8 @@ git pull 之后只领取第一件 todo。做完释放，开 PR，不要推 main�
 
 ## Latest
 
-- 2026-10-08: Task K done by grok-bot (self-picked). `podlib.public_get` retries URLError, SSL EOF / ssl.SSLError, resets, timeouts and HTTP 5xx 3 times (0.5 s, 1 s backoff); never HTTP 4xx.
-- If every attempt fails, `PublicGetError` is raised and the scanner exits 3 (`stop=network_error`, paging incomplete) and writes nothing, instead of crashing with exit 1.
-- Task J (risk_gate fails closed) merged via PR #3; I (public scanner exit 0, scanned=15360 passed=8659) and J stay done. Signals only; no order and no credentials.
-- `python -m pytest` passed offline (100 passed; urlopen mocked, no sleeps). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task L done by grok-bot (self-picked, backlog item 2). `src/book_staleness.py` flags a missing, unparseable, future or >120 s old book timestamp.
+- RiskGate wires it in fail closed: `Intent.book_ts` missing or bad vetoes with `missing_book_ts` / `invalid_book_ts` / `future_book_ts` / `stale_book`. 120 s is a code constant, not a risk.toml key.
+- Task K accepted on main 663ba8a: public scanner hit SSL EOF after retries at scanned=5200 and exited 3 (`stop=network_error`), nothing written, no crash.
+- `python -m pytest` passed offline (151 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.

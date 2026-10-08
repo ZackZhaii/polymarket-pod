@@ -84,6 +84,7 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
         "shares": round(decision.shares, 8),
         "spread": intent.spread,
         "liquidity_usd": intent.liquidity_usd,
+        "book_ts": intent.book_ts,
         "hypothetical": intent.hypothetical,
         "counts_toward_risk": not intent.hypothetical,
         "risk_decision": "allow",
@@ -125,6 +126,8 @@ def _intent(**kwargs: Any) -> Intent:
         "token_id": "",
         "hypothetical": True,
         "note": "Gate test only. Not a forecast and not a claim of edge.",
+        # Synthetic gate-test touch, stamped now so only the check under test can veto.
+        "book_ts": utc_now(),
     }
     defaults.update(kwargs)
     return Intent(**defaults)
@@ -231,6 +234,7 @@ def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
             spread=float(book["spread"]),
             token_id=str(book.get("token_id") or ""),
             hypothetical=False,
+            book_ts=book.get("ts"),
             note="Public ask used as both model and price. Must not fill. Not a forecast.",
         ),
         cfg,
@@ -251,6 +255,7 @@ def run_cli_intent(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, A
         spread=args.spread,
         token_id=args.token_id or "",
         hypothetical=False,
+        book_ts=args.book_ts,
         note=args.note or "Operator paper intent. Not a promise of profit.",
     )
     return commit_if_allowed(intent, cfg)
@@ -268,6 +273,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--liquidity", type=float, default=None)
     parser.add_argument("--spread", type=float, default=None)
     parser.add_argument("--token-id", default="")
+    parser.add_argument(
+        "--book-ts",
+        default=None,
+        help="UTC ISO time of the book snapshot, e.g. 2026-10-09T01:00:00Z. Missing or older than 120 s vetoes.",
+    )
     parser.add_argument("--note", default="")
     parser.add_argument(
         "--self-check",
