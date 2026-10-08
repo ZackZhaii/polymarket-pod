@@ -114,6 +114,15 @@
       "note": "Queued by Poly指挥; done by grok-bot. Not a risk-gap backlog item. Rule follows docs.polymarket.com (Polymarket Protocol V2 migration: choose the ID field by version, even when both fields are present; reject missing or unsupported versions). Poly指挥 spec: fail closed on missing or unrecognized version.",
       "done_at": "2026-10-08T19:34:24Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "R",
+      "status": "done",
+      "title": "book timestamps read one way: paper_cycle judges book age with book_staleness; book.record puts the book's own book_ts on the bus",
+      "finish": "src/paper_cycle.py drops _age_seconds; _book_problem calls book_staleness.book_age_problem, so fresh means 0 <= age <= 120 s (exactly 120 s fresh, 121 s stale) and a future, missing or unparseable ts, an unparseable now (no wall-clock fallback) or a broken limit counts as stale; the stale signal adds stale_reasons. src/book.py book_timestamp normalises the /book timestamp (Unix ms string or non-negative int, or aware ISO) to ISO 8601 UTC; snapshot rows and the book.record bus payload carry book_ts and book_ts_problem, never the recorder clock. With no usable timestamp book_ts is null with missing_book_ts or invalid_book_ts, and RiskGate vetoes it. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold changes.",
+      "note": "Assigned by Poly指挥; done by grok-bot. Doc/code conflicts 2 and 3 from the batch 2+3 skills PR. Only tightens: a future book is no longer fresh in paper_cycle.",
+      "done_at": "2026-10-08T19:53:50Z",
+      "surface": "grok-bot"
     }
   ]
 }

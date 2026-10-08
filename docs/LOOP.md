@@ -256,6 +256,27 @@ no network and no credentials.
 - Valid version but missing or malformed IDs, non-decimal V2 IDs, or an ID count that does not match `outcomes`: `token_ids`
   stays empty with a `token_ids_problem` (not a rejection, as before); no book is fetched downstream. Exit codes unchanged.
 
+## Task R — book timestamps read one way: paper_cycle uses book_staleness; book.record puts the book's own book_ts on the bus
+
+Status: done.
+
+Assigned by Poly指挥, done by grok-bot. `paper_cycle._age_seconds` had its own strict `%Y-%m-%dT%H:%M:%SZ` parser and
+counted a future book as fresh, while RiskGate (`src/book_staleness.py`) read offsets, fractions and epoch seconds and
+vetoed a future book. `book.record` never put a book timestamp on the bus.
+
+Finish when both read book time the same way and `python -m pytest` passes with no network and no credentials.
+
+- `src/paper_cycle.py`: `_age_seconds` is gone. `_book_problem(ts, now, stale_after_s)` calls `book_age_problem`, so
+  fresh means `0 <= age <= 120` (exactly 120 s is fresh, 121 s stale). Future, missing or unparseable `ts`, an
+  unparseable `now` (no wall-clock fallback) and a broken limit all count as stale. The stale signal adds `stale_reasons`.
+  `STALE_AFTER_S` stays 120. No threshold changes and no risk.toml edit.
+- `src/book.py`: `book_timestamp(raw)` reads the /book `timestamp` (Unix milliseconds as a string, per docs.polymarket.com;
+  a non-negative int the same) or an aware ISO string, and returns ISO 8601 UTC with milliseconds and `Z`. Floats, signs,
+  decimals, bools and naive times are `invalid_book_ts`; absent or blank is `missing_book_ts`.
+- `book.snapshot` rows and the `book.record` bus payload carry `book_ts` and `book_ts_problem`. The recorder clock stays in
+  `ts` and is never copied into `book_ts`. No usable timestamp: the snapshot is still recorded with `book_ts=null`, the
+  reason and a stderr line, and RiskGate vetoes `missing_book_ts` on it (fail closed).
+
 ## Paste this into a new chat
 
 ```text
@@ -267,8 +288,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task Q done by grok-bot (queued by Poly指挥). The scanner picks outcome IDs by Gamma's `version`. Task P (per-leg exposure) is on dev.
-- `v2` -> `positionIds`, `v1` -> `clobTokenIds`, even when both differ. Missing version -> `missing_version`, anything else -> `unsupported_version` (rejected).
-- Valid version but missing, malformed, non-decimal V2 or count-mismatched IDs leave `token_ids` empty, so no book is fetched (fail closed).
-- `python -m pytest` passed offline (337 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task R done by grok-bot (assigned by Poly指挥). `paper_cycle` judges book age with `book_staleness`, like RiskGate.
+- Future, missing or unparseable book `ts` is now stale in `paper_cycle` (a future book used to count as fresh). Exactly 120 s is fresh.
+- `book.record` puts the book's own /book `timestamp` on the bus as `book_ts` (ISO UTC). None usable: `book_ts=null` + reason; RiskGate vetoes.
+- `python -m pytest` passed offline (397 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.
