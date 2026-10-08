@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T21:05:01Z",
+  "ts": "2026-10-08T21:08:47Z",
   "live_enabled": false,
-  "last_done": "AA",
+  "last_done": "AB",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AA (Sentinel StaleWatch wired into paper_cycle, backlog #15: streak in logs/sentinel_stale.json, atomic write, any state problem counts as stale) done by grok-bot. F-Z done on dev. Task letters after Z are AA, AB, AC. SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, MIN_EDGE and WASH_WINDOW_S await the user's decision at M2. No open todo. No live gate."
+  "note": "AA (Sentinel StaleWatch wired into paper_cycle, backlog #15: streak in logs/sentinel_stale.json, atomic write, any state problem counts as stale) and AB (paper_session uses scanner.scan and judges book age from the CLOB book_ts at a clock read after the books, backlog #16, from astra's review) done by grok-bot. F-Z done on dev. Task letters after Z are AA, AB, AC. SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, MIN_EDGE and WASH_WINDOW_S await the user's decision at M2. No open todo. No live gate."
 }

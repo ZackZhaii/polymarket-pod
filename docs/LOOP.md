@@ -485,6 +485,36 @@ Finish when two consecutive stale `paper_cycle` runs halt that market's paper qu
   missing or future `book_ts`, pin drift touches no state).
 - Do not edit `config/risk.toml`.
 
+## Task AB — paper_session uses the current scanner path; book age from the CLOB timestamp at an evaluation clock (backlog #16)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. astra's review found that `paper_session` still used the legacy single unfiltered
+Gamma page (`fetch_markets` + `visible_rows`: no version, non-finite, expiry, spread or liquidity rules) and judged book age
+at the session start stamp, taken in whole seconds before any book was read, so a fresh book aged about 0 s or looked future.
+
+Finish when the session only persists and books markets that pass the scanner, every scanner fail-closed exit writes nothing,
+book age comes from the CLOB `book_ts` at a clock read after the books, `risk.toml` is unchanged, and `python -m pytest`
+passes with no network and no credentials.
+
+- `src/paper_session.py` calls `scanner.scan` with `scanner.thresholds_from(cfg)`: keyset paging with the
+  `liquidity_num_min` pre-filter, version-aware outcome IDs (`positionIds` for v2), `non_finite_*`, expiry, spread,
+  liquidity and long-tail rules. Only passing rows go to `data/markets.jsonl` (bus signals for the top `BUS_TOP_N`).
+- Fail closed, nothing written: a bad threshold (`invalid_scanner_threshold`, before any read), a failed read
+  (`public_read_failed`), incomplete paging (`markets_incomplete`), fewer than 5 scanned (`too_few_markets`, the scanner's
+  own floor) or nothing passing (`no_markets`).
+- Books: the first `book_limit` (5) passing markets that have outcome IDs; `book.record` keeps the recorder `ts` and the
+  CLOB `book_ts` apart as before.
+- `paper_cycle` gets `now` from `clock()` (default `eval_clock()`, UTC with milliseconds), read once after the books are
+  recorded. The session stamp still stamps rows. Missing, unparseable or future `book_ts`, or a broken clock, stay stale;
+  exactly 120 s is fresh. The result and `logs/sessions.jsonl` add `scanned` and `evaluated_at`.
+- A local clock running behind the exchange makes fresh books look future and therefore stale (fail closed, no tolerance added).
+- Tests: `tests/test_paper_session_scanner_path.py` (scanner rejections never persisted or booked, NaN/inf fields, v2
+  `positionIds`, unknown version, too few, incomplete paging, the liquidity pre-filter, bad thresholds, clock read after the
+  books, 120 s boundary, stale, missing, future and unparseable stamps, broken clock). `tests/test_paper_session.py`
+  keeps every assertion; its fixture adds four scanner-rejected markets for the 5-market floor and a clock.
+- Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -496,8 +526,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task AA done by grok-bot (approved by Poly指挥, backlog #15). `paper_cycle` now feeds Sentinel's `StaleWatch` once per booked market per run.
-- The streak lives in `logs/sentinel_stale.json` (atomic temp file + replace); 2 stale runs in a row halt that market's paper quotes only.
-- An unreadable, corrupt, malformed or vanished state file, or a failed save, counts as a stale check (fail closed); a first run starts at 0.
-- `python -m pytest` passed offline (752 passed; on Windows 748 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. Task letters after Z are AA, AB, AC, … The M2 threshold list is unchanged (no new threshold).
+- 2026-10-09: Tasks AA and AB done by grok-bot (approved by Poly指挥). AA (backlog #15): `paper_cycle` feeds Sentinel's `StaleWatch`; the streak lives in `logs/sentinel_stale.json` (atomic write) and 2 stale runs in a row halt that market's paper quotes.
+- AA: an unreadable, corrupt, malformed or vanished state file, or a failed save, counts as stale (fail closed). Task letters after Z are AA, AB, AC, …
+- AB (backlog #16, astra's review): `paper_session` uses `scanner.scan`; only passing markets are persisted and booked; bad thresholds, incomplete paging or fewer than 5 scanned write nothing.
+- AB: book age comes from the CLOB `book_ts` at a millisecond clock read after the books; missing, unparseable or future stamps stay stale. `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- `python -m pytest` passed offline (783 passed; on Windows 779 passed, 4 symlink tests skipped). Queue empty. No new threshold; the M2 list is unchanged.
