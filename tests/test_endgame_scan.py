@@ -28,10 +28,17 @@ BANNED = ("/order", "/auth", "api-key", "secret", "signature", "withdraw", "priv
 
 
 def _band(index: int, bid: object = 0.98, ask: object = 0.99, **extra: object) -> dict:
+    # Task AD: realistic Gamma rows carry both outcome prices and both token ids. The second
+    # outcome's price mirrors the first-outcome mid, so it sits far below the band.
+    numeric = all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (bid, ask))
+    first = round((bid + ask) / 2, 6) if numeric else 0.985
     row = {
         "id": f"eg{index}", "slug": f"eg{index}", "question": f"Endgame market {index}",
         "liquidityNum": 20000, "volume24hr": 100 + index, "bestBid": bid, "bestAsk": ask,
         "spread": 0.01, "endDate": IN_36H, "closed": False, "acceptingOrders": True, "version": "v1",
+        "outcomes": '["Yes", "No"]',
+        "outcomePrices": f'["{first}", "{round(1 - first, 6)}"]',
+        "clobTokenIds": f'["{index}01", "{index}02"]',
     }
     row.update(extra)
     return row

@@ -222,6 +222,15 @@
       "note": "Approved by Poly指挥 (task 3, threshold module); done by grok-bot. Refactor only: no value or behaviour changes. M2 pending list unchanged.",
       "done_at": "2026-10-08T21:18:32Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AD",
+      "status": "done",
+      "title": "endgame_scan also selects a market when its second outcome is in the Endgame band (backlog #18)",
+      "finish": "endgame_scan selects a market when exactly one of its two outcomes is inside ENDGAME_PRICE_MIN..ENDGAME_PRICE_MAX (src/thresholds.py, inclusive; no new numbers). Outcome 0 is scanner.yes_price, outcome 1 is Gamma outcomePrices[1]; both are needed (missing -> missing_price, non-finite -> non_finite_price / non_finite_outcome_prices). Both in the band -> both_outcomes_in_band; one in the band and the other above it -> other_outcome_above_band. The selected outcome needs its own token id (version-aware), else the scanner's token problem name. Signals to RiskGate name outcome_index, outcome and token_id. Same scanner rules, 24-48 h window, MIN_SCANNED_MARKETS and exit codes. COORDINATION #18 struck through. pytest passes offline. No network and no credentials. config/risk.toml unchanged.",
+      "note": "Approved by Poly指挥 (Endgame second outcome); done by grok-bot. Tightening only: no new thresholds, M2 pending list unchanged.",
+      "done_at": "2026-10-08T21:24:17Z",
+      "surface": "grok-bot"
     }
   ]
 }
