@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T20:36:23Z",
+  "ts": "2026-10-08T20:46:44Z",
   "live_enabled": false,
-  "last_done": "X",
+  "last_done": "Y",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "X (RiskGate minimum edge, backlog #6: MIN_EDGE = 0.02 code constant, inclusive; 0 < edge < 0.02 vetoes edge_below_min, non_positive_edge kept, non-finite inputs fail closed) done by grok-bot in its PR. F-V done on dev. MIN_EDGE and WASH_WINDOW_S (S) await the user's decision at M2. No open todo. No live gate."
+  "note": "Y (scanner rejects any parsed NaN or +/-inf as non_finite_<field>: bid, ask, spread, liquidity, volume, 24h volume, outcome prices, price; ranked after structural reasons, before the filters; exit codes and output format unchanged) done by grok-bot in its PR. F-X done on dev; W (Endgame scan) in PR #25. MIN_EDGE and WASH_WINDOW_S await the user's decision at M2. No open todo. No live gate."
 }

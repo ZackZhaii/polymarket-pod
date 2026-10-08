@@ -7,6 +7,9 @@ Outcome IDs come from positionIds for V2 markets and clobTokenIds for V1, chosen
 by Gamma's `version` (select_token_ids); a missing or unknown version rejects the market.
 A market needs a zoned end date at least MIN_HOURS_TO_EXPIRY (24 h, a code
 constant in src/expiry_rule.py) away; otherwise it fails closed.
+Any parsed number that is NaN or +/-inf (Gamma text such as "NaN" or "-Infinity")
+rejects the market as non_finite_<field> (Task Y); comparisons with NaN are always
+False, so without this a NaN spread, liquidity or bid/ask slipped through.
 """
 from __future__ import annotations
 
@@ -65,6 +68,21 @@ EXIT_TOO_FEW_SCANNED = 1
 EXIT_NONE_PASSED = 2
 EXIT_INCOMPLETE = 3
 
+# Task Y: a NaN or +/-inf in any parsed number rejects the market. Ranked after the
+# structural reasons (closed, version, expiry, accepting orders) and before the ordinary
+# bid/ask, liquidity, spread and price filters, which cannot judge a non-finite value.
+NON_FINITE_FIELDS = (
+    ("best_bid", "non_finite_best_bid"),
+    ("best_ask", "non_finite_best_ask"),
+    ("spread", "non_finite_spread"),
+    ("liquidity_usd", "non_finite_liquidity_usd"),
+    ("volume_usd", "non_finite_volume_usd"),
+    ("volume_24h_usd", "non_finite_volume_24h_usd"),
+    ("outcome_prices", "non_finite_outcome_prices"),
+    ("price", "non_finite_price"),
+)
+NON_FINITE_REASONS = tuple(reason for _, reason in NON_FINITE_FIELDS)
+
 # Order matters: the first entry that fails is the market's "first" reason.
 REASONS = (
     "closed",
@@ -77,6 +95,7 @@ REASONS = (
     "invalid_min_hours_to_expiry",
     "invalid_now",
     "not_accepting_orders",
+    *NON_FINITE_REASONS,
     "missing_bid_ask",
     "low_liquidity",
     "wide_spread",
@@ -246,7 +265,9 @@ def yes_price(market: dict[str, Any]) -> tuple[float | None, str]:
     if bid is not None and ask is not None and 0 < bid <= ask < 1:
         return (bid + ask) / 2.0, "mid"
     last = as_float(market.get("lastTradePrice"))
-    if last is not None and last > 0:
+    # A non-finite last trade is returned as-is so the row fails non_finite_price (Task Y)
+    # instead of silently falling through to outcomePrices.
+    if last is not None and (last > 0 or not math.isfinite(last)):
         return last, "last_trade"
     prices = json_list(market.get("outcomePrices"))
     first = as_float(prices[0]) if prices else None
@@ -361,6 +382,24 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
     }
 
 
+def _non_finite(value: Any) -> bool:
+    return isinstance(value, float) and not math.isfinite(value)
+
+
+def non_finite_reasons(row: dict[str, Any]) -> list[str]:
+    """non_finite_<field> for every parsed number in a normalized row that is NaN or +/-inf."""
+    reasons = []
+    for key, reason in NON_FINITE_FIELDS:
+        value = row.get(key)
+        if key == "outcome_prices":
+            bad = isinstance(value, list) and any(_non_finite(item) for item in value)
+        else:
+            bad = _non_finite(value)
+        if bad:
+            reasons.append(reason)
+    return reasons
+
+
 def rejection_reasons(
     row: dict[str, Any],
     limits: dict[str, float],
@@ -382,6 +421,7 @@ def rejection_reasons(
         reasons.append(expiry)
     if row["accepting_orders"] is False:
         reasons.append("not_accepting_orders")
+    reasons.extend(non_finite_reasons(row))
     bid, ask = row["best_bid"], row["best_ask"]
     # Gamma reports a one-sided book as bestBid 0 or bestAsk 1; treat that as missing.
     if bid is None or ask is None or bid <= 0 or ask >= 1:

@@ -168,6 +168,15 @@
       "note": "Approved by Poly指挥 (backlog #6); done by grok-bot. Pure tightening. MIN_EDGE 0.02 awaits the user's decision at M2 (like MIN_HOURS_TO_EXPIRY and WASH_WINDOW_S).",
       "done_at": "2026-10-08T20:36:23Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "Y",
+      "status": "done",
+      "title": "Scanner rejects any non-finite parsed number (NaN, +inf, -inf) as non_finite_<field>",
+      "finish": "src/scanner.py rejection_reasons rejects a market whose parsed best_bid, best_ask, spread, liquidity_usd, volume_usd, volume_24h_usd, price or any outcomePrices element is NaN or +/-inf (Gamma text such as \"NaN\", \"nan\", \"inf\", \"-Infinity\", or a float NaN) with non_finite_<field>. The non_finite_* reasons rank after the structural reasons (closed ... not_accepting_orders) and before missing_bid_ask, low_liquidity, wide_spread, missing_price and long_tail_price. A non-finite lastTradePrice gives non_finite_price instead of falling through to outcomePrices. Exit codes, the summary line format and the markets.jsonl row keys are unchanged; only the new reasons appear. Offline tests per field with 'NaN', 'nan', 'inf', '-Infinity' and float('nan'). endgame_scan (PR #25) gets the same names through scanner.rejection_reasons. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold changes.",
+      "note": "Approved by Poly指挥 (after X, before backlog #9); done by grok-bot. Pure tightening: every market rejected before is still rejected; finite markets get the same reasons as before.",
+      "done_at": "2026-10-08T20:46:44Z",
+      "surface": "grok-bot"
     }
   ]
 }
