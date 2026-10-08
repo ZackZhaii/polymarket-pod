@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T20:20:07Z",
+  "ts": "2026-10-08T20:25:02Z",
   "live_enabled": false,
-  "last_done": "T",
+  "last_done": "U",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "T (Task R follow-ups: paper_cycle and realistic_no_edge judge book age by the exchange book_ts, never the recorder ts; stale markets emit no gap signal, the stale signal is the skip record; latest rows chosen by parsed time, unparseable rows skipped and recorded) done by grok-bot in its PR. F-S done on dev. WASH_WINDOW_S (S) awaits the user's decision. No open todo. No live gate."
+  "note": "U (non-finite numbers veto: NaN/inf RiskGate inputs veto non_finite_<field>, fee_rate=NaN can no longer skip the edge check; bad max_order_pct vetoes; non-finite ledger shares/notional/fee make the risk state invalid; maker and sports_devig reject non-finite inputs) done by grok-bot in its PR. F-T done on dev. Endgame #10 waits for a free slot. WASH_WINDOW_S (S) awaits the user's decision. No open todo. No live gate."
 }

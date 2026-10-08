@@ -9,6 +9,7 @@ offset each other (backlog item 5, Task P).
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,34 @@ def leg_key(market: object, token_id: object) -> tuple[str, str]:
     return (str(market or ""), str(token_id or ""))
 
 
+LEDGER_NUMBER_FIELDS = ("shares", "notional_usd", "fee_usd")
+
+
+def non_finite_ledger_rows(rows: list[dict[str, Any]]) -> list[int]:
+    """Task U: indexes of counted rows whose shares / notional_usd / fee_usd is NaN, inf or garbage.
+
+    A NaN share count makes abs(net) > OPEN_EPS False, which would hide an open leg,
+    and a NaN fee poisons the daily total. Absent (None) values keep their old meaning.
+    """
+    bad: list[int] = []
+    for index, row in enumerate(rows):
+        if not _counts(row):
+            continue
+        for field in LEDGER_NUMBER_FIELDS:
+            value = row.get(field)
+            if value is None:
+                continue
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                bad.append(index)
+                break
+            if not math.isfinite(number):
+                bad.append(index)
+                break
+    return bad
+
+
 def leg_positions(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, float]]:
     """Net shares per leg, plus exposure at the leg's average fill price.
 
@@ -93,6 +122,19 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     history RiskGate's structured wash / self-trade check reads (Task S).
     """
     rows = read_jsonl(PAPER_PATH)
+    bad_rows = non_finite_ledger_rows(rows)
+    if bad_rows:
+        # Fail closed (Task U): RiskGate vetoes invalid_risk_state; nothing is netted.
+        return {
+            "open_positions": None,
+            "leg_already_open": False,
+            "exposure_usd": None,
+            "leg_exposure_usd": None,
+            "daily_loss_usd": None,
+            "non_finite_ledger_rows": bad_rows,
+            "recent_fills": rows,
+            "own_quotes": read_jsonl(QUOTES_PATH),
+        }
     legs = leg_positions(rows)
     daily_fees = 0.0
     today = utc_now()[:10]
