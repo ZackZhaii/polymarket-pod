@@ -96,6 +96,20 @@ Finish when `src/sports_devig.py` removes the overround from a two-way decimal-o
 - A positive edge is not locked profit. One leg is directional.
 - No network. Do not edit `config/risk.toml`.
 
+## Task J — risk_gate fails closed on missing thresholds
+
+Status: done.
+
+Risk-gap backlog item 11. Letter I is left for the scanner pull request (PR #2) so the two branches do not collide.
+
+Finish when `src/risk_gate.py` has no default for `min_liquidity_usd` or `max_spread`, a bad threshold can only veto, and `python -m pytest` passes with no network and no credentials.
+
+- `gate_thresholds(cfg)` accepts only a finite int or float, like the scanner thresholds. A missing key, bool, string, None, inf or nan raises `RuntimeError`.
+- `min_liquidity_usd < 0` or `max_spread <= 0` also raises. There is no looser default.
+- `evaluate` turns that error into the `invalid_gate_threshold` veto. It never raises for this and never allows.
+- A present but nan, inf or bool intent liquidity or spread vetoes with `invalid_liquidity` or `invalid_spread`.
+- Do not edit `config/risk.toml`. Parameter ideas go into the pull request text as a proposal only.
+
 ## Paste this into a new chat
 
 ```text
@@ -107,8 +121,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: Task H done by grok-web. SportsDevig de-vigs two-way odds and emits a signal only.
-- No fill, no quote, no order, no network. Edge is not locked profit.
-- `python -m pytest` passed offline. `config/risk.toml` unchanged, `live_enabled=false`.
-- No todo remains. Do not add a live-trading task.
-- Next code task starts only when a human adds one here and in `docs/loop/state.json`.
+- 2026-10-08: Task J done by grok-bot. `risk_gate.evaluate` no longer defaults missing thresholds to 0 / 1.
+- Missing, bool, string, None, inf or nan `min_liquidity_usd` / `max_spread` veto with `invalid_gate_threshold`. Never allow.
+- nan, inf or bool intent liquidity or spread vetoes too. Other reasons and the 1% clip are unchanged.
+- `python -m pytest` passed offline (57 passed). `config/risk.toml` unchanged, `live_enabled=false`.
+- No todo remains on this branch. Next code task starts only when a human adds one here and in `docs/loop/state.json`.

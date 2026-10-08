@@ -5,6 +5,7 @@ read secrets, or edit config/risk.toml.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from src.podlib import PAPER_EQUITY_USD, pin_problems
@@ -44,6 +45,38 @@ class Decision:
     formula: str
 
 
+def _finite_number(value: object) -> float | None:
+    """Accept only a finite int or float. Bools, strings, nan, and inf are rejected."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def gate_thresholds(cfg: dict) -> dict[str, float]:
+    """Return min_liquidity_usd and max_spread, or raise RuntimeError naming the key.
+
+    Fails closed like the scanner thresholds: a missing key, a bool, a string,
+    None, inf or nan raises. There is no default. evaluate turns the error into
+    the invalid_gate_threshold veto, so a bad config can never allow.
+    """
+    checked: dict[str, float] = {}
+    for key in ("min_liquidity_usd", "max_spread"):
+        if key not in cfg:
+            raise RuntimeError(f"risk.toml missing gate key: {key}")
+        number = _finite_number(cfg[key])
+        if number is None:
+            raise RuntimeError(f"risk.toml gate key must be a finite number: {key}")
+        checked[key] = number
+    if checked["min_liquidity_usd"] < 0:
+        raise RuntimeError("risk.toml gate key out of range: min_liquidity_usd must be >= 0")
+    if checked["max_spread"] <= 0:
+        raise RuntimeError("risk.toml gate key out of range: max_spread must be > 0")
+    return checked
+
+
 def evaluate(intent: Intent, cfg: dict, state: dict) -> Decision:
     """Return allow only when every Phase 0 check passes.
 
@@ -69,18 +102,28 @@ def evaluate(intent: Intent, cfg: dict, state: dict) -> Decision:
     if intent.assumed_slippage < 0 or intent.fee_rate < 0:
         reasons.append("negative_cost_assumption")
 
-    min_liquidity = float(cfg.get("min_liquidity_usd", 0))
+    try:
+        thresholds = gate_thresholds(cfg)
+    except RuntimeError:
+        reasons.append("invalid_gate_threshold")
+        thresholds = None
+
+    liquidity = None if intent.liquidity_usd is None else _finite_number(intent.liquidity_usd)
     if intent.liquidity_usd is None:
         reasons.append("missing_liquidity")
-    elif intent.liquidity_usd < min_liquidity:
+    elif liquidity is None:
+        reasons.append("invalid_liquidity")
+    elif thresholds is not None and liquidity < thresholds["min_liquidity_usd"]:
         reasons.append("liquidity_below_min")
 
-    max_spread = float(cfg.get("max_spread", 1))
+    spread = None if intent.spread is None else _finite_number(intent.spread)
     if intent.spread is None:
         reasons.append("missing_spread")
-    elif intent.spread < 0:
+    elif spread is None:
+        reasons.append("invalid_spread")
+    elif spread < 0:
         reasons.append("negative_spread")
-    elif intent.spread > max_spread:
+    elif thresholds is not None and spread > thresholds["max_spread"]:
         reasons.append("spread_above_max")
 
     if intent.side == "buy":
