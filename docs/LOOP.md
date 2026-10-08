@@ -186,6 +186,24 @@ and `python -m pytest` passes with no network and no credentials.
   instead of reading 0. `paper_ledger.load_state` always supplies both.
 - No new threshold. `config/risk.toml` is unchanged; the keys it already has are now enforced for hypothetical intents too.
 
+## Task O — scanner minimum time-to-expiry; markets closer than 24 h do not pass
+
+Status: done.
+
+Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 8: the scanner let markets expiring today through
+(2026-10-08 run: 944 of 8,409 passing markets had under 1 day left).
+
+Finish when a pure, offline rule drops markets with less than the minimum time to expiry, fails closed on a bad end date,
+and `python -m pytest` passes with no network and no credentials.
+
+- `src/expiry_rule.py`: `expiry_problem(end_date, now, min_hours)` returns `None` when `end - now >= min_hours` (boundary passes),
+  else `near_expiry`, `expired`, `missing_end_date` or `invalid_end_date`. A bad `min_hours` or `now` returns a reason too.
+- Accepted end dates: ISO 8601 strings with a date, a time and a zone (`Z` or offset). Naive, date-only, numeric, bool and other
+  non-string values are invalid, not guessed (the old scanner read naive and date-only strings as UTC).
+- `MIN_HOURS_TO_EXPIRY = 24` is a code constant. It is not read from `config/risk.toml`; moving it there is a proposal for the Operator.
+- `scanner.filter_markets` / `scan` / `main` take `min_hours_to_expiry` (and `now` for `scan`); the summary line prints it.
+  Exit codes are unchanged; if nothing is left, main exits 2 as before. Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -197,8 +215,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/main 开 worktr
 
 ## Latest
 
-- 2026-10-09: Task M done by grok-bot (self-picked, backlog item 4). `hypothetical=True` no longer skips `max_open_positions` / `max_daily_loss`.
-- A missing or invalid cap gives `invalid_risk_cap`; missing or invalid `open_positions` / `daily_loss_usd` gives `invalid_risk_state`. Both veto.
-- Task L accepted on main cd4d5fd (PR #8 and #9 merged): 151 passed offline, F-L done. Backlog 11 marked handled by Task J.
-- `python -m pytest` passed offline (190 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task O done by grok-bot (self-picked, backlog item 8). The scanner drops markets with under 24 h to expiry (`near_expiry`).
+- Fail closed: a missing, unparseable, naive, date-only, non-string or past end date never passes. 24 h is a code constant, not a risk.toml key.
+- PR #10 and Task M accepted on main 5e3eefc (190 passed, F-M done). Task N (Forecaster -> NewsForecaster) is in review as PR #12.
+- `python -m pytest` passed offline (238 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.

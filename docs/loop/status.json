@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T17:47:34Z",
+  "ts": "2026-10-08T18:56:46Z",
   "live_enabled": false,
-  "last_done": "M",
+  "last_done": "O",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "M (hypothetical intents no longer skip max_open_positions / max_daily_loss; missing or invalid cap or state vetoes) done by grok-bot in its PR. F-L done on main. No open todo. No live gate."
+  "note": "O (scanner minimum time-to-expiry: under 24 h or a bad end date does not pass; 24 h code default) done by grok-bot in its PR. F-M done on main; N in review (PR #12). No open todo. No live gate."
 }
