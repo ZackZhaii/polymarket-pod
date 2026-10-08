@@ -86,6 +86,29 @@ Finish when `src/quant.py` scores a local fixture with Brier `mean((p-y)^2)`, em
 - No network and no credentials.
 - The proposal does not edit `config/risk.toml` or any size cap.
 
+## Task H — scanner filter, long-tail band, keyset paging
+
+Status: todo.
+
+Owner: Scanner (Poly扫描). Claim as surface `grok-bot` (any surface may verify).
+Order: placed ahead of G by operator decision 2026-10-08. G was already done (5332d4a), so H is the only todo.
+The code ships in the Task H pull request. Whoever claims H verifies it and closes it.
+
+Finish when `src/scanner.py` walks public Gamma `/markets/keyset` (24h volume desc, `liquidity_num_min` = `min_liquidity_usd`),
+filters by `min_liquidity_usd` and `max_spread` from `config/risk.toml`, drops expired, closed, not-accepting, one-sided
+and long-tail (YES mid < 0.03 or > 0.97) markets, reports first-reason rejection counts, and `python -m pytest`
+passes with no network and no credentials. Record one public `python src/scanner.py` run (exit code, passed, bus lines) under `## Latest`.
+
+- Missing, non-numeric, boolean, non-finite or invalid scanner keys raise: `max_spread <= 0`, `min_liquidity_usd < 0`,
+  or a band outside `0 <= scanner_min_price < scanner_max_price <= 1`. No looser default.
+- Paging stops on a repeated cursor (including A->B->A) or a page with no new markets, and reports `stop_reason`.
+- `MAX_MARKETS = 50000`. Today's filtered universe is about 15,000 markets (about 150 pages).
+- Every passing market goes to `data/markets.jsonl`. Only the top 50 by 24h volume become Scanner `signal` lines.
+- Exit codes: 0 ok, 1 fewer than 5 scanned, 2 nothing passed, 3 paging incomplete (cap or stall).
+  Codes 1-3 write nothing to `data/markets.jsonl` or the bus.
+- Public reads only. No order, auth or signing endpoint. Do not edit `config/risk.toml`.
+- Out of scope: paper_session switch, Endgame >0.97 feed, minimum time-to-expiry.
+
 ## Paste this into a new chat
 
 ```text
@@ -97,8 +120,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: Task G done by grok-build-local. `src/quant.py` scores a local fixture with Brier `mean((p-y)^2)`.
-- At most one proposal. No fill, no order, no network. `config/risk.toml` unchanged, `live_enabled=false`.
-- `python -m pytest` passed offline. The score is not a promise of profit.
-- No todo remains. Do not add a live-trading task.
-- Next code task starts only when a human adds one here and in `docs/loop/state.json`.
+- 2026-10-08: Operator added Task H (scanner filter) and ordered it ahead of G. G was already done, so H is the only todo.
+- H code is in the Task H pull request: keyset paging, risk.toml thresholds, 0.03-0.97 band, top-50 bus cap.
+- Thresholds fail closed on missing, boolean, non-finite or invalid values. `MAX_MARKETS = 50000`.
+- `python -m pytest` passed offline. `config/risk.toml` unchanged, `live_enabled=false`.
+- After merge, claim H, verify with pytest and one public scanner run, record it here, then release done.

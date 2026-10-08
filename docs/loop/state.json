@@ -24,6 +24,14 @@
       "title": "Offline Brier proposal",
       "finish": "src/quant.py scores a local fixture with Brier mean((p-y)^2) and emits at most one proposal. It does not edit config/risk.toml or any size cap. pytest passes offline. No network and no credentials.",
       "done_at": "2026-10-08T08:30:01Z"
+    },
+    {
+      "id": "H",
+      "status": "todo",
+      "title": "Scanner filter, long-tail band, keyset paging",
+      "owner": "Scanner",
+      "order_note": "Placed ahead of G by operator decision 2026-10-08; G was already done, so H is the first todo.",
+      "finish": "src/scanner.py walks public Gamma /markets/keyset, filters by min_liquidity_usd and max_spread from config/risk.toml plus expiry, one-sided and 0.03-0.97 long-tail rules, fails closed on missing, boolean, non-finite or invalid keys, stops on a repeated cursor or a page with no new markets, writes all passing markets to data/markets.jsonl and only the top 50 to the bus, exits 1/2/3 without writing on failure, and pytest passes offline. Record one public scanner run under ## Latest. config/risk.toml is unchanged. No network in tests and no credentials."
     }
   ]
 }
