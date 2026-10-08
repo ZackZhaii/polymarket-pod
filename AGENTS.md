@@ -36,7 +36,7 @@ python src/loop_claim.py release --surface grok-build-local --done
 - bot 只能从 `docs/COORDINATION.md` 的风险缺口清单（Risk gaps backlog）挑纯代码项，不许自造清单外的任务
 - 以 PR 提出：同一个 PR 把任务登记进 `docs/LOOP.md` 和 `docs/loop/state.json`。PR 合并进 `dev` 就是 Operator 加入队列，关闭 PR 就是拒绝
 - 每个 bot 同时最多开着 2 个 PR（自选任务、文档、验收都算）
-- 任务字母：开 PR 时用 `dev`、`main` 和所有未关闭 PR 都没用过的下一个字母
+- 任务字母：开 PR 时用 `dev`、`main` 和所有未关闭 PR 都没用过的下一个字母；Z 之后依次用 AA、AB、AC……（AZ 之后是 BA，以此类推）。
 
 ## 硬约束
 

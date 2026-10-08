@@ -12,6 +12,7 @@ One chat, one task, one finish line. Do not start a second task in the same chat
 When the diff is committed, write five lines at the bottom of this file under `## Latest` and stop.
 Branch from `origin/dev`; pull requests target `dev`. Poly指挥 merges into `dev` and opens `dev` -> `main` pull requests for human review.
 Never push `main` or `dev`, never merge your own pull request, keep at most 2 open pull requests per bot. Escalated items are never auto-merged.
+Task letters: the next letter unused on `dev`, `main` and every open pull request. After Z come AA, AB, AC, … (after AZ comes BA, and so on).
 The next chat starts from that block.
 
 A single-leg fill is directional exposure, not risk-free arbitrage. Do not promise profit.
@@ -448,10 +449,40 @@ is unchanged, and `python -m pytest` passes with no network and no credentials.
 - At 2 stale checks in a row for a market it calls `sentinel.halt` once (that market's paper quotes cancelled,
   `exchange_action=none`, reason `stale_book_consecutive: ...`). Later stale checks do not halt again; a fresh check resets.
 - Per-check blocks are untouched: RiskGate still vetoes a single stale book, and `paper_cycle` still sends no gap signal and
-  the BookWatcher stale signal for every stale check. `StaleWatch` is not wired into `paper_cycle` yet (a caller feeds it).
+  the BookWatcher stale signal for every stale check. `StaleWatch` was not wired into `paper_cycle` here (Task AA wires it).
 - `to_dict` / `from_dict` keep the streak between runs; a malformed state raises instead of quietly resetting.
 - Tests: `tests/test_sentinel_stale.py` (one stale no alarm, two halt once, reset, per market, missing/NaN/inf/naive/future
   stamps, failed checks, the 120 s boundary, RiskGate still vetoing one stale book, stricter-only limits, state round trip).
+- Do not edit `config/risk.toml`.
+
+## Task AA — Sentinel StaleWatch wired into paper_cycle; the streak survives between runs (backlog #15)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. Task Z added `StaleWatch` but nothing fed it, so the 2-in-a-row counter lived only in
+memory and never reached 2 across separate `paper_cycle` runs. This task wires it in and keeps the counter in a file.
+Every per-check block is unchanged, and every new path fails closed, so nothing is loosened.
+
+Finish when two consecutive stale `paper_cycle` runs halt that market's paper quotes, every state-file problem counts as stale,
+`risk.toml` is unchanged, and `python -m pytest` passes with no network and no credentials.
+
+- State file: `logs/sentinel_stale.json` (`podlib.SENTINEL_STATE_PATH`; `logs/` is gitignored). `paper_cycle.run` takes
+  `sentinel_state_path` and `quotes_path` so tests never touch the real files (`tests/conftest.py` isolates them for every test).
+- Each run checks every market with at least one booked token once, at Sentinel's own `SENTINEL_STALE_S` (120 s). A caller's
+  looser `stale_after_s` keeps its per-check meaning but cannot reset the Sentinel streak. The market is stale if any booked token is.
+- Fail closed: an unreadable file (`state_unreadable`), bad JSON (`state_corrupt`), a wrong shape, NaN or looser limits
+  (`state_malformed`), or a file deleted after a prior run (`state_missing`, detected by the `.seen` marker next to it) counts
+  as one stale check for every checked market before its own check. A failed save (`state_write_failed`) counts as one more after it.
+  A first run (no file, no marker) starts at 0. Deleting both the file and the marker looks like a first run (documented limit).
+- Writes are atomic: a temp file in the same folder, flush and fsync, then `os.replace`; a failed write leaves the old file
+  and no temp file behind.
+- At 2 in a row `sentinel.halt` cancels only that market's paper quotes (`exchange_action=none`), once per streak; a fresh check resets.
+  The BookWatcher stale signal, the skipped gap signal and RiskGate's single-stale veto are unchanged.
+- The result has a `sentinel` block: `checked`, `state_problem`, `write_problem`, `halts`, `state_path`.
+- Task letters after Z: AA, AB, AC, … (`AGENTS.md`, `docs/COORDINATION.md`, this file).
+- Tests: `tests/test_stalewatch_paper_cycle.py` (first run, two runs halt, reset, unbooked markets, corrupt/malformed/NaN/looser
+  state, invalid UTF-8, missing after a prior run, unreadable path, write failure, atomic replace, looser `stale_after_s`,
+  missing or future `book_ts`, pin drift touches no state).
 - Do not edit `config/risk.toml`.
 
 ## Task AB — paper_session uses the current scanner path; book age from the CLOB timestamp at an evaluation clock (backlog #16)
@@ -495,8 +526,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task AB done by grok-bot (approved by Poly指挥, backlog #16, from astra's review). `paper_session` now uses `scanner.scan`.
-- Only scanner-passing markets are persisted and booked; bad thresholds, incomplete paging or fewer than 5 scanned write nothing.
-- Book age comes from the CLOB `book_ts` at a millisecond clock read after the books; missing, unparseable or future stamps stay stale.
-- `python -m pytest` passed offline (760 passed; on Windows 756 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. No new threshold; the M2 list is unchanged.
+- 2026-10-09: Tasks AA and AB done by grok-bot (approved by Poly指挥). AA (backlog #15): `paper_cycle` feeds Sentinel's `StaleWatch`; the streak lives in `logs/sentinel_stale.json` (atomic write) and 2 stale runs in a row halt that market's paper quotes.
+- AA: an unreadable, corrupt, malformed or vanished state file, or a failed save, counts as stale (fail closed). Task letters after Z are AA, AB, AC, …
+- AB (backlog #16, astra's review): `paper_session` uses `scanner.scan`; only passing markets are persisted and booked; bad thresholds, incomplete paging or fewer than 5 scanned write nothing.
+- AB: book age comes from the CLOB `book_ts` at a millisecond clock read after the books; missing, unparseable or future stamps stay stale. `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- `python -m pytest` passed offline (783 passed; on Windows 779 passed, 4 symlink tests skipped). Queue empty. No new threshold; the M2 list is unchanged.

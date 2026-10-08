@@ -8,7 +8,7 @@ Phase 0：只读扫描 + 纸面信号。`config/risk.toml` 固定 mode=paper、l
 - 任务队列：`docs/loop/state.json`（机器可读，`src/loop_claim.py` 领取/释放）+ `docs/LOOP.md`（人读）。两处必须同时更新。
 - 规则：一个对话只领一件、只领第一件 todo（loop_claim 强制顺序），做完释放并在 `## Latest` 写五行。
 - 新任务进队列：Operator 直接写；或 bot 从下方 Risk gaps backlog 挑纯代码项，开 PR 登记（LOOP.md + state.json）。PR 合并进 `dev` = Operator 加入，关闭 PR = 拒绝。bot 不自造清单外任务，不加实盘任务。
-- 每个 bot 同时最多开着 2 个 PR（自选任务、文档、验收都算）。任务字母用 `dev`、`main` 和未关闭 PR 都没用过的下一个。
+- 每个 bot 同时最多开着 2 个 PR（自选任务、文档、验收都算）。任务字母用 `dev`、`main` 和未关闭 PR 都没用过的下一个；Z 之后依次用 AA、AB、AC……（AZ 之后是 BA，以此类推）。
 - 写 git 只在 `.worktrees/<名字>` 的 worktree 里（`.git/info/exclude`），做完 `git worktree remove`。主目录归 Operator 本机 Grok Build，只有它在主目录 pull。提交用 `git -c user.name=ZackZhaii -c user.email=17690114@qq.com commit ...`，不改全局配置。
 - 分支从 `origin/dev` 开，PR 的 base 一律是 `dev`。Poly指挥 把 PR 合并进 `dev`；`dev`→`main` 的 PR 只由 Poly指挥 开，由人审查合并。bot 不推 `main` 也不推 `dev`，不合并自己的 PR。升级给 Operator 的事项（risk.toml、live、风控阈值提案等）永不自动合并。
 - `D:\AI_Workspace\OpenClaw\workspace\polymarket-pod` 是平行草稿树，不合并。
@@ -89,4 +89,5 @@ I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。�
 12. ~~（审查新增）Forecaster 总线名与 ROSTER 的 NewsForecaster 不一致。~~ **Task N 处理**：`src/forecaster.py` 用 `from="NewsForecaster"`；`podlib.ROLE_ALIASES` 把旧名 Forecaster 映射过去，`bus()` 统一写 ROSTER 名，旧调用方不报错。未改 risk.toml。
 13. ~~scanner 阈值接受布尔和无穷（`max_spread = true` 读成 1.0，`1e999` 读成 inf）。~~ **已在 PR #2（Task I）修复**：只接受有限的 int/float，bool、字符串、inf、nan 都报错。
 14. ~~（审查新增）scanner 把 Gamma 的 `"NaN"` / `"inf"` / `"-Infinity"` 解析成非有限数；NaN 比较恒为 False，NaN 的 spread、流动性、买卖价能绕过过滤通过 scanner。~~ **Task Y 处理**：`src/scanner.py` 对 best_bid、best_ask、spread、liquidity_usd、volume_usd、volume_24h_usd、outcome_prices 任一元素和 price 中任何 NaN/±inf 记 `non_finite_<field>`，不通过；排在结构性原因之后、`missing_bid_ask` 等过滤之前。退出码、输出格式和 markets.jsonl 字段不变。没有新阈值，未改 risk.toml。
+15. ~~（Task Z 后续）Sentinel 的 `StaleWatch` 没有接进 `paper_cycle`，连续计数只存在内存里，每次运行都从 0 开始，2 次连续陈旧永远凑不齐。~~ **Task AA 处理**：`paper_cycle.run` 每次对每个至少有一个盘口记录的市场做一次 Sentinel 检查（按 `SENTINEL_STALE_S` = 120 s，调用方 `stale_after_s` 更宽也不影响），连续计数存进 `logs/sentinel_stale.json`（`podlib.SENTINEL_STATE_PATH`，测试可传 `sentinel_state_path`），先写临时文件再 `os.replace` 原子替换。状态文件读不了、坏 JSON、结构不对（含 NaN、更宽的阈值）、上次运行后被删（旁边的 `.seen` 标记还在）或写失败，一律算一次陈旧检查（fail closed）；第一次运行（文件和标记都没有）从 0 开始。连续 2 次就 `sentinel.halt` 撤该市场纸面挂单。单次检查的 stale 信号和不发 gap 不变。没有新阈值，未改 risk.toml。
 16. ~~（astra 审查新增）`paper_session` 仍走旧 scanner 路径：单页 `fetch_markets` + 不过滤的 `visible_rows`（不看 version、非有限数、到期、点差和流动性），并用会话开始时间（秒级、读盘口之前取）判断盘口年龄，结果约 0 s，或 CLOB 时间比它新被记为未来。~~ **Task AB 处理**：`src/paper_session.py` 改走 `scanner.scan`（keyset 分页、`thresholds_from` 读 risk.toml 阈值、按 version 选 outcome ID、`non_finite_*`、到期规则），只持久化通过的市场（总线信号前 `BUS_TOP_N` 个），只给通过且有 outcome ID 的前 5 个市场读盘口。分页不完整（`markets_incomplete`）、扫描少于 5 个（`too_few_markets`）、阈值无效（`invalid_scanner_threshold`）一律什么都不写（fail closed）。盘口年龄由 `paper_cycle` 按 CLOB `/book` 的 `book_ts` 判断（不用记录时间 ts），比较时间是读完盘口后再读的毫秒级时钟（可注入 `clock`）；book_ts 缺失、无法解析或在未来一律算陈旧。没有新阈值，未改 risk.toml。
