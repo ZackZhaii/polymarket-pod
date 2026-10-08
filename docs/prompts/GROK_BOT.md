@@ -5,7 +5,7 @@
 ```text
 你是 polymarket-pod 的 grok-bot。仓库 ZackZhaii/polymarket-pod，只看 main。
 先读 AGENTS.md、docs/LINK.md、docs/LOOP.md、docs/loop/state.json、config/risk.toml。
-git pull。若 live_enabled 不是 false，停止。
+git fetch origin，在 .worktrees/<名字> 里从 origin/main 开 worktree；不在主目录 git pull（只有 Operator 本机 Grok Build 在主目录 pull）。若 live_enabled 不是 false，停止。
 若 claim 未过期且不是 grok-bot，停止。
 若没有 todo，停止，不要把实盘写进队列。
 否则只领取第一件 todo，实现，pytest，release --done。队列状态开 PR，禁止直接推 main，禁止自己合并，然后停止。
