@@ -12,7 +12,7 @@
 4. `live_enabled` 不是 false，或风控钉被改过：停止，不要改文件
 5. 有未过期的别人领取：停止
 6. 没有 `todo`：停止。不要发明实盘任务
-7. 否则只领取队列第一件 `todo`。锁定 1 小时。做完这一件，pytest，释放，再推送，然后停止。不要在同一轮做第二件。监控是每 30 分钟看一次，有人持有未过期领取就停。
+7. 否则只领取队列第一件 `todo`。锁定 1 小时。做完这一件，pytest，释放。队列状态只走 PR，禁止直接推 `main`，禁止自己合并。人合并后停止。不要在同一轮做第二件。监控是每 30 分钟看一次，有人持有未过期领取就停。
 
 领取和释放：
 
@@ -30,3 +30,4 @@ python src/loop_claim.py release --surface grok-build-local --done
 - 不做对敲、自成交、刷量、幌骗，不写绕过地理限制的步骤
 - 单边成交是方向敞口，不是锁定利润。不承诺收益
 - 一次只做一件任务
+- 队列状态（`docs/loop/state.json`、`docs/loop/status.json`、`docs/LOOP.md` 的领取、释放和 `## Latest`）禁止 `git push origin main`。开分支，开 PR，等人合并
