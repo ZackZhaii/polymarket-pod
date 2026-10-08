@@ -1,0 +1,20 @@
+# polymarket-pod 项目级 Grok Build 配置（Phase 0：只读 + paper）
+# 只允许免密钥、只读的 MCP。交易/签名/钱包/提现类 MCP 一律不加。
+# 不在此文件写任何密钥；将来需要时只用 ${VAR} 引用。
+
+[mcp_servers.youtube]
+command = "cmd"
+args = ["/c", "npx", "-y", "@anaisbetts/mcp-youtube@0.8.0"]
+enabled = true
+startup_timeout_sec = 60
+
+[permission]
+deny = [
+  "Read(.env)", "Edit(.env)", "Read(**/.env)", "Edit(**/.env)",
+  "Bash(pip install py-clob-client*)", "Bash(python -m pip install py-clob-client*)",
+  "Bash(npm install @polymarket/clob-client*)",
+  "Bash(git push origin main*)", "Bash(git push --force*)",
+  "MCPTool(github__merge_pull_request)", "MCPTool(github__push_files)",
+  "MCPTool(github__create_or_update_file)", "MCPTool(github__delete_file)",
+]
+ask = ["Edit(config/risk.toml)"]
