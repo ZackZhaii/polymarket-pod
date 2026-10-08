@@ -80,7 +80,7 @@ I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。�
 3. ROSTER 写的 category caps（类别上限）既不在 risk.toml，也不在代码里。
 4. ~~`hypothetical=True` 会跳过 max_open_positions 和 max_daily_loss 检查（仅 phase0-gate-test 可用，但仍是旁路）。~~ **Task M 处理**：两个上限对所有 intent 生效，hypothetical 不再旁路；上限缺失或无效记 `invalid_risk_cap`，state 缺失或无效记 `invalid_risk_state`，一律 veto。未改 risk.toml。
 5. ~~单边套利成交必须计为方向敞口：ledger/risk 需按单腿记净头寸，不能按 "套利对" 抵消。~~ **Task P 处理**：`paper_ledger` 按单腿（market + token_id）记净头寸，只有同一 token 的买卖互相抵消；套利对的两个 token 永不抵消，成交一腿就是一个完整方向头寸，成交一对占两个 `max_open_positions` 名额。上限豁免只看同一 token 已持仓（`leg_already_open`）。没有新阈值，未改 risk.toml。
-6. risk.toml 没有 `min_edge` 参数（Forecaster 临时用了 0.02）；现在只要求 edge > 0。
+6. ~~risk.toml 没有 `min_edge` 参数（Forecaster 临时用了 0.02）；现在只要求 edge > 0。~~ **Task X 处理**：`src/risk_gate.py` 加代码常量 `MIN_EDGE = 0.02`（含 0.02，浮点容差 1e-12）：0 < edge < 0.02 记 `edge_below_min`，edge <= 0 仍记 `non_positive_edge`；非有限或缺失输入按 Task U fail closed；配置里的 `min_edge` 不能调低它。0.02 是代码常量，不在 risk.toml；是否写进 risk.toml 由 Operator 在 M2 决定。未改 risk.toml。
 7. risk_gate 不使用 `kelly_fraction`，所有单子一律 1% 封顶（这是保守的，但参数形同虚设）。
 8. ~~scanner 没有最短剩余到期时间规则（今天到期的盘也会通过；2026-10-08 实跑 8,409 个通过里有 944 个剩余不到 1 天）。~~ **Task O 处理**：剩余不足 24 h 记 `near_expiry`，不通过；end date 缺失、无法解析、无时区、仅日期、非字符串或已过期一律不通过（`src/expiry_rule.py`）。24 h 是代码常量 `MIN_HOURS_TO_EXPIRY`，不在 risk.toml；是否写进 risk.toml 由 Operator 决定。
 9. Sentinel 提议陈旧阈值 120s / 连续 2 次失败才报警（30s 会误报）；risk.toml 与代码尚无此参数。

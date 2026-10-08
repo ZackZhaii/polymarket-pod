@@ -116,6 +116,13 @@ def risk_caps(cfg: dict) -> dict[str, float]:
     return {"max_open_positions": int(positions), "max_daily_loss_pct": loss_pct}
 
 
+# Task X (COORDINATION #6): minimum edge after slippage and fees. A code constant, not a
+# risk.toml key: a threshold proposal for the user to decide at M2 (like MIN_HOURS_TO_EXPIRY
+# and WASH_WINDOW_S). 0.02 is the bar the Forecaster used as a stopgap. Inclusive: an edge of
+# exactly 0.02 passes; EDGE_TOLERANCE only absorbs float rounding (0.425 - 0.405 = 0.01999...96).
+MIN_EDGE = 0.02
+EDGE_TOLERANCE = 1e-12
+
 NUMERIC_INTENT_FIELDS = ("model_prob", "market_price", "assumed_slippage", "fee_rate")
 
 
@@ -172,6 +179,9 @@ def evaluate(
     own counterparty (self_trade_structure) or an opposite fill on the same leg within
     WASH_WINDOW_S (wash_same_market) vetoes. Missing history is wash_input_missing,
     malformed history wash_input_invalid; both veto.
+
+    Edge must be at least MIN_EDGE (0.02, inclusive; code constant, Task X): 0 < edge < MIN_EDGE
+    vetoes edge_below_min, edge <= 0 vetoes non_positive_edge.
 
     Size is the 1% clip. kelly_fraction is not applied and cannot increase size.
     A single-leg fill is directional exposure, not risk-free arbitrage.
@@ -273,6 +283,8 @@ def evaluate(
         edge = -1.0  # fail closed: a non-finite input never yields a usable edge
     if edge <= 0:
         reasons.append("non_positive_edge")
+    elif edge < MIN_EDGE - EDGE_TOLERANCE:
+        reasons.append("edge_below_min")  # Task X: 0 < edge < MIN_EDGE; config cannot lower it
 
     # Hard clip at 1% even if a caller passes a looser in-memory config.
     try:

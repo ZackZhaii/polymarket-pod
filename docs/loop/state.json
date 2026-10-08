@@ -168,6 +168,15 @@
       "note": "Approved by Poly指挥 (Endgame backlog #10); done by grok-bot. Paper only: a new read-only second path; nothing in the scanner or RiskGate is loosened or bypassed.",
       "done_at": "2026-10-08T20:33:13Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "X",
+      "status": "done",
+      "title": "RiskGate minimum edge (backlog #6): MIN_EDGE = 0.02 code constant, edge_below_min veto; non_positive_edge kept",
+      "finish": "src/risk_gate.py has MIN_EDGE = 0.02 (code constant, not a risk.toml key; threshold proposal for the user at M2). 0 < edge < MIN_EDGE vetoes edge_below_min; edge <= 0 still vetoes non_positive_edge (not doubled); 0.02 is inclusive with a 1e-12 float tolerance; a config min_edge cannot lower it; non-finite or missing inputs fail closed as in Task U. Offline tests at 0.0199, 0.02 and 0.05 (buy and sell), fee counted, NaN/inf/None. No existing fixture had 0 < edge < 0.02, so none changed. Backlog #6 struck through in COORDINATION.md. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Approved by Poly指挥 (backlog #6); done by grok-bot. Pure tightening. MIN_EDGE 0.02 awaits the user's decision at M2 (like MIN_HOURS_TO_EXPIRY and WASH_WINDOW_S).",
+      "done_at": "2026-10-08T20:36:23Z",
+      "surface": "grok-bot"
     }
   ]
 }

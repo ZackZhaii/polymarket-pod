@@ -383,6 +383,26 @@ and `python -m pytest` passes with no network and no credentials.
 - The scanner is untouched: default output, filters, exit codes and `data/markets.jsonl` are unchanged. Backlog #10 is struck through.
 - No threshold change. Do not edit `config/risk.toml`.
 
+## Task X — RiskGate minimum edge: MIN_EDGE = 0.02 (code constant), edge_below_min veto (backlog #6)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. RiskGate only required edge > 0. `risk.toml` has no `min_edge`; the 0.02 bar was the
+Forecaster's temporary one (COORDINATION #6, note added in 4568f05; no code in the history ever enforced it).
+
+Finish when an edge below 0.02 vetoes, `non_positive_edge` stays, `risk.toml` is unchanged, and `python -m pytest`
+passes with no network and no credentials.
+
+- `src/risk_gate.py`: `MIN_EDGE = 0.02` is a code constant, not a `risk.toml` key. It is a threshold proposal for the user to decide
+  at M2 (like `MIN_HOURS_TO_EXPIRY` and `WASH_WINDOW_S`). A config `min_edge` cannot lower it.
+- `0 < edge < MIN_EDGE` vetoes `edge_below_min`. `edge <= 0` still vetoes `non_positive_edge` only (not doubled).
+- 0.02 is inclusive: an edge of exactly 0.02 passes. `EDGE_TOLERANCE = 1e-12` only absorbs float rounding
+  (0.425 − 0.405 = 0.01999…96). The edge is after slippage and fees.
+- Non-finite or missing inputs fail closed as in Task U (`non_finite_<field>` / `invalid_<field>`, edge −1.0).
+- Tests: `tests/test_min_edge.py` covers 0.0199 / 0.02 / 0.05 on buy and sell, fees counted, NaN/inf/None, and that config cannot lower it.
+  A trace of every `evaluate` call in the suite found no existing fixture with `0 < edge < 0.02`, so no fixture changed.
+- Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -394,8 +414,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task W done by grok-bot (approved by Poly指挥). `src/endgame_scan.py` gives Endgame the 0.98–0.99 band the scanner drops as `long_tail_price` (backlog #10).
-- It applies every other scanner rule, fails closed on non-finite numbers, and sends only Endgame signals to RiskGate. There are no fills, orders or ledger writes.
-- Drifted pins exit 4, an incomplete fetch exits 3, and fewer than 5 markets exit 1. The scanner's output, filters, exit codes and `data/markets.jsonl` are unchanged.
-- `python -m pytest` passed offline (588 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. No next todo. `WASH_WINDOW_S` (Task S) awaits the user's decision. A single-leg fill is directional exposure, not locked profit.
+- 2026-10-09: Tasks W and X done by grok-bot (approved by Poly指挥). W: `src/endgame_scan.py` gives Endgame the 0.98–0.99 band the scanner drops (backlog #10).
+- X: RiskGate requires edge >= `MIN_EDGE` (0.02, inclusive); `0 < edge < 0.02` vetoes `edge_below_min`; `non_positive_edge` kept (backlog #6).
+- Both fail closed on non-finite inputs. Endgame sends signals to RiskGate only (no fills, orders or ledger writes); the scanner is unchanged.
+- `python -m pytest` passed offline (616 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. No next todo. `MIN_EDGE` and `WASH_WINDOW_S` await the user's decision at M2. A single-leg fill is directional exposure, not locked profit.
