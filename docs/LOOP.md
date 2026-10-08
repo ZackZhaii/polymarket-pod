@@ -28,6 +28,8 @@ Finish when `python -m pytest` passes with no network and no credentials.
 
 ## Task B — reflector
 
+Status: done.
+
 Finish when a proposal lands in `playbook/proposals.md` and `config/risk.toml` is byte-for-byte unchanged.
 
 - At most 3 proposals per UTC day.
@@ -35,6 +37,8 @@ Finish when a proposal lands in `playbook/proposals.md` and `config/risk.toml` i
 - Proposals do not edit `config/risk.toml` or any size cap.
 
 ## Task C — remaining role stubs
+
+Status: done.
 
 Finish when these modules import and only append to `logs/bus.jsonl`: ArbBinary, Maker, Forecaster, Sentinel.
 
@@ -55,8 +59,8 @@ Finish when these modules import and only append to `logs/bus.jsonl`: ArbBinary,
 
 ## Latest
 
-- 2026-10-08: Task A done. `python -m pytest` passed offline, 12 tests, no credentials.
-- YES+NO and multi-outcome ask sums live in `src/gaps.py`. A gap is a signal, not locked profit.
-- RiskGate veto tests cover pin drift, non-positive edge, wide spread, and banned strategy names.
-- `config/risk.toml` unchanged: mode=paper, live_enabled=false. No `.env` read. No order SDK.
-- Tasks B and C remain open. The next chat should do Task B only, then stop.
+- 2026-10-08: Tasks A, B, and C are done. `python -m pytest` passed offline, 20 tests.
+- Reflector wrote one proposal in `playbook/proposals.md`. Cap is 3 per UTC day. It does not emit fills.
+- ArbBinary, Maker, Forecaster, and Sentinel only write bus lines. Sentinel halt cancels local paper quotes only.
+- `config/risk.toml` unchanged: mode=paper, live_enabled=false. No `.env` read. No order SDK. No exchange cancel.
+- Planned paper stubs are complete. Do not enable live. Next step is human review of the paper log, not a live client.

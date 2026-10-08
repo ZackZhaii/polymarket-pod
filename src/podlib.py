@@ -15,6 +15,7 @@ BUS_PATH = LOG_DIR / "bus.jsonl"
 PAPER_PATH = LOG_DIR / "paper.jsonl"
 MARKETS_PATH = DATA_DIR / "markets.jsonl"
 BOOKS_PATH = DATA_DIR / "books.jsonl"
+QUOTES_PATH = LOG_DIR / "quotes.jsonl"
 
 # Local paper bankroll. Not a wallet. Sizing never exceeds the 1% clip.
 PAPER_EQUITY_USD = 1000.0
@@ -91,7 +92,14 @@ def append_jsonl(path: Path, row: dict[str, Any]) -> None:
         handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
-def bus(frm: str, to: str, kind: str, market: str, payload: dict[str, Any]) -> dict[str, Any]:
+def bus(
+    frm: str,
+    to: str,
+    kind: str,
+    market: str,
+    payload: dict[str, Any],
+    path: Path | None = None,
+) -> dict[str, Any]:
     if kind not in BUS_TYPES:
         raise RuntimeError(f"bus type not allowed: {kind}")
     if kind == "fill" and frm != "Executor":
@@ -106,7 +114,7 @@ def bus(frm: str, to: str, kind: str, market: str, payload: dict[str, Any]) -> d
         "market": market,
         "payload": payload,
     }
-    append_jsonl(BUS_PATH, message)
+    append_jsonl(path or BUS_PATH, message)
     return message
 
 
