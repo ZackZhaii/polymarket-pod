@@ -120,6 +120,20 @@ passes with no network and no credentials. Record one public `python src/scanner
 - Public reads only. No order, auth or signing endpoint. Do not edit `config/risk.toml`.
 - Out of scope: paper_session switch, Endgame >0.97 feed, minimum time-to-expiry.
 
+## Task J — risk_gate fails closed on missing thresholds
+
+Status: done.
+
+Risk-gap backlog item 11. Letter I is left for the scanner pull request (PR #2) so the two branches do not collide.
+
+Finish when `src/risk_gate.py` has no default for `min_liquidity_usd` or `max_spread`, a bad threshold can only veto, and `python -m pytest` passes with no network and no credentials.
+
+- `gate_thresholds(cfg)` accepts only a finite int or float, like the scanner thresholds. A missing key, bool, string, None, inf or nan raises `RuntimeError`.
+- `min_liquidity_usd < 0` or `max_spread <= 0` also raises. There is no looser default.
+- `evaluate` turns that error into the `invalid_gate_threshold` veto. It never raises for this and never allows.
+- A present but nan, inf or bool intent liquidity or spread vetoes with `invalid_liquidity` or `invalid_spread`.
+- Do not edit `config/risk.toml`. Parameter ideas go into the pull request text as a proposal only.
+
 ## Task K — public_get retry/backoff; scanner exits 3 on network failure
 
 Status: done.
@@ -147,8 +161,8 @@ git pull 之后只领取第一件 todo。做完释放并推送，然后停止。
 
 ## Latest
 
-- 2026-10-08: Task K done by grok-bot (self-picked). `podlib.public_get` retries transient network/TLS errors 3 times with 0.5 s exponential backoff.
-- Retried: URLError, SSL EOF / ssl.SSLError, ConnectionResetError, socket timeouts, HTTP 5xx. Never retried: HTTP 4xx and refused order/auth URLs.
+- 2026-10-08: Task K done by grok-bot (self-picked). `podlib.public_get` retries URLError, SSL EOF / ssl.SSLError, resets, timeouts and HTTP 5xx 3 times (0.5 s, 1 s backoff); never HTTP 4xx.
 - If every attempt fails, `PublicGetError` is raised and the scanner exits 3 (`stop=network_error`, paging incomplete) and writes nothing, instead of crashing with exit 1.
-- `python -m pytest` passed offline (76 passed; urlopen mocked, no sleeps). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Task J (risk_gate fails closed) merged via PR #3; I (public scanner exit 0, scanned=15360 passed=8659) and J stay done. Signals only; no order and no credentials.
+- `python -m pytest` passed offline (100 passed; urlopen mocked, no sleeps). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.
