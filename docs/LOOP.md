@@ -222,6 +222,23 @@ and `python -m pytest` passes with no network and no credentials.
 - `scanner.filter_markets` / `scan` / `main` take `min_hours_to_expiry` (and `now` for `scan`); the summary line prints it.
   Exit codes are unchanged; if nothing is left, main exits 2 as before. Do not edit `config/risk.toml`.
 
+## Task P — single-leg arb fill is directional exposure; positions net per leg, never per pair
+
+Status: done.
+
+Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 5: the ledger netted shares per market, so a sell on one
+token of a pair cancelled a buy on the other, and a filled pair took only one `max_open_positions` slot.
+
+Finish when paper positions are netted per leg (market + token), one filled leg counts as a full directional position,
+and `python -m pytest` passes with no network and no credentials.
+
+- `src/paper_ledger.py`: `leg_positions(rows)` nets shares per `(market, token_id)`. Only a buy and a sell of the same token
+  offset each other (closing). The two tokens of an arb pair never offset; a row with no `token_id` is its own unknown leg.
+- `load_state(market, token_id)`: `open_positions` counts open legs; `leg_already_open` is True only for that exact token;
+  `exposure_usd` / `leg_exposure_usd` = abs(net shares) x the leg's average fill price (1 USD per share if notional is missing).
+- `src/risk_gate.py`: the `max_open_positions` exemption needs `leg_already_open is True`. Another open leg of the same market
+  (the other side of a pair) is a new position. No new threshold. Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -233,8 +250,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task O done by grok-bot (self-picked, backlog item 8). The scanner drops markets with under 24 h to expiry (`near_expiry`).
-- Fail closed: a missing, unparseable, naive, date-only, non-string or past end date never passes. 24 h is a code constant, not a risk.toml key.
-- Task N merged into dev b43d84d: `src/forecaster.py` emits `from="NewsForecaster"`; the legacy `Forecaster` maps via `podlib.canonical_role`.
-- `python -m pytest` passed offline (244 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task P done by grok-bot (self-picked, backlog item 5). The paper ledger nets per leg (market + token_id); arb-pair tokens never offset.
+- One filled leg is one position at its full notional; a filled pair is two positions. Only a same-token sell closes a leg.
+- `max_open_positions` counts legs. The cap exemption needs the same token already open (`leg_already_open`), not just the same market.
+- `python -m pytest` passed offline (265 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. No next todo. Do not add a live-trading task. A single-leg fill is directional exposure, not locked profit.

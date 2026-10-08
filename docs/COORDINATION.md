@@ -79,7 +79,7 @@ I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。�
 2. ~~`risk_gate.py` 没有盘口陈旧检查（不看 book 时间戳）。~~ **Task L 处理**：`Intent.book_ts` 缺失、无法解析、在未来或超过 120 s 一律 veto（`src/book_staleness.py`）。120 s 是代码常量，不在 risk.toml；是否写进 risk.toml 由 Operator 决定。
 3. ROSTER 写的 category caps（类别上限）既不在 risk.toml，也不在代码里。
 4. ~~`hypothetical=True` 会跳过 max_open_positions 和 max_daily_loss 检查（仅 phase0-gate-test 可用，但仍是旁路）。~~ **Task M 处理**：两个上限对所有 intent 生效，hypothetical 不再旁路；上限缺失或无效记 `invalid_risk_cap`，state 缺失或无效记 `invalid_risk_state`，一律 veto。未改 risk.toml。
-5. 单边套利成交必须计为方向敞口：ledger/risk 需按单腿记净头寸，不能按 "套利对" 抵消。
+5. ~~单边套利成交必须计为方向敞口：ledger/risk 需按单腿记净头寸，不能按 "套利对" 抵消。~~ **Task P 处理**：`paper_ledger` 按单腿（market + token_id）记净头寸，只有同一 token 的买卖互相抵消；套利对的两个 token 永不抵消，成交一腿就是一个完整方向头寸，成交一对占两个 `max_open_positions` 名额。上限豁免只看同一 token 已持仓（`leg_already_open`）。没有新阈值，未改 risk.toml。
 6. risk.toml 没有 `min_edge` 参数（Forecaster 临时用了 0.02）；现在只要求 edge > 0。
 7. risk_gate 不使用 `kelly_fraction`，所有单子一律 1% 封顶（这是保守的，但参数形同虚设）。
 8. ~~scanner 没有最短剩余到期时间规则（今天到期的盘也会通过；2026-10-08 实跑 8,409 个通过里有 944 个剩余不到 1 天）。~~ **Task O 处理**：剩余不足 24 h 记 `near_expiry`，不通过；end date 缺失、无法解析、无时区、仅日期、非字符串或已过期一律不通过（`src/expiry_rule.py`）。24 h 是代码常量 `MIN_HOURS_TO_EXPIRY`，不在 risk.toml；是否写进 risk.toml 由 Operator 决定。

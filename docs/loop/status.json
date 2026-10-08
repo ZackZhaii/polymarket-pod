@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T18:56:46Z",
+  "ts": "2026-10-08T19:11:34Z",
   "live_enabled": false,
-  "last_done": "O",
+  "last_done": "P",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "O (scanner minimum time-to-expiry: under 24 h or a bad end date does not pass; 24 h code default) done by grok-bot in its PR. F-N done on dev. No open todo. No live gate."
+  "note": "P (single-leg arb fill is directional exposure: positions net per leg, never per pair; cap exemption only for the same token) done by grok-bot in its PR. F-O done on dev. No open todo. No live gate."
 }
