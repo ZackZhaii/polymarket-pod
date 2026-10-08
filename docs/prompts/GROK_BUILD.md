@@ -4,3 +4,5 @@
 不要再按下面的旧 Phase 0 清单重做一遍。
 
 旧说明仅作隔离提醒：不要碰咖啡、StarHive 或其他交易仓库。密钥不进对话。`live_enabled` 保持 false。
+
+队列状态（领取、释放、`docs/loop/state.json`、`docs/loop/status.json`、`## Latest`）只走 PR。禁止直接推 `main`，禁止自己合并。

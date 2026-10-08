@@ -65,7 +65,10 @@ I 的代码随 PR #2 提交（Poly扫描 编写，Poly指挥 两轮审查）。�
 - grok-web 在 26667aa **直接推送到 main**（Task H — SportsDevig），没有走 PR 审查。该任务从未以 todo 进入队列、也没有经 loop_claim 领取，
   而是直接登记为 done（`done_at` 09:10:00Z 晚于提交时间 09:09:05Z）。
 - 风险：绕过审查；字母冲突（本 PR 因此从 H 改为 I）；与 "新任务只由 Operator 加入" 和 "只领第一件 todo" 的规则不一致。
-- 可选措施（需 Operator 决定）：main 分支保护（要求 PR）、或约定 bot 只推分支。
+- **Operator 决定（2026-10-08）：队列状态也走 PR，禁止直接推 `main`。**
+  范围是领取、释放、`docs/loop/state.json`、`docs/loop/status.json`、`docs/LOOP.md` 的 `## Latest`。
+  只许开分支并开 PR。不许 `git push origin main`，不许 bot 自己合并。人合并前，其他入口仍看 `main`。
+- 本决定之前，`93b87c0`（claim I）和 `0cdf741`（release I）已经直接进入 `main`。Task I 在 `main` 上是 done。本 PR 不回滚这两笔，也不再改队列状态。
 
 ## Risk gaps backlog（只记录，不在 Phase 0 改 risk.toml；每条需 Operator 另立任务）
 1. 自成交/对敲检测只靠策略名关键词（wash / self-trade / spoof / layering），没有基于成交对手或同市场双向挂单的检测。
