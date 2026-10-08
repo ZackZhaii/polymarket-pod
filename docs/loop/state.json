@@ -3,7 +3,12 @@
   "branch": "main",
   "claim_hours": 1,
   "cadence_minutes": 30,
-  "claim": null,
+  "claim": {
+    "surface": "grok-web",
+    "task": "I",
+    "since": "2026-10-08T10:14:07Z",
+    "until": "2026-10-08T11:14:07Z"
+  },
   "assignment": {
     "grok-web": "first open todo when the claim is free",
     "grok-build-local": "same queue; stop if grok-web holds the claim",
@@ -35,7 +40,7 @@
     },
     {
       "id": "I",
-      "status": "todo",
+      "status": "doing",
       "title": "Scanner filter, long-tail band, keyset paging",
       "owner": "Scanner",
       "order_note": "Operator ordered this task ahead of G on 2026-10-08. G and H (SportsDevig) were already done, so I is the first todo. Merging PR #2 is the human add.",
