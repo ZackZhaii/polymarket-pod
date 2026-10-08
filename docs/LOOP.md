@@ -316,6 +316,29 @@ parsed time, and `python -m pytest` passes with no network and no credentials.
 - `paper_ledger.realistic_no_edge`: same selection, newest first; passes `book_ts` (not `ts`) to RiskGate; returns `skipped_rows`.
 - Historical "Forecaster" mentions in docs stay as they are. No threshold change. Do not edit `config/risk.toml`.
 
+## Task U — non-finite numbers (NaN, +inf, -inf) veto; fee_rate=NaN can no longer skip the edge check
+
+Status: done.
+
+Approved by Poly指挥 (security fix, ahead of Endgame #10), done by grok-bot. `NaN` compares False with everything, so
+`fee_rate=NaN` made the edge `NaN`, `edge <= 0` was False and `non_positive_edge` never fired.
+
+Finish when every number in RiskGate's edge math and in paper_ledger's fee/position math must be finite, a non-finite
+value vetoes (fail closed), and `python -m pytest` passes with no network and no credentials.
+
+- `src/risk_gate.py`: `model_prob`, `market_price`, `assumed_slippage` and `fee_rate` must each be a finite number. NaN/inf
+  vetoes `non_finite_<field>`; a non-number (string, None, bool) vetoes `invalid_<field>` instead of crashing. Then the edge
+  is forced to -1.0 (`non_positive_edge`), and `fee_usd` / `shares` in the decision stay finite. The old range checks run unchanged.
+- A non-finite or non-numeric `max_order_pct` vetoes `invalid_max_order_pct` with zero notional (it was a NaN notional that
+  skipped `zero_notional`). The 1% clip and `PINS` are unchanged.
+- `src/paper_ledger.py`: `load_state` returns an invalid risk state (`open_positions` None, so `invalid_risk_state`) when a
+  counted row has a non-finite or non-numeric `shares`, `notional_usd` or `fee_usd`; a NaN row can no longer hide an open
+  leg (`abs(nan) > eps` is False). Absent values keep their old meaning; hypothetical rows are still ignored.
+- `src/maker.py`: `quote` raises on a non-finite price or size. `src/sports_devig.py`: non-finite odds, price or slippage
+  emit nothing (NaN odds or slippage emitted a NaN edge). Forecaster, quant, endgame and gaps already reject NaN/inf.
+- Tests: `tests/test_non_finite_params.py`, NaN, +inf and -inf for each parameter (fee_rate NaN and inf included).
+- No threshold change. Do not edit `config/risk.toml`.
+
 ## Paste this into a new chat
 
 ```text
@@ -327,8 +350,8 @@ bot 先 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktre
 
 ## Latest
 
-- 2026-10-09: Task T done by grok-bot (approved by Poly指挥). `paper_cycle` and `realistic_no_edge` judge book age by the exchange `book_ts`, never `ts`.
-- Missing or invalid `book_ts` (or a recorded `book_ts_problem`) is stale. 120 s unchanged; exactly 120 s is fresh.
-- Stale markets emit no gap signal; the BookWatcher stale signal is the skip record. Latest rows are chosen by parsed time; bad `ts` rows are skipped and recorded.
-- `python -m pytest` passed offline (479 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. No next todo. `WASH_WINDOW_S` (Task S) awaits the user's decision. A single-leg fill is directional exposure, not locked profit.
+- 2026-10-09: Task U done by grok-bot (approved by Poly指挥). NaN/+inf/-inf in RiskGate inputs vetoes `non_finite_<field>`; `fee_rate=NaN` can no longer skip `non_positive_edge`.
+- Non-numbers veto `invalid_<field>`; a bad `max_order_pct` vetoes `invalid_max_order_pct`. Non-finite ledger shares/notional/fee make the risk state invalid (veto).
+- `maker.quote` and `sports_devig` reject non-finite inputs. Finite inputs behave exactly as before; nothing was loosened.
+- `python -m pytest` passed offline (541 passed). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. No next todo. Endgame #10 waits for a free slot. `WASH_WINDOW_S` (Task S) awaits the user's decision.

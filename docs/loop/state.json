@@ -141,6 +141,15 @@
       "note": "Approved by Poly指挥 (Task R follow-ups); done by grok-bot. Only tightens: a fresh recorder ts can no longer hide a stale or missing exchange book_ts, and a stale market no longer emits a gap signal.",
       "done_at": "2026-10-08T20:20:07Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "U",
+      "status": "done",
+      "title": "Non-finite numeric inputs (NaN, +inf, -inf) veto in RiskGate, the edge math and paper_ledger fee/position math",
+      "finish": "risk_gate.evaluate vetoes non_finite_<field> (NaN/inf) or invalid_<field> (non-number) for model_prob, market_price, assumed_slippage and fee_rate, and the edge then fails closed (-1.0, non_positive_edge); fee_rate=NaN no longer skips the edge check. A non-finite or non-numeric max_order_pct vetoes invalid_max_order_pct with zero notional. paper_ledger.load_state returns an invalid risk state (open_positions None, so invalid_risk_state) when any counted row has non-finite or non-numeric shares, notional_usd or fee_usd, so a NaN row can no longer hide an open leg. maker.quote raises on non-finite price/size; sports_devig rejects non-finite odds, price or slippage. Rejection tests per parameter (fee_rate NaN and inf included). pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold changes.",
+      "note": "Approved by Poly指挥 (security fix, queued before Endgame #10); done by grok-bot. Pure tightening: every check that vetoed before still vetoes; finite inputs behave exactly as before.",
+      "done_at": "2026-10-08T20:25:02Z",
+      "surface": "grok-bot"
     }
   ]
 }

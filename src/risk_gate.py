@@ -116,6 +116,23 @@ def risk_caps(cfg: dict) -> dict[str, float]:
     return {"max_open_positions": int(positions), "max_daily_loss_pct": loss_pct}
 
 
+NUMERIC_INTENT_FIELDS = ("model_prob", "market_price", "assumed_slippage", "fee_rate")
+
+
+def _number_problem(field: str, value: object) -> str | None:
+    """Task U: NaN / +inf / -inf -> non_finite_<field>; a non-number -> invalid_<field>."""
+    if _finite_number(value) is not None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"non_finite_{field}"
+    return f"invalid_{field}"
+
+
+def _as_float(value: object) -> float:
+    """A number for the unchanged range checks below; a non-number becomes NaN (it never passes)."""
+    return float(value) if isinstance(value, (int, float)) else math.nan
+
+
 def _risk_state(state: dict) -> tuple[int, float] | None:
     """Return (open_positions, daily_loss_usd), or None when either is missing or invalid."""
     positions = _finite_number(state.get("open_positions"))
@@ -183,11 +200,25 @@ def evaluate(
         reasons.append("hypothetical_strategy_not_allowed")
     if intent.side not in {"buy", "sell"}:
         reasons.append("side_must_be_single_leg")
-    if not 0.0 < intent.model_prob < 1.0:
+    # Task U: every number in the edge math must be finite. NaN compares False with
+    # everything, so without this a NaN fee_rate made the edge NaN and skipped
+    # non_positive_edge. A non-finite or non-number input vetoes and the edge fails closed.
+    number_problems = [
+        problem
+        for field in NUMERIC_INTENT_FIELDS
+        if (problem := _number_problem(field, getattr(intent, field))) is not None
+    ]
+    reasons.extend(number_problems)
+    model_prob = _as_float(intent.model_prob)
+    market_price = _as_float(intent.market_price)
+    assumed_slippage = _as_float(intent.assumed_slippage)
+    fee_rate = _as_float(intent.fee_rate)
+
+    if not 0.0 < model_prob < 1.0:
         reasons.append("model_prob_out_of_range")
-    if not 0.0 < intent.market_price < 1.0:
+    if not 0.0 < market_price < 1.0:
         reasons.append("market_price_out_of_range")
-    if intent.assumed_slippage < 0 or intent.fee_rate < 0:
+    if assumed_slippage < 0 or fee_rate < 0:
         reasons.append("negative_cost_assumption")
 
     try:
@@ -219,30 +250,39 @@ def evaluate(
         reasons.append(book_problem)
 
     if intent.side == "buy":
-        effective = intent.market_price + intent.assumed_slippage
+        effective = market_price + assumed_slippage
         formula = EDGE_FORMULA_BUY
     elif intent.side == "sell":
-        effective = intent.market_price - intent.assumed_slippage
+        effective = market_price - assumed_slippage
         formula = EDGE_FORMULA_SELL
     else:
-        effective = intent.market_price
+        effective = market_price
         formula = ""
 
     if not 0.0 < effective < 1.0:
         reasons.append("effective_price_out_of_range")
 
-    fee_per_share = intent.fee_rate * intent.market_price
+    fee_per_share = fee_rate * market_price
     if intent.side == "buy":
-        edge = intent.model_prob - effective - fee_per_share
+        edge = model_prob - effective - fee_per_share
     elif intent.side == "sell":
-        edge = effective - intent.model_prob - fee_per_share
+        edge = effective - model_prob - fee_per_share
     else:
         edge = -1.0
+    if number_problems or not math.isfinite(edge):
+        edge = -1.0  # fail closed: a non-finite input never yields a usable edge
     if edge <= 0:
         reasons.append("non_positive_edge")
 
     # Hard clip at 1% even if a caller passes a looser in-memory config.
-    clip = min(float(cfg.get("max_order_pct", 0.0)), 0.01)
+    try:
+        max_order_pct = float(cfg.get("max_order_pct", 0.0))
+    except (TypeError, ValueError):
+        max_order_pct = math.nan
+    if not math.isfinite(max_order_pct):
+        reasons.append("invalid_max_order_pct")
+        max_order_pct = 0.0
+    clip = min(max_order_pct, 0.01)
     notional = PAPER_EQUITY_USD * clip
     if notional <= 0:
         reasons.append("zero_notional")
@@ -264,8 +304,8 @@ def evaluate(
         if PAPER_EQUITY_USD <= 0 or daily_loss / PAPER_EQUITY_USD >= caps["max_daily_loss_pct"]:
             reasons.append("max_daily_loss")
 
-    fee_usd = notional * intent.fee_rate if notional > 0 else 0.0
-    shares = (notional / effective) if effective > 0 else 0.0
+    fee_usd = notional * fee_rate if notional > 0 and math.isfinite(fee_rate) else 0.0
+    shares = (notional / effective) if math.isfinite(effective) and effective > 0 else 0.0
     return Decision(
         allow=not reasons,
         reasons=reasons,

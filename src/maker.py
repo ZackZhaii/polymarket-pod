@@ -1,6 +1,7 @@
 """Maker stub. Records a paper quote signal. Does not post or cancel on an exchange."""
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from src.podlib import PAPER_EQUITY_USD, QUOTES_PATH, append_jsonl, bus, utc_now
@@ -18,6 +19,10 @@ def quote(
 ) -> dict:
     if side not in {"buy", "sell"}:
         raise ValueError("side must be one paper leg")
+    if not isinstance(price, (int, float)) or isinstance(price, bool) or not math.isfinite(price):
+        raise ValueError("price must be a finite number")
+    if not isinstance(size, (int, float)) or isinstance(size, bool) or not math.isfinite(size):
+        raise ValueError("size must be a finite number")
     if not 0.0 < price < 1.0:
         raise ValueError("price out of range")
     if size <= 0:

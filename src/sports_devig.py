@@ -5,6 +5,7 @@ This module never emits a fill or an order and does not use the network.
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from src.podlib import bus
@@ -18,6 +19,8 @@ def fair_two_way(odds_a: float, odds_b: float) -> tuple[float, float] | None:
         return None
     if not isinstance(odds_b, (int, float)) or isinstance(odds_b, bool):
         return None
+    if not math.isfinite(float(odds_a)) or not math.isfinite(float(odds_b)):
+        return None  # Task U: NaN passed `<= 1.0`; inf gave a 0/1 fair price
     if float(odds_a) <= 1.0 or float(odds_b) <= 1.0:
         return None
     raw_a = 1.0 / float(odds_a)
@@ -40,11 +43,15 @@ def emit(
     fair = fair_two_way(odds_a, odds_b)
     if fair is None or not isinstance(market_price, (int, float)) or isinstance(market_price, bool):
         return None
+    if not isinstance(slippage, (int, float)) or isinstance(slippage, bool):
+        return None
+    if not math.isfinite(float(market_price)) or not math.isfinite(float(slippage)):
+        return None  # Task U: a NaN slippage passed `< 0.0` and emitted a NaN edge
     if not 0.0 < float(market_price) < 1.0 or float(slippage) < 0.0:
         return None
     fair_a = fair[0]
     edge = fair_a - (float(market_price) + float(slippage))
-    if edge <= 0.0:
+    if not math.isfinite(edge) or edge <= 0.0:
         return None
     return bus(
         "SportsDevig",
