@@ -57,6 +57,17 @@ Finish when `python src/paper_cycle.py` reads local jsonl, emits signals only, a
 - BookWatcher emits staleness. It does not call the exchange and does not auto-halt.
 - The cycle must not write a paper fill and must not edit `config/risk.toml`.
 
+## Task E — one public paper session
+
+Status: done.
+
+Finish when `python src/paper_session.py` can record one public read, then the offline cycle, and `python -m pytest` passes with no credentials.
+
+- Scanner uses the public Gamma markets endpoint. BookWatcher uses public CLOB `/book` only.
+- The session appends `logs/sessions.jsonl`. It does not write a paper fill.
+- `live_enabled` stays false. The command does not read `.env` and does not call an order endpoint.
+- A gap remains a signal, not locked profit.
+
 ## Paste this into a new chat
 
 ```text
@@ -69,8 +80,8 @@ Finish when `python src/paper_cycle.py` reads local jsonl, emits signals only, a
 
 ## Latest
 
-- 2026-10-08: Task D done. Offline `python src/paper_cycle.py` ran: gaps=0, stale=5, fills=0.
-- NegRiskArb and ArbBinary now emit ask-sum signals from local books. A gap is not locked profit.
-- BookWatcher marks snapshots older than 120 seconds stale. No halt and no exchange call.
-- `python -m pytest` passed offline, 22 tests. `config/risk.toml` unchanged, `live_enabled=false`.
-- Do not install a trading client. Next step is still human review of paper logs, not live orders.
+- 2026-10-08: Task E done. `python src/paper_session.py` is one public read plus the offline cycle.
+- Session log is `logs/sessions.jsonl`. Fills stay 0. No order endpoint and no `.env` read.
+- `python -m pytest` passed offline. `config/risk.toml` unchanged, `live_enabled=false`.
+- This starts the paper observation the plan already required. It is not a live gate.
+- Do not install a trading client. Do not set `live_enabled` to true.

@@ -66,17 +66,22 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
     }
 
 
-def main() -> int:
-    cfg = load_risk()
-    ts = utc_now()
-    markets = fetch_markets()
+def visible_rows(raw_markets: list[dict], ts: str) -> list[dict[str, Any]]:
     rows = []
-    for market in markets:
+    for market in raw_markets:
         row = normalize(market, ts)
         if row["question"] or row["slug"] or row["id"]:
             rows.append(row)
+    return rows
+
+
+def persist_markets(
+    rows: list[dict[str, Any]],
+    markets_path: Path = MARKETS_PATH,
+    bus_path: Path | None = None,
+) -> int:
     for row in rows:
-        append_jsonl(MARKETS_PATH, row)
+        append_jsonl(markets_path, row)
         bus(
             "Scanner",
             "BookWatcher",
@@ -89,7 +94,16 @@ def main() -> int:
                 "spread": row["spread"],
                 "source": "gamma_public",
             },
+            path=bus_path,
         )
+    return len(rows)
+
+
+def main() -> int:
+    cfg = load_risk()
+    ts = utc_now()
+    rows = visible_rows(fetch_markets(), ts)
+    persist_markets(rows)
     mode = cfg.get("mode")
     live = cfg.get("live_enabled")
     print(

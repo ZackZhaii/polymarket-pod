@@ -29,6 +29,8 @@ Windows, if this machine has no `D:` drive, use `%USERPROFILE%\projects\polymark
 
 `python src/paper_cycle.py` reads those local files only. It emits YES+NO or multi-outcome gap signals and a staleness signal. It does not use the network, does not write a paper fill, and does not place an order. A gap is not locked profit.
 
+`python src/paper_session.py` is one observation pass: public Gamma, public CLOB `/book` for the first five markets, then `paper_cycle`. It appends `logs/sessions.jsonl` and does not write a paper fill. Run it when you want another paper sample. It does not start live trading.
+
 `python src/paper_ledger.py` with no arguments runs a local gate self-check. A simulated fill is written only after `RiskGate` returns allow. The default check does not invent an edge on a real market: a public price compared with the same price is vetoed. The one allow path is labeled `phase0-gate-test` and is not a forecast.
 
 Operator paper intent (still simulated, still gated):

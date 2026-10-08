@@ -50,10 +50,17 @@ def level(levels: Any, pick: str) -> tuple[float | None, float | None]:
     return price, size
 
 
-def snapshot(market: dict[str, Any], outcome: str, token_id: str, ts: str) -> dict[str, Any] | None:
+def snapshot(
+    market: dict[str, Any],
+    outcome: str,
+    token_id: str,
+    ts: str,
+    getter=None,
+) -> dict[str, Any] | None:
     url = "https://clob.polymarket.com/book?" + urlencode({"token_id": token_id})
+    get = getter or public_get
     try:
-        book = public_get(url)
+        book = get(url)
     except Exception as exc:  # network or HTTP failure on one token
         print(f"book_skip token={token_id[:12]} reason={type(exc).__name__}", file=sys.stderr)
         return None
@@ -85,25 +92,27 @@ def snapshot(market: dict[str, Any], outcome: str, token_id: str, ts: str) -> di
     }
 
 
-def main() -> int:
-    cfg = load_risk()
-    markets = latest_markets()
-    if not markets:
-        print("no markets in data/markets.jsonl; run python src/scanner.py first", file=sys.stderr)
-        return 2
-    ts = utc_now()
+def record(
+    markets: list[dict[str, Any]],
+    ts: str,
+    *,
+    books_path: Path = BOOKS_PATH,
+    bus_path: Path | None = None,
+    getter=None,
+    per_market: int = 2,
+) -> int:
     written = 0
     for market in markets:
         tokens = [str(item) for item in market.get("token_ids") or []]
         outcomes = [str(item) for item in market.get("outcomes") or []]
         pairs = list(zip(outcomes, tokens)) or [(str(index), token) for index, token in enumerate(tokens)]
-        for outcome, token_id in pairs[:2]:
+        for outcome, token_id in pairs[:per_market]:
             if not token_id:
                 continue
-            row = snapshot(market, outcome, token_id, ts)
+            row = snapshot(market, outcome, token_id, ts, getter=getter)
             if row is None:
                 continue
-            append_jsonl(BOOKS_PATH, row)
+            append_jsonl(books_path, row)
             bus(
                 "BookWatcher",
                 "RiskGate",
@@ -117,12 +126,27 @@ def main() -> int:
                     "spread": row["spread"],
                     "source": "clob_public_book",
                 },
+                path=bus_path,
             )
             written += 1
-            print(
-                f"- {row['question']} | {outcome} | bid={row['best_bid']} "
-                f"ask={row['best_ask']} spread={row['spread']}"
-            )
+    return written
+
+
+def main() -> int:
+    cfg = load_risk()
+    markets = latest_markets()
+    if not markets:
+        print("no markets in data/markets.jsonl; run python src/scanner.py first", file=sys.stderr)
+        return 2
+    ts = utc_now()
+    written = record(markets, ts)
+    for row in read_jsonl(BOOKS_PATH):
+        if str(row.get("ts") or "") != ts:
+            continue
+        print(
+            f"- {row['question']} | {row['outcome']} | bid={row['best_bid']} "
+            f"ask={row['best_ask']} spread={row['spread']}"
+        )
     live = cfg.get("live_enabled")
     print(
         f"book_snapshots={written} mode={cfg.get('mode')} "
