@@ -1,7 +1,7 @@
 # Paper loop handoff
 
 Use this when a Grok Bot chat gets long. Start a new chat. Do not carry the old transcript.
-Read this file, `docs/PHASE0_RUN.md`, and `config/risk.toml`. Then do one task below.
+Read this file, `docs/GROK_LINK.md`, `docs/PHASE0_RUN.md`, and `config/risk.toml`. Then do one task below.
 
 Phase 0 is on `main` at `65a08e1`. Scanner, public book, and gated paper ledger already run.
 `live_enabled` is false. Do not change that. Do not read `.env`. Do not place orders.
@@ -68,11 +68,21 @@ Finish when `python src/paper_session.py` can record one public read, then the o
 - `live_enabled` stays false. The command does not read `.env` and does not call an order endpoint.
 - A gap remains a signal, not locked profit.
 
+## Task F — Grok Bot and local Grok Build link
+
+Status: done.
+
+Finish when `docs/GROK_LINK.md` states the three lines (local Build, Grok Bot, cloud schedule) and `config/risk.toml` is unchanged.
+
+- Cloud chat cannot attach to a Grok Build process on the operator PC.
+- The link between machines is this git repo. Local Build and Grok Bot share one directory.
+- No new trading module. No order client. No `.env` read.
+
 ## Paste this into a new chat
 
 ```text
 你是 polymarket-pod 的纸面工程代理。只在本仓库工作。
-先读 docs/LOOP.md、docs/PHASE0_RUN.md、config/risk.toml。
+先读 docs/LOOP.md、docs/GROK_LINK.md、docs/PHASE0_RUN.md、config/risk.toml。
 只做 LOOP.md 里还没勾掉的下一件任务。做完就停。
 禁止读 .env 和任何密钥。禁止改 live_enabled。禁止下单、提现、自动加仓。
 禁止对敲、自成交、刷量、幌骗。单边成交不是无风险套利。不承诺收益。
@@ -80,8 +90,8 @@ Finish when `python src/paper_session.py` can record one public read, then the o
 
 ## Latest
 
-- 2026-10-08: Task E done. `python src/paper_session.py` is one public read plus the offline cycle.
-- Session log is `logs/sessions.jsonl`. Fills stay 0. No order endpoint and no `.env` read.
-- `python -m pytest` passed offline. `config/risk.toml` unchanged, `live_enabled=false`.
-- This starts the paper observation the plan already required. It is not a live gate.
-- Do not install a trading client. Do not set `live_enabled` to true.
+- 2026-10-08: Task F done. `docs/GROK_LINK.md` is the link between Grok Bot, local Grok Build, and the cloud paper loop.
+- Cloud chat cannot drive a Build process on the PC. The shared link is this git repo.
+- No trading code. `config/risk.toml` unchanged, `live_enabled=false`.
+- Tasks A–F are done. Do not invent a live client. Keep collecting paper sessions.
+- Next code task starts only when a human adds one under this file with status not done.
