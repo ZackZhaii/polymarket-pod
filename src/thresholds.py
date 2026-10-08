@@ -76,6 +76,40 @@ WS_PING_INTERVAL_S = 10.0
 # quiet-top book does not look stale while its deltas keep arriving. Rows can only lag reality by
 # this much (never lead it); it must stay well below MAX_BOOK_AGE_S.
 WS_ROW_REFRESH_S = 30.0
+# Task AI: with a stop callback (graceful shutdown), the recorder notices SIGINT/SIGTERM within this.
+WS_STOP_POLL_S = 1.0
+
+# --- M1 24-hour acceptance (Task AI) -------------------------------------------------------------
+# Run defaults (operational: they decide what is recorded, not what passes).
+# default --top: markets taken from the latest scanner batch (both outcome tokens each)
+M1_TOP_MARKETS = 5
+# 64 MiB: a JSONL file is rotated before it would exceed this
+M1_ROTATE_BYTES = 67108864
+# ... or once it has been open this long
+M1_ROTATE_S = 3600.0
+# REST /book comparison sample every 10 minutes
+M1_REST_EVERY_S = 600.0
+# ... of the first N recorded assets
+M1_REST_ASSETS = 4
+# report timeline resolution (coverage and book age are evaluated every step)
+M1_REPORT_STEP_S = 1.0
+# Acceptance criteria (M2 pending; conservative first values, flagged for Poly指挥 / the user).
+# the run must last at least 24 h minus 1 min and end by its deadline
+M1_MIN_RUN_S = 86340.0
+# every asset: share of the run with a fresh book (age <= MAX_BOOK_AGE_S)
+M1_MIN_COVERAGE = 0.99
+# connect attempts after the first (reconnects plus failed connects) over the whole run: 2 per hour
+M1_MAX_RECONNECTS = 48
+# resyncs not caused by a disconnect, per asset per run
+M1_MAX_GAP_RESYNCS_PER_ASSET = 24
+# a REST sample is compared with the WS row nearest in exchange time within this
+M1_REST_MATCH_WINDOW_S = 30.0
+# at least this many REST samples must be compared
+M1_MIN_REST_MATCHED = 50
+# best bid / best ask disagreement among compared samples
+M1_MAX_TOP_MISMATCH_RATE = 0.02
+# REST samples with no live WS row within the window (or an unusable REST book_ts)
+M1_MAX_REST_UNMATCHED_RATE = 0.10
 
 
 def consistency_problems() -> list[str]:
@@ -99,6 +133,28 @@ def consistency_problems() -> list[str]:
         problems.append("WebSocket timing must satisfy 0 < WS_PING_INTERVAL_S < WS_RESYNC_TIMEOUT_S")
     if not 0.0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S:
         problems.append("WS_ROW_REFRESH_S must satisfy 0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S")
+    if not 0.0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S:
+        problems.append("WS_STOP_POLL_S must satisfy 0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S")
+    for name, value in (("M1_TOP_MARKETS", M1_TOP_MARKETS), ("M1_ROTATE_BYTES", M1_ROTATE_BYTES),
+                        ("M1_REST_ASSETS", M1_REST_ASSETS), ("M1_MIN_REST_MATCHED", M1_MIN_REST_MATCHED)):
+        if not (isinstance(value, int) and not isinstance(value, bool) and value >= 1):
+            problems.append(f"{name} must be a whole number >= 1")
+    for name, value in (("M1_MAX_RECONNECTS", M1_MAX_RECONNECTS),
+                        ("M1_MAX_GAP_RESYNCS_PER_ASSET", M1_MAX_GAP_RESYNCS_PER_ASSET)):
+        if not (isinstance(value, int) and not isinstance(value, bool) and value >= 0):
+            problems.append(f"{name} must be a whole number >= 0")
+    if not (M1_ROTATE_S > 0.0 and M1_REST_EVERY_S > 0.0 and M1_MIN_RUN_S > 0.0):
+        problems.append("M1_ROTATE_S, M1_REST_EVERY_S and M1_MIN_RUN_S must be > 0")
+    if not 0.0 < M1_REPORT_STEP_S <= WS_ROW_REFRESH_S:
+        problems.append("M1_REPORT_STEP_S must satisfy 0 < M1_REPORT_STEP_S <= WS_ROW_REFRESH_S")
+    if not 0.0 < M1_MIN_COVERAGE <= 1.0:
+        problems.append("M1_MIN_COVERAGE must satisfy 0 < M1_MIN_COVERAGE <= 1")
+    if not (0.0 <= M1_MAX_TOP_MISMATCH_RATE < 1.0 and 0.0 <= M1_MAX_REST_UNMATCHED_RATE < 1.0):
+        problems.append("M1 mismatch and unmatched rates must be in [0, 1)")
+    if not 0.0 < M1_REST_MATCH_WINDOW_S <= WS_ROW_REFRESH_S:
+        problems.append("M1_REST_MATCH_WINDOW_S must satisfy 0 < M1_REST_MATCH_WINDOW_S <= WS_ROW_REFRESH_S")
+    if M1_MIN_RUN_S / M1_REST_EVERY_S * M1_REST_ASSETS < M1_MIN_REST_MATCHED:
+        problems.append("a full run must be able to collect M1_MIN_REST_MATCHED REST samples")
     return problems
 
 

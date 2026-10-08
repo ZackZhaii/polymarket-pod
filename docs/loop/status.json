@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T22:11:50Z",
+  "ts": "2026-10-08T22:30:57Z",
   "live_enabled": false,
-  "last_done": "AH",
+  "last_done": "AI",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AH (local M0 guard, scripts/guard.py: standard library only, offline, read-only; one PASS/FAIL line per check: risk.toml sha256 pin for the working tree and git HEAD, live_enabled=false and the podlib PINS, no order-capable dependency or import, src URL allowlist of the public read-only endpoints in use, THRESHOLDS.md vs src/thresholds.py; exit 0/1/2; no CI config; backlog #22) done by grok-bot. Task letters after Z are AA, AB, AC, AD, AE, AF, AG, AH. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY and WS_ROW_REFRESH_S. No open todo. No live gate."
+  "note": "AI (M1 24-hour acceptance tooling: python -m src.m1_run records the public WS market channel read-only with rotated JSONL, REST /book samples, graceful SIGINT/SIGTERM and a run manifest with git and risk sha; python -m src.m1_report judges a run dir offline with coverage, book-age percentiles, resyncs, reconnects and REST-vs-WS match, PASS/FAIL; backlog #23) done by grok-bot. Task letters after Z are AA, AB, AC, AD, AE, AF, AG, AH, AI. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S and the M1 criteria M1_MIN_RUN_S, M1_MIN_COVERAGE, M1_MAX_RECONNECTS, M1_MAX_GAP_RESYNCS_PER_ASSET, M1_REST_MATCH_WINDOW_S, M1_MIN_REST_MATCHED, M1_MAX_TOP_MISMATCH_RATE, M1_MAX_REST_UNMATCHED_RATE. No open todo. No live gate."
 }

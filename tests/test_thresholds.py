@@ -42,6 +42,22 @@ EXPECTED = {
     "WS_RESYNC_TIMEOUT_S": 30.0,
     "WS_PING_INTERVAL_S": 10.0,
     "WS_ROW_REFRESH_S": 30.0,
+    # Task AI: M1 acceptance (first values; the criteria are M2 pending).
+    "WS_STOP_POLL_S": 1.0,
+    "M1_TOP_MARKETS": 5,
+    "M1_ROTATE_BYTES": 67108864,
+    "M1_ROTATE_S": 3600.0,
+    "M1_REST_EVERY_S": 600.0,
+    "M1_REST_ASSETS": 4,
+    "M1_REPORT_STEP_S": 1.0,
+    "M1_MIN_RUN_S": 86340.0,
+    "M1_MIN_COVERAGE": 0.99,
+    "M1_MAX_RECONNECTS": 48,
+    "M1_MAX_GAP_RESYNCS_PER_ASSET": 24,
+    "M1_REST_MATCH_WINDOW_S": 30.0,
+    "M1_MIN_REST_MATCHED": 50,
+    "M1_MAX_TOP_MISMATCH_RATE": 0.02,
+    "M1_MAX_REST_UNMATCHED_RATE": 0.1,
 }
 
 # Old import paths that callers and tests use; each must stay the very same object.
@@ -75,7 +91,10 @@ REEXPORTS = {
 }
 
 M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
-              "MIN_HOURS_TO_EXPIRY", "WS_ROW_REFRESH_S"}
+              "MIN_HOURS_TO_EXPIRY", "WS_ROW_REFRESH_S",
+              # Task AI: the M1 acceptance criteria (conservative first values for the user at M2).
+              "M1_MIN_RUN_S", "M1_MIN_COVERAGE", "M1_MAX_RECONNECTS", "M1_MAX_GAP_RESYNCS_PER_ASSET",
+              "M1_REST_MATCH_WINDOW_S", "M1_MIN_REST_MATCHED", "M1_MAX_TOP_MISMATCH_RATE", "M1_MAX_REST_UNMATCHED_RATE"}
 HEADER = ["Name", "Value", "Unit", "Meaning", "Where", "Source", "M2 pending"]
 
 
@@ -214,6 +233,23 @@ def test_relations_hold():
         ("WS_BACKOFF_BASE_S = 1.0", "WS_BACKOFF_BASE_S = 0.0"),
         ("WS_PING_INTERVAL_S = 10.0", "WS_PING_INTERVAL_S = 30.0"),
         ("WS_ROW_REFRESH_S = 30.0", "WS_ROW_REFRESH_S = 120.0"),
+        ("WS_STOP_POLL_S = 1.0", "WS_STOP_POLL_S = 0.0"),
+        ("WS_STOP_POLL_S = 1.0", "WS_STOP_POLL_S = 11.0"),
+        ("M1_TOP_MARKETS = 5", "M1_TOP_MARKETS = 0"),
+        ("M1_ROTATE_BYTES = 67108864", "M1_ROTATE_BYTES = 1.5"),
+        ("M1_REST_ASSETS = 4", "M1_REST_ASSETS = True"),
+        ("M1_MAX_RECONNECTS = 48", "M1_MAX_RECONNECTS = -1"),
+        ("M1_MAX_GAP_RESYNCS_PER_ASSET = 24", "M1_MAX_GAP_RESYNCS_PER_ASSET = 2.5"),
+        ("M1_ROTATE_S = 3600.0", "M1_ROTATE_S = 0.0"),
+        ("M1_REPORT_STEP_S = 1.0", "M1_REPORT_STEP_S = 60.0"),
+        ("M1_MIN_COVERAGE = 0.99", "M1_MIN_COVERAGE = 1.5"),
+        ("M1_MIN_COVERAGE = 0.99", "M1_MIN_COVERAGE = 0.0"),
+        ("M1_MAX_TOP_MISMATCH_RATE = 0.02", "M1_MAX_TOP_MISMATCH_RATE = 1.0"),
+        ("M1_MAX_REST_UNMATCHED_RATE = 0.10", "M1_MAX_REST_UNMATCHED_RATE = -0.1"),
+        ("M1_REST_MATCH_WINDOW_S = 30.0", "M1_REST_MATCH_WINDOW_S = 600.0"),
+        ("M1_REST_MATCH_WINDOW_S = 30.0", "M1_REST_MATCH_WINDOW_S = 0.0"),
+        ("M1_MIN_REST_MATCHED = 50", "M1_MIN_REST_MATCHED = 1000"),
+        ("M1_REST_EVERY_S = 600.0", "M1_REST_EVERY_S = 7200.0"),
     ],
 )
 def test_an_inconsistent_edit_fails_at_import(line, replacement):

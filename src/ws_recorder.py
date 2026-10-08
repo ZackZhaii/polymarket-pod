@@ -103,6 +103,7 @@ from src.thresholds import (  # noqa: E402
     WS_PING_INTERVAL_S,
     WS_RESYNC_TIMEOUT_S,
     WS_ROW_REFRESH_S,
+    WS_STOP_POLL_S,
 )
 
 MARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
@@ -834,6 +835,7 @@ class RunReport:
     counts: Counter = field(default_factory=Counter)
     pings: int = 0
     unmapped_assets: list[str] = field(default_factory=list)
+    ended_by: str = ""  # "deadline" or "stopped" (Task AI)
 
 
 def validate_assets(assets: Iterable[str]) -> list[str]:
@@ -861,7 +863,13 @@ class Recorder:
         monotonic: Callable[[], float] | None = None,
         sleep: Callable[[float], None] | None = None,
         now: Callable[[], str] | None = None,
+        stop: Callable[[], bool] | None = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
+        """``stop`` (Task AI): polled at least every WS_STOP_POLL_S; once true the run ends like a deadline
+        (graceful shutdown). ``on_event`` (Task AI) receives one dict per connect, disconnect, backoff,
+        resync, resubscribe, asset going live and end of run. Both are optional; without them the
+        recorder behaves exactly as in Task AG."""
         check_market_url(url)
         runtime = _number(max_runtime_s)
         if runtime is None or runtime <= 0:
@@ -875,13 +883,30 @@ class Recorder:
         self.monotonic = monotonic or time.monotonic
         self.sleep = sleep or time.sleep
         self.now = now or utc_now
+        self.stop = stop
+        self.on_event = on_event
         self.report = RunReport(unmapped_assets=[a for a in self.assets if a not in (meta or {})])
 
-    def _write(self, out: Outcome) -> None:
+    def _stopped(self) -> bool:
+        return self.stop is not None and bool(self.stop())
+
+    def _event(self, name: str, **fields: Any) -> None:
+        if self.on_event is not None:
+            self.on_event({"ts": self.now(), "event": name, **fields})
+
+    def _write(self, out: Outcome, before: set[str] | None = None) -> None:
         for row in out.rows:
             self.sink.write(row)
             self.report.rows += 1
         self.report.counts.update(out.counts)
+        if self.on_event is not None:
+            for asset, reason in out.resyncs:
+                self._event("resync", asset=asset, reason=reason)
+            if before is not None:
+                awaiting = set(self.core.awaiting())
+                for asset in self.assets:
+                    if asset in before and asset not in awaiting:
+                        self._event("live", asset=asset)
 
     def _send(self, connection: Connection, frame: str) -> None:
         connection.send(check_outgoing_frame(frame))
@@ -889,36 +914,51 @@ class Recorder:
     def _pause(self, attempt: int, deadline: float) -> None:
         delay = min(backoff_delay(attempt), max(0.0, deadline - self.monotonic()))
         self.report.backoffs.append(delay)
-        if delay > 0:
+        self._event("backoff", delay_s=delay, attempt=attempt)
+        if delay <= 0:
+            return
+        if self.stop is None:
             self.sleep(delay)
+            return
+        end = self.monotonic() + delay
+        while not self._stopped():  # sleep in short slices so a shutdown is not held up by a long backoff
+            left = end - self.monotonic()
+            if left <= 0:
+                break
+            self.sleep(min(left, WS_STOP_POLL_S))
 
     def run(self) -> RunReport:
         deadline = self.monotonic() + self.max_runtime_s
         attempt = 0
-        while self.monotonic() < deadline:
+        while self.monotonic() < deadline and not self._stopped():
             try:
                 connection = self.transport.connect(
                     self.url, min(WS_RESYNC_TIMEOUT_S, max(0.0, deadline - self.monotonic())))
             except TransportUnavailable:
                 raise
-            except Exception:  # noqa: BLE001 - any connect failure backs off and retries
+            except Exception as exc:  # noqa: BLE001 - any connect failure backs off and retries
                 self.report.connect_failures += 1
+                self._event("connect_failed", error=type(exc).__name__)
                 self._pause(attempt, deadline)
                 attempt += 1
                 continue
             self.report.connects += 1
             try:
+                self._event("connected", connects=self.report.connects)
                 reason, healthy = self._session(connection, deadline)
             finally:
                 connection.close()
-            if reason == "deadline":
+            if reason in ("deadline", "stopped"):
                 break
             self.report.disconnects[reason] += 1
+            self._event("disconnected", reason=reason, healthy=healthy)
             self._write(self.core.invalidate_all(f"disconnect_{reason}", self.now()))
             if healthy:
                 attempt = 0
             self._pause(attempt, deadline)
             attempt += 1
+        self.report.ended_by = "stopped" if self._stopped() else "deadline"
+        self._event("end", ended_by=self.report.ended_by)
         return self.report
 
     def _session(self, connection: Connection, deadline: float) -> tuple[str, bool]:
@@ -933,6 +973,8 @@ class Recorder:
             current = self.monotonic()
             if current >= deadline:
                 return "deadline", healthy
+            if self._stopped():
+                return "stopped", healthy
             try:
                 if current >= next_ping:
                     self._send(connection, PING)
@@ -942,6 +984,8 @@ class Recorder:
                 if oldest is not None and current - oldest >= WS_RESYNC_TIMEOUT_S:
                     return "resync_timeout", healthy
                 waits = [deadline - current, next_ping - current]
+                if self.stop is not None:
+                    waits.append(WS_STOP_POLL_S)
                 if oldest is not None:
                     waits.append(oldest + WS_RESYNC_TIMEOUT_S - current)
                 text = connection.recv(max(0.0, min(waits)))
@@ -949,10 +993,11 @@ class Recorder:
                     continue
                 before = set(self.core.awaiting())
                 out = self.core.handle_text(text, self.now(), self.monotonic())
-                self._write(out)
+                self._write(out, before)
                 fresh = [asset for asset, _ in out.resyncs if asset not in before]
                 fresh = list(dict.fromkeys(fresh))
                 if fresh:
+                    self._event("resubscribe", assets=fresh)
                     for frame in resubscribe_frames(fresh):
                         self._send(connection, frame)
                 if self.core.all_live():

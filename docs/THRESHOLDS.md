@@ -34,12 +34,32 @@ proposals waiting for the user's decision at M2. Task AC moved no value and chan
 | `WS_RESYNC_TIMEOUT_S` | `30.0` | s | An asset waiting this long for a fresh snapshot (after subscribe or a detected gap) makes the recorder reconnect. Also the connect timeout. A waiting asset writes no priced rows: only the one price-less invalidation row written when it left live (already stale), so this never makes a book look fresh. Operational. | `src/thresholds.py` | Task AG | no (operational) |
 | `WS_PING_INTERVAL_S` | `10.0` | s | Application heartbeat: the text frame `PING` this often (Polymarket market-channel docs). Operational. | `src/thresholds.py` | Task AG, docs.polymarket.com | no (operational) |
 | `WS_ROW_REFRESH_S` | `30.0` | s (exchange time) | A live book with an unchanged top still gets a new row once the exchange time of its latest applied event is this far past the last row, so `book_ts` keeps up with a live stream. Rows lag the stream by at most this, never lead it. Staleness-relevant; must stay below `MAX_BOOK_AGE_S`. | `src/thresholds.py` | Task AG | yes |
+| `WS_STOP_POLL_S` | `1.0` | s | With a stop callback (the M1 run's SIGINT/SIGTERM handling) the recorder checks it at least this often, also while backing off. Operational; must stay <= `WS_PING_INTERVAL_S`. | `src/thresholds.py` | Task AI | no (operational) |
+| `M1_TOP_MARKETS` | `5` | markets | Default `src.m1_run --top`: markets taken from the latest scanner batch (24h volume order), both outcome tokens each. Decides what is recorded, not what passes. | `src/thresholds.py` | Task AI | no (operational) |
+| `M1_ROTATE_BYTES` | `67108864` | bytes | An M1 run JSONL file (books, events, rest) is rotated before it would pass 64 MiB (`--rotate-mb`). | `src/thresholds.py` | Task AI | no (operational) |
+| `M1_ROTATE_S` | `3600.0` | s | ... or once it has been open this long (`--rotate-s`). | `src/thresholds.py` | Task AI | no (operational) |
+| `M1_REST_EVERY_S` | `600.0` | s | The M1 run reads the public CLOB `/book` for the REST-vs-WS comparison at start and then this often (`--rest-every`). | `src/thresholds.py` | Task AI | no (operational) |
+| `M1_REST_ASSETS` | `4` | assets | ... for the first N recorded assets (`--rest-assets`). | `src/thresholds.py` | Task AI | no (operational) |
+| `M1_REPORT_STEP_S` | `1.0` | s | `src.m1_report` timeline resolution: coverage and book age are evaluated at every step of the run window. Must be <= `WS_ROW_REFRESH_S`. | `src/thresholds.py` | Task AI | no (operational) |
+| `M1_MIN_RUN_S` | `86340.0` | s | M1 acceptance: the run lasted at least 24 h minus 1 min, ended by its deadline (not a signal) with exit 0. Conservative first value. | `src/thresholds.py` | Task AI | yes |
+| `M1_MIN_COVERAGE` | `0.99` | fraction of run | M1 acceptance: every asset had a fresh book (`0 <= t - book_ts <= MAX_BOOK_AGE_S`, the `book_age_problem` rule) for at least this share of the run. Each asset's p99 book age must also be <= `MAX_BOOK_AGE_S`. Conservative first value. | `src/thresholds.py` | Task AI | yes |
+| `M1_MAX_RECONNECTS` | `48` | connect attempts | M1 acceptance: connect attempts after the first (reconnects plus failed connects) over the run, at most 2 per hour. Conservative first value. | `src/thresholds.py` | Task AI | yes |
+| `M1_MAX_GAP_RESYNCS_PER_ASSET` | `24` | resyncs/asset | M1 acceptance: resyncs not caused by a disconnect (gaps, regressions, invalid data, a non-JSON frame) per asset over the run. Conservative first value. | `src/thresholds.py` | Task AI | yes |
+| `M1_REST_MATCH_WINDOW_S` | `30.0` | s (exchange time) | A REST `/book` sample is compared with the live WS row whose exchange `book_ts` is nearest, if within this; otherwise it is unmatched. Must be <= `WS_ROW_REFRESH_S`. | `src/thresholds.py` | Task AI | yes |
+| `M1_MIN_REST_MATCHED` | `50` | samples | M1 acceptance: at least this many REST samples compared (a full default run takes about 580). Conservative first value. | `src/thresholds.py` | Task AI | yes |
+| `M1_MAX_TOP_MISMATCH_RATE` | `0.02` | fraction | M1 acceptance: compared REST samples whose best bid or best ask differs from the WS row. Conservative first value. | `src/thresholds.py` | Task AI | yes |
+| `M1_MAX_REST_UNMATCHED_RATE` | `0.1` | fraction | M1 acceptance: REST samples with no live WS row within `M1_REST_MATCH_WINDOW_S` (or an unusable REST `book_ts`). Conservative first value. | `src/thresholds.py` | Task AI | yes |
 
 Relations checked when `src/thresholds.py` is imported (an explicit `RuntimeError`, not `assert`):
 `SENTINEL_STALE_S == MAX_BOOK_AGE_S`, `PAPER_CYCLE_STALE_AFTER_S == MAX_BOOK_AGE_S`,
 `SENTINEL_STALE_CONSECUTIVE` a whole number >= 1, `0 <= SCANNER_MIN_PRICE < SCANNER_MAX_PRICE <= 1`,
 `SCANNER_MAX_PRICE < ENDGAME_PRICE_MIN <= ENDGAME_PRICE_MAX < 1`, `0 < MIN_HOURS_TO_EXPIRY < ENDGAME_WINDOW_HOURS`,
-`0 < WS_BACKOFF_BASE_S <= WS_BACKOFF_CAP_S`, `0 < WS_PING_INTERVAL_S < WS_RESYNC_TIMEOUT_S`, `0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S`.
+`0 < WS_BACKOFF_BASE_S <= WS_BACKOFF_CAP_S`, `0 < WS_PING_INTERVAL_S < WS_RESYNC_TIMEOUT_S`, `0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S`,
+`0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S`; M1 (Task AI): `M1_TOP_MARKETS`, `M1_ROTATE_BYTES`, `M1_REST_ASSETS`,
+`M1_MIN_REST_MATCHED` whole numbers >= 1, `M1_MAX_RECONNECTS` and `M1_MAX_GAP_RESYNCS_PER_ASSET` whole numbers >= 0,
+`M1_ROTATE_S`, `M1_REST_EVERY_S`, `M1_MIN_RUN_S` > 0, `0 < M1_REPORT_STEP_S <= WS_ROW_REFRESH_S`, `0 < M1_MIN_COVERAGE <= 1`,
+both M1 rates in `[0, 1)`, `0 < M1_REST_MATCH_WINDOW_S <= WS_ROW_REFRESH_S`, and a full run can collect enough REST
+samples: `M1_MIN_RUN_S / M1_REST_EVERY_S * M1_REST_ASSETS >= M1_MIN_REST_MATCHED`.
 `src/sentinel.py` keeps its own `SENTINEL_STALE_S != MAX_BOOK_AGE_S` guard as well.
 
 ## Operational limits (stay in their modules)
@@ -55,6 +75,7 @@ Paging, retry and sampling limits. They decide how much is read, not what passes
 | `podlib.PUBLIC_GET_ATTEMPTS` | `3` | attempts | Tries per public GET on transient network/TLS errors. | `src/podlib.py` | Task K (9c41d5a) | no |
 | `podlib.PUBLIC_GET_BACKOFF_S` | `0.5` | s | Retry backoff base (0.5 s, then 1 s). | `src/podlib.py` | Task K (9c41d5a) | no |
 | `paper_session.BOOK_LIMIT` | `5` | markets | A paper session books the first N passing markets. | `src/paper_session.py` | Task E | no |
+| `m1_report.MISMATCH_LIST_LIMIT` | `200` | rows | The M1 report lists at most this many REST-vs-WS mismatches (all are counted). | `src/m1_report.py` | Task AI | no |
 
 Not gathered either: `book.record(per_market=2)` (books at most 2 outcomes per market) is a function default,
 and `paper_ledger`'s self-check uses a fixed 0.005 slippage as fixture data.
