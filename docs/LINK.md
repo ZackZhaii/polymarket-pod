@@ -20,7 +20,11 @@
 
 没有变化就不要开空 PR。释放写在 PR 里：任务标成 `done`，清掉 claim，并在 `## Latest` 写下五行。
 
+## 工作区
+
+写 git 的执行者都在 `.worktrees/<名字>` 里开 worktree 干活（`.worktrees/` 写进 `.git/info/exclude`），做完 `git worktree remove`。主目录留给 Operator 本机 Grok Build，只有它在主目录 `git pull`。提交用 `git -c user.name=ZackZhaii -c user.email=17690114@qq.com commit ...`，不改全局配置。
+
 ## 不许演进到实盘
 
-队列空了就停。下一件任务只能由人写进 `docs/LOOP.md` 和 `docs/loop/state.json`。
+队列空了就停。新任务进队列只有两条路：人直接写进 `docs/LOOP.md` 和 `docs/loop/state.json`；或 bot 从 `docs/COORDINATION.md` 风险缺口清单挑一条纯代码项，开 PR 登记到这两个文件。人合并 PR 就是 Operator 加入，关闭 PR 就是拒绝。清单外的任务 bot 不许自造。同时最多 2 个自选任务 PR 等审查；任务字母用 `main` 和未关闭 PR 都没用过的下一个。
 不允许任何一个入口自己把实盘、下单客户端或密钥访问加进队列。
