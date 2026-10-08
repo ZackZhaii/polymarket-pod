@@ -32,6 +32,7 @@ from src.podlib import (  # noqa: E402
     utc_now,
 )
 from src.book_staleness import latest_by_time, parse_book_ts  # noqa: E402
+from src.fees import booked_fee_usd  # noqa: E402 - Task AE: one fee module
 from src.risk_gate import Decision, Intent, evaluate  # noqa: E402
 
 DIRECTIONAL = "Single-leg fill is directional exposure, not risk-free arbitrage."
@@ -179,7 +180,7 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
         "edge_formula": decision.formula,
         "assumed_slippage": intent.assumed_slippage,
         "fee_rate": intent.fee_rate,
-        "fee_usd": round(decision.fee_usd, 8),
+        "fee_usd": booked_fee_usd(decision.fee_usd),
         "effective_price": round(decision.effective_price, 8),
         "notional_usd": round(decision.notional_usd, 8),
         "shares": round(decision.shares, 8),
@@ -205,7 +206,7 @@ def _decision_payload(intent: Intent, decision: Decision) -> dict[str, Any]:
         "edge_formula": decision.formula,
         "assumed_slippage": decision.assumed_slippage,
         "fee_rate": decision.fee_rate,
-        "fee_usd": round(decision.fee_usd, 8),
+        "fee_usd": booked_fee_usd(decision.fee_usd),
         "reasons": decision.reasons,
         "hypothetical": intent.hypothetical,
         "risk_decision": "allow" if decision.allow else "veto",

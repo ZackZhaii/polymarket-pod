@@ -15,14 +15,16 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from src import fees  # Task AE: the one fee module (stress_fee / ledger_fee)
 from src.book_staleness import book_age_problem
 from src.podlib import PAPER_EQUITY_USD, pin_problems
 from src.thresholds import EDGE_TOLERANCE, MAX_BOOK_AGE_S, MIN_EDGE  # Task AC: values in src/thresholds.py
 from src.wash_detect import wash_problems
 
 BANNED_STRATEGY_TOKENS = ("wash", "self-trade", "self_trade", "spoof", "layering")
-EDGE_FORMULA_BUY = "model_prob - (market_price + assumed_slippage) - fee_rate * market_price"
-EDGE_FORMULA_SELL = "(market_price - assumed_slippage) - model_prob - fee_rate * market_price"
+# Task AE: the fee per share is charged on max(market_price, effective_price) (src/fees.py).
+EDGE_FORMULA_BUY = "model_prob - (market_price + assumed_slippage) - fee_rate * max(market_price, effective_price)"
+EDGE_FORMULA_SELL = "(market_price - assumed_slippage) - model_prob - fee_rate * max(market_price, effective_price)"
 
 
 @dataclass
@@ -272,14 +274,17 @@ def evaluate(
     if not 0.0 < effective < 1.0:
         reasons.append("effective_price_out_of_range")
 
-    fee_per_share = fee_rate * market_price
+    # Task AE: one fee module (src/fees.py). stress_fee is None only for a non-finite or
+    # non-number fee_rate or price, which is already a Task U number problem: edge -1 (veto).
+    stress = fees.stress_fee(intent.fee_rate, intent.market_price, effective)
+    fee_per_share = 0.0 if stress is None else stress
     if intent.side == "buy":
         edge = model_prob - effective - fee_per_share
     elif intent.side == "sell":
         edge = effective - model_prob - fee_per_share
     else:
         edge = -1.0
-    if number_problems or not math.isfinite(edge):
+    if number_problems or stress is None or not math.isfinite(edge):
         edge = -1.0  # fail closed: a non-finite input never yields a usable edge
     if edge <= 0:
         reasons.append("non_positive_edge")
@@ -316,8 +321,14 @@ def evaluate(
         if PAPER_EQUITY_USD <= 0 or daily_loss / PAPER_EQUITY_USD >= caps["max_daily_loss_pct"]:
             reasons.append("max_daily_loss")
 
-    fee_usd = notional * fee_rate if notional > 0 and math.isfinite(fee_rate) else 0.0
     shares = (notional / effective) if math.isfinite(effective) and effective > 0 else 0.0
+    # Task AE: the booked fee comes from the same module; never below notional * fee_rate.
+    booked = fees.ledger_fee(intent.fee_rate, intent.market_price, effective, notional, shares)
+    if booked is None:
+        if not reasons:
+            reasons.append("invalid_fee")  # backstop: no allow without a valid fee
+        booked = 0.0
+    fee_usd = booked
     return Decision(
         allow=not reasons,
         reasons=reasons,

@@ -231,6 +231,15 @@
       "note": "Approved by Poly指挥 (Endgame second outcome); done by grok-bot. Tightening only: no new thresholds, M2 pending list unchanged.",
       "done_at": "2026-10-08T21:24:17Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AE",
+      "status": "done",
+      "title": "One fee module (src/fees.py): stress_fee for the RiskGate edge, ledger_fee for simulated booking; no fee goes down (backlog #19)",
+      "finish": "src/fees.py is the one place fees are computed: fee_per_share = max(fee_rate * market_price, fee_rate * effective_price, 0); stress_fee is the RiskGate edge stress per share, ledger_fee = max(notional_usd * fee_rate, shares * fee_per_share) is Decision.fee_usd, booked_fee_usd is the ledger's 8-decimal rounding. risk_gate and paper_ledger do no fee arithmetic of their own. tests/test_fee_characterisation.py recorded the old fees (first commit: equality) and now asserts every path is >= its old value on a 24,624-point grid, every edge <= its old value and nothing newly allows. Non-finite or non-number inputs stay fail-closed (edge -1, fee 0.0; ledger invalid state). No new threshold, no fee constant in code, config/risk.toml unchanged. COORDINATION #19 struck through. pytest passes offline.",
+      "note": "Approved by Poly指挥 (fee unification); done by grok-bot. More conservative: buy edge lower by fee_rate * slippage; sell booked fee higher by market/effective; negative fee_rate no longer a rebate. M2 pending list unchanged.",
+      "done_at": "2026-10-08T21:34:13Z",
+      "surface": "grok-bot"
     }
   ]
 }

@@ -56,9 +56,10 @@ def test_edge_threshold(side, model_prob, edge, allowed):
 
 
 def test_fee_counts_toward_the_minimum():
-    # 0.43 - 0.405 - 0.02 * 0.40 = 0.017 < 0.02
+    # Task AE: the fee is charged on max(market_price, effective_price) (src/fees.py).
+    # 0.43 - 0.405 - 0.02 * 0.405 = 0.0169 < 0.02 (was 0.017 with the fee on 0.40)
     decision = evaluate(_intent(model_prob=0.43, fee_rate=0.02), load_risk(), STATE)
-    assert decision.edge == pytest.approx(0.017)
+    assert decision.edge == pytest.approx(0.0169)
     assert decision.reasons == ["edge_below_min"]
 
 

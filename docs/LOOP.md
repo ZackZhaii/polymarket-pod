@@ -575,10 +575,37 @@ nothing else is loosened, and `python -m pytest` passes with no network and no c
 - Tests: `tests/test_endgame_second_outcome.py`. `tests/test_endgame_scan.py` fixtures now carry Gamma's `outcomes`,
   `outcomePrices` and `clobTokenIds`; no assertion changed.
 
+## Task AE — one fee module: stress_fee and ledger_fee (backlog #19)
+
+Status: done.
+
+Approved by Poly指挥, done by grok-bot. RiskGate charged fees twice with two price bases: the edge stress used
+`fee_rate * market_price` per share, the booked fee (`Decision.fee_usd`, written by paper_ledger) used `notional_usd * fee_rate`,
+i.e. the effective (fill) price. A sell was booked cheaper than it was stressed (COORDINATION backlog #19).
+
+Finish when one module computes every fee, no fee is lower than before on any input, invalid inputs still fail closed,
+and `python -m pytest` passes with no network and no credentials.
+
+- `src/fees.py` (pure, imports nothing from `src`): `fee_per_share = max(fee_rate * market_price, fee_rate * effective_price, 0)`.
+  `stress_fee` is the RiskGate edge stress (USD per share); `ledger_fee = max(notional_usd * fee_rate, shares * fee_per_share)`
+  is the booked `Decision.fee_usd`; `booked_fee_usd` is paper_ledger's 8-decimal rounding (unchanged). `risk_gate` and
+  `paper_ledger` do no fee arithmetic of their own (a test walks their AST).
+- `tests/test_fee_characterisation.py` recorded the old fees (the first commit asserts equality with the old code) and now
+  asserts on a 24,624-point grid (prices near 0 and 1 and invalid, sizes, fee rates, slippages, buy/sell/other) that every
+  fee is >= its old value, every edge <= its old value, and nothing newly allows.
+- More conservative: a buy's edge is lower by `fee_rate * assumed_slippage` (0.43 / 0.40 / 0.005 / 0.02: 0.017 -> 0.0169;
+  model 0.433: 0.020 passed, now 0.0199 `edge_below_min`); a sell's booked fee is higher by `market / effective`
+  (10 USD at 0.40, slippage 0.005, fee 0.02: 0.2 -> 0.20253165), so `daily_loss_usd` grows faster. A negative fee_rate
+  (still `negative_cost_assumption`) is no longer a negative fee. Buy booked fees and sell edges are unchanged.
+- Fail closed as Task U: a non-finite or non-number fee_rate or price gives edge -1 and fee 0.0 in a vetoed decision;
+  `invalid_fee` backstops a clean intent whose fee cannot be computed; a non-finite ledger `fee_usd` is still invalid state.
+- No new threshold: fee_rate comes from the intent; there is no fee constant in code and no fee key in `config/risk.toml`.
+  `docs/THRESHOLDS.md` is unchanged. Tests: `tests/test_fee_characterisation.py`, `tests/test_fees.py`.
+
 ## Latest
 
-- 2026-10-09: Task AD done by grok-bot (approved by Poly指挥, backlog #18). `endgame_scan` also selects a market whose second outcome is in the band.
-- Same band (`ENDGAME_PRICE_MIN/MAX`), no new numbers; missing or non-finite prices, both outcomes in the band, or no token for the outcome reject.
-- Signals to RiskGate name `outcome_index`, `outcome` and `token_id`. Scanner rules, 24–48 h window, minimum 5 markets and exit codes unchanged.
-- `python -m pytest` passed offline (911 passed; on Windows 907 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task AE done by grok-bot (approved by Poly指挥, backlog #19). Every fee now comes from `src/fees.py` (`stress_fee`, `ledger_fee`).
+- Fee per share is the higher of `fee_rate * market_price` and `fee_rate * effective_price`; a 24,624-point grid proves no fee went down.
+- More conservative: buy edges lower by fee_rate * slippage; sell booked fees higher by market/effective; negative fee_rate no longer a rebate.
+- `python -m pytest` passed offline (1016 passed; on Windows 1012 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
 - Queue empty. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY.

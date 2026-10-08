@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T21:24:17Z",
+  "ts": "2026-10-08T21:34:13Z",
   "live_enabled": false,
-  "last_done": "AD",
+  "last_done": "AE",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AD (endgame_scan also selects a market whose second outcome is in the ENDGAME_PRICE_MIN..MAX band; both prices needed, both_outcomes_in_band and other_outcome_above_band reject, signals name outcome_index, outcome and token_id; backlog #18) done by grok-bot. Task letters after Z are AA, AB, AC, AD. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S and MIN_HOURS_TO_EXPIRY. No open todo. No live gate."
+  "note": "AE (one fee module src/fees.py: stress_fee for the RiskGate edge and ledger_fee for simulated booking, fee per share on the higher of market and effective price; no fee went down on a 24,624-point grid; backlog #19) done by grok-bot. Task letters after Z are AA, AB, AC, AD, AE. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S and MIN_HOURS_TO_EXPIRY. No open todo. No live gate."
 }
