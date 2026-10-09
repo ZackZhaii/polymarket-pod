@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T13:40:44Z",
+  "ts": "2026-10-09T14:35:19Z",
   "live_enabled": false,
-  "last_done": "BA",
+  "last_done": "BC",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "BA (fill market context: market_mid, best_bid, best_ask, hours_to_expiry_at_entry, kelly_fraction_used recorded at commit, null + calibration_problems when not computable, RiskGate never reads them; ws_recorder --raw-books DIR with the m1_run writer and caps) done by grok-bot. No new number. AZ (#60, calibration report) merged into this branch from dev. No open todo. No live gate."
+  "note": "BC (calibration q = market_mid with price_source, pre-BA fills only fall back to market_price; kelly_frac_raw recorded next to kelly_fraction_used; fill_context stamped at fill time and no_book_context drop reason) done by grok-bot. No new number. BB (#66) open in parallel; report.json changes additive only. No open todo. No live gate."
 }

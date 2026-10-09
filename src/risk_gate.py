@@ -70,6 +70,12 @@ class Intent:
     best_bid: float | None = None
     best_ask: float | None = None
     kelly_fraction_used: float | None = None
+    # Task BC: intent_builder's per-trade raw (full) Kelly fraction kelly_raw, recorded next to the multiplier
+    # (kelly_frac = kelly_fraction_used * kelly_frac_raw), and which path built the intent (calibration_ids
+    # FILL_CONTEXTS: intent_builder / operator_cli / gate_check). Recorded only: RiskGate never reads either,
+    # and neither ever changes a decision or a size.
+    kelly_frac_raw: float | None = None
+    fill_context: str | None = None
 
 
 @dataclass

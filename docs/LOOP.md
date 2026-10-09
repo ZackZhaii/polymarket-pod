@@ -1267,13 +1267,41 @@ provably reads none of it, the standalone recorder can save raw book frames like
 - Docs: `docs/M3_CALIBRATION.md` Step 2b, `docs/EXIT_CODES.md`, `docs/THRESHOLDS.md` wording.
 - No new number, no decision, threshold or size moved. config/risk.toml unchanged, `live_enabled` false.
 
+## Task BC — Calibration at market_mid; both Kelly values; fill_context and no_book_context
+
+Status: done.
+
+Requested by Poly指挥 after Task BA (#62), done by grok-bot on dev@ff21802. BB (#66,
+src/reflector_proposals.py) reads report.json in parallel, so report changes only add keys.
+
+Finish when the trade sample scores the market at the decision-time mid, both Kelly values are on the fill
+and provably unread by RiskGate and sizing, fills without book context have their own drop reason stamped
+at fill time, and `python -m pytest` and guard --require-git pass offline.
+
+- `src/calibration.py`: q = the first fill's `market_mid` (`price_source=market_mid`). Design 3 allows
+  "mid if there is one, else `market_price`, with price_source noted"; that fallback is kept only for a fill
+  with no `market_mid` key (booked before Task BA). A recorded but unusable mid is never replaced: it is a
+  `fill_calibration_problems` drop (stored `missing_market_mid`), or `fill_market_mid_missing` if the stored
+  list hides it. `trades.price_sources` counts samples per source; samples carry `price_source`.
+- `risk_gate.Intent`: `kelly_frac_raw` (intent_builder `kelly_raw`, unscaled; `kelly_frac = kelly_fraction_used x
+  kelly_frac_raw`) and `fill_context` (`intent_builder` / `operator_cli` / `gate_check`, from
+  `calibration_ids.FILL_CONTEXTS`). Both on the fill; null + `missing_` / `invalid_` in `calibration_problems`.
+  RiskGate and sizing never read them (source scan, identical decisions and fill sizes; `tests/test_calibration_mid_kelly.py`).
+- Report: `fill_context` in `operator_cli` / `gate_check` -> `no_book_context` (checked first, market-field
+  problems not counted). A fill without the key (before BC) is judged as before; nothing is inferred from
+  missing fields. A stored null / unknown context is a data problem (`missing_` / `invalid_fill_context`).
+- `report.json` stays `schema_version` 1 and only gains keys. e2e golden (`--update-golden`): only
+  `fill_context` and `market_fields.kelly_frac_raw` on the three calibration fills.
+- Docs: `docs/M3_CALIBRATION.md` step 2c and the drop table. No new number, no decision, threshold or size
+  moved. config/risk.toml unchanged, `live_enabled` false.
+
 ## Latest
 
-- 2026-10-09: Task BA: paper fills record `market_mid`, `best_bid`, `best_ask`, `hours_to_expiry_at_entry`,
-  `kelly_fraction_used` (shadow, recorded only); null + `calibration_problems` when not computable; RiskGate
-  never reads them. `python -m src.ws_recorder --raw-books DIR` uses the m1_run raw writer and caps.
-- Task AZ (merged #60): offline calibration report `python -m src.calibration`. Task AY (merged #59): opt-in raw
-  book snapshots and `python -m src.ws_hash_check`.
+- 2026-10-09: Task BC: calibration q = `market_mid` (pre-BA fills fall back to `market_price`, labelled);
+  `kelly_frac_raw` recorded next to `kelly_fraction_used`; `fill_context` stamped at fill time and the report
+  drops operator CLI / gate-check fills as `no_book_context`. Recorded only; RiskGate and size never read them.
+- Task BA (merged #62): fill market context and `ws_recorder --raw-books`. Task AZ (merged #60): offline
+  calibration report. Task BB (#66, Reflector proposals) open in parallel.
 - pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
-- Open: switch the calibration baseline to `market_mid` after AZ and BA merge; run M1 with `--raw-books`
-  before deciding on hash enforcement; Operator choice on netting realized gains (AR). Queue empty after BA.
+- Open: run M1 with `--raw-books` before deciding on hash enforcement; Operator choice on netting realized
+  gains (AR). Queue empty after BC.
