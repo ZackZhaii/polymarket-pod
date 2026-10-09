@@ -226,6 +226,10 @@ def main(
     now: datetime | None = None,
     hold_hours: float = RESOLUTION_HOLD_HOURS,
 ) -> int:
+    from src.pins import refuse_start  # Task AS (gap 5): the risk file pins (sha + every key) at start
+
+    if refuse_start("resolutions"):
+        return EXIT_PIN
     cfg = load_risk()
     drifted = pin_problems(cfg)
     if drifted:

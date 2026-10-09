@@ -969,3 +969,48 @@ def test_timing_constants_come_from_thresholds():
     for name in ("WS_BACKOFF_BASE_S", "WS_BACKOFF_CAP_S", "WS_RESYNC_TIMEOUT_S", "WS_PING_INTERVAL_S", "WS_ROW_REFRESH_S"):
         assert re.search(rf"^{name}\s*=", source, re.M) is None
     assert 0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S
+
+
+# --- Task AS (gap 5): the runtime pin check -------------------------------------------------------
+
+
+def _drift_after(monkeypatch, tmp_path, clean_checks):
+    """src.pins sees a pinned file for ``clean_checks`` checks, then drift; halt lines go to tmp_path."""
+    import src.podlib as podlib
+    from src import pins
+
+    calls = {"n": 0}
+
+    def checked(risk_path):
+        calls["n"] += 1
+        return [] if calls["n"] <= clean_checks else ["live_enabled=True expected False"]
+    monkeypatch.setattr(pins, "_checked", checked)
+    monkeypatch.setattr(podlib, "BUS_PATH", tmp_path / "bus.jsonl")
+    return calls
+
+
+def test_cli_stops_with_6_when_the_risk_file_drifts_mid_run(tmp_path, monkeypatch, capsys):
+    import src.halt_store as halt_store
+    from src.thresholds import PIN_RECHECK_S
+
+    calls = _drift_after(monkeypatch, tmp_path, 2)  # the start check and the first runtime check pass
+    clock_box = {}
+    real_clock = Clock
+
+    class Recording(real_clock):
+        def __init__(self):
+            super().__init__()
+            clock_box["clock"] = self
+    monkeypatch.setattr(sys.modules[__name__], "Clock", Recording)
+    code, _ = _cli(tmp_path, ["--assets", A, "--max-runtime", "600"], [[_book(A)]], monkeypatch)
+    assert code == w.EXIT_PIN_DRIFT == 6 and calls["n"] == 3
+    assert PIN_RECHECK_S <= clock_box["clock"].t < 600  # stopped at the re-check, not at --max-runtime
+    assert len(read_jsonl(tmp_path / "books.jsonl")) == 1
+    assert [r["reason"] for r in halt_store.active_halts()] == ["risk_toml_pin_drift"]
+    assert "drifted while running" in capsys.readouterr().err
+
+
+def test_cli_refuses_with_6_before_connecting(tmp_path, monkeypatch):
+    _drift_after(monkeypatch, tmp_path, 0)
+    code, transport = _cli(tmp_path, ["--assets", A, "--max-runtime", "5"], [[_book(A)]], monkeypatch)
+    assert code == w.EXIT_PIN_DRIFT and transport.urls == [] and not (tmp_path / "books.jsonl").exists()

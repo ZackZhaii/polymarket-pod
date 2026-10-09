@@ -1389,12 +1389,16 @@ def heartbeat_gate(root: Path | None = None) -> tuple[list[str], str]:
     return problems, summary
 
 
+EXIT_OK = 0
+EXIT_FAILED = 1  # the gate found a problem (golden mismatch, invariant, network touched)
+
+
 def main() -> int:
     problems, summary = gate()
     for problem in problems:
         print(f"FAIL {problem}")
     print(f"e2e: {'PASS' if not problems else 'FAIL'} {summary}".rstrip())
-    return 0 if not problems else 1
+    return EXIT_OK if not problems else EXIT_FAILED
 
 
 if __name__ == "__main__":

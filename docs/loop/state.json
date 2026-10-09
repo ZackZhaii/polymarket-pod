@@ -368,6 +368,15 @@
       "surface": "grok-bot"
     },
     {
+      "id": "AS",
+      "status": "done",
+      "title": "Exit-code registry and runtime pin checks (Poly哨兵 design gaps 4, 5, 6): docs/EXIT_CODES.md for every src/ and scripts/ entry point, kept in sync by tests and guard check exit_codes; config/risk.toml checked as a file (sha256 + every key, value and type, no unknown key) at process start and while running, drift = refuse + global halt",
+      "finish": "docs/EXIT_CODES.md lists all 18 entry points (src/ and scripts/ files with a __main__ block) with every EXIT_* code, its meaning and the resident Sentinel's action (EXIT_EVENTS). src/exit_codes.py (stdlib, ast only) checks both directions: an undocumented or wrong constant, a documented code the module lacks, a literal exit code in main/_main or sys.exit, parser.error or parse_args outside try/except SystemExit (argparse's own 2), a Sentinel column that disagrees with src/sentinel_tick.py, an EXIT_EVENTS entry without a row; tests/test_exit_codes.py and guard check 12 exit_codes run it. src/pins.py: RISK_FILE_PINS (all 9 risk.toml keys, typed) plus PINNED_RISK_SHA256 (CRLF normalised); refuse_start at start of scanner, book, ws_recorder, m1_run (exit 6), endgame_scan, resolutions (4), loop_claim (2) and before every paper_cycle cycle (1); PinWatch re-checks ws_recorder and m1_run every PIN_RECHECK_S while running (stop, exit 6, m1 manifest status pin_drift). Drift or a check that cannot run records one global Sentinel halt (risk_toml_pin_drift, shared with the Sentinel tick, deduped; logs/HALT if that fails). The Sentinel tick checks the same file pins. New M2-pending PIN_RECHECK_S = 60. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (queue: heartbeat -> EXIT_CODES/pins); done by grok-bot from Poly哨兵's sentinel_design.md gaps 4-6. AR (#46, daily_loss) landed on dev first and was merged into this branch. Behaviour changes: loop_claim usage errors exit 5 (was argparse's 2 = EXIT_PIN, a global halt); paper_cycle exit 1 is now a Sentinel global halt (was an alert); new exit 6 for scanner, book, ws_recorder, m1_run; processes record the global halt themselves on drift. podlib.PINS stays at 5 keys (tests vary the in-memory config); the file pins are separate. Left: resolutions exit 4 still covers both pin drift and a bad snapshot clock (documented).",
+      "done_at": "2026-10-09T09:34:19Z",
+      "surface": "grok-bot"
+    },
+    {
       "id": "AU",
       "status": "done",
       "title": "RiskGate slippage floor: veto any intent whose assumed_slippage is below ASSUMED_SLIPPAGE (Task AT's one slippage, 0.005, inclusive); missing / non-finite slippage vetoes; the paper_ledger CLI refuses --slippage below the floor",

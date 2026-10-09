@@ -68,6 +68,7 @@ EXIT_OK = 0
 EXIT_TOO_FEW_SCANNED = 1
 EXIT_NONE_PASSED = 2
 EXIT_INCOMPLETE = 3
+EXIT_PIN_DRIFT = 6  # Task AS: config/risk.toml off its pins at start (global halt recorded; nothing fetched)
 
 # Task Y: a NaN or +/-inf in any parsed number rejects the market. Ranked after the
 # structural reasons (closed, version, expiry, accepting orders) and before the ordinary
@@ -585,6 +586,10 @@ def main(
     ts: str | None = None,
     min_hours_to_expiry: float = MIN_HOURS_TO_EXPIRY,
 ) -> int:
+    from src.pins import refuse_start  # Task AS (gap 5): runtime pin check at start
+
+    if refuse_start("scanner", bus_path=bus_path):
+        return EXIT_PIN_DRIFT
     cfg = load_risk()
     result = scan(
         getter=getter,

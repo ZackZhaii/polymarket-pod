@@ -469,29 +469,38 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+EXIT_OK = 0
+EXIT_REJECTED = 1  # resume rejected (bad checks JSON, unknown / wrong-scope halt, missing approval, ...)
+EXIT_USAGE = 2
+EXIT_ACTIVE = 3  # status: at least one halt is active
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit as exc:
+        return EXIT_OK if exc.code == 0 else EXIT_USAGE
     if args.command == "status":
         active = active_halts()
         for record in active:
             print(f"ACTIVE {record['id']} scope={record['scope']} market={record['market'] or '-'} "
                   f"reason={record['reason']}")
         print(f"halts_active={len(active)} exchange_action=none")
-        return 3 if active else 0
+        return EXIT_ACTIVE if active else EXIT_OK
     try:
         checks = json.loads(args.checks)
     except ValueError:
         print("resume rejected: bad_checks (not JSON)", file=sys.stderr)
-        return 1
+        return EXIT_REJECTED
     try:
         result = resume(from_role=OPERATOR, scope=args.scope, halt_id=args.halt_id, market=args.market,
                         approved_by=args.approved_by, root_cause=args.root_cause, postmortem=args.postmortem,
                         checks=checks)
     except ResumeRejected as exc:
         print(f"resume rejected: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_REJECTED
     print(f"resumed {result['released']} scope={result['scope']} logged=bus exchange_action=none")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

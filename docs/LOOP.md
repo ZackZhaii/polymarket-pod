@@ -1053,6 +1053,38 @@ Finish when every assumed slippage reads one constant, no copy can drift, no num
 - `config/risk.toml` unchanged, `live_enabled` false. Not done (would be a new veto, left for review): a RiskGate
   floor that vetoes an `assumed_slippage` below `ASSUMED_SLIPPAGE` (the paper_ledger CLI still accepts `--slippage 0`).
 
+## Task AS — Exit-code registry and runtime pin checks (Poly哨兵 design gaps 4, 5, 6)
+
+Status: done.
+
+Requested by Poly指挥 (queue after AP: EXIT_CODES / pins), done by grok-bot on dev@9ec24df;
+merged origin/dev with AR (#46, daily_loss) and AT (#47, one ASSUMED_SLIPPAGE) before the PR.
+
+Finish when every entry point's exit codes are in one registry kept in sync with the code by a test and a guard
+check, the long-running and data-writing processes check config/risk.toml (sha + every key) at start and while
+running and refuse + halt globally on drift, and `python -m pytest` and guard --require-git pass offline.
+
+- Gap 4: `docs/EXIT_CODES.md` lists the 18 entry points (every `src/` and `scripts/` file with a `__main__` block):
+  each `EXIT_*` code, its meaning and the resident Sentinel's action from `src/sentinel_tick.py` `EXIT_EVENTS`.
+  `src/exit_codes.py` (stdlib, `ast` only, never imports the modules) fails on an undocumented or changed constant, a
+  documented code the module lacks, a literal exit code in `main` / `sys.exit`, `parser.error` or `parse_args`
+  outside `try/except SystemExit`, a wrong Sentinel column, an `EXIT_EVENTS` entry without a row. Run by
+  `tests/test_exit_codes.py` and guard check 12 `exit_codes`. Literal codes in main were replaced with names.
+- Gap 6: `src/pins.py` `RISK_FILE_PINS` pins all 9 keys of config/risk.toml with value and type, plus the sha256
+  (CRLF normalised); an unknown, missing or retyped key, an unreadable / unparseable file or a check that cannot run
+  is drift. `podlib.PINS` stays at 5 keys (tests vary the in-memory config). The Sentinel tick checks the same pins.
+- Gap 5: `refuse_start` at start of scanner, book, ws_recorder, m1_run (exit 6, new), endgame_scan, resolutions
+  (exit 4), loop_claim (exit 2) and before every paper_cycle cycle (exit 1); `PinWatch` re-checks ws_recorder and
+  m1_run at least every `PIN_RECHECK_S` and stops the run (exit 6, m1 manifest `pin_drift`). Drift records one global
+  Sentinel halt `risk_toml_pin_drift` (shared with the Sentinel tick, deduped; `logs/HALT` if recording fails).
+  Only the Operator resumes.
+- Behaviour changes: loop_claim usage errors exit 5 (was argparse's 2 = `EXIT_PIN`, a global halt); paper_cycle exit
+  1 is a Sentinel global halt (was an alert); scanner / ws_recorder / m1_run exit 6 = global halt. Usage errors of
+  halt_store, paper_ledger, loop_claim go through their own `EXIT_USAGE`.
+- New number (M2 pending): `PIN_RECHECK_S = 60` (`<= SENTINEL_HEARTBEAT_TIMEOUT_S`). No risk.toml change, no URL,
+  no order code. Tests: `tests/test_exit_codes.py`, `tests/test_pins.py`, `tests/test_guard.py`,
+  `tests/test_sentinel_tick.py`, `tests/test_ws_recorder.py`, `tests/test_m1_run.py`, `tests/test_thresholds.py`.
+- Left: resolutions exit 4 still means pin drift or a bad snapshot clock (documented in the registry).
 
 ## Task AU — RiskGate slippage floor (tightening; Poly指挥 approved)
 
@@ -1078,10 +1110,9 @@ Finish when no intent can assume less slippage than `ASSUMED_SLIPPAGE`, includin
 
 ## Latest
 
-- 2026-10-09: Task AU: RiskGate vetoes `assumed_slippage < ASSUMED_SLIPPAGE` (`slippage_below_floor`); CLI refuses it.
-- 2026-10-09: Task AT: one `ASSUMED_SLIPPAGE = 0.005` in `src/thresholds.py`; SportsDevig/intent names are aliases,
-  paper_ledger literals gone, drift fails at import. ROLES.md: RiskGate has no Kelly sizing (shadow only).
-- 2026-10-09: Task AR: `max_daily_loss` now counts today's (UTC) fees plus gross realized losses (`src/daily_loss.py`).
-- Gains never offset; corrupt counted ledger rows = `invalid_risk_state` = global halt. e2e golden `daily_loss`.
-- pytest + guard (11 checks) pass. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
-- No new number from AR or AU. Open Operator choice: netting realized gains. Queue empty after AU.
+- 2026-10-09: Merge origin/dev (AS #48 exit codes / pins) into Task AU; AS and AU both kept (COORDINATION AS #31, AU #32).
+- Task AU: RiskGate vetoes `assumed_slippage < ASSUMED_SLIPPAGE` (`slippage_below_floor`); the paper_ledger CLI refuses it.
+- Task AS (merged #48): `docs/EXIT_CODES.md` registry (guard check 12 `exit_codes`); `src/pins.py` risk.toml pins at runtime.
+- Task AT (merged #47): one `ASSUMED_SLIPPAGE = 0.005`. Task AR (merged #46): `max_daily_loss` counts realized losses.
+- pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+- No new number from AU. Open Operator choice: netting realized gains (AR). Queue empty after AU.

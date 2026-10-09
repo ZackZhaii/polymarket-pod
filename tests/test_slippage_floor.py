@@ -118,10 +118,9 @@ def test_cli_main_with_slippage_zero_exits_before_any_read_or_write(monkeypatch)
         raise AssertionError("must not run")
     monkeypatch.setattr(paper_ledger, "load_risk", boom)
     monkeypatch.setattr(paper_ledger, "commit_if_allowed", boom)
-    with pytest.raises(SystemExit) as exc:
-        paper_ledger.main(["--strategy", "au", "--market", "au", "--model-prob", "0.7", "--market-price", "0.4",
-                           "--slippage", "0", "--liquidity", "20000", "--spread", "0.01", "--book-ts", NOW])
-    assert exc.value.code == 2
+    code = paper_ledger.main(["--strategy", "au", "--market", "au", "--model-prob", "0.7", "--market-price", "0.4",
+                              "--slippage", "0", "--liquidity", "20000", "--spread", "0.01", "--book-ts", NOW])
+    assert code == paper_ledger.EXIT_USAGE == 2  # Task AS: usage errors exit through EXIT_USAGE
     assert not paper_ledger.PAPER_PATH.exists()
 
 

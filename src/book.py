@@ -189,12 +189,22 @@ def record(
     return written
 
 
+EXIT_OK = 0
+EXIT_NO_SNAPSHOT = 1
+EXIT_NO_MARKETS = 2
+EXIT_PIN_DRIFT = 6  # Task AS: config/risk.toml off its pins at start (global halt recorded; nothing fetched)
+
+
 def main() -> int:
+    from src.pins import refuse_start  # Task AS (gap 5): runtime pin check at start
+
+    if refuse_start("book"):
+        return EXIT_PIN_DRIFT
     cfg = load_risk()
     markets = latest_markets()
     if not markets:
         print("no markets in data/markets.jsonl; run python src/scanner.py first", file=sys.stderr)
-        return 2
+        return EXIT_NO_MARKETS
     ts = utc_now()
     written = record(markets, ts)
     for row in read_jsonl(BOOKS_PATH):
@@ -212,8 +222,8 @@ def main() -> int:
     print(f"wrote={BOOKS_PATH}")
     if written < 1:
         print("book failed: no public book snapshot", file=sys.stderr)
-        return 1
-    return 0
+        return EXIT_NO_SNAPSHOT
+    return EXIT_OK
 
 
 if __name__ == "__main__":
