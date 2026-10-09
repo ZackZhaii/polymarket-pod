@@ -160,6 +160,10 @@ def _assert_risk_unchanged(before: bytes) -> None:
         raise RuntimeError("risk.toml changed during paper session")
 
 
+EXIT_OK = 0
+EXIT_FAILED = 1  # the session did not run cleanly (pins, scan) or booked a fill (Phase 0 books none)
+
+
 def main() -> int:
     result = run()
     print(
@@ -168,7 +172,7 @@ def main() -> int:
         f"gaps={result['gaps']} stale={result['stale']} fills={result['fills']} "
         "orders=none"
     )
-    return 0 if result["ok"] and result["fills"] == 0 else 1
+    return EXIT_OK if result["ok"] and result["fills"] == 0 else EXIT_FAILED
 
 
 if __name__ == "__main__":

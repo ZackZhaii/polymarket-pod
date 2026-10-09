@@ -92,6 +92,9 @@ It prints one `PASS`/`FAIL` line per check with the reason, then a summary line:
 - `heartbeat` (Task AP): the same harness's heartbeat scenarios must hold
   semantically (stale / corrupt heartbeat and a lost Sentinel are global halts, exit-code matrix, gap-resync storm,
   all-markets-stale, stale-resume re-alarm, Reconciler halt stored, recording dir read).
+- `exit_codes` (Task AS): `docs/EXIT_CODES.md` lists every entry point under `src/` and `scripts/` with exactly its
+  `EXIT_*` codes and the resident Sentinel's action per code (`src/exit_codes.py`, `ast` only: no literal exit code in
+  `main`, no argparse exit outside the registry, Sentinel column = `src/sentinel_tick.py` `EXIT_EVENTS`).
 
 Exit codes: 0 every check passed (`risk_sha_head` may be `SKIP`), 1 a check failed, 2 usage error or no repo root.
 It writes nothing in the repo (the `e2e` check keeps its scratch files in a temp folder outside the repo and
@@ -206,7 +209,8 @@ lost after its marker exists or stamped off the risk pins is a global halt (fail
 (module, code): ws_recorder / m1_run 4, endgame_scan 4, loop_claim 2 = global halt; scanner 1 / 2 and scanner 3
 twice in a row, m1_run 1 / 2 / 3 and any other non-zero = alert; m1_run 5 = log. Recorder: 4 reconnects in 600 s =
 alert, 3 gap resyncs of one asset in 600 s = that market halted. All checked markets stale 2 cycles in a row =
-global halt. Alerts go to `logs/alerts.jsonl` plus a Sentinel->Operator bus `signal`.
+global halt. Alerts go to `logs/alerts.jsonl` plus a Sentinel->Operator bus `signal`. Every code by module:
+`docs/EXIT_CODES.md` (Task AS).
 
 Once the resident Sentinel has beaten, RiskGate, the Maker and paper_cycle treat its heartbeat older than 90 s,
 missing, corrupt or finished as a stored global halt (`sentinel_heartbeat_*`): stopping the Sentinel halts
@@ -240,3 +244,13 @@ The 24-hour read-only WebSocket book run and its offline report are `python -m s
 ## Not in this phase
 
 No live trading, no key material, no CLOB authentication, no withdraw, no automatic size-up, and no geo-bypass steps. A single-leg fill is directional exposure, not risk-free arbitrage. Nothing here is a promise of profit.
+
+## Runtime pin checks (Task AS)
+
+`src/pins.py` checks config/risk.toml as a file: sha256 `0aea23af…bc04` (CRLF normalised) and all 9 keys with value
+and type (`RISK_FILE_PINS`), no unknown key. scanner, book, ws_recorder, m1_run (exit 6), endgame_scan, resolutions
+(exit 4) and loop_claim (exit 2) check it at start, paper_cycle before every cycle (exit 1), ws_recorder and m1_run
+again at least every `PIN_RECHECK_S` (60 s) while running (stop, exit 6, m1 manifest status `pin_drift`). Drift, or a
+check that cannot run, records one global Sentinel halt `risk_toml_pin_drift` (the same one the Sentinel tick
+records) and nothing is fetched or written. Restoring the file does not lift it: fix the file, then the Operator
+resume above. Exit codes of every entry point: `docs/EXIT_CODES.md`.

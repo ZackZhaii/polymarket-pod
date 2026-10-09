@@ -436,8 +436,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+EXIT_OK = 0
+EXIT_FAILED = 1  # halted (ledger integrity / write), risk.toml changed during the run, or self-check failed
+EXIT_USAGE = 2
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit as exc:
+        return EXIT_OK if exc.code == 0 else EXIT_USAGE
     before_bytes = RISK_PATH.read_bytes()
     cfg = load_risk()
     live = cfg.get("live_enabled")
@@ -463,17 +471,17 @@ def main(argv: list[str] | None = None) -> int:
         ]
         if missing:
             print("missing operator fields: " + ", ".join(missing), file=sys.stderr)
-            return 2
+            return EXIT_USAGE
         result = run_cli_intent(args, cfg)
         label = "ALLOW" if result["allow"] else "HALT" if result.get("halted") else "VETO"
         print(label, result.get("fill") or result.get("decision"))
         if result.get("halted"):
             print(f"paper ledger halted: {result['halt_reason']} {result['ledger_problems']}", file=sys.stderr)
-            return 1
+            return EXIT_FAILED
         if RISK_PATH.read_bytes() != before_bytes:
             print("risk.toml changed during paper run; refusing", file=sys.stderr)
-            return 1
-        return 0 if result["allow"] or result.get("decision", {}).get("reasons") else 1
+            return EXIT_FAILED
+        return EXIT_OK if result["allow"] or result.get("decision", {}).get("reasons") else EXIT_FAILED
 
     report = run_self_check(cfg)
     realistic = realistic_no_edge(cfg)
@@ -513,9 +521,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not ok:
         print("paper ledger self-check failed", file=sys.stderr)
-        return 1
+        return EXIT_FAILED
     print(DIRECTIONAL)
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

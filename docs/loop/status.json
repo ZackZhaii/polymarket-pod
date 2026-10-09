@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T08:31:11Z",
+  "ts": "2026-10-09T09:34:19Z",
   "live_enabled": false,
-  "last_done": "AP",
+  "last_done": "AS",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AP (Sentinel heartbeat: heartbeat files, resident src/sentinel_tick.py event matrix, lost Sentinel = global halt, Reconciler halts in halt_store, stale-resume re-alarm, paper_cycle --recording-dir/--loop, guard check 11 heartbeat) done by grok-bot; merged origin/dev with AQ (#44 secret-string scan, guard check 10 secret_scan). M2 pending also has AQ's SECRET_VALUE_MIN_LEN, MNEMONIC_MIN_WORDS, SECRET_HASH_PREFIX_CHARS. M2 pending adds 17 heartbeat/Sentinel numbers (HEARTBEAT_*, SCANNER_HANG_S, SCANNER_MAX_SUCCESS_AGE_S, SCANNER_INCOMPLETE_CONSECUTIVE, SENTINEL_TICK_S, SENTINEL_HEARTBEAT_TIMEOUT_S, RECORDER_*, ALL_STALE_CONSECUTIVE_CYCLES). No open todo. No live gate."
+  "note": "AS (exit-code registry docs/EXIT_CODES.md for all 18 entry points, kept in sync by tests/test_exit_codes.py and guard check 12 exit_codes; runtime pin checks src/pins.py: config/risk.toml sha256 + all 9 keys at start of scanner/book/ws_recorder/m1_run/endgame_scan/resolutions/loop_claim, before every paper_cycle cycle and every PIN_RECHECK_S in ws_recorder/m1_run; drift = refuse + one global halt) done by grok-bot. Behaviour changes: loop_claim usage exit 5 (was 2), paper_cycle exit 1 = global halt, new exit 6 for scanner/book/ws_recorder/m1_run. M2 pending adds PIN_RECHECK_S. AR (#46) in parallel. No open todo. No live gate."
 }

@@ -74,7 +74,8 @@ CLI: ``python -m src.ws_recorder --assets TOKEN [TOKEN ...] --max-runtime SECOND
 [--out data/books.jsonl] [--markets data/markets.jsonl]``. Exit codes: 0 ran until
 --max-runtime and wrote at least one book row; 1 wrote no book row (no usable snapshot);
 2 usage error; 3 the optional ``websockets`` package is not installed; 4 writing the output file
-failed (the recorder stops instead of reconnecting).
+failed (the recorder stops instead of reconnecting); 6 config/risk.toml off its pins at start or
+while running (Task AS, src/pins.py; a global halt is recorded). Registry: docs/EXIT_CODES.md.
 
 Task AP (Sentinel design gaps 2 and 13): the CLI writes logs/heartbeat/ws_recorder.json every
 HEARTBEAT_RECORDER_EVERY_S (10 s, also while backing off) and a last beat with the exit code; the
@@ -131,6 +132,7 @@ EXIT_NO_ROWS = 1
 EXIT_USAGE = 2
 EXIT_NO_WEBSOCKETS = 3
 EXIT_WRITE_FAILED = 4
+EXIT_PIN_DRIFT = 6  # Task AS: config/risk.toml off its pins at start or while running (global halt recorded)
 
 
 # --- values -----------------------------------------------------------------------------------
@@ -1109,7 +1111,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="M1 read-only recorder for the public Polymarket CLOB WebSocket market channel. No orders.",
         epilog="Exit codes: 0 ran until --max-runtime and wrote at least one book row; 1 wrote no book row; "
                "2 usage error; 3 the optional websockets package is not installed (requirements-ws.txt); "
-               "4 writing the output file failed.",
+               "4 writing the output file failed; 6 config/risk.toml off its pins (global halt recorded). "
+               "See docs/EXIT_CODES.md.",
     )
     parser.add_argument("--assets", nargs="+", required=True, help="Token (asset) ids; spaces or commas.")
     parser.add_argument("--max-runtime", type=float, required=True, help="Stop after this many seconds.")
@@ -1151,10 +1154,15 @@ def _main(argv: list[str] | None, *, transport: Transport | None, heartbeat: Any
     except ValueError as exc:
         print(f"usage error: {exc}", file=sys.stderr)
         return EXIT_USAGE
+    from src.pins import PinWatch, refuse_start  # Task AS (gap 5): runtime pin checks
+
+    if refuse_start("ws_recorder"):
+        return EXIT_PIN_DRIFT
+    watch = PinWatch("ws_recorder")
     meta = asset_meta(read_jsonl(args.markets))
     sink = JsonlAppender(args.out)
     recorder = Recorder(assets, transport=transport or WebsocketsTransport(), sink=sink,
-                        max_runtime_s=runtime, meta=meta, heartbeat=heartbeat)
+                        max_runtime_s=runtime, meta=meta, heartbeat=heartbeat, stop=watch.drifted)
     try:
         report = recorder.run()
     except TransportUnavailable as exc:
@@ -1176,6 +1184,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, heartbeat: Any
         f"resyncs={resyncs} pings={report.pings} unmapped_assets={len(report.unmapped_assets)} orders=none"
     )
     print(f"wrote={args.out}")
+    if watch.problems:
+        return EXIT_PIN_DRIFT
     if report.counts["snapshot_applied"] < 1:
         print("ws_recorder: no book snapshot recorded", file=sys.stderr)
         return EXIT_NO_ROWS

@@ -22,6 +22,10 @@ SURFACES = frozenset({"grok-build-local", "grok-web", "grok-bot"})
 EXIT_PIN = 2
 EXIT_BUSY = 3
 EXIT_CLOSED = 4
+EXIT_OK = 0
+# Task AS (gap 4): a usage error was argparse's 2, the same code as EXIT_PIN (a global halt for the
+# resident Sentinel). It is now its own code.
+EXIT_USAGE = 5
 
 
 def utc_stamp(moment: datetime | None = None) -> str:
@@ -108,7 +112,17 @@ def _expired(claim: dict, now: datetime) -> bool:
 
 
 def pins_ok() -> bool:
-    return not pin_problems(load_risk())
+    """podlib.PINS on the parsed config and (Task AS) the risk file pins: sha256 and every key."""
+    from src.pins import record_drift, risk_file_problems
+
+    drift = risk_file_problems()
+    if drift:
+        record_drift("loop_claim", drift, phase="start")  # one global halt, deduped (src/pins.py)
+        return False
+    try:
+        return not pin_problems(load_risk())
+    except Exception:  # noqa: BLE001 - unreadable config: refuse (fail closed)
+        return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,7 +134,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--todo", action="store_true")
     parser.add_argument("--state", type=Path, default=STATE_PATH)
     parser.add_argument("--now")
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return EXIT_OK if exc.code == 0 else EXIT_USAGE
     if not pins_ok():
         print("live_enabled must stay false; queue not changed")
         return EXIT_PIN
@@ -130,14 +147,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "status":
             waiting = next_todo(state)
             print(json.dumps({"claim": state.get("claim"), "next": None if waiting is None else waiting.get("id")}, ensure_ascii=False))
-            return 0
+            return EXIT_OK
         if args.action == "claim":
             if not args.surface or not args.task:
-                parser.error("claim needs --surface and --task")
+                print("usage error: claim needs --surface and --task", file=sys.stderr)
+                return EXIT_USAGE
             claim_state(state, args.surface, args.task, now)
         else:
             if not args.surface or args.done == args.todo:
-                parser.error("release needs --surface and exactly one of --done or --todo")
+                print("usage error: release needs --surface and exactly one of --done or --todo", file=sys.stderr)
+                return EXIT_USAGE
             release_state(state, args.surface, args.done, now)
     except RuntimeError:
         print("claim busy")
@@ -147,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CLOSED
     save_state(args.state, state)
     print(json.dumps(state["claim"], ensure_ascii=False))
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":

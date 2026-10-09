@@ -16,7 +16,8 @@ from scripts import guard
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / "scripts" / "guard.py"
 CHECKS = ["risk_sha_worktree", "risk_sha_head", "live_enabled", "banned_dependencies", "banned_imports",
-          "url_allowlist", "thresholds_doc", "e2e", "halt", "secret_scan", "heartbeat"]
+          "url_allowlist", "thresholds_doc", "e2e", "halt", "secret_scan", "heartbeat",
+          "exit_codes"]
 PINNED = "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04"
 _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc")
 
@@ -632,7 +633,10 @@ def test_a_missing_harness_or_fixture_fails_e2e(repo, rel):
     assert results(repo)["e2e"].status == "FAIL"
     code, lines, out = run(repo)
     assert code == 1, out
-    failed_only(lines, "e2e", "halt", "heartbeat")  # halt (AL) and heartbeat (AP) run the same harness
+    # halt (AL) and heartbeat (AP) run the same harness; a deleted entry point leaves its registry
+    # section orphaned (exit_codes, Task AS)
+    extra = ("exit_codes",) if rel == "scripts/e2e_offline.py" else ()
+    failed_only(lines, "e2e", "halt", "heartbeat", *extra)
 
 
 def test_a_loosened_risk_gate_rule_fails_e2e(repo):
@@ -813,3 +817,32 @@ def test_a_missing_word_list_fails_secret_scan(repo):
     failed_only(lines, "e2e", "halt", "secret_scan", "heartbeat")
     reason = lines["secret_scan"][1]
     assert "self-test: cannot run (bip39 word list unreadable" in reason and "scan error: bip39 word list" in reason
+
+
+# ---------------------------------------------------------------- 10. exit_codes (Task AS)
+
+def test_the_exit_code_registry_passes_on_the_real_repo():
+    result = results(ROOT)["exit_codes"]
+    assert result.status == guard.PASS, result.reason
+    assert "18 entry points" in result.reason
+
+
+def test_an_undocumented_exit_code_fails_only_that_check(repo):
+    edit(repo / "src" / "book.py", "EXIT_NO_MARKETS = 2\n", "EXIT_NO_MARKETS = 2\nEXIT_SURPRISE = 7\n")
+    code, lines, out = run(repo)
+    assert code == 1
+    failed_only(lines, "exit_codes")
+    assert "src/book.py: EXIT_SURPRISE=7 is not in docs/EXIT_CODES.md" in lines["exit_codes"][1]
+
+
+def test_a_literal_exit_code_fails_only_that_check(repo):
+    edit(repo / "src" / "book.py", "return EXIT_NO_MARKETS", "return 2")
+    code, lines, out = run(repo)
+    failed_only(lines, "exit_codes")
+    assert "literal" in lines["exit_codes"][1]
+
+
+def test_a_missing_registry_fails_closed(repo):
+    (repo / "docs" / "EXIT_CODES.md").unlink()
+    code, lines, out = run(repo)
+    failed_only(lines, "exit_codes")

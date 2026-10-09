@@ -228,6 +228,10 @@ def main(
     ts: str | None = None,
     min_hours_to_expiry: float = MIN_HOURS_TO_EXPIRY,
 ) -> int:
+    from src.pins import refuse_start  # Task AS (gap 5): the risk file pins (sha + every key) at start
+
+    if refuse_start("endgame_scan", bus_path=bus_path):
+        return EXIT_NOT_PAPER
     cfg = load_risk()
     drifted = pin_problems(cfg)
     if drifted:

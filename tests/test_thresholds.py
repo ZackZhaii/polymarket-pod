@@ -96,6 +96,8 @@ EXPECTED = {
     "RECORDER_RECONNECT_ALERT_COUNT": 4,
     "RECORDER_GAP_RESYNC_HALT_COUNT": 3,
     "ALL_STALE_CONSECUTIVE_CYCLES": 2,
+    # Task AS: runtime pin re-check (M2 pending).
+    "PIN_RECHECK_S": 60.0,
 }
 
 # Old import paths that callers and tests use; each must stay the very same object.
@@ -148,7 +150,9 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "HEARTBEAT_PAPER_CYCLE_EVERY_S", "HEARTBEAT_PAPER_CYCLE_TIMEOUT_S", "HEARTBEAT_PAPER_CYCLE_HALT_FACTOR",
               "HEARTBEAT_CONSUMER_EVERY_S", "HEARTBEAT_CONSUMER_TIMEOUT_S", "SENTINEL_TICK_S",
               "SENTINEL_HEARTBEAT_TIMEOUT_S", "RECORDER_ESCALATION_WINDOW_S", "RECORDER_RECONNECT_ALERT_COUNT",
-              "RECORDER_GAP_RESYNC_HALT_COUNT", "ALL_STALE_CONSECUTIVE_CYCLES"}
+              "RECORDER_GAP_RESYNC_HALT_COUNT", "ALL_STALE_CONSECUTIVE_CYCLES",
+              # Task AS: runtime pin re-check.
+              "PIN_RECHECK_S"}
 HEADER = ["Name", "Value", "Unit", "Meaning", "Where", "Source", "M2 pending"]
 
 

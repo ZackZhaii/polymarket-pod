@@ -330,11 +330,17 @@ def _assert_risk_unchanged(before: bytes) -> None:
         raise RuntimeError("risk.toml changed during paper cycle")
 
 
+EXIT_OK = 0
+EXIT_PIN = 1  # a phase-0 pin failed (in-memory config or, Task AS, the risk file: a global halt is recorded)
+EXIT_USAGE = 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m src.paper_cycle",
         description="Offline paper cycle: gap and staleness signals, Sentinel StaleWatch. No orders.",
-        epilog="Exit codes: 0 ran; 1 a phase-0 pin failed; 2 usage error.",
+        epilog="Exit codes: 0 ran; 1 a phase-0 pin failed (the risk file is checked before every cycle; "
+               "global halt recorded); 2 usage error. See docs/EXIT_CODES.md.",
     )
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--books", type=Path, default=None, help="book rows JSONL (default data/books.jsonl)")
@@ -362,14 +368,16 @@ def main(argv: list[str] | None = None, *, sleep=time.sleep, monotonic=time.mono
     """
     from src.heartbeat import Heartbeat  # local: keeps the module import light
 
+    from src.pins import refuse_start  # Task AS (gap 5): the risk file pins before every cycle
+
     try:
         args = build_parser().parse_args(argv)
     except SystemExit as exc:
-        return 0 if exc.code == 0 else 2
+        return EXIT_OK if exc.code == 0 else EXIT_USAGE
     if not (0.0 < args.every <= HEARTBEAT_PAPER_CYCLE_EVERY_S) or args.max_cycles < 0:
         print(f"paper_cycle: usage error: 0 < --every <= {HEARTBEAT_PAPER_CYCLE_EVERY_S:g} and --max-cycles >= 0",
               file=sys.stderr)
-        return 2
+        return EXIT_USAGE
     kwargs: dict = {"recording_dir": args.recording_dir}
     if args.books is not None:
         kwargs["books_path"] = args.books
@@ -379,6 +387,9 @@ def main(argv: list[str] | None = None, *, sleep=time.sleep, monotonic=time.mono
     try:
         while True:
             started = monotonic()
+            if refuse_start("paper_cycle"):
+                hb.finish(EXIT_PIN, {"cycles": cycles, "pin_drift": True})
+                return EXIT_PIN
             result = run(**kwargs)
             cycles += 1
             _print(result)
@@ -386,11 +397,11 @@ def main(argv: list[str] | None = None, *, sleep=time.sleep, monotonic=time.mono
                         "halts": len((result.get("sentinel") or {}).get("halts") or []),
                         "books_problem": result.get("books_problem")}
             if not result["ok"]:
-                hb.finish(1, progress)
-                return 1
+                hb.finish(EXIT_PIN, progress)
+                return EXIT_PIN
             if not args.loop or (args.max_cycles and cycles >= args.max_cycles):
-                hb.finish(0, progress)
-                return 0
+                hb.finish(EXIT_OK, progress)
+                return EXIT_OK
             hb.beat("running", progress, force=True)
             sleep(max(0.0, args.every - (monotonic() - started)))
     except BaseException:
