@@ -81,6 +81,11 @@ WS_PING_INTERVAL_S = 10.0
 # (counted toward the Task AP reconnect escalation). 30 s per Poly研究's notes on the market channel.
 # M2 pending.
 WS_PONG_TIMEOUT_S = 30.0
+# Task AY: opt-in raw book snapshots (src.m1_run --raw-books), kept to validate the snapshot hash
+# offline (src.ws_hash_check). One raw_books file never passes the file cap (nor --rotate-mb); once a
+# run has written the run cap, further frames are dropped (counted), the recording goes on. M2 pending.
+WS_RAW_BOOK_FILE_MAX_BYTES = 16 * 1024 * 1024
+WS_RAW_BOOK_RUN_MAX_BYTES = 256 * 1024 * 1024
 # Staleness-relevant: a live book whose top of book does not change still gets a new row once the
 # EXCHANGE time of the latest applied event is this far past the last written row, so a deep but
 # quiet-top book does not look stale while its deltas keep arriving. Rows can only lag reality by
@@ -241,6 +246,9 @@ def consistency_problems() -> list[str]:
         problems.append("WebSocket timing must satisfy 0 < WS_PING_INTERVAL_S < WS_RESYNC_TIMEOUT_S")
     if not 0.0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S:
         problems.append("WS_ROW_REFRESH_S must satisfy 0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S")
+    if not (isinstance(WS_RAW_BOOK_FILE_MAX_BYTES, int) and isinstance(WS_RAW_BOOK_RUN_MAX_BYTES, int)
+            and 0 < WS_RAW_BOOK_FILE_MAX_BYTES <= WS_RAW_BOOK_RUN_MAX_BYTES):
+        problems.append("WS_RAW_BOOK_*_MAX_BYTES must be whole numbers with 0 < file cap <= run cap")
     if not 0.0 < WS_PING_INTERVAL_S < WS_PONG_TIMEOUT_S:
         problems.append("WS_PONG_TIMEOUT_S must satisfy 0 < WS_PING_INTERVAL_S < WS_PONG_TIMEOUT_S")
     if not 0.0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S:

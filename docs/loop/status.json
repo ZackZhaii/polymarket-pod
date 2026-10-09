@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T12:21:43Z",
+  "ts": "2026-10-09T12:45:25Z",
   "live_enabled": false,
-  "last_done": "AX",
+  "last_done": "AY",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AX (M3 step 2 identity fields: forecast_id/decision_id/condition_id/outcome_index/token_id/category/tags/end_date/model_version on forecasts, scanner rows and fills; sealed logs/forecasts.jsonl before every NewsForecaster signal; unjoinable fills flagged in calibration_problems) done by grok-bot. No new number, no decision moved. AW (#51, WS resync hardening) merged into this branch from dev. No open todo. No live gate."
+  "note": "AY (opt-in raw book snapshots: m1_run --raw-books -> raw_books/raw_books-NNNNNN.jsonl, 16 MiB per file / 256 MiB per run, M2 pending; offline read-only python -m src.ws_hash_check) done by grok-bot. BOOK_HASH_ENFORCED stays False. AX (#58) merged into this branch from dev. No open todo. No live gate."
 }
