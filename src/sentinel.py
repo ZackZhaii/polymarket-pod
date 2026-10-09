@@ -192,6 +192,8 @@ class StaleWatch:
         self.quotes_path = quotes_path
         self.streaks: dict[str, int] = {}
         self.alarmed: set[str] = set()
+        # Task AP gap 14: consecutive paper cycles in which every checked market was stale.
+        self.all_stale_streak = 0
 
     def check(
         self,
@@ -230,7 +232,7 @@ class StaleWatch:
         streak = self.streaks.get(key, 0) + 1
         self.streaks[key] = streak
         message = None
-        if streak >= self.consecutive and key not in self.alarmed:
+        if streak >= self.consecutive and (key not in self.alarmed or self._resumed_while_stale(key)):
             self.alarmed.add(key)
             message = halt(
                 reason=f"{STALE_ALARM}: {streak} consecutive stale or failed book checks (last: {problem})",
@@ -240,12 +242,28 @@ class StaleWatch:
             )
         return {"market": key, "stale": True, "problem": problem, "streak": streak, "halt": message}
 
+    @staticmethod
+    def _resumed_while_stale(key: str) -> bool:
+        """Task AP (AL follow-up): the streak already alarmed, but the Operator has since resumed that
+        market's stale-book halt while the book is still stale. Re-alarm on this check, without
+        waiting for a fresh check first. An unreadable halt state is already a global halt, so no
+        duplicate is written then (the next readable check re-alarms if the market halt is gone).
+        A market with no market id cannot hold a market halt; it is never re-halted here.
+        """
+        from src import halt_store
+
+        if not key or halt_store.fallback_active():
+            return False  # logs/HALT already halts everything; re-alarm once it is resumed
+        active = halt_store.has_active_halt(scope=halt_store.SCOPE_MARKET, market=key, reason_prefix=STALE_ALARM)
+        return active is False
+
     def to_dict(self) -> dict:
         return {
             "max_age_s": self.max_age_s,
             "consecutive": self.consecutive,
             "streaks": dict(sorted(self.streaks.items())),
             "alarmed": sorted(self.alarmed),
+            "all_stale_streak": self.all_stale_streak,
         }
 
     @classmethod
@@ -277,6 +295,11 @@ class StaleWatch:
             if not isinstance(key, str) or key not in watch.streaks:
                 raise ValueError("bad alarmed entry")
             watch.alarmed.add(key)
+        # Task AP: absent in a state file written before Task AP (counts from 0); present means strict.
+        all_stale = data.get("all_stale_streak", 0)
+        if isinstance(all_stale, bool) or not isinstance(all_stale, int) or all_stale < 0:
+            raise ValueError("bad all_stale_streak")
+        watch.all_stale_streak = all_stale
         return watch
 
 

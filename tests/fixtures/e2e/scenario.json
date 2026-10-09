@@ -28,5 +28,17 @@
   "global_reason": "e2e drill: global halt",
   "market_reason": "e2e drill: market halt",
   "approved_by": "e2e-operator"
+ },
+ "heartbeat": {
+  "commit": "bravo-allow",
+  "recorder_stale_after_s": 121,
+  "sentinel_stale_after_s": 91,
+  "corrupt_text": "{\"proc\": \"scanner\", ",
+  "storm_asset": "e2e-storm-asset",
+  "storm_market": "e2e-bravo",
+  "storm_gap_resyncs": 3,
+  "storm_reconnects": 4,
+  "all_stale_after_s": 600,
+  "approved_by": "e2e-operator"
  }
 }

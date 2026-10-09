@@ -18,6 +18,13 @@ One run of the real pipeline on fixed, sanitised recordings in tests/fixtures/e2
     Task AL halt consumer: the persisted halt blocks later intents and the Maker; a corrupt halt
     state file is a global halt (RiskGate and paper_cycle); a market resume cannot lift a global
     halt; a non-Operator resume is rejected (src/halt_store.py)
+    Task AP heartbeats and the resident Sentinel tick (golden key ``sentinel_heartbeat``): a stale
+    recorder heartbeat, a corrupt heartbeat and a lost Sentinel are global halts that veto intents;
+    scanner / endgame_scan / m1_run exit codes per the event matrix; a recorder gap-resync storm
+    halts its market and a reconnect storm alerts; every checked market stale two cycles in a row
+    is a global halt; a stale-book market halt resumed by the Operator while the book is still
+    stale is halted again on the next check; a failing Reconciler run lands in the halt store;
+    paper_cycle reads an M1 recording directory (gap 11)
 
 Nothing in src/ is replaced. Only the clock (a frozen ``datetime`` in podlib, book_staleness and
 wash_detect, which also freezes every ``utc_now``) and I/O paths (bus, ledger, quotes, markets,
@@ -31,10 +38,12 @@ writes it. scripts/guard.py (check ``e2e``) runs gate() in-process: stdlib + src
 """
 from __future__ import annotations
 
+import contextlib
 import copy
 import dataclasses
 import hashlib
 import http.client
+import io
 import json
 import math
 import re
@@ -61,7 +70,9 @@ PINNED_RISK_SHA256 = "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32
 FLOAT_DIGITS = 8  # golden rounding (formatting only, not a threshold)
 NEW_FILL_ID = re.compile(r"[0-9a-f]{32}")
 PATH_NAMES = ("BUS_PATH", "PAPER_PATH", "QUOTES_PATH", "MARKETS_PATH", "BOOKS_PATH", "SENTINEL_STATE_PATH",
-              "SESSIONS_PATH", "HALT_STATE_PATH", "HALT_FALLBACK_PATH")
+              "SESSIONS_PATH", "HALT_STATE_PATH", "HALT_FALLBACK_PATH",
+              # Task AP: heartbeats, Sentinel alerts and tick state (scenarios pass their own paths)
+              "HEARTBEAT_DIR", "ALERTS_PATH", "TICK_STATE_PATH")
 BUS_KINDS = frozenset({"signal", "veto", "fill", "halt", "resume"})
 
 
@@ -124,8 +135,9 @@ def _patched(patches: list[tuple[object, str, object]]) -> Iterator[None]:
 
 
 def _modules() -> dict[str, Any]:
-    from src import (book, book_staleness, endgame, endgame_scan, forecaster, halt_store, ledger_store, maker,
-                     paper_cycle, paper_ledger, podlib, risk_gate, scanner, sentinel, wash_detect)
+    from src import (book, book_staleness, endgame, endgame_scan, forecaster, halt_store, heartbeat, ledger_store,
+                     maker, paper_cycle, paper_ledger, podlib, reconcile, risk_gate, scanner, sentinel,
+                     sentinel_tick, wash_detect)
     return {name: module for name, module in locals().items()}
 
 
@@ -167,7 +179,7 @@ def offline_sandbox(work: Path, clock: Clock) -> Iterator[dict[str, Any]]:
             if hasattr(module, name):
                 patches.append((module, name, explicit.get(name, unused / name.lower())))
     frozen = frozen_datetime(clock)
-    for name in ("podlib", "book_staleness", "wash_detect"):
+    for name in ("podlib", "book_staleness", "wash_detect", "heartbeat"):
         patches.append((mods[name], "datetime", frozen))
     patches += [
         (socket, "socket", tripwire("socket.socket")),
@@ -550,6 +562,11 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
         halts_section = run_halt_scenarios(halt_plan, work, commit, paper_ledger, paper_cycle, halt_store, maker,
                                            podlib, ledger_start, quotes_start, markets_path, books_path, bus_path,
                                            state_path, clock, risk_cfg, problems)
+        # 11. Task AP: heartbeats and the resident Sentinel tick (scenario.json "heartbeat")
+        heartbeat_section = run_heartbeat_scenarios(scenario["heartbeat"], work, commit, paper_ledger, paper_cycle,
+                                                    halt_store, podlib, ledger_start, quotes_start, markets_path,
+                                                    books_path, work / "heartbeat_bus.jsonl", state_path, clock,
+                                                    risk_cfg, problems)  # own bus: the main bus counts stay as before
         bus_rows = podlib.read_jsonl(bus_path)
         attempts = list(box["attempts"])
         unused_files = sorted(p.name for p in box["unused"].rglob("*") if p.is_file())
@@ -627,6 +644,7 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
         "corrupt_mid_write": {**mid, "ledger_is_start_plus_tear": mid_bytes == ledger_start + tail},
         "cycle_2": _cycle(cycle_2),
         "halt_consumer": halts_section,
+        "sentinel_heartbeat": heartbeat_section,
         "quotes_after": [{k: q.get(k) for k in ("market", "token_id", "side", "price", "status", "cancelled_by",
                                                 "cancelled_ts")} for q in quotes_after],
         "bus": {"counts": counts, "fills": len(fills),
@@ -735,6 +753,194 @@ def run_halt_scenarios(plan: dict[str, Any], work: Path, commit, paper_ledger, p
             "active_after_global_resume": _halt_view(halt_store),
         }
     return out
+
+
+@contextmanager
+def heartbeat_scope(folder: Path, quotes_start: bytes) -> Iterator[dict[str, Path]]:
+    """Task AP: halt_scope plus this scenario's own heartbeat folder, alerts and tick state."""
+    mods = _modules()
+    with halt_scope(folder, quotes_start) as paths:
+        extra = {"heartbeat": folder / "heartbeat", "alerts": folder / "alerts.jsonl",
+                 "tick_state": folder / "sentinel_tick.json"}
+        with _patched([(mods["heartbeat"], "HEARTBEAT_DIR", extra["heartbeat"]),
+                       (mods["sentinel_tick"], "ALERTS_PATH", extra["alerts"]),
+                       (mods["sentinel_tick"], "TICK_STATE_PATH", extra["tick_state"])]):
+            yield {**paths, **extra}
+
+
+def _beat(scope: dict[str, Path], proc: str, *, ts: datetime, state: str = "running", exit_code: int | None = None,
+          progress: dict[str, Any] | None = None, started_at: datetime | None = None) -> None:
+    """Write one well-formed heartbeat (pins as in config/risk.toml) with a chosen time."""
+    from src import heartbeat
+    record = {"proc": proc, "pid": 4242, "host": "e2e", "started_at": heartbeat.utc_stamp(started_at or ts),
+              "ts": heartbeat.utc_stamp(ts), "seq": 1, "git_sha": None, "risk_sha256": PINNED_RISK_SHA256,
+              "live_enabled": False, "mode": "paper", "state": state, "exit_code": exit_code,
+              "progress": dict(progress or {})}
+    problem = heartbeat.write_record(heartbeat.beat_path(proc, scope["heartbeat"]), record)
+    if problem is not None:
+        raise RuntimeError(f"e2e could not write the {proc} heartbeat: {problem}")
+
+
+def _tick(scope: dict[str, Path], clock: Clock, bus_path: Path, ledger: Path) -> dict[str, Any]:
+    from src import sentinel_tick
+    result = sentinel_tick.tick(now=clock.now, heartbeat_dir=scope["heartbeat"], bus_path=bus_path,
+                                quotes_path=scope["quotes"], alerts_path=scope["alerts"],
+                                state_path=scope["tick_state"], ledger_path=ledger)
+    return {"halts": result["halts"], "alerts": result["alerts"], "logs": result["logs"],
+            "state_problem": result["state_problem"]}
+
+
+def run_heartbeat_scenarios(plan: dict[str, Any], work: Path, commit, paper_ledger, paper_cycle, halt_store, podlib,
+                            ledger_start: bytes, quotes_start: bytes, markets_path: Path, books_path: Path,
+                            bus_path: Path, state_path: Path, clock: Clock, risk_cfg,
+                            problems: list[str]) -> dict[str, Any]:
+    """Task AP (Sentinel design gaps 2, 4, 11, 12, 13, 14 and the AL follow-ups), each in its own folder."""
+    from src import reconcile, sentinel
+    out: dict[str, Any] = {}
+    now = clock.now
+
+    def ledger_in(folder: Path) -> Path:
+        ledger = folder / "paper.jsonl"
+        ledger.write_bytes(ledger_start)
+        return ledger
+
+    def vetoed(folder: Path) -> dict[str, Any]:
+        ledger = ledger_in(folder)
+        row = commit(plan["commit"], ledger)
+        paper_ledger.PAPER_PATH = work / "paper.jsonl"
+        unchanged = ledger.read_bytes() == ledger_start
+        if not unchanged:
+            problems.append(f"heartbeat {folder.name}: a halted intent changed the ledger")
+        return {"allow": row["allow"], "reasons": _reasons_kinds(row["reasons"]), "ledger_unchanged": unchanged}
+
+    # (a) a recorder heartbeat older than HEARTBEAT_RECORDER_TIMEOUT_S: global halt, intents vetoed
+    folder = work / "hb_recorder_stale"
+    with heartbeat_scope(folder, quotes_start) as scope:
+        _beat(scope, "m1_run", ts=now - timedelta(seconds=plan["recorder_stale_after_s"]))
+        _beat(scope, "m1_rest", ts=now)
+        first = _tick(scope, clock, bus_path, ledger_in(folder))
+        again = _tick(scope, clock, bus_path, folder / "paper.jsonl")
+        out["a_recorder_heartbeat_stale"] = {"tick": first, "second_tick": again, "active": _halt_view(halt_store),
+                                             "commit": vetoed(folder)}
+
+    # (b) a corrupt heartbeat is stale = a global halt (fail closed), whatever the process
+    folder = work / "hb_corrupt"
+    with heartbeat_scope(folder, quotes_start) as scope:
+        target = scope["heartbeat"] / "scanner.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(plan["corrupt_text"], encoding="utf-8")
+        out["b_corrupt_heartbeat"] = {"tick": _tick(scope, clock, bus_path, ledger_in(folder)),
+                                      "active": _halt_view(halt_store), "commit": vetoed(folder)}
+
+    # (c) exit codes by (module, code): alert, log only, or global halt
+    folder = work / "hb_exit_codes"
+    with heartbeat_scope(folder, quotes_start) as scope:
+        ledger = ledger_in(folder)
+        steps = []
+        for proc, code, streak in (("scanner", 2, 1), ("scanner", 3, 1), ("scanner", 3, 2), ("m1_run", 5, 1),
+                                   ("m1_run", 1, 1), ("endgame_scan", 4, 1)):
+            started = now - timedelta(seconds=len(steps) + 1)
+            progress = {"last_exit_code": code, "exit_streak": streak, "last_success_ts": heartbeat_stamp(now)}
+            _beat(scope, proc, ts=now, state="finished", exit_code=code, progress=progress, started_at=started)
+            steps.append({"proc": proc, "exit_code": code, "streak": streak,
+                          "tick": _tick(scope, clock, bus_path, ledger)})
+        out["c_exit_codes"] = {"steps": steps, "active": _halt_view(halt_store),
+                               "alerts_logged": len(podlib.read_jsonl(scope["alerts"]))}
+
+    # (d) the resident Sentinel lost (heartbeat older than SENTINEL_HEARTBEAT_TIMEOUT_S): consumers halt
+    folder = work / "hb_sentinel_lost"
+    with heartbeat_scope(folder, quotes_start) as scope:
+        _beat(scope, "sentinel", ts=now)
+        fresh = halt_store.halt_problems(plan["storm_market"])
+        _beat(scope, "sentinel", ts=now - timedelta(seconds=plan["sentinel_stale_after_s"]))
+        lost = _reasons_kinds(halt_store.halt_problems(plan["storm_market"]))
+        out["d_sentinel_lost"] = {"fresh_reasons": fresh, "lost_reasons": lost, "active": _halt_view(halt_store),
+                                  "commit": vetoed(folder)}
+
+    # (e) recorder escalation (gap 13): a gap-resync storm halts its market; a reconnect storm alerts
+    folder = work / "hb_recorder_storm"
+    with heartbeat_scope(folder, quotes_start) as scope:
+        asset, market = plan["storm_asset"], plan["storm_market"]
+        _beat(scope, "ws_recorder", ts=now, progress={
+            "reconnects_in_window": plan["storm_reconnects"],
+            "gap_resyncs_in_window": {asset: plan["storm_gap_resyncs"]}, "asset_markets": {asset: market}})
+        tick_e = _tick(scope, clock, bus_path, ledger_in(folder))
+        out["e_recorder_storm"] = {"tick": tick_e, "active": _halt_view(halt_store),
+                                   "market_reasons": _reasons_kinds(halt_store.halt_problems(market)),
+                                   "other_market_reasons": halt_store.halt_problems("e2e-alpha")}
+
+    # (f) every checked market stale in two consecutive cycles (gap 14): a global halt
+    folder = work / "hb_all_stale"
+    with heartbeat_scope(folder, quotes_start) as scope:
+        later = Clock(now + timedelta(seconds=plan["all_stale_after_s"]))
+        own_state = folder / "sentinel_stale.json"
+        cycles = []
+        for _ in range(2):
+            later.now = later.now + timedelta(seconds=60)
+            result = paper_cycle.run(markets_path=markets_path, books_path=books_path, bus_path=bus_path,
+                                     now=later.stamp(), cfg=risk_cfg(), sentinel_state_path=own_state,
+                                     quotes_path=scope["quotes"])
+            cycles.append({"checked": result["sentinel"]["checked"], "stale": result["stale"],
+                           "all_stale_streak": result["sentinel"]["all_stale_streak"],
+                           "all_stale_halt": result["sentinel"]["all_stale_halt"]})
+        out["f_all_markets_stale"] = {"cycles": cycles,
+                                      "global": [h for h in _halt_view(halt_store) if h["scope"] == "global"]}
+
+    # (g) AL follow-up: a stale-book market halt resumed while the book is still stale re-alarms at once
+    folder = work / "hb_stale_resume"
+    with heartbeat_scope(folder, quotes_start) as scope:
+        own_state = folder / "sentinel_stale.json"
+        own_state.write_bytes(state_path.read_bytes())
+        Path(str(own_state) + ".seen").write_text("1\n", encoding="utf-8")
+        market = "e2e-charlie"
+        record = halt_store.record_halt(scope="market", market=market, source="Sentinel",
+                                        reason=f"{sentinel.STALE_ALARM}: e2e carried over from cycle 2")
+        released = halt_store.resume(from_role="Operator", scope="market", halt_id=record["id"], market=market,
+                                     approved_by=plan["approved_by"], root_cause="e2e drill", postmortem="e2e drill",
+                                     bus_path=bus_path)["released"] == record["id"]
+        after_resume = _halt_view(halt_store)
+        cycle = paper_cycle.run(markets_path=markets_path, books_path=books_path, bus_path=bus_path, now=clock.stamp(),
+                                cfg=risk_cfg(), sentinel_state_path=own_state, quotes_path=scope["quotes"])
+        out["g_stale_resume_realarm"] = {"released": released, "active_after_resume": after_resume,
+                                         "cycle_halts": cycle["sentinel"]["halts"],
+                                         "active_after_next_check": _halt_view(halt_store)}
+
+    # (h) AL follow-up: a failing Reconciler run (exit 3 here) is a global halt in the halt store
+    folder = work / "hb_reconciler"
+    with heartbeat_scope(folder, quotes_start) as scope:
+        ledger = ledger_in(folder)
+        with contextlib.redirect_stdout(io.StringIO()):  # its report is not the gate's output
+            code = reconcile.main(["--user", "0x" + "1" * 40, "--ledger", str(ledger), "--bus", str(bus_path)],
+                                  getter=lambda url: {})
+        out["h_reconciler_halt"] = {"exit_code": code, "active": _halt_view(halt_store), "commit": vetoed(folder)}
+
+    # (i) gap 11: paper_cycle reads an M1 recording directory; an empty one makes every leg missing_book
+    folder = work / "hb_recording_dir"
+    with heartbeat_scope(folder, quotes_start) as scope:
+        run_dir = folder / "m1-run"
+        (run_dir / "books").mkdir(parents=True)
+        (run_dir / "books" / "books-000001.jsonl").write_bytes(books_path.read_bytes())
+        from_dir = paper_cycle.run(markets_path=markets_path, books_path=folder / "unused.jsonl", bus_path=bus_path,
+                                   now=clock.stamp(), cfg=risk_cfg(), sentinel_state_path=folder / "s1.json",
+                                   quotes_path=scope["quotes"], recording_dir=run_dir)
+        from_file = paper_cycle.run(markets_path=markets_path, books_path=books_path, bus_path=bus_path,
+                                    now=clock.stamp(), cfg=risk_cfg(), sentinel_state_path=folder / "s2.json",
+                                    quotes_path=scope["quotes"])
+        empty = folder / "empty-run"
+        empty.mkdir()
+        from_empty = paper_cycle.run(markets_path=markets_path, books_path=books_path, bus_path=bus_path,
+                                     now=clock.stamp(), cfg=risk_cfg(), sentinel_state_path=folder / "s3.json",
+                                     quotes_path=scope["quotes"], recording_dir=empty)
+        out["i_recording_dir"] = {"same_as_books_file": _cycle(from_dir) == _cycle(from_file),
+                                  "from_dir": _cycle(from_dir), "empty_dir": _cycle(from_empty),
+                                  "empty_problem": from_empty.get("books_problem")}
+    paper_ledger.PAPER_PATH = work / "paper.jsonl"
+    return out
+
+
+def heartbeat_stamp(moment: datetime) -> str:
+    from src import heartbeat
+    return heartbeat.utc_stamp(moment)
 
 
 def _ledger_view_bytes(data: bytes) -> list[str]:
@@ -913,6 +1119,91 @@ def halt_gate(root: Path | None = None) -> tuple[list[str], str]:
     summary = (f"halt blocks intents and Maker, corrupt halt file = global halt, "
                f"{sum(1 for a in attempts if not a['released'])} resumes rejected / "
                f"{sum(1 for a in attempts if a['released'])} Operator resumes")
+    return problems, summary
+
+
+def heartbeat_semantic_problems(actual: dict[str, Any]) -> list[str]:
+    """Task AP: the heartbeat / resident Sentinel outcomes, checked by meaning (not only against golden.json)."""
+    out: list[str] = []
+    section = actual.get("sentinel_heartbeat")
+    if not isinstance(section, dict):
+        return ["sentinel_heartbeat section missing from the run"]
+
+    def global_reasons(part: dict) -> list[str]:
+        return [h.get("reason") for h in part.get("active") or [] if h.get("scope") == "global"]
+
+    def blocked(part: dict, label: str) -> None:
+        commit = part.get("commit") or {}
+        if commit.get("allow") is not False or commit.get("ledger_unchanged") is not True:
+            out.append(f"{label}: an intent passed (or the ledger changed) under the halt")
+
+    a = section.get("a_recorder_heartbeat_stale") or {}
+    if "heartbeat_stale:m1_run" not in global_reasons(a):
+        out.append("(a) a stale m1_run heartbeat did not leave a global halt")
+    if (a.get("second_tick") or {}).get("halts"):
+        out.append("(a) the second tick halted again while the halt was active")
+    blocked(a, "(a)")
+    b = section.get("b_corrupt_heartbeat") or {}
+    if "heartbeat_corrupt:scanner" not in global_reasons(b):
+        out.append("(b) a corrupt heartbeat was not a global halt")
+    blocked(b, "(b)")
+    c = section.get("c_exit_codes") or {}
+    steps = c.get("steps") or []
+    want = [([], ["exit_2"], []), ([], [], ["scanner:scanner_incomplete"]), ([], ["scanner_incomplete_repeated"], []),
+            ([], [], ["m1_run:exit_5"]), ([], ["exit_1"], []), (["global:*:exit_4:endgame_scan"], ["exit_4"], [])]
+    got = [((s.get("tick") or {}).get("halts"), (s.get("tick") or {}).get("alerts"), (s.get("tick") or {}).get("logs"))
+           for s in steps]
+    if got != want:
+        out.append(f"(c) exit-code matrix {got} != {want}")
+    d = section.get("d_sentinel_lost") or {}
+    if d.get("fresh_reasons") != [] or "sentinel_heartbeat_stale" not in global_reasons(d) or not d.get("lost_reasons"):
+        out.append("(d) a lost Sentinel was not a global halt for the consumers (or a fresh one was)")
+    blocked(d, "(d)")
+    e = section.get("e_recorder_storm") or {}
+    if "halt_market" not in (e.get("market_reasons") or []) or e.get("other_market_reasons") != []:
+        out.append("(e) a gap-resync storm did not halt exactly its market")
+    if "reconnect_storm" not in ((e.get("tick") or {}).get("alerts") or []):
+        out.append("(e) a reconnect storm raised no alert")
+    f = section.get("f_all_markets_stale") or {}
+    cycles = f.get("cycles") or []
+    if len(cycles) != 2 or cycles[0].get("all_stale_halt") or not cycles[1].get("all_stale_halt"):
+        out.append("(f) every market stale twice in a row was not a global halt on the second cycle")
+    if not any(str(h.get("reason", "")).startswith("all_markets_stale") for h in f.get("global") or []):
+        out.append("(f) no all_markets_stale global halt stored")
+    g = section.get("g_stale_resume_realarm") or {}
+    if g.get("released") is not True or g.get("cycle_halts") != ["e2e-charlie"]:
+        out.append("(g) a resumed stale-book halt was not raised again at the next stale check")
+    h = section.get("h_reconciler_halt") or {}
+    if h.get("exit_code") != 3 or not any(x.get("source") == "Reconciler" and x.get("scope") == "global"
+                                          for x in h.get("active") or []):
+        out.append("(h) a failing Reconciler run did not land as a global halt in the halt store")
+    blocked(h, "(h)")
+    i = section.get("i_recording_dir") or {}
+    if i.get("same_as_books_file") is not True or i.get("empty_problem") != "recording_has_no_book_file":
+        out.append("(i) paper_cycle did not read the M1 recording dir like the books file (or an empty dir)")
+    if (i.get("empty_dir") or {}).get("gaps") != 0:
+        out.append("(i) an empty recording dir produced a gap signal")
+    return out
+
+
+def heartbeat_gate(root: Path | None = None) -> tuple[list[str], str]:
+    """Guard check 10 (Task AP): the heartbeat / resident Sentinel scenarios, by meaning and against golden."""
+    root = root or ROOT
+    fixtures = fixtures_dir(root)
+    missing = [name for name in (*INPUT_FILES, GOLDEN_NAME) if not (fixtures / name).is_file()]
+    if missing:
+        return [f"missing fixture {FIXTURES_REL.as_posix()}/{name}" for name in missing], ""
+    if "heartbeat" not in load_json(fixtures / "scenario.json"):
+        return ["scenario.json has no heartbeat plan"], ""
+    golden = load_json(fixtures / GOLDEN_NAME)
+    result = run_once(fixtures, root)
+    actual = result["actual"]
+    problems = list(result["problems"]) + heartbeat_semantic_problems(actual)
+    problems += golden_problems(actual.get("sentinel_heartbeat"), golden.get("sentinel_heartbeat"),
+                                "$.sentinel_heartbeat")
+    summary = ("stale/corrupt heartbeat and lost Sentinel = global halt, exit-code matrix, gap-resync storm = "
+               "market halt, all-stale x2 = global halt, resumed stale halt re-alarms, Reconciler halt stored, "
+               "M1 recording dir read")
     return problems, summary
 
 

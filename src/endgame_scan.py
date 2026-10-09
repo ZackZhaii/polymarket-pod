@@ -262,4 +262,7 @@ def main(
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Task AP: start/finish heartbeat (logs/heartbeat/endgame_scan.json) for the resident Sentinel.
+    from src.heartbeat import run_main
+
+    raise SystemExit(run_main("endgame_scan", main))

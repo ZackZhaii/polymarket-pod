@@ -109,8 +109,9 @@ def test_endgame_emits_a_signal_only(run):
 
 def test_every_intent_starts_from_a_newsforecaster_signal(run):
     forecasts = [r for r in run["detail"]["bus"] if r["from"] == "NewsForecaster"]
-    # 7 intents, the replay commit, two corrupted-ledger commits, two Task AL halt-consumer commits
-    assert len(forecasts) == 12
+    # 7 intents, the replay commit, two corrupted-ledger commits, two Task AL halt-consumer commits,
+    # four Task AP heartbeat-halt commits (all vetoed)
+    assert len(forecasts) == 16
     assert all(r["to"] == "RiskGate" and r["payload"]["order"] is False for r in forecasts)
 
 

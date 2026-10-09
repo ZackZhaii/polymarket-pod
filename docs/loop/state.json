@@ -339,6 +339,15 @@
       "note": "Requested by Poly指挥 (queue after AO: heartbeat -> EXIT_CODES/pins -> private-key string scan); done by grok-bot from Poly哨兵's sentinel_design.md (event matrix SEV-1 row, gap 9). AP is reserved for the parallel heartbeat task. Not done here: bus() write-error handling and ts monotonicity (rest of gap 9; heartbeat/bus task), a resident Sentinel tick calling the scan (gap 2/12), scanning data/ or M1 RUN dirs by default (use --path). A missing or changed word list fails closed: every bus write is refused and halted.",
       "done_at": "2026-10-09T08:16:45Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AP",
+      "status": "done",
+      "title": "Sentinel heartbeat: per-process heartbeat files, a resident Sentinel tick with the design's event matrix (stale = halt, fail closed), scanner exit-code alerts, paper_cycle --recording-dir, Reconciler halts in halt_store, stale-resume re-alarm (Poly哨兵 design gaps 2, 4, 11, 12, 13, 14)",
+      "finish": "src/heartbeat.py writes logs/heartbeat/<proc>.json atomically (tmp + fsync + os.replace, .seen marker) for ws_recorder, m1_run, m1_rest, scanner, endgame_scan, loop_claim, paper_cycle and the Sentinel; unreadable / corrupt / malformed / lost-after-marker / future-stamped counts as stale. src/sentinel_tick.py (resident, every SENTINEL_TICK_S) beats first, checks risk.toml pins, every heartbeat (liveness, pin fields, exit-code matrix by (module, code), recorder reconnect / gap-resync window) and ledger_store.verify; halts via sentinel.halt into halt_store (deduped by active halt, re-halted after an Operator resume while the condition holds), alerts to logs/alerts.jsonl + a Sentinel->Operator signal (bus failure writes logs/HALT). Consumers treat a lost resident Sentinel (SENTINEL_HEARTBEAT_TIMEOUT_S) as a stored global halt. Reconciler exits 1/3/4 are a global halt in halt_store. A resumed stale-book market halt re-alarms on the next stale check. paper_cycle --recording-dir reads rotated books-*.jsonl, --loop beats every <= 60 s, all checked markets stale ALL_STALE_CONSECUTIVE_CYCLES cycles = global halt. e2e gate scenarios (golden sentinel_heartbeat, only via --update-golden), guard check 11 heartbeat. New M2-pending numbers in src/thresholds.py and docs/THRESHOLDS.md. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (ruling on Poly哨兵's sentinel design; queue: heartbeat after AK/AL/AO); done by grok-bot. AQ (private-key scan, #44) ran in parallel and was merged into this branch before the PR. Behaviour changes: once the resident Sentinel has run, stopping it halts every consumer until an Operator resume; a Reconciler failure is now a global halt; a dead process's stale heartbeat re-halts after each resume until it is restarted or the Operator removes its heartbeat file and marker. No halt_consumer process exists yet (its spec is checked only if it beats). Later: resume precondition signal, WS hash/tick resync, the Sentinel tick running the secret scan.",
+      "done_at": "2026-10-09T08:31:11Z",
+      "surface": "grok-bot"
     }
   ]
 }

@@ -58,6 +58,13 @@ scratch files in a temp folder outside the repo and remove it):
    FAILs and is reported as file:line, rule, length and a sha256 prefix only (never the text). It
    also runs the scanner's self-test on fresh random canaries, so a weakened rule FAILs. .env files
    are never opened. Read only: the guard records no halt (python -m src.secret_scan does).
+9. heartbeat (Task AP): the heartbeat / resident Sentinel scenarios of the same offline run
+   (e2e_offline.heartbeat_gate): a stale recorder heartbeat, a corrupt heartbeat and a lost
+   Sentinel are global halts that veto intents; the exit-code event matrix (alert / log / global
+   halt); a gap-resync storm halts its market only and a reconnect storm alerts; every market stale
+   two cycles in a row is a global halt; a resumed stale-book halt is raised again at the next
+   stale check; a failing Reconciler run is stored as a global halt; paper_cycle reads an M1
+   recording directory. Checked by meaning and against golden.json.
 """
 from __future__ import annotations
 
@@ -763,6 +770,21 @@ def check_secret_scan(root: Path) -> Result:
                               f"{log_note}; self-test canaries detected")
 
 
+# ---------------------------------------------------------------- 9. heartbeat (Task AP)
+
+def check_heartbeat(root: Path) -> Result:
+    name = "heartbeat"
+    if not (root / E2E_HARNESS_REL).is_file():
+        return Result(name, FAIL, f"{E2E_HARNESS_REL} is missing")
+    harness = _load_e2e(root)
+    if not hasattr(harness, "heartbeat_gate"):
+        return Result(name, FAIL, f"{E2E_HARNESS_REL} has no heartbeat_gate (Task AP)")
+    problems, summary = harness.heartbeat_gate(root)
+    if problems:
+        return Result(name, FAIL, _summary(problems))
+    return Result(name, PASS, summary)
+
+
 def run_checks(root: Path, require_git: bool = False) -> list[Result]:
     checks = [
         lambda: check_risk_sha_worktree(root),
@@ -775,10 +797,11 @@ def run_checks(root: Path, require_git: bool = False) -> list[Result]:
         lambda: check_e2e(root),
         lambda: check_halt(root),
         lambda: check_secret_scan(root),
+        lambda: check_heartbeat(root),
     ]
     results = []
     names = ["risk_sha_worktree", "risk_sha_head", "live_enabled", "banned_dependencies", "banned_imports",
-             "url_allowlist", "thresholds_doc", "e2e", "halt", "secret_scan"]
+             "url_allowlist", "thresholds_doc", "e2e", "halt", "secret_scan", "heartbeat"]
     for name, check in zip(names, checks):
         try:
             results.append(check())
@@ -796,7 +819,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="guard.py",
         description="M0 guard: offline, read-only safety checks (risk.toml pin, live_enabled, banned "
                     "packages and imports, URL allowlist, THRESHOLDS.md, the end-to-end offline gate, the halt consumer, "
-                    "the secret-string scan of tracked files and logs/).",
+                    "the secret-string scan of tracked files and logs/, heartbeats and the resident Sentinel).",
         epilog="Exit codes: 0 all checks pass (risk_sha_head may SKIP without git); 1 a check failed; "
                "2 usage error or no repo root found.",
     )

@@ -152,10 +152,10 @@
       "Endgame>RiskGate:signal": 1,
       "Executor>Sentinel:fill": 3,
       "Executor>Sentinel:halt": 1,
-      "NewsForecaster>RiskGate:signal": 12,
+      "NewsForecaster>RiskGate:signal": 16,
       "Operator>Sentinel:resume": 2,
       "RiskGate>Executor:signal": 4,
-      "RiskGate>Executor:veto": 8,
+      "RiskGate>Executor:veto": 12,
       "Scanner>BookWatcher:signal": 7,
       "Sentinel>Executor:halt": 2
     },
@@ -789,7 +789,7 @@
   },
   "invariants": {
     "booked_fill_ids": 3,
-    "live_checks": 16,
+    "live_checks": 26,
     "live_enabled": [
       "False"
     ],
@@ -871,5 +871,301 @@
       "e2e-golf"
     ],
     "scanned": 10
+  },
+  "sentinel_heartbeat": {
+    "a_recorder_heartbeat_stale": {
+      "active": [
+        {
+          "market": "",
+          "reason": "heartbeat_stale:m1_run",
+          "scope": "global",
+          "source": "Sentinel"
+        }
+      ],
+      "commit": {
+        "allow": false,
+        "ledger_unchanged": true,
+        "reasons": [
+          "halt_global"
+        ]
+      },
+      "second_tick": {
+        "alerts": [],
+        "halts": [],
+        "logs": [],
+        "state_problem": null
+      },
+      "tick": {
+        "alerts": [
+          "heartbeat_stale"
+        ],
+        "halts": [
+          "global:*:heartbeat_stale:m1_run"
+        ],
+        "logs": [],
+        "state_problem": null
+      }
+    },
+    "b_corrupt_heartbeat": {
+      "active": [
+        {
+          "market": "",
+          "reason": "heartbeat_corrupt:scanner",
+          "scope": "global",
+          "source": "Sentinel"
+        }
+      ],
+      "commit": {
+        "allow": false,
+        "ledger_unchanged": true,
+        "reasons": [
+          "halt_global"
+        ]
+      },
+      "tick": {
+        "alerts": [
+          "heartbeat_corrupt"
+        ],
+        "halts": [
+          "global:*:heartbeat_corrupt:scanner"
+        ],
+        "logs": [],
+        "state_problem": null
+      }
+    },
+    "c_exit_codes": {
+      "active": [
+        {
+          "market": "",
+          "reason": "exit_4:endgame_scan",
+          "scope": "global",
+          "source": "Sentinel"
+        }
+      ],
+      "alerts_logged": 4,
+      "steps": [
+        {
+          "exit_code": 2,
+          "proc": "scanner",
+          "streak": 1,
+          "tick": {
+            "alerts": [
+              "exit_2"
+            ],
+            "halts": [],
+            "logs": [],
+            "state_problem": null
+          }
+        },
+        {
+          "exit_code": 3,
+          "proc": "scanner",
+          "streak": 1,
+          "tick": {
+            "alerts": [],
+            "halts": [],
+            "logs": [
+              "scanner:scanner_incomplete"
+            ],
+            "state_problem": null
+          }
+        },
+        {
+          "exit_code": 3,
+          "proc": "scanner",
+          "streak": 2,
+          "tick": {
+            "alerts": [
+              "scanner_incomplete_repeated"
+            ],
+            "halts": [],
+            "logs": [],
+            "state_problem": null
+          }
+        },
+        {
+          "exit_code": 5,
+          "proc": "m1_run",
+          "streak": 1,
+          "tick": {
+            "alerts": [],
+            "halts": [],
+            "logs": [
+              "m1_run:exit_5"
+            ],
+            "state_problem": null
+          }
+        },
+        {
+          "exit_code": 1,
+          "proc": "m1_run",
+          "streak": 1,
+          "tick": {
+            "alerts": [
+              "exit_1"
+            ],
+            "halts": [],
+            "logs": [],
+            "state_problem": null
+          }
+        },
+        {
+          "exit_code": 4,
+          "proc": "endgame_scan",
+          "streak": 1,
+          "tick": {
+            "alerts": [
+              "exit_4"
+            ],
+            "halts": [
+              "global:*:exit_4:endgame_scan"
+            ],
+            "logs": [],
+            "state_problem": null
+          }
+        }
+      ]
+    },
+    "d_sentinel_lost": {
+      "active": [
+        {
+          "market": "",
+          "reason": "sentinel_heartbeat_stale",
+          "scope": "global",
+          "source": "halt_store"
+        }
+      ],
+      "commit": {
+        "allow": false,
+        "ledger_unchanged": true,
+        "reasons": [
+          "halt_global"
+        ]
+      },
+      "fresh_reasons": [],
+      "lost_reasons": [
+        "halt_global"
+      ]
+    },
+    "e_recorder_storm": {
+      "active": [
+        {
+          "market": "e2e-bravo",
+          "reason": "recorder_gap_resyncs:e2e-storm-asset",
+          "scope": "market",
+          "source": "Sentinel"
+        }
+      ],
+      "market_reasons": [
+        "halt_market"
+      ],
+      "other_market_reasons": [],
+      "tick": {
+        "alerts": [
+          "reconnect_storm",
+          "gap_resync_storm"
+        ],
+        "halts": [
+          "market:e2e-bravo:recorder_gap_resyncs:e2e-storm-asset"
+        ],
+        "logs": [],
+        "state_problem": null
+      }
+    },
+    "f_all_markets_stale": {
+      "cycles": [
+        {
+          "all_stale_halt": false,
+          "all_stale_streak": 1,
+          "checked": 7,
+          "stale": 7
+        },
+        {
+          "all_stale_halt": true,
+          "all_stale_streak": 2,
+          "checked": 7,
+          "stale": 7
+        }
+      ],
+      "global": [
+        {
+          "market": "",
+          "reason": "all_markets_stale: all 7 checked markets stale for 2 consecutive cycles",
+          "scope": "global",
+          "source": "Sentinel"
+        }
+      ]
+    },
+    "g_stale_resume_realarm": {
+      "active_after_next_check": [
+        {
+          "market": "e2e-charlie",
+          "reason": "stale_book_consecutive: 3 consecutive stale or failed book checks (last: stale_book)",
+          "scope": "market",
+          "source": "Sentinel"
+        }
+      ],
+      "active_after_resume": [],
+      "cycle_halts": [
+        "e2e-charlie"
+      ],
+      "released": true
+    },
+    "h_reconciler_halt": {
+      "active": [
+        {
+          "market": "",
+          "reason": "reconcile_failed exit=3",
+          "scope": "global",
+          "source": "Reconciler"
+        }
+      ],
+      "commit": {
+        "allow": false,
+        "ledger_unchanged": true,
+        "reasons": [
+          "halt_global"
+        ]
+      },
+      "exit_code": 3
+    },
+    "i_recording_dir": {
+      "empty_dir": {
+        "fills": 0,
+        "gaps": 0,
+        "halted_markets": [],
+        "ok": true,
+        "sentinel_checked": 7,
+        "sentinel_halts": [],
+        "stale": 7,
+        "stale_markets": [
+          "e2e-alpha",
+          "e2e-bravo",
+          "e2e-charlie",
+          "e2e-delta",
+          "e2e-echo",
+          "e2e-foxtrot",
+          "e2e-golf"
+        ],
+        "state_problem": null,
+        "write_problem": null
+      },
+      "empty_problem": "recording_has_no_book_file",
+      "from_dir": {
+        "fills": 0,
+        "gaps": 1,
+        "halted_markets": [],
+        "ok": true,
+        "sentinel_checked": 7,
+        "sentinel_halts": [],
+        "stale": 1,
+        "stale_markets": [
+          "e2e-charlie"
+        ],
+        "state_problem": null,
+        "write_problem": null
+      },
+      "same_as_books_file": true
+    }
   }
 }

@@ -195,7 +195,7 @@ def test_state_round_trips_across_runs(paper):
     watch = _watch(paper)
     watch.check("m1", STALE, NOW)
     saved = json.loads(json.dumps(watch.to_dict()))
-    assert saved == {"max_age_s": 120.0, "consecutive": 2, "streaks": {"m1": 1}, "alarmed": []}
+    assert saved == {"max_age_s": 120.0, "consecutive": 2, "streaks": {"m1": 1}, "alarmed": [], "all_stale_streak": 0}
     again = sentinel.StaleWatch.from_dict(saved, bus_path=paper["bus"], quotes_path=paper["quotes"])
     assert again.check("m1", STALE, NOW)["halt"] is not None
     after = sentinel.StaleWatch.from_dict(again.to_dict(), bus_path=paper["bus"], quotes_path=paper["quotes"])

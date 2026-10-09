@@ -165,6 +165,44 @@ MNEMONIC_MIN_WORDS = 12
 # apart without echoing them). Kept between 4 and 12 so the prefix never identifies a value.
 SECRET_HASH_PREFIX_CHARS = 8
 
+# --- Heartbeats and the resident Sentinel tick (Task AP, Poly哨兵 design gaps 2, 12, 13, 14) -------
+# Every value is a first value from the Sentinel design review (dev@f760e51), M2 pending. A
+# heartbeat older than its timeout (or unreadable, corrupt, malformed, or lost after it was written
+# once) is stale; what a stale heartbeat does (alert, global halt) is in src/sentinel_tick.py.
+# M2 pending. ws_recorder and m1_run main loop: a heartbeat at least this often (also while backing off).
+HEARTBEAT_RECORDER_EVERY_S = 10.0
+# M2 pending. ... and stale (global halt) once it is this old.
+HEARTBEAT_RECORDER_TIMEOUT_S = 120.0
+# M2 pending. m1_run REST sampler: stale (alert) once its heartbeat (one per sample) is this old.
+HEARTBEAT_REST_TIMEOUT_S = 900.0
+# M2 pending. Scanner (and endgame_scan) write start/finish: a start with no finish after this is hung (alert).
+SCANNER_HANG_S = 1800.0
+# M2 pending. The latest successful scan (exit 0) older than this raises an alert.
+SCANNER_MAX_SUCCESS_AGE_S = 86400.0
+# M2 pending. Consecutive scanner exit-3 (incomplete paging / network) runs that raise an alert.
+SCANNER_INCOMPLETE_CONSECUTIVE = 2
+# M2 pending. paper_cycle --loop: one cycle (and heartbeat) this often; stale (alert) after the
+# timeout and a global halt after HEARTBEAT_PAPER_CYCLE_HALT_FACTOR x the timeout.
+HEARTBEAT_PAPER_CYCLE_EVERY_S = 60.0
+HEARTBEAT_PAPER_CYCLE_TIMEOUT_S = 180.0
+HEARTBEAT_PAPER_CYCLE_HALT_FACTOR = 2
+# M2 pending. A polling halt consumer: heartbeat this often, stale (global halt) after the timeout.
+HEARTBEAT_CONSUMER_EVERY_S = 5.0
+HEARTBEAT_CONSUMER_TIMEOUT_S = 30.0
+# M2 pending. The resident Sentinel ticks this often; once it has beaten once, a Sentinel heartbeat
+# older than the timeout is a global halt for every consumer (RiskGate, Maker, paper_cycle).
+SENTINEL_TICK_S = 30.0
+SENTINEL_HEARTBEAT_TIMEOUT_S = 90.0
+# M2 pending. Recorder escalation (gap 13), over a sliding window: this many reconnects (connect
+# attempts after the first) raise an alert; this many gap resyncs (not caused by a disconnect) of
+# one asset halt its market (and alert).
+RECORDER_ESCALATION_WINDOW_S = 600.0
+RECORDER_RECONNECT_ALERT_COUNT = 4
+RECORDER_GAP_RESYNC_HALT_COUNT = 3
+# M2 pending. Gap 14: every checked market stale in the same paper cycle, this many cycles in a row,
+# is a global halt.
+ALL_STALE_CONSECUTIVE_CYCLES = 2
+
 
 def consistency_problems() -> list[str]:
     """Relations the values must keep. Import fails if any is broken (explicit, survives -O)."""
@@ -226,6 +264,27 @@ def consistency_problems() -> list[str]:
         problems.append("MAX_SIGNAL_AGE_*_S must be > 0")
     if not MAX_SOURCE_LOGIT_GAP > 0.0:
         problems.append("MAX_SOURCE_LOGIT_GAP must be > 0")
+    if not 0.0 < HEARTBEAT_RECORDER_EVERY_S < HEARTBEAT_RECORDER_TIMEOUT_S <= MAX_BOOK_AGE_S:
+        problems.append("0 < HEARTBEAT_RECORDER_EVERY_S < HEARTBEAT_RECORDER_TIMEOUT_S <= MAX_BOOK_AGE_S")
+    if not 0.0 < HEARTBEAT_REST_TIMEOUT_S:
+        problems.append("HEARTBEAT_REST_TIMEOUT_S must be > 0")
+    if not 0.0 < SCANNER_HANG_S < SCANNER_MAX_SUCCESS_AGE_S:
+        problems.append("0 < SCANNER_HANG_S < SCANNER_MAX_SUCCESS_AGE_S")
+    if not 0.0 < HEARTBEAT_PAPER_CYCLE_EVERY_S < HEARTBEAT_PAPER_CYCLE_TIMEOUT_S:
+        problems.append("0 < HEARTBEAT_PAPER_CYCLE_EVERY_S < HEARTBEAT_PAPER_CYCLE_TIMEOUT_S")
+    if not 0.0 < HEARTBEAT_CONSUMER_EVERY_S < HEARTBEAT_CONSUMER_TIMEOUT_S:
+        problems.append("0 < HEARTBEAT_CONSUMER_EVERY_S < HEARTBEAT_CONSUMER_TIMEOUT_S")
+    if not 0.0 < SENTINEL_TICK_S < SENTINEL_HEARTBEAT_TIMEOUT_S:
+        problems.append("0 < SENTINEL_TICK_S < SENTINEL_HEARTBEAT_TIMEOUT_S")
+    if not RECORDER_ESCALATION_WINDOW_S > 0.0:
+        problems.append("RECORDER_ESCALATION_WINDOW_S must be > 0")
+    for name, value in (("SCANNER_INCOMPLETE_CONSECUTIVE", SCANNER_INCOMPLETE_CONSECUTIVE),
+                        ("HEARTBEAT_PAPER_CYCLE_HALT_FACTOR", HEARTBEAT_PAPER_CYCLE_HALT_FACTOR),
+                        ("RECORDER_RECONNECT_ALERT_COUNT", RECORDER_RECONNECT_ALERT_COUNT),
+                        ("RECORDER_GAP_RESYNC_HALT_COUNT", RECORDER_GAP_RESYNC_HALT_COUNT),
+                        ("ALL_STALE_CONSECUTIVE_CYCLES", ALL_STALE_CONSECUTIVE_CYCLES)):
+        if not (isinstance(value, int) and not isinstance(value, bool) and value >= 1):
+            problems.append(f"{name} must be a whole number >= 1")
     if isinstance(RESOLUTION_HOLD_HOURS, bool) or not isinstance(RESOLUTION_HOLD_HOURS, (int, float)) or not (
         RESOLUTION_HOLD_HOURS > 0.0
     ):

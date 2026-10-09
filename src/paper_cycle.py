@@ -14,11 +14,22 @@ Task AL (Sentinel design gaps 1 and 10): a leg with no recorded book row (or a m
 tokens) is stale (missing_book), so a market without a book is checked by StaleWatch instead of
 skipped. A market covered by an active halt (src/halt_store.py: its own, a global one, a bad
 halt state file or logs/HALT) gets no gap signal; the skip is recorded as halted_market.
+Task AP (Sentinel design gaps 11, 12, 14):
+- gap 11: ``recording_dir`` (CLI ``--recording-dir RUN_DIR``) reads the M1 run's rotated book files
+  ``RUN_DIR/books/books-*.jsonl`` (src.m1_run) instead of data/books.jsonl, so StaleWatch sees the
+  recorder's rows during M1. A recording dir with no book file makes every leg missing_book (stale).
+- gap 14: every checked market stale in the same cycle, ALL_STALE_CONSECUTIVE_CYCLES cycles in a
+  row (the count persists in the StaleWatch state), is a GLOBAL Sentinel halt. If the Operator
+  resumes it while every market is still stale, the next such cycle halts again at once.
+- gap 12: ``python -m src.paper_cycle --loop`` runs a cycle every HEARTBEAT_PAPER_CYCLE_EVERY_S and
+  writes logs/heartbeat/paper_cycle.json each cycle (a one-shot run writes start and finish).
 No network, no orders, no paper fills, no edits to config/risk.toml.
 """
 from __future__ import annotations
 
+import argparse
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -50,9 +61,37 @@ from src.podlib import (  # noqa: E402
 
 # Same value as book_staleness.MAX_BOOK_AGE_S (RiskGate). Not a risk.toml key.
 from src.thresholds import PAPER_CYCLE_STALE_AFTER_S as STALE_AFTER_S  # noqa: E402 - Task AC
+from src.thresholds import ALL_STALE_CONSECUTIVE_CYCLES, HEARTBEAT_PAPER_CYCLE_EVERY_S  # noqa: E402 - Task AP
 
 # Task AL gap 10: a leg (or a market) with no recorded book row counts as a stale check.
 MISSING_BOOK = "missing_book"
+# Task AP gap 14: the global halt reason prefix when every checked market is stale.
+ALL_STALE_ALARM = "all_markets_stale"
+# Task AP gap 11: the M1 run's rotated book files inside a run directory.
+RECORDING_BOOKS_GLOB = "books/books-*.jsonl"
+RECORDING_EMPTY = "recording_has_no_book_file"
+
+
+def recording_book_files(recording_dir: Path) -> list[Path]:
+    """The run's book files in rotation order (books-000001.jsonl, books-000002.jsonl, ...)."""
+    return sorted(Path(recording_dir).glob(RECORDING_BOOKS_GLOB))
+
+
+def read_books(books_path: Path, recording_dir: Path | None = None) -> tuple[list[dict], str | None]:
+    """Book rows from ``books_path``, or from every rotated file of ``recording_dir`` when given.
+
+    Returns (rows, problem). A recording dir with no book file returns no rows and
+    RECORDING_EMPTY: every leg is then missing_book (stale), never skipped.
+    """
+    if recording_dir is None:
+        return read_jsonl(books_path), None
+    files = recording_book_files(recording_dir)
+    if not files:
+        return [], RECORDING_EMPTY
+    rows: list[dict] = []
+    for path in files:
+        rows.extend(read_jsonl(path))
+    return rows, None
 
 
 def run(
@@ -65,6 +104,7 @@ def run(
     cfg: dict | None = None,
     sentinel_state_path: Path | None = None,
     quotes_path: Path | None = None,
+    recording_dir: Path | None = None,
 ) -> dict:
     before = RISK_PATH.read_bytes()
     loaded = cfg if cfg is not None else load_risk()
@@ -75,7 +115,8 @@ def run(
     now_at = parse_book_ts(now_s)
     skips: list[dict] = []
     markets = _latest_by(read_jsonl(markets_path), "id", skips, bus_path)
-    books = _latest_books(read_jsonl(books_path), skips, bus_path)
+    book_rows, books_problem = read_books(books_path, recording_dir)
+    books = _latest_books(book_rows, skips, bus_path)
     state_path = sentinel_state_path if sentinel_state_path is not None else SENTINEL_STATE_PATH
     watch, state_problem = sentinel.load_watch(
         state_path,
@@ -83,6 +124,7 @@ def run(
         quotes_path=quotes_path if quotes_path is not None else QUOTES_PATH,
     )
     checked: list[str] = []
+    stale_checked: list[str] = []
     halts: list[str] = []
     halted_markets: list[str] = []
     gaps = 0
@@ -119,6 +161,8 @@ def run(
         if state_problem is not None:
             _sentinel_record(watch, market_id, state_problem, halts)
         _sentinel_record(watch, market_id, min(sentinel_reasons) if sentinel_reasons else None, halts)
+        if sentinel_reasons or state_problem is not None:
+            stale_checked.append(market_id)
         if stale_reasons:
             bus(
                 "BookWatcher",
@@ -152,6 +196,18 @@ def run(
             if message["type"] != "signal":
                 raise RuntimeError("paper cycle refused a non-signal")
             gaps += 1
+    # Task AP gap 14: every checked market stale in this cycle extends the all-stale streak.
+    all_stale = bool(checked) and len(stale_checked) == len(checked)
+    watch.all_stale_streak = watch.all_stale_streak + 1 if all_stale else 0
+    all_stale_halt = None
+    if watch.all_stale_streak >= ALL_STALE_CONSECUTIVE_CYCLES:
+        active = halt_store.has_active_halt(scope=halt_store.SCOPE_GLOBAL, reason_prefix=ALL_STALE_ALARM)
+        if active is False and not halt_store.fallback_active():
+            all_stale_halt = sentinel.halt(
+                reason=f"{ALL_STALE_ALARM}: all {len(checked)} checked markets stale for "
+                       f"{watch.all_stale_streak} consecutive cycles",
+                scope=halt_store.SCOPE_GLOBAL, bus_path=bus_path,
+                quotes_path=quotes_path if quotes_path is not None else QUOTES_PATH)
     write_problem = sentinel.save_watch(watch, state_path)
     if write_problem is not None:
         # This run's streaks are lost, so the failed write is one more stale check now (fail closed).
@@ -174,7 +230,10 @@ def run(
             "write_problem": write_problem,
             "halts": halts,
             "state_path": str(state_path),
+            "all_stale_streak": watch.all_stale_streak,
+            "all_stale_halt": all_stale_halt is not None,
         },
+        "books_problem": books_problem,
     }
 
 
@@ -271,13 +330,72 @@ def _assert_risk_unchanged(before: bytes) -> None:
         raise RuntimeError("risk.toml changed during paper cycle")
 
 
-def main() -> int:
-    result = run()
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m src.paper_cycle",
+        description="Offline paper cycle: gap and staleness signals, Sentinel StaleWatch. No orders.",
+        epilog="Exit codes: 0 ran; 1 a phase-0 pin failed; 2 usage error.",
+    )
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--books", type=Path, default=None, help="book rows JSONL (default data/books.jsonl)")
+    source.add_argument("--recording-dir", type=Path, default=None,
+                        help="an M1 run directory: read its rotated books/books-*.jsonl (Task AP gap 11)")
+    parser.add_argument("--loop", action="store_true", help="run a cycle every --every seconds (Task AP gap 12)")
+    parser.add_argument("--every", type=float, default=HEARTBEAT_PAPER_CYCLE_EVERY_S,
+                        help=f"seconds between cycles with --loop (0 < s <= {HEARTBEAT_PAPER_CYCLE_EVERY_S:g})")
+    parser.add_argument("--max-cycles", type=int, default=0, help="stop after N cycles with --loop (0 = no limit)")
+    return parser
+
+
+def _print(result: dict) -> None:
     print(
         f"ok={str(result['ok']).lower()} reason={result['reason']} "
         f"gaps={result['gaps']} stale={result['stale']} fills={result['fills']} orders=none"
     )
-    return 0 if result["ok"] else 1
+
+
+def main(argv: list[str] | None = None, *, sleep=time.sleep, monotonic=time.monotonic) -> int:
+    """One cycle (start and finish heartbeat), or ``--loop``: a cycle and a heartbeat every ``--every``.
+
+    ``--every`` may only be the default or shorter (a longer one would outrun the Sentinel's
+    HEARTBEAT_PAPER_CYCLE_TIMEOUT_S). An exception ends the loop with a ``crashed`` heartbeat.
+    """
+    from src.heartbeat import Heartbeat  # local: keeps the module import light
+
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit as exc:
+        return 0 if exc.code == 0 else 2
+    if not (0.0 < args.every <= HEARTBEAT_PAPER_CYCLE_EVERY_S) or args.max_cycles < 0:
+        print(f"paper_cycle: usage error: 0 < --every <= {HEARTBEAT_PAPER_CYCLE_EVERY_S:g} and --max-cycles >= 0",
+              file=sys.stderr)
+        return 2
+    kwargs: dict = {"recording_dir": args.recording_dir}
+    if args.books is not None:
+        kwargs["books_path"] = args.books
+    hb = Heartbeat("paper_cycle", every_s=args.every, monotonic=monotonic)
+    hb.beat("running", {"cycles": 0}, force=True)
+    cycles = 0
+    try:
+        while True:
+            started = monotonic()
+            result = run(**kwargs)
+            cycles += 1
+            _print(result)
+            progress = {"cycles": cycles, "gaps": result["gaps"], "stale": result["stale"],
+                        "halts": len((result.get("sentinel") or {}).get("halts") or []),
+                        "books_problem": result.get("books_problem")}
+            if not result["ok"]:
+                hb.finish(1, progress)
+                return 1
+            if not args.loop or (args.max_cycles and cycles >= args.max_cycles):
+                hb.finish(0, progress)
+                return 0
+            hb.beat("running", progress, force=True)
+            sleep(max(0.0, args.every - (monotonic() - started)))
+    except BaseException:
+        hb.finish(None, {"cycles": cycles}, crashed=True)
+        raise
 
 
 if __name__ == "__main__":

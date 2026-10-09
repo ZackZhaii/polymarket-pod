@@ -210,7 +210,7 @@ class RestSampler:
 
     def __init__(self, assets: list[str], meta: dict[str, dict[str, Any]], sink: Any, events: Any, *,
                  every_s: float, deadline_s: float, getter: Any = None, now: Callable[[], str] = utc_now_ms,
-                 monotonic: Callable[[], float] = time.monotonic) -> None:
+                 monotonic: Callable[[], float] = time.monotonic, heartbeat: Any = None) -> None:
         self.assets = list(assets)
         self.meta = meta
         self.sink = sink
@@ -224,6 +224,7 @@ class RestSampler:
         self.rows = 0
         self.errors = 0
         self.failure: BaseException | None = None
+        self.heartbeat = heartbeat  # Task AP: one m1_rest beat after every sample
 
     def sample_once(self) -> None:
         self.samples += 1
@@ -241,6 +242,9 @@ class RestSampler:
             row["received_at"] = self.now()
             self.sink.write(row)
             self.rows += 1
+        if self.heartbeat is not None:
+            self.heartbeat.beat("running", {"samples": self.samples, "rows": self.rows, "errors": self.errors},
+                                force=True)
 
     def run(self, stop: threading.Event, wait: Callable[[float], bool] | None = None) -> None:
         """Sample now, then every every_s until stop or the deadline. ``wait(seconds)`` returns True on stop."""
@@ -348,6 +352,36 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None, r
          monotonic: Callable[[], float] | None = None, sleep: Callable[[float], None] | None = None,
          now: Callable[[], str] | None = None, stop_event: threading.Event | None = None,
          install_signals: bool = True, git: Callable[[], dict] = git_state) -> int:
+    """Task AP (Sentinel design gap 2): logs/heartbeat/m1_run.json is written by the recorder loop every
+    HEARTBEAT_RECORDER_EVERY_S (also while backing off) and logs/heartbeat/m1_rest.json after every REST
+    sample; both end with a beat carrying the exit code. For the resident Sentinel (src/sentinel_tick.py):
+    m1_run exit 4 is a global halt, 1/2/3 an alert, 5 (Operator stop) only logged; a lost m1_run
+    heartbeat (HEARTBEAT_RECORDER_TIMEOUT_S) is a global halt, a lost m1_rest one
+    (HEARTBEAT_REST_TIMEOUT_S) an alert."""
+    from src.heartbeat import Heartbeat  # local: keeps the module import light
+
+    hb = Heartbeat("m1_run", every_s=thresholds.HEARTBEAT_RECORDER_EVERY_S)
+    rest_hb = Heartbeat("m1_rest", every_s=thresholds.HEARTBEAT_RECORDER_EVERY_S)
+    hb.beat("starting", force=True)
+    try:
+        code = _main(argv, transport=transport, rest_getter=rest_getter, monotonic=monotonic, sleep=sleep, now=now,
+                     stop_event=stop_event, install_signals=install_signals, git=git, heartbeat=hb,
+                     rest_heartbeat=rest_hb)
+    except BaseException:
+        hb.finish(None, crashed=True)
+        if rest_hb.seq:
+            rest_hb.finish(None, crashed=True)
+        raise
+    hb.finish(code)
+    if rest_hb.seq:
+        rest_hb.finish(0 if code in (EXIT_OK, EXIT_NO_ROWS, EXIT_INTERRUPTED) else code)
+    return code
+
+
+def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: Any,
+          monotonic: Callable[[], float] | None, sleep: Callable[[float], None] | None,
+          now: Callable[[], str] | None, stop_event: threading.Event | None,
+          install_signals: bool, git: Callable[[], dict], heartbeat: Any = None, rest_heartbeat: Any = None) -> int:
     try:
         args = build_parser().parse_args(argv)
     except SystemExit as exc:
@@ -431,11 +465,11 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None, r
     events = sinks["events"]
     events.write({"ts": now(), "event": "start", "assets": assets, "rest_assets": rest_assets})
     sampler = RestSampler(rest_assets, meta, sinks["rest"], events, every_s=args.rest_every,
-                          deadline_s=args.max_runtime, getter=rest_getter, now=now)
+                          deadline_s=args.max_runtime, getter=rest_getter, now=now, heartbeat=rest_heartbeat)
     thread = threading.Thread(target=sampler.run, args=(stop,), name="m1-rest-sampler", daemon=True)
     recorder = Recorder(assets, transport=transport or WebsocketsTransport(), sink=sinks["books"],
                         max_runtime_s=args.max_runtime, meta=meta, monotonic=monotonic, sleep=sleep, now=now,
-                        stop=stop.is_set, on_event=events.write)
+                        stop=stop.is_set, on_event=events.write, heartbeat=heartbeat)
     start_mono = monotonic()
     code = EXIT_OK
     status = "completed"

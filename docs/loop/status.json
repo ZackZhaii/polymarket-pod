@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T08:16:45Z",
+  "ts": "2026-10-09T08:31:11Z",
   "live_enabled": false,
-  "last_done": "AQ",
+  "last_done": "AP",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AQ (secret-string scan, Sentinel design gap 9: src/secret_scan.py key-name context / PEM private key / 12+ BIP39 words, never a bare 0x+64hex; podlib.bus() refuses a message with a hit and records a global halt; python -m src.secret_scan scans logs/ and halts globally on a hit or unreadable file; guard check 10 secret_scan over tracked files and logs/ with a canary self-test; only file:line, rule, length and a sha256 prefix are ever reported) done by grok-bot. AP is reserved for the parallel heartbeat task. Task letters after Z are AA..AO, AP (heartbeat), AQ. M2 pending adds SECRET_VALUE_MIN_LEN, MNEMONIC_MIN_WORDS, SECRET_HASH_PREFIX_CHARS to the AK reconcile tolerances, AO's INTENT_ASSUMED_SLIPPAGE, INTENT_TTL_S, MAX_SIGNAL_AGE_*_S, MAX_SOURCE_LOGIT_GAP and the earlier list. No open todo. No live gate."
+  "note": "AP (Sentinel heartbeat: heartbeat files, resident src/sentinel_tick.py event matrix, lost Sentinel = global halt, Reconciler halts in halt_store, stale-resume re-alarm, paper_cycle --recording-dir/--loop, guard check 11 heartbeat) done by grok-bot; merged origin/dev with AQ (#44 secret-string scan, guard check 10 secret_scan). M2 pending also has AQ's SECRET_VALUE_MIN_LEN, MNEMONIC_MIN_WORDS, SECRET_HASH_PREFIX_CHARS. M2 pending adds 17 heartbeat/Sentinel numbers (HEARTBEAT_*, SCANNER_HANG_S, SCANNER_MAX_SUCCESS_AGE_S, SCANNER_INCOMPLETE_CONSECUTIVE, SENTINEL_TICK_S, SENTINEL_HEARTBEAT_TIMEOUT_S, RECORDER_*, ALL_STALE_CONSECUTIVE_CYCLES). No open todo. No live gate."
 }
