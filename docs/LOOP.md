@@ -1397,9 +1397,37 @@ guard --require-git pass offline.
   two keys. Docs: `docs/M3_CALIBRATION.md` (Task BF subsection), `docs/THRESHOLDS.md` row note.
 - No decision, threshold, size, gate or proposal moved. config/risk.toml unchanged, `live_enabled` false.
 
+## Task BG — Calibration bootstrap intervals resample by event (the event_cluster key)
+
+Status: done.
+
+Requested by Poly指挥 as the open point Task BF (#74) left, done by grok-bot on dev@67ef100. Report only;
+the Reflector (BE) reads the intervals unchanged.
+
+Finish when every calibration bootstrap interval resamples the same clusters as `event_cluster` (event_id,
+else condition_id per sample), the report says which key it resampled by, samples without an event id give
+the intervals they gave before, the seed and resample count are unchanged, and `python -m pytest` and guard
+--require-git pass offline.
+
+- `src/calibration.py`: `cluster_bootstrap` clusters by `cluster_name` (BF): markets of one event are drawn
+  together; an event id and a condition id with the same text stay apart; `key=` keeps a plain-field bootstrap.
+  Applies to the overall Brier, ECE, slope, intercept, the trade delta Brier, skill, R and mean(R - E) and every
+  judged `by_category` / `by_edge_tier` group's intervals. Fewer than two clusters: no interval.
+- `forecasts.metrics`, `trades.metrics` and judged group `intervals` gain `bootstrap_cluster_key` (`event_id` /
+  `condition_id` / `mixed`) and `bootstrap_clusters`; the markdown cluster line and a report note name them.
+- Same `CALIBRATION_BOOTSTRAP_SEED` / `_RESAMPLES` / `CALIBRATION_CI_LEVEL`; no new number. report.json
+  schema_version 1, keys only added.
+- Tests: `tests/test_event_id_bootstrap.py` (one event drawn together, fallback, unusable ids, mixed, name
+  collision, determinism, pre-BF intervals unchanged); BF's "stay market-clustered" test now checks the event
+  bootstrap; the BD interval key set gains the two keys. Docs: `docs/M3_CALIBRATION.md` (Task BG subsection),
+  `docs/THRESHOLDS.md` row note.
+- No decision, threshold, size, gate or proposal moved. config/risk.toml unchanged, `live_enabled` false.
+
 ## Latest
 
-- 2026-10-10: Task BF: Polymarket event id / slug (Gamma `events`) on scanner rows, forecasts and fills;
+- 2026-10-10: Task BG: calibration bootstrap intervals resample by event_id, else condition_id per sample (the
+  `event_cluster` key); `bootstrap_cluster_key` / `bootstrap_clusters` recorded. Reported only.
+- Task BF (merged #74): Polymarket event id / slug (Gamma `events`) on scanner rows, forecasts and fills;
   `event_cluster` clusters by event_id with per-sample condition_id fallback (`cluster_key` event_id /
   condition_id / mixed, fallback count). Recorded and reported only.
 - Task BE (merged #73): Reflector rules from BD's intervals: per-category delta Brier disable, per-edge-tier
@@ -1417,5 +1445,5 @@ guard --require-git pass offline.
   calibration report.
 - pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 - Open: run M1 with `--raw-books` before deciding on hash enforcement; Operator choice on netting realized
-  gains (AR); the two-batch Kelly rule and cumulative-loss disable (need Poly反思's numbers); bootstrap
-  intervals by event instead of market (BF left them market-clustered). Queue empty after BF.
+  gains (AR); the two-batch Kelly rule and cumulative-loss disable (need Poly反思's numbers); verify live
+  Gamma `events` id / slug in an M1 run. Queue empty after BG.

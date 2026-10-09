@@ -306,13 +306,16 @@ def test_the_report_says_which_key_it_used():
     assert "event cluster (event_id)" in markdown and "fell back" in markdown
 
 
-def test_bootstrap_intervals_stay_market_clustered():
-    """BF changes only event_cluster; the bootstrap intervals (Task BD) are unchanged by event ids."""
+def test_bootstrap_intervals_follow_the_event_cluster():
+    """Task BG: the bootstrap intervals resample the event_cluster clusters (tests/test_event_id_bootstrap.py);
+    one event per market resamples exactly like the market bootstrap, one event for all gives no interval."""
     from tests.test_calibration import world
     fs, rs = world(80)
     plain = build(fs, rs)[0]["forecasts"]["metrics"]
+    one_each = build([with_event(f, f"E{i}") for i, f in enumerate(fs)], rs)[0]["forecasts"]["metrics"]
+    assert one_each["brier_ci"] == plain["brier_ci"] and one_each["calibration"] == plain["calibration"]
     tagged = build([with_event(f, "E1") for f in fs], rs)[0]["forecasts"]["metrics"]
-    assert tagged["brier_ci"] == plain["brier_ci"] and tagged["calibration"] == plain["calibration"]
+    assert tagged["brier_ci"] is None and tagged["bootstrap_cluster_key"] == "event_id"
 
 
 # ------------------------------------------------------------------ reflector
