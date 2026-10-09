@@ -372,10 +372,29 @@ The report is read-only input (default: the newest dated folder). Each proposal 
   `REFLECTOR_TIGHTEN_SLOPE_MAX`) with interval upper bound below `REFLECTOR_TIGHTEN_SLOPE_CI_HIGH_MAX`; and,
   for the worst price band, ECE above `REFLECTOR_ECE_MAX` with a judged bin outside its Wilson interval. Not
   for a strategy being disabled the same day.
-- Not implemented yet: per-edge-tier realization, per-category delta Brier, intercept, the two-batch Kelly
-  rule, the cumulative-loss disable, the event-cluster share. Task BD added the report intervals the first
-  three need (`intervals` on by_edge_tier / by_category, `calibration.intercept_ci`) and the
-  `event_cluster` share; the rules themselves are a later task.
+- Task BE, `disable` one category (`target.category`, e.g. `{strategy, key: enabled, file: null, category:
+  Politics}`): a judged `trades.by_category` group's `intervals.delta_brier_ci` lies wholly above 0 (model worse
+  than market). Scope is the single trade strategy, else `all`; skipped when the strategy itself is disabled;
+  `(unknown)` never.
+- Task BE, `param_change` MIN_EDGE by edge tier (`target.edge_tier`): starting at the trade edge tier that holds
+  MIN_EDGE (labels from `thresholds.edge_tiers`), each judged tier whose `intervals.realization_ci` lies wholly
+  below `REFLECTOR_EDGE_TIER_REALIZATION_MAX` (0.25, M3 pending) extends a run; MIN_EDGE is proposed at the top
+  of the highest bounded tier of the run (0.02 -> 0.04 for `[0.02, 0.04)`). A failing tier above a passing or
+  unjudged one is an observation only (raising MIN_EDGE past it would cut the good tier), and so is a failing
+  open top tier (`>=0.08`) beyond the last bound.
+- Task BE, intercept: `forecasts.metrics.calibration.intercept_ci` wholly above 0 (positive bias) or below 0
+  (negative bias) adds its reason, ref and interval to the MIN_EDGE + `REFLECTOR_MIN_EDGE_STEP` proposal, or
+  makes that proposal when the slope rule does not fire. Not for a strategy being disabled.
+- Task BE, event-cluster share: every proposal's `evidence.event_cluster` = `{cluster_key, flag, largest_share,
+  max_share}` of its section (null for a report before BD); a `concentrated` section is stated in the
+  proposal's `risk` and in the run's observations. It gates nothing (the cluster is still the market, a lower
+  bound on event concentration).
+- Order under the daily cap: strategy disables, category disables, then MIN_EDGE (slope / intercept), band and
+  edge-tier tightenings. A report from before BD (no group `intervals`, no `intercept_ci`, no
+  `event_cluster`) gives no new proposal; a wrongly typed new field is a corrupt report (exit 4).
+- Not implemented yet: the two-batch Kelly rule (`kelly_fraction` is in config/risk.toml, which no proposal may
+  name, and the rule concerns raising Kelly, a loosening for KEY) and the cumulative-loss disable (its
+  threshold is not in the repo). Both need Poly反思's numbers and a decision on where they live.
 
 ### Limits
 

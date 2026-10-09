@@ -129,6 +129,8 @@ EXPECTED = {
     "REFLECTOR_MIN_EDGE_STEP": 0.01,
     "REFLECTOR_REJECT_COOLDOWN_DAYS": 7,
     "REFLECTOR_REJECT_NEW_SAMPLES": 15,
+    # Task BE: edge-tier realization rule (M3 pending).
+    "REFLECTOR_EDGE_TIER_REALIZATION_MAX": 0.25,
     # issue #52: the halt-state read-modify-write mutex (M2 pending).
     "HALT_STATE_LOCK_TIMEOUT_S": 5.0,
     "HALT_STATE_LOCK_POLL_S": 0.05,
@@ -208,6 +210,8 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "REFLECTOR_DISABLE_SLOPE_CI_HIGH_MAX", "REFLECTOR_TIGHTEN_SLOPE_MAX", "REFLECTOR_TIGHTEN_SLOPE_CI_HIGH_MAX",
               "REFLECTOR_ECE_MAX", "REFLECTOR_MIN_EDGE_STEP", "REFLECTOR_REJECT_COOLDOWN_DAYS",
               "REFLECTOR_REJECT_NEW_SAMPLES",
+              # Task BE: edge-tier realization rule.
+              "REFLECTOR_EDGE_TIER_REALIZATION_MAX",
               # issue #52: the halt-state read-modify-write mutex.
               "HALT_STATE_LOCK_TIMEOUT_S", "HALT_STATE_LOCK_POLL_S"}
 HEADER = ["Name", "Value", "Unit", "Meaning", "Where", "Source", "M2 pending"]
