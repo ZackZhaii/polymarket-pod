@@ -11,6 +11,12 @@ Any integrity problem is an invalid risk state and halts booking.
 Task AL (Sentinel design gap 7): invalid_risk_state and the Executor's ledger_integrity /
 ledger_write_failed halt are now persisted global halts (src/halt_store.py): every later intent
 vetoes until the Operator resumes it.
+Issue #63: the CLI now checks the whole risk file (sha256 and every key, ``src.pins.refuse_start``)
+right after argument parsing and before the config is read. A file that drifted before the run was
+only caught by the five in-memory ``podlib.PINS`` RiskGate holds, so a changed max_open_positions
+could still book a fill while the file stayed byte-identical during the run. Drift is refused with
+the existing EXIT_FAILED and a recorded global halt; the two entry points (operator intent and the
+default self-check) both stop there. ``evaluate(cfg)`` still takes an in-memory config.
 """
 from __future__ import annotations
 
@@ -600,7 +606,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 EXIT_OK = 0
-EXIT_FAILED = 1  # halted (ledger integrity / write), risk.toml changed during the run, or self-check failed
+# Issue #63: also the refusal when config/risk.toml is off its file pins at start (global halt recorded).
+EXIT_FAILED = 1  # halted (ledger integrity / write), risk file pin drift, risk.toml changed during the run, or self-check failed
 EXIT_USAGE = 2
 
 
@@ -609,6 +616,10 @@ def main(argv: list[str] | None = None) -> int:
         args = build_parser().parse_args(argv)
     except SystemExit as exc:
         return EXIT_OK if exc.code == 0 else EXIT_USAGE
+    from src.pins import refuse_start  # issue #63: the risk file pins (sha256 + every key) before any read
+
+    if refuse_start("paper_ledger"):
+        return EXIT_FAILED
     before_bytes = RISK_PATH.read_bytes()
     cfg = load_risk()
     live = cfg.get("live_enabled")

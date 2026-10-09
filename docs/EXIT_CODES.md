@@ -18,9 +18,10 @@ For every entry point:
 - `--help` exits 0. Usage errors are each module's `EXIT_USAGE` (never argparse's own exit).
 - Pin drift (Task AS, gaps 5 and 6, `src/pins.py`): config/risk.toml is checked as a file (sha256
   `0aea23af…bc04`, CRLF normalised, and every key with its value and type, no unknown key) at start by scanner,
-  book, ws_recorder, m1_run, endgame_scan, resolutions and loop_claim, before every paper_cycle cycle, and while
+  book, ws_recorder, m1_run, endgame_scan, resolutions, loop_claim and paper_ledger (issue #63: its existing exit 1),
+  before every paper_cycle cycle, and while
   running by ws_recorder and m1_run at least every `PIN_RECHECK_S`. Drift records one global halt
-  (`risk_toml_pin_drift`, shared with the Sentinel tick) and exits with the module's pin code. A check that
+  (`risk_toml_pin_drift`, shared with the Sentinel tick) and exits with the module's own refusal code. A check that
   cannot run is drift. Only the Operator resumes.
 
 ## `src/book.py`
@@ -123,7 +124,7 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
 | 0 | `EXIT_OK` | decided (allowed, or vetoed with reasons) / self-check passed | - |
-| 1 | `EXIT_FAILED` | ledger halted, risk.toml changed during the run, no decision, or self-check failed | - |
+| 1 | `EXIT_FAILED` | refused to start: config/risk.toml off its pins (sha256 / any key, issue #63; global halt recorded, no fill and no self-check), ledger halted, risk.toml changed during the run, no decision, or self-check failed | - |
 | 2 | `EXIT_USAGE` | usage error or missing operator fields | - |
 
 ## `src/paper_session.py`
