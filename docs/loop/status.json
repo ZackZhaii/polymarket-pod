@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T11:10:40Z",
+  "ts": "2026-10-09T12:21:43Z",
   "live_enabled": false,
-  "last_done": "AW",
+  "last_done": "AX",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AW (WS recorder resync hardening: tick_size_change re-snapshots, no PONG within WS_PONG_TIMEOUT_S=30 s reconnects, unknown events for subscribed assets resync, snapshot hash recorded as book_hash_check but not enforced) done by grok-bot. New number WS_PONG_TIMEOUT_S (M2 pending). AV (#50) merged into this branch from dev. No open todo. No live gate."
+  "note": "AX (M3 step 2 identity fields: forecast_id/decision_id/condition_id/outcome_index/token_id/category/tags/end_date/model_version on forecasts, scanner rows and fills; sealed logs/forecasts.jsonl before every NewsForecaster signal; unjoinable fills flagged in calibration_problems) done by grok-bot. No new number, no decision moved. AW (#51, WS resync hardening) merged into this branch from dev. No open todo. No live gate."
 }

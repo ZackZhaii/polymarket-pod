@@ -187,6 +187,66 @@
       }
     ]
   },
+  "calibration_ids": {
+    "distinct_forecast_ids": 9,
+    "fills": {
+      "alpha-again": {
+        "calibration_problems": [],
+        "decision_id_derived": true,
+        "fields": [
+          "category",
+          "condition_id",
+          "decision_id",
+          "end_date",
+          "forecast_id",
+          "forecast_ts",
+          "model_version",
+          "outcome",
+          "outcome_index",
+          "tags"
+        ],
+        "joins_forecast": true
+      },
+      "alpha-allow": {
+        "calibration_problems": [],
+        "decision_id_derived": true,
+        "fields": [
+          "category",
+          "condition_id",
+          "decision_id",
+          "end_date",
+          "forecast_id",
+          "forecast_ts",
+          "model_version",
+          "outcome",
+          "outcome_index",
+          "tags"
+        ],
+        "joins_forecast": true
+      },
+      "bravo-allow": {
+        "calibration_problems": [],
+        "decision_id_derived": true,
+        "fields": [
+          "category",
+          "condition_id",
+          "decision_id",
+          "end_date",
+          "forecast_id",
+          "forecast_ts",
+          "model_version",
+          "outcome",
+          "outcome_index",
+          "tags"
+        ],
+        "joins_forecast": true
+      }
+    },
+    "forecast_problems": [],
+    "forecast_rows": 9,
+    "news_signals": 23,
+    "unsealed_signals": 0
+  },
   "clock": {
     "now": "2026-09-01T12:00:00Z",
     "second_check": "2026-09-01T12:01:00Z"
