@@ -1267,8 +1267,31 @@ provably reads none of it, the standalone recorder can save raw book frames like
 - Docs: `docs/M3_CALIBRATION.md` Step 2b, `docs/EXIT_CODES.md`, `docs/THRESHOLDS.md` wording.
 - No new number, no decision, threshold or size moved. config/risk.toml unchanged, `live_enabled` false.
 
+## Task BB — M3 calibration step 4: structured Reflector proposals (src/reflector_proposals.py)
+
+Status: done.
+
+Requested by Poly指挥 (Poly反思's M3 calibration design sections 4 and 5, step 4), done by grok-bot on
+dev@e667e4a. BA (#62) ran in parallel; merged in from dev (dev@ff21802).
+
+Finish when the Reflector turns a calibration report.json into structured, tightening-only proposals (jsonl, md,
+bus with `exchange_action: none`) within the daily cap, never applies one, never writes config/, a .toml or
+thresholds.py, proposes nothing from an `insufficient` section, marks loosening for KEY, fails closed on a missing
+or corrupt report, and `python -m pytest` and guard --require-git pass offline.
+
+- `src/reflector_proposals.py`: rules (disable, MIN_EDGE tightening, price-band tightening), `PROPOSAL_FIELDS`
+  schema, `validate`, rejected-target cooldown, CLI exit 0 / 2 / 3 missing / 4 corrupt report / 5 corrupt
+  proposals.jsonl / 6 write failed (`docs/EXIT_CODES.md`, 21 entry points).
+- `src/reflector.py`: `propose(payload=...)`, `exchange_action: none` on every proposal, `refused_path`.
+- New numbers (M3 pending): `REFLECTOR_*` rule thresholds; `REFLECTOR_MAX_PER_UTC_DAY` (3) now M3 pending.
+- Docs: `docs/M3_CALIBRATION.md` Step 4. Letter note: PR #61 (pod-flash) titled itself "Task AZ" but added only
+  a test file and no queue entry; AZ stays #60.
+
 ## Latest
 
+- 2026-10-09: Task BB: `python -m src.reflector_proposals` turns a calibration report.json into structured,
+  tightening-only proposals (jsonl + md + bus, `exchange_action: none`, cap 3/UTC day, never applied); none from an
+  `insufficient` section; loosening needs KEY; missing/corrupt report = exit 3/4, nothing written.
 - 2026-10-09: Task BA: paper fills record `market_mid`, `best_bid`, `best_ask`, `hours_to_expiry_at_entry`,
   `kelly_fraction_used` (shadow, recorded only); null + `calibration_problems` when not computable; RiskGate
   never reads them. `python -m src.ws_recorder --raw-books DIR` uses the m1_run raw writer and caps.

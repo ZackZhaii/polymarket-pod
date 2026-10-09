@@ -31,10 +31,15 @@ def propose(
     proposals_path: Path = PROPOSALS_PATH,
     bus_path: Path | None = None,
     now: str | None = None,
+    payload: dict | None = None,
 ) -> dict:
-    """Append one proposal and a bus `proposal` line. Never emits a fill."""
-    if proposals_path.resolve() == RISK_PATH.resolve():
-        raise RuntimeError("refusing to write risk.toml")
+    """Append one proposal and a bus `proposal` line. Never emits a fill.
+
+    Task BB: ``payload`` is an optional structured proposal (src/reflector_proposals.py schema); it rides in the
+    bus payload under ``proposal``. Every Reflector bus proposal says ``exchange_action: none``.
+    """
+    if refused_path(proposals_path):
+        raise RuntimeError("refusing to write risk.toml, config/ or src/thresholds.py")
     cleaned = " ".join(text.split())
     if not cleaned:
         return {"accepted": False, "reason": "empty"}
@@ -66,10 +71,20 @@ def propose(
             "effect": "proposal_only",
             "changes_risk_toml": False,
             "changes_size_caps": False,
+            "exchange_action": "none",
+            **({"proposal": payload} if payload is not None else {}),
         },
         path=bus_path,
     )
     return {"accepted": True, "reason": "written", "ts": message["ts"], "bus_type": message["type"]}
+
+
+def refused_path(path: Path) -> bool:
+    """Task BB: the Reflector never writes config/ (risk.toml, a strategy switch), any .toml, or thresholds.py."""
+    resolved = Path(path).resolve()
+    config = (ROOT / "config").resolve()
+    return (resolved == RISK_PATH.resolve() or resolved == (ROOT / "src" / "thresholds.py").resolve()
+            or resolved.suffix.lower() == ".toml" or config == resolved or config in resolved.parents)
 
 
 def _count_day(text: str, day: str) -> int:
