@@ -152,10 +152,10 @@
       "Endgame>RiskGate:signal": 1,
       "Executor>Sentinel:fill": 3,
       "Executor>Sentinel:halt": 1,
-      "NewsForecaster>RiskGate:signal": 22,
+      "NewsForecaster>RiskGate:signal": 23,
       "Operator>Sentinel:resume": 2,
       "RiskGate>Executor:signal": 4,
-      "RiskGate>Executor:veto": 16,
+      "RiskGate>Executor:veto": 20,
       "Scanner>BookWatcher:signal": 7,
       "Sentinel>Executor:halt": 3
     },
@@ -912,7 +912,7 @@
   },
   "invariants": {
     "booked_fill_ids": 3,
-    "live_checks": 32,
+    "live_checks": 40,
     "live_enabled": [
       "False"
     ],
@@ -1290,5 +1290,85 @@
       },
       "same_as_books_file": true
     }
+  },
+  "slippage_floor": {
+    "cases": {
+      "a_zero": {
+        "allow": false,
+        "assumed_slippage": 0.0,
+        "expect": "veto",
+        "halted": false,
+        "reasons": [
+          "slippage_below_floor"
+        ],
+        "via": "commit_if_allowed"
+      },
+      "b_just_below": {
+        "allow": false,
+        "assumed_slippage": 0.0049,
+        "expect": "veto",
+        "halted": false,
+        "reasons": [
+          "slippage_below_floor"
+        ],
+        "via": "commit_if_allowed"
+      },
+      "c_at_floor": {
+        "allow": true,
+        "assumed_slippage": 0.005,
+        "expect": "allow",
+        "reasons": [],
+        "via": "evaluate"
+      },
+      "d_above": {
+        "allow": true,
+        "assumed_slippage": 0.01,
+        "expect": "allow",
+        "reasons": [],
+        "via": "evaluate"
+      },
+      "e_nan": {
+        "allow": false,
+        "assumed_slippage": "nan",
+        "expect": "veto",
+        "halted": false,
+        "reasons": [
+          "non_finite_assumed_slippage",
+          "effective_price_out_of_range",
+          "non_positive_edge"
+        ],
+        "via": "commit_if_allowed"
+      },
+      "f_missing": {
+        "allow": false,
+        "assumed_slippage": null,
+        "expect": "veto",
+        "halted": false,
+        "reasons": [
+          "invalid_assumed_slippage",
+          "effective_price_out_of_range",
+          "non_positive_edge"
+        ],
+        "via": "commit_if_allowed"
+      }
+    },
+    "cli": {
+      "-0.01": "refused_exit_2",
+      "0": "refused_exit_2",
+      "0.0049": "refused_exit_2",
+      "0.005": "accepted",
+      "0.01": "accepted",
+      "nan": "refused_exit_2"
+    },
+    "floor": 0.005,
+    "global_halts": [],
+    "intent_builder": {
+      "allow": true,
+      "assumed_slippage": 0.005,
+      "intent": true,
+      "reasons": [],
+      "reasons_riskgate": []
+    },
+    "ledger_unchanged": true
   }
 }

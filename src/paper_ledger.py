@@ -15,6 +15,7 @@ vetoes until the Operator resumes it.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -425,6 +426,19 @@ def run_cli_intent(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, A
     return commit_if_allowed(intent, cfg)
 
 
+def slippage_arg(text: str) -> float:
+    """Task AU: --slippage must be a finite number >= ASSUMED_SLIPPAGE (the floor RiskGate also enforces)."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError(f"must be finite: {text!r}")
+    if value < ASSUMED_SLIPPAGE:
+        raise argparse.ArgumentTypeError(f"{value} is below the slippage floor ASSUMED_SLIPPAGE={ASSUMED_SLIPPAGE}")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Phase 0 paper ledger. RiskGate required. No live orders.")
     parser.add_argument("--strategy", default="")
@@ -432,7 +446,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--side", choices=("buy", "sell"), default="buy")
     parser.add_argument("--model-prob", type=float, default=None)
     parser.add_argument("--market-price", type=float, default=None)
-    parser.add_argument("--slippage", type=float, default=ASSUMED_SLIPPAGE)
+    parser.add_argument("--slippage", type=slippage_arg, default=ASSUMED_SLIPPAGE,
+                        help=f"Assumed slippage, price units per share; at least ASSUMED_SLIPPAGE={ASSUMED_SLIPPAGE}.")
     parser.add_argument("--fee-rate", type=float, default=0.0)
     parser.add_argument("--liquidity", type=float, default=None)
     parser.add_argument("--spread", type=float, default=None)

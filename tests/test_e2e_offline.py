@@ -110,8 +110,9 @@ def test_endgame_emits_a_signal_only(run):
 def test_every_intent_starts_from_a_newsforecaster_signal(run):
     forecasts = [r for r in run["detail"]["bus"] if r["from"] == "NewsForecaster"]
     # 7 intents, the replay commit, two corrupted-ledger commits, two Task AL halt-consumer commits,
-    # four Task AP heartbeat-halt commits (all vetoed), six Task AR daily-loss cases (one each)
-    assert len(forecasts) == 22
+    # four Task AP heartbeat-halt commits (all vetoed), six Task AR daily-loss cases (one each),
+    # one Task AU slippage-floor signal (shared by its cases)
+    assert len(forecasts) == 23
     assert all(r["to"] == "RiskGate" and r["payload"]["order"] is False for r in forecasts)
 
 
@@ -576,3 +577,23 @@ def test_daily_loss_cases_by_meaning(run):
     assert f["state"]["daily_loss_usd"] is None
     assert [h["scope"] for h in f["global_halts"]] == ["global"]
     assert not [p for p in run["problems"] if p.startswith("daily_loss")]
+
+
+# ---------------------------------------------------------------- Task AU: slippage floor
+
+def test_slippage_floor_cases_by_meaning(run):
+    section = run["actual"]["slippage_floor"]
+    cases = section["cases"]
+    assert section["floor"] == 0.005
+    for name in ("a_zero", "b_just_below"):
+        assert (cases[name]["allow"], cases[name]["reasons"]) == (False, ["slippage_below_floor"]), name
+    for name in ("c_at_floor", "d_above"):
+        assert (cases[name]["allow"], cases[name]["reasons"]) == (True, []), name
+    assert "non_finite_assumed_slippage" in cases["e_nan"]["reasons"] and cases["e_nan"]["allow"] is False
+    assert "invalid_assumed_slippage" in cases["f_missing"]["reasons"] and cases["f_missing"]["allow"] is False
+    assert section["ledger_unchanged"] is True and section["global_halts"] == []
+    builder = section["intent_builder"]
+    assert (builder["allow"], builder["assumed_slippage"], builder["reasons_riskgate"]) == (True, 0.005, [])
+    assert section["cli"] == {"0": "refused_exit_2", "0.0049": "refused_exit_2", "nan": "refused_exit_2",
+                              "-0.01": "refused_exit_2", "0.005": "accepted", "0.01": "accepted"}
+    assert not [p for p in run["problems"] if p.startswith("slippage_floor")]

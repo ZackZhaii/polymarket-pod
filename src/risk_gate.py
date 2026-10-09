@@ -23,6 +23,7 @@ from src import halt_store  # Task AL: the halt consumer (persisted Sentinel / E
 from src.book_staleness import book_age_problem
 from src.podlib import PAPER_EQUITY_USD, pin_problems
 from src.thresholds import EDGE_TOLERANCE, MAX_BOOK_AGE_S, MIN_EDGE  # Task AC: values in src/thresholds.py
+from src.thresholds import ASSUMED_SLIPPAGE  # Task AU: the slippage floor (Task AT's one slippage)
 from src.wash_detect import wash_problems
 
 BANNED_STRATEGY_TOKENS = ("wash", "self-trade", "self_trade", "spoof", "layering")
@@ -188,6 +189,9 @@ def evaluate(
     WASH_WINDOW_S (wash_same_market) vetoes. Missing history is wash_input_missing,
     malformed history wash_input_invalid; both veto.
 
+    Task AU: assumed_slippage must be a finite number >= ASSUMED_SLIPPAGE (src/thresholds.py, inclusive);
+    below it vetoes slippage_below_floor, missing / non-finite vetoes invalid_ / non_finite_assumed_slippage.
+
     Edge must be at least MIN_EDGE (0.02, inclusive; code constant, Task X): 0 < edge < MIN_EDGE
     vetoes edge_below_min, edge <= 0 vetoes non_positive_edge.
 
@@ -244,6 +248,12 @@ def evaluate(
         reasons.append("market_price_out_of_range")
     if assumed_slippage < 0 or fee_rate < 0:
         reasons.append("negative_cost_assumption")
+    # Task AU: an intent may not assume less slippage than the one ASSUMED_SLIPPAGE (a smaller value
+    # inflates the edge). Inclusive floor: exactly ASSUMED_SLIPPAGE passes. A missing / non-number /
+    # non-finite slippage already vetoed above (invalid_ / non_finite_assumed_slippage).
+    slippage_number = _finite_number(intent.assumed_slippage)
+    if slippage_number is not None and slippage_number < ASSUMED_SLIPPAGE:
+        reasons.append("slippage_below_floor")
 
     try:
         thresholds = gate_thresholds(cfg)

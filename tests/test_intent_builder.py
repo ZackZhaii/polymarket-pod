@@ -126,6 +126,14 @@ def test_to_risk_intent_matches_the_harness_shape():
     }
 
 
+def test_intent_builder_slippage_meets_the_riskgate_floor(tmp_path):
+    """Task AU: INTENT_ASSUMED_SLIPPAGE is the floor itself (inclusive), so builder intents still pass."""
+    oi = build().intent
+    assert oi.assumed_slippage == risk_gate.ASSUMED_SLIPPAGE
+    decision = gate(oi, tmp=tmp_path)
+    assert "slippage_below_floor" not in decision.reasons and decision.allow is True, decision.reasons
+
+
 # ---------------------------------------------------------------- T-WALK
 
 def test_walk_single_level_gives_the_level_price_exactly():
