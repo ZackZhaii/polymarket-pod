@@ -205,11 +205,13 @@
           "outcome_index",
           "tags"
         ],
+        "fill_context": "intent_builder",
         "joins_forecast": true,
         "market_fields": {
           "best_ask": 0.41,
           "best_bid": 0.39,
           "hours_to_expiry_at_entry": 1044.0,
+          "kelly_frac_raw": 0.09401709,
           "kelly_fraction_used": 0.15,
           "market_mid": 0.4
         }
@@ -229,11 +231,13 @@
           "outcome_index",
           "tags"
         ],
+        "fill_context": "intent_builder",
         "joins_forecast": true,
         "market_fields": {
           "best_ask": 0.41,
           "best_bid": 0.39,
           "hours_to_expiry_at_entry": 1044.0,
+          "kelly_frac_raw": 0.09401709,
           "kelly_fraction_used": 0.15,
           "market_mid": 0.4
         }
@@ -253,11 +257,13 @@
           "outcome_index",
           "tags"
         ],
+        "fill_context": "intent_builder",
         "joins_forecast": true,
         "market_fields": {
           "best_ask": 0.61,
           "best_bid": 0.59,
           "hours_to_expiry_at_entry": 1044.0,
+          "kelly_frac_raw": 0.19506305,
           "kelly_fraction_used": 0.15,
           "market_mid": 0.6
         }

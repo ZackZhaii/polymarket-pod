@@ -179,8 +179,8 @@ in `paper_ledger.market_fields` at commit from data the intent already carries (
   (intent_builder: the chosen token's BookSnapshot; e2e harness: the latest /book row; the
   paper_ledger no-edge check: the book row it used). Each a finite price in (0, 1), else null.
 - `market_mid`: `(best_bid + best_ask) / 2`, rounded to 8 places, only when both sides are usable and
-  not crossed (`bid <= ask`); else null. The calibration baseline should move from `market_price`
-  (the ask on a buy) to this mid in a later step; src/calibration.py is not changed here.
+  not crossed (`bid <= ask`); else null. The calibration report scores the market at this mid
+  from Task BC (step 2c).
 - `hours_to_expiry_at_entry`: `end_date` minus the fill's `ts`, in hours (6 places; negative if the
   end has passed, as computed). Null when `end_date` is missing or not a zoned ISO time.
 - `kelly_fraction_used`: intent_builder's shadow Kelly multiplier (risk.toml `kelly_fraction`, 0.15)
@@ -193,6 +193,34 @@ The join check `fill_problems` is unchanged, so older fills are not re-flagged; 
 calibration report drops any fill whose stored problems are non-empty, so a fill without this
 context is not a calibration sample. RiskGate reads none of these fields (tested: source and
 identical decisions with any values). No new number, no decision or size moved.
+
+## Step 2c: mid as the market probability, both Kelly values, fill context (Task BC)
+
+- **q = `market_mid`.** The trade sample's market probability is the first fill's `market_mid`
+  (`price_source=market_mid`). Design section 3 says "mid if there is one, else `market_price`, with
+  `price_source` noted"; that fallback is kept only for a fill booked before Task BA, which has no
+  `market_mid` key at all (`price_source=market_price`). A fill that records the key but no usable mid
+  (null, non-finite, outside (0, 1)) is never re-scored at `market_price`: it is dropped and counted
+  (normally as `fill_calibration_problems` with `missing_market_mid` / `invalid_market_mid`, which
+  paper_ledger stores; if the stored list hides it, as `fill_market_mid_missing`). `report.json`
+  `trades.price_sources` counts the samples per source, and each trade sample carries `price_source`.
+  `price_band` still bands the entry `market_price`.
+- **Kelly.** `kelly_fraction_used` stays the shadow multiplier (risk.toml `kelly_fraction`, 0.15).
+  New `kelly_frac_raw` = intent_builder's per-trade raw (full) Kelly fraction `kelly_raw =
+  edge / (1 - c_all)`, so `kelly_frac = kelly_fraction_used x kelly_frac_raw`. Same rule: a finite
+  number in (0, 1], else null + `missing_` / `invalid_kelly_frac_raw`. Recorded only: RiskGate and the
+  order size never read it (source scan + identical decisions and fill sizes with any value).
+- **`fill_context`.** `risk_gate.Intent.fill_context`, stamped by the caller and copied onto the fill:
+  `intent_builder` (`intent_builder.to_risk_intent`; the e2e harness stands in for it), `operator_cli`
+  (`python -m src.paper_ledger --market ...`), `gate_check` (self-check and the realistic no-edge check).
+  A missing or unknown value stays null and adds `missing_` / `invalid_fill_context`. The report drops
+  `operator_cli` / `gate_check` fills as `no_book_context` (before the strategy exclusion, and without
+  counting their market-field problems), so genuine missing-data drops stay apart. A fill from before
+  Task BC has no `fill_context` key; nothing is inferred from its missing fields, and it is judged as before.
+
+`report.json` keeps `schema_version` 1 and only adds keys (`trades.price_sources`, sample
+`price_source` / `fill_context`), so Task BB's reader is unaffected. No new number; no decision,
+threshold or size moved.
 
 ## Step 3: the offline calibration report (Task AZ)
 
@@ -216,7 +244,7 @@ git-ignored. Exit codes: `docs/EXIT_CODES.md` (0 written, 2 usage, 3 corrupt inp
   `model_prob`, y = 1 when its token won.
 - **A, trades**: counted (`ledger_store.counts`), `risk_decision=allow` fills grouped by `decision_id`; at
   most `CALIBRATION_MAX_DECISIONS_PER_MARKET` decisions per market. p = the first fill's `model_prob`, q =
-  its `market_price` (no mid on fills yet). Expected `E = sum(edge x shares)`; realized
+  its `market_mid` (Task BC, step 2c; `market_price` only for a pre-Task BA fill). Expected `E = sum(edge x shares)`; realized
   `R = (bought - sold shares) x y + sell proceeds - buy cost` (fees included).
 
 A label is used only when the resolution row is `status=resolved`, `uma_checked=true`, its prices are one
@@ -230,11 +258,12 @@ with its reason.
 
 | Reason | Sample | When |
 |---|---|---|
+| `no_book_context` | A | Task BC: `fill_context` is `operator_cli` or `gate_check` (checked first) |
 | `excluded_strategy` / `excluded_market` | A, B | phase0-gate-test, no-edge-check, wash-probe; `phase0-self-check*`, `e2e-*` |
 | `forecast_calibration_problems` | B | the stored list or a recomputed `forecast_problems` is non-empty (also counted per problem) |
 | `duplicate_market_forecast` | B | not the first forecast for its market |
 | `fill_missing_identity` | A | a fill booked before Task AX (no `calibration_problems`) |
-| `fill_calibration_problems` | A | stored or recomputed `fill_problems` non-empty (counted per problem) |
+| `fill_calibration_problems` | A | stored or recomputed `fill_problems` (plus a missing / unknown stored `fill_context`) non-empty (counted per problem) |
 | `decision_inconsistent` | A | fills of one decision_id disagree on forecast, token, condition or outcome |
 | `fill_forecast_not_found` / `fill_forecast_mismatch` | A | its forecast_id is not on file / points at another market |
 | `resolution_pending` | A, B | no resolution row for the condition |
@@ -244,6 +273,7 @@ with its reason.
 | `resolution_void` | A, B | prices are not exactly one 1.0 and the rest 0.0 |
 | `outcome_index_out_of_range` / `token_outcome_mismatch` | A, B | the outcome cannot be matched to the snapshot |
 | `re_entry_cap` | A | a third or later decision on one market |
+| `fill_market_mid_missing` | A | Task BC: the first fill records `market_mid` but it is not a usable price |
 
 Corrupt input is an error exit, not a partial report: a torn last line, a blank line, non-UTF-8, bad JSON or
 NaN, a non-object, keys other than `FORECAST_ROW_FIELDS` / the resolutions schema, a wrong type, or a

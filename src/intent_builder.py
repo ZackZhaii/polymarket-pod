@@ -824,6 +824,8 @@ def to_risk_intent(oi: OrderIntent) -> Intent:
         best_bid=oi.best_bid,  # Task BA: the chosen token's book at build time (recorded on the fill only)
         best_ask=oi.best_ask,
         kelly_fraction_used=oi.kelly_fraction,  # shadow Kelly multiplier; RiskGate sizes with its 1% clip
+        kelly_frac_raw=oi.kelly_raw,  # Task BC: this trade's raw (full) Kelly fraction; recorded only
+        fill_context="intent_builder",  # Task BC: calibration_ids.FILL_CONTEXT_INTENT_BUILDER
     )
 
 

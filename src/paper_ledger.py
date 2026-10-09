@@ -224,7 +224,12 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
     # A value that cannot be computed stays None and is named in calibration_problems.
     market, market_problems = market_fields(intent, fill["ts"])
     fill.update(market)
-    fill["calibration_problems"] = sorted(set(calibration_ids.fill_problems(fill)) | set(market_problems))
+    # Task BC: which path built the intent (intent_builder / operator_cli / gate_check), so the calibration
+    # report can tell a fill without book context from one with genuinely missing data.
+    context, context_problems = fill_context(intent)
+    fill["fill_context"] = context
+    fill["calibration_problems"] = sorted(set(calibration_ids.fill_problems(fill)) | set(market_problems)
+                                          | set(context_problems))
     try:
         fill = ledger_store.book(PAPER_PATH, fill)
     except LedgerIntegrityError as exc:
@@ -292,7 +297,8 @@ def market_fields(intent: Intent, fill_ts: str) -> tuple[dict[str, Any], list[st
     invalid_market_mid if crossed). hours_to_expiry_at_entry = end_date - fill ts in hours (negative
     when already past, as computed), None if end_date is missing or not a zoned ISO time.
     kelly_fraction_used: intent_builder's shadow Kelly multiplier as given, a finite number in (0, 1],
-    else None. Recorded only: nothing reads these for a decision or a size. Never invented.
+    else None. Task BC: kelly_frac_raw, intent_builder's per-trade raw (full) Kelly fraction, same rule.
+    Recorded only: nothing reads these for a decision or a size. Never invented.
     """
     problems: list[str] = []
     bid, bid_problem = _price(intent.best_bid)
@@ -318,16 +324,37 @@ def market_fields(intent: Intent, fill_ts: str) -> tuple[dict[str, Any], list[st
             problems.append("invalid_hours_to_expiry_at_entry")
         else:
             hours = round(hours, 6)
-    kelly = intent.kelly_fraction_used
-    if kelly is None:
-        problems.append("missing_kelly_fraction_used")
-    elif isinstance(kelly, bool) or not isinstance(kelly, (int, float)) or not math.isfinite(kelly) or not 0 < kelly <= 1:
-        kelly = None
-        problems.append("invalid_kelly_fraction_used")
-    else:
-        kelly = float(kelly)
+    kelly, kelly_problem = _fraction(intent.kelly_fraction_used)
+    if kelly_problem:
+        problems.append(f"{kelly_problem}_kelly_fraction_used")
+    kelly_raw, raw_problem = _fraction(intent.kelly_frac_raw)
+    if raw_problem:
+        problems.append(f"{raw_problem}_kelly_frac_raw")
     return ({"market_mid": mid, "best_bid": bid, "best_ask": ask, "hours_to_expiry_at_entry": hours,
-             "kelly_fraction_used": kelly}, problems)
+             "kelly_fraction_used": kelly, "kelly_frac_raw": kelly_raw}, problems)
+
+
+def _fraction(value: object) -> tuple[float | None, str | None]:
+    """A Kelly fraction: a finite number in (0, 1] (bool and str refused); else None and missing / invalid."""
+    if value is None:
+        return None, "missing"
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value <= 1:
+        return None, "invalid"
+    return float(value), None
+
+
+def fill_context(intent: Intent) -> tuple[str | None, list[str]]:
+    """Task BC: the fill's fill_context (calibration_ids.FILL_CONTEXTS) as the caller stamped it on the intent.
+
+    Never inferred from missing fields: None -> missing_fill_context, an unknown value -> None +
+    invalid_fill_context. Recorded only; RiskGate never reads it.
+    """
+    value = intent.fill_context
+    if value is None:
+        return None, ["missing_fill_context"]
+    if value not in calibration_ids.FILL_CONTEXTS:
+        return None, ["invalid_fill_context"]
+    return value, []
 
 
 def _decision_payload(intent: Intent, decision: Decision) -> dict[str, Any]:
@@ -362,6 +389,7 @@ def _intent(**kwargs: Any) -> Intent:
         "token_id": "",
         "hypothetical": True,
         "note": "Gate test only. Not a forecast and not a claim of edge.",
+        "fill_context": calibration_ids.FILL_CONTEXT_GATE_CHECK,  # Task BC: no book context
         # Synthetic gate-test touch, stamped now so only the check under test can veto.
         "book_ts": utc_now(),
     }
@@ -492,6 +520,7 @@ def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
             # Task BA: the same book row's top of book (recorded on the fill only; RiskGate never reads it).
             best_bid=book.get("best_bid"),
             best_ask=book.get("best_ask"),
+            fill_context=calibration_ids.FILL_CONTEXT_GATE_CHECK,  # Task BC: a gate check, never a sample
             note="Public ask used as both model and price. Must not fill. Not a forecast.",
         ),
         cfg,
@@ -515,6 +544,7 @@ def run_cli_intent(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, A
         hypothetical=False,
         book_ts=args.book_ts,
         note=args.note or "Operator paper intent. Not a promise of profit.",
+        fill_context=calibration_ids.FILL_CONTEXT_OPERATOR_CLI,  # Task BC: no book context
     )
     return commit_if_allowed(intent, cfg)
 

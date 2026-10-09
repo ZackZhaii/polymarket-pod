@@ -8,8 +8,14 @@ src/resolutions.py) and scores them as Poly反思's M3 calibration design (secti
   y = 1 when that token won. Brier, log loss, reliability bins with Wilson intervals, ECE, logistic
   calibration slope / intercept, and counts and Brier by category, strategy and model_version.
 - A, trade sample: one sample per decision_id (at most two decisions per market), p = the first
-  fill's model_prob, q = its market_price. Brier of p and of q, delta (model - market), expected
-  (edge x shares) and realized paper P&L.
+  fill's model_prob, q = its market_mid (Task BC; design 3: the decision-time mid, else market_price
+  with price_source noted, which only a fill booked before Task BA can reach). Brier of p and of q,
+  delta (model - market), expected (edge x shares) and realized paper P&L.
+
+Task BC: a fill whose fill_context says it was built without book context (the operator CLI or a
+gate check, calibration_ids.NO_BOOK_CONTEXTS) is dropped as no_book_context, apart from the genuine
+missing-data reasons; a fill whose market_mid key is present but not a usable price is dropped as
+fill_market_mid_missing (never replaced by market_price).
 
 Fail closed. Nothing is imputed: a row with calibration_problems, a missing join, a pending,
 UMA-unconfirmed, disputed, void or ambiguous resolution, or a token / outcome that disagrees with
@@ -80,7 +86,10 @@ NOTES = (
     "Labels are only data/resolutions.jsonl rows with uma_checked=true and status=resolved; nothing is imputed.",
     "UMA dispute status not checked (beyond umaResolutionStatus=resolved).",
     "Not a promise of profit. Paper only. This report proposes nothing and changes no setting.",
-    "q is the first fill's market_price (price_source=market_price); no mid is recorded on fills yet.",
+    "q is the first fill's market_mid (price_source=market_mid). Only a fill booked before Task BA, with no "
+    "market_mid key at all, uses market_price instead (price_source=market_price, design 3); a recorded but "
+    "null mid is a drop (fill_market_mid_missing), never a fallback. trades.price_sources counts both.",
+    "Fills built without book context (fill_context operator_cli / gate_check) are dropped as no_book_context.",
 )
 
 
@@ -472,6 +481,9 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
     for row in fills:
         if not ledger_store.counts(row) or row.get("risk_decision") != "allow":
             continue  # not a trade sample at all (hypothetical / not counted); not a drop
+        if row.get("fill_context") in calibration_ids.NO_BOOK_CONTEXTS:
+            drop(row, "no_book_context")  # Task BC: stamped at fill time; never inferred from missing fields
+            continue
         excluded = _excluded(row.get("strategy"), row.get("market"))
         if excluded:
             drop(row, excluded)
@@ -480,7 +492,7 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
             drop(row, "fill_missing_identity")  # booked before Task AX
             continue
         stored = row["calibration_problems"] if isinstance(row["calibration_problems"], list) else ["unreadable"]
-        problems = sorted(set(map(str, stored)) | set(calibration_ids.fill_problems(row)))
+        problems = sorted(set(map(str, stored)) | set(calibration_ids.fill_problems(row)) | set(_context_problems(row)))
         if problems:
             problem_counts.update(problems)
             drop(row, "fill_calibration_problems")
@@ -512,6 +524,10 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
         if per_market[condition] >= CALIBRATION_MAX_DECISIONS_PER_MARKET:
             drop(ref, "re_entry_cap", len(rows))
             continue
+        q, price_source = market_probability(first)
+        if q is None:
+            drop(ref, "fill_market_mid_missing", len(rows))
+            continue
         per_market[condition] += 1
         bought = sum(float(r["shares"]) for r in rows if r.get("side") == "buy")
         sold = sum(float(r["shares"]) for r in rows if r.get("side") == "sell")
@@ -522,7 +538,8 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
         eligible.append({"kind": "trade", "decision_id": decision_id, "forecast_id": first["forecast_id"],
                          "market_id": first["market"], "condition_id": condition, "token_id": first["token_id"],
                          "side": first.get("side"), "p": float(first["model_prob"]),
-                         "q": float(first["market_price"]), "y": y, "fills": len(rows),
+                         "q": q, "price_source": price_source, "fill_context": first.get("fill_context"),
+                         "y": y, "fills": len(rows),
                          "re_entry": per_market[condition] > 1, "expected_usd": expected, "realized_usd": realized,
                          "strategy": first.get("strategy"), "model_version": first.get("model_version"),
                          "category": first.get("category"),
@@ -532,6 +549,32 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
                          "price_band": price_band(float(first["market_price"])),
                          "resolution_day": resolution["closed_ts"][:10]})  # type: ignore[index]
     return eligible, dropped, reasons, problem_counts
+
+
+def _context_problems(row: Mapping[str, Any]) -> list[str]:
+    """Task BC: a stored fill_context must be a known one (a row from before Task BC has no key: no problem)."""
+    if "fill_context" not in row:
+        return []
+    value = row["fill_context"]
+    if value is None:
+        return ["missing_fill_context"]
+    return [] if value in calibration_ids.FILL_CONTEXTS else ["invalid_fill_context"]
+
+
+def market_probability(fill: Mapping[str, Any]) -> tuple[float | None, str]:
+    """Task BC: q for a trade sample and its price_source.
+
+    market_mid when the fill records one (Task BA onward). A fill that has the key but no usable mid
+    (null, non-finite, outside (0, 1)) gives (None, "market_mid"): the caller drops it, never falling
+    back. Only a fill with no market_mid key at all (booked before Task BA) uses its market_price, as
+    design section 3 allows ("mid if there is one, else market_price, with price_source noted").
+    """
+    if "market_mid" in fill:
+        mid = fill["market_mid"]
+        if isinstance(mid, bool) or not isinstance(mid, (int, float)) or not math.isfinite(mid) or not 0 < mid < 1:
+            return None, "market_mid"
+        return float(mid), "market_mid"
+    return float(fill["market_price"]), "market_price"
 
 
 # ------------------------------------------------------------------ report (pure)
@@ -674,6 +717,7 @@ def build_report(forecast_rows: list[dict[str, Any]], resolution_rows: list[dict
             "eligible": len(a_rows), "dropped": sum(b for b in a_reasons.values()),
             "dropped_by_reason": dict(sorted(a_reasons.items())),
             "calibration_problems": dict(sorted(a_problems.items())),
+            "price_sources": dict(sorted(Counter(s["price_source"] for s in a_rows).items())),  # Task BC
             "metrics": trade_section(a_rows),
             "by_category": group_counts(a_rows, "category"),
             "by_strategy": group_counts(a_rows, "strategy"),
@@ -729,6 +773,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
               f"- status: **{tm['status']}** ({'; '.join(tm['short_of']) or 'all minimums met'})",
               f"- eligible {t['eligible']} decisions; dropped {t['dropped']} fills: "
               f"{json.dumps(t['dropped_by_reason'], sort_keys=True)}",
+              f"- market probability q by source: {json.dumps(t.get('price_sources', {}), sort_keys=True)}",
               f"- Brier model {_fmt(tm['brier_model'])}, market {_fmt(tm['brier_market'])}, delta "
               f"{_fmt(tm['delta_brier'])} (CI {_fmt(tm.get('delta_brier_ci'))}), skill {_fmt(tm['brier_skill'])} "
               f"(CI {_fmt(tm.get('brier_skill_ci'))})",

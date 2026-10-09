@@ -447,6 +447,15 @@
       "note": "Requested by Poly指挥 (Poly反思's M3 calibration design sections 4-5, step 4); done by grok-bot. BA (#62) ran in parallel and was merged in from dev. Not yet: per-tier / per-category / intercept / Kelly / cumulative-loss / cluster rules (the report has no interval for them). PR #61 (pod-flash) used the title 'Task AZ' for a test-only change without a queue entry.",
       "done_at": "2026-10-09T15:00:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "BC",
+      "status": "done",
+      "title": "M3 calibration: market_mid as the market probability, kelly_frac_raw recorded next to kelly_fraction_used, fill_context and the no_book_context drop reason",
+      "finish": "src/calibration.py scores the trade sample at the first fill's market_mid (price_source noted; market_price only for a pre-Task BA fill with no market_mid key, per design 3; a recorded but unusable mid is dropped and counted, never replaced). risk_gate.Intent gains kelly_frac_raw (intent_builder kelly_raw) and fill_context (intent_builder / operator_cli / gate_check), recorded on the fill; null + missing_/invalid_ in calibration_problems; RiskGate and order size never read them (source scan + identical decisions and fill sizes). The report drops operator_cli / gate_check fills as no_book_context, stamped at fill time, apart from missing-data reasons. report.json schema_version 1, keys only added (trades.price_sources, sample price_source / fill_context). e2e golden only via --update-golden for the new fields. No new number; no decision, threshold or size moved; config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 after BA (#62) merged. BB (#66, src/reflector_proposals.py) reads report.json in parallel, so report changes are additive only. Done by grok-bot. Choice: design 3 allows the market_price fallback with price_source noted, so it is kept only for pre-Task BA fills (no market_mid key); a recorded null mid is a drop. kelly_frac_raw = intent_builder kelly_raw (unscaled); kelly_frac = kelly_fraction_used x kelly_frac_raw.",
+      "done_at": "2026-10-09T14:35:19Z",
+      "surface": "grok-bot"
     }
   ]
 }
