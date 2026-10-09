@@ -1053,12 +1053,35 @@ Finish when every assumed slippage reads one constant, no copy can drift, no num
 - `config/risk.toml` unchanged, `live_enabled` false. Not done (would be a new veto, left for review): a RiskGate
   floor that vetoes an `assumed_slippage` below `ASSUMED_SLIPPAGE` (the paper_ledger CLI still accepts `--slippage 0`).
 
+
+## Task AU — RiskGate slippage floor (tightening; Poly指挥 approved)
+
+Status: done.
+
+Requested by Poly指挥 after Task AT (#47) unified the slippage, done by grok-bot on dev@6368f80.
+
+Finish when no intent can assume less slippage than `ASSUMED_SLIPPAGE`, including an Operator CLI intent.
+
+- `risk_gate.evaluate`: a finite `assumed_slippage < ASSUMED_SLIPPAGE` (0.005, `src/thresholds.py`, inclusive floor)
+  vetoes `slippage_below_floor`; missing / non-number vetoes `invalid_assumed_slippage`, NaN/inf
+  `non_finite_assumed_slippage` (Task U, unchanged). A negative slippage also keeps `negative_cost_assumption`.
+  Every intent, hypothetical gate tests included.
+- `paper_ledger` CLI: `--slippage` is parsed by `slippage_arg` (finite and >= the floor, else argparse error, exit 2,
+  before risk.toml, the ledger or the bus is touched). Default stays `ASSUMED_SLIPPAGE`.
+- The intent builder's `INTENT_ASSUMED_SLIPPAGE` is the floor itself, so its intents still pass (tested in
+  `tests/test_intent_builder.py` and in the e2e run).
+- e2e: golden `slippage_floor` (0 and 0.0049 veto `slippage_below_floor`, 0.005 and 0.01 allow, NaN and missing veto,
+  the builder's intent passes, CLI refuses 0 / 0.0049 / nan / -0.01 and accepts 0.005 / 0.01); golden only via
+  `--update-golden`. Tests: `tests/test_slippage_floor.py`; `tests/test_fee_characterisation.py` (the recorded
+  sell point with slippage 0.0 that allowed now vetoes, checked separately).
+- No new number. config/risk.toml unchanged, `live_enabled` false.
+
 ## Latest
 
+- 2026-10-09: Task AU: RiskGate vetoes `assumed_slippage < ASSUMED_SLIPPAGE` (`slippage_below_floor`); CLI refuses it.
 - 2026-10-09: Task AT: one `ASSUMED_SLIPPAGE = 0.005` in `src/thresholds.py`; SportsDevig/intent names are aliases,
   paper_ledger literals gone, drift fails at import. ROLES.md: RiskGate has no Kelly sizing (shadow only).
 - 2026-10-09: Task AR: `max_daily_loss` now counts today's (UTC) fees plus gross realized losses (`src/daily_loss.py`).
 - Gains never offset; corrupt counted ledger rows = `invalid_risk_state` = global halt. e2e golden `daily_loss`.
-- Task AP (merged #45) and AQ (merged #44) are on dev: guard checks 10 `secret_scan`, 11 `heartbeat`.
 - pytest + guard (11 checks) pass. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
-- No new number from AR. Open Operator choice: netting realized gains. Queue empty after AR.
+- No new number from AR or AU. Open Operator choice: netting realized gains. Queue empty after AU.

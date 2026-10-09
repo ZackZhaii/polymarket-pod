@@ -44,6 +44,15 @@ The 2026-10-08 run itself used the earlier single-page sample (`active_sample=20
 - `logs/bus.jsonl` received `signal`, `veto`, and `fill` lines in the `docs/PROTOCOL.md` shape. The only `fill` is from `Executor` and carries `risk_decision=allow`.
 - `logs/paper.jsonl` is gitignored.
 
+### Slippage floor (Task AU)
+
+RiskGate vetoes any intent whose `assumed_slippage` is below `ASSUMED_SLIPPAGE` (0.005, `src/thresholds.py`)
+with `slippage_below_floor`; exactly 0.005 passes. A missing or non-number slippage vetoes
+`invalid_assumed_slippage`, NaN/inf `non_finite_assumed_slippage`. This holds for every intent (hypothetical
+gate tests and the intent builder, whose `INTENT_ASSUMED_SLIPPAGE` is the floor itself). The
+`paper_ledger` CLI also refuses `--slippage` below the floor, non-finite or not a number: argparse error, exit
+code 2, before `risk.toml`, the ledger or the bus is read or written. The default stays 0.005.
+
 ## Risk file
 
 `config/risk.toml` is unchanged:

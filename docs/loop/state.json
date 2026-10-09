@@ -366,6 +366,15 @@
       "note": "Requested by Poly指挥 (queue after EXIT_CODES and daily_loss-realized; SPEC_signal_to_intent inconsistencies 1 and 2); done by grok-bot. AS (EXIT_CODES + runtime pins) ran in parallel. Not done: a RiskGate floor vetoing assumed_slippage below ASSUMED_SLIPPAGE (new veto; callers such as the paper_ledger CLI can still pass a lower value). Kelly enforcement stays KEY (backlog #7).",
       "done_at": "2026-10-09T09:29:18Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AU",
+      "status": "done",
+      "title": "RiskGate slippage floor: veto any intent whose assumed_slippage is below ASSUMED_SLIPPAGE (Task AT's one slippage, 0.005, inclusive); missing / non-finite slippage vetoes; the paper_ledger CLI refuses --slippage below the floor",
+      "finish": "risk_gate.evaluate adds slippage_below_floor when a finite assumed_slippage < ASSUMED_SLIPPAGE (missing / non-number / non-finite already veto invalid_ / non_finite_assumed_slippage); paper_ledger --slippage uses slippage_arg (finite, >= ASSUMED_SLIPPAGE, else argparse error exit 2 before any read or write); the intent builder's INTENT_ASSUMED_SLIPPAGE intents still pass. e2e gate cases (golden slippage_floor, only via --update-golden); unit tests. No new number; config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Approved by Poly指挥 as tightening; done by grok-bot. Behaviour change: a recorded Task AE characterisation point (sell, slippage 0.0) that used to allow now vetoes; an Operator CLI intent with --slippage below 0.005 is refused. sports_devig's slippage argument only shapes its signal edge (RiskGate re-checks the intent).",
+      "done_at": "2026-10-09T10:06:10Z",
+      "surface": "grok-bot"
     }
   ]
 }
