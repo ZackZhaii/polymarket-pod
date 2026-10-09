@@ -465,6 +465,15 @@
       "note": "Requested by Poly指挥 after BC (#67) merged. Done by grok-bot. No event id is recorded on forecasts or fills, so event_cluster uses condition_id (one market per cluster), a lower bound on event concentration; recording an event id and the six missing Reflector rules are later tasks.",
       "done_at": "2026-10-09T15:48:52Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "BE",
+      "status": "done",
+      "title": "M3 Reflector rules after BB: per-category delta Brier disable, per-edge-tier realization MIN_EDGE tightening, calibration intercept, event-cluster share on proposal evidence",
+      "finish": "src/reflector_proposals.py: a judged trades.by_category group whose delta_brier_ci lies wholly above 0 proposes disabling that category (target.category); the trade edge tiers from the one holding MIN_EDGE up whose realization_ci lies wholly below REFLECTOR_EDGE_TIER_REALIZATION_MAX (0.25, M3 pending, src/thresholds.py and docs only) propose MIN_EDGE at the top of the highest such bounded tier (target.edge_tier); a forecast calibration intercept_ci wholly off 0 joins the MIN_EDGE + step proposal; every proposal carries its section's event_cluster in evidence and a concentrated section is stated in risk and observations. Tightening only, proposals only, never applied; corrupt new fields fail closed (exit 4); reports before BD give no new proposal. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 after BD (#71) merged. Done by grok-bot. Not done: the design's two-batch Kelly rule (kelly_fraction lives in config/risk.toml, which no proposal may name, and the rule is about raising Kelly) and the cumulative-loss disable (its threshold is not in the repo); both need Poly反思's numbers and a decision on where they live.",
+      "done_at": "2026-10-09T16:42:20Z",
+      "surface": "grok-bot"
     }
   ]
 }

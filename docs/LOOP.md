@@ -1340,9 +1340,40 @@ existing minimums, and `python -m pytest` and guard --require-git pass offline.
   for the added keys. Docs: `docs/M3_CALIBRATION.md` (Task BD subsection, Step 4 not-implemented list).
 - No decision, threshold, size or proposal moved. config/risk.toml unchanged, `live_enabled` false.
 
+## Task BE — M3 Reflector rules after BB: category delta Brier, edge-tier realization, intercept, cluster share
+
+Status: done.
+
+Requested by Poly指挥 after Task BD (#71), done by grok-bot on dev@71386b6. Reads only the intervals BD added to
+report.json; the report is unchanged.
+
+Finish when the Reflector proposes from the per-category, per-edge-tier and intercept intervals, carries the
+event-cluster share on every proposal, still only tightens and never applies, fails closed on corrupt new
+fields, gives nothing new for a report from before BD, and `python -m pytest` and guard --require-git pass offline.
+
+- `src/reflector_proposals.py`: `disable` of one category (`target.category`) when a judged
+  `trades.by_category` group's `delta_brier_ci` lies wholly above 0 (not when the strategy itself is disabled).
+- `param_change` MIN_EDGE to the top of the failing edge tiers (`target.edge_tier`): walk up from the trade edge
+  tier holding MIN_EDGE; each judged tier with `realization_ci` wholly below `REFLECTOR_EDGE_TIER_REALIZATION_MAX`
+  extends the run. A failing tier above a passing or unjudged one, and the open top tier, are observations only.
+- Forecast `calibration.intercept_ci` wholly off 0 (positive or negative bias) joins the MIN_EDGE + step
+  proposal (one target, one proposal; a new one when the slope rule does not fire).
+- `evidence.event_cluster` (cluster_key, flag, largest_share, max_share) on every proposal; a `concentrated`
+  section is stated in the proposal's `risk` and in the observations. Nothing is gated on it.
+- Disable before param_change under the daily cap. Corrupt group intervals / intercept_ci / event_cluster: exit 4.
+- New number (M3 pending): `REFLECTOR_EDGE_TIER_REALIZATION_MAX` 0.25 (src/thresholds.py, docs/THRESHOLDS.md).
+- Not done: the two-batch Kelly rule (`kelly_fraction` is in config/risk.toml, which no proposal may name, and
+  the rule is about raising Kelly) and the cumulative-loss disable (no threshold in the repo). Both need
+  Poly反思's numbers and a decision on where they live.
+- Tests: `tests/test_reflector_rules_be.py`. No decision, threshold, size or gate moved. config/risk.toml
+  unchanged, `live_enabled` false.
+
 ## Latest
 
-- 2026-10-09: Task BD: calibration report intervals per category and edge tier (Brier, ECE, slope, intercept;
+- 2026-10-10: Task BE: Reflector rules from BD's intervals: per-category delta Brier disable, per-edge-tier
+  realization MIN_EDGE tightening (`REFLECTOR_EDGE_TIER_REALIZATION_MAX`, M3 pending), intercept joins the
+  MIN_EDGE + step proposal, `event_cluster` on proposal evidence. Proposals only; tightening only.
+- Task BD (merged #71): calibration report intervals per category and edge tier (Brier, ECE, slope, intercept;
   trades also delta Brier and realization), intercept CI + verdict, `event_cluster` share flagged against
   `CALIBRATION_MAX_CLUSTER_SHARE` (M3 pending). Report only; additive keys.
 - Task BC (merged #67): calibration q = `market_mid` (pre-BA fills fall back to `market_price`, labelled);
@@ -1354,5 +1385,5 @@ existing minimums, and `python -m pytest` and guard --require-git pass offline.
   calibration report.
 - pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 - Open: run M1 with `--raw-books` before deciding on hash enforcement; Operator choice on netting realized
-  gains (AR); record an event id on forecasts / fills so `event_cluster` groups markets of one event; the six
-  missing Reflector rules. Queue empty after BD.
+  gains (AR); record an event id on forecasts / fills so `event_cluster` groups markets of one event; the
+  two-batch Kelly rule and cumulative-loss disable (need Poly反思's numbers). Queue empty after BE.

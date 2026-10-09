@@ -21,6 +21,15 @@ Hard limits (tested):
   ``REFLECTOR_REJECT_COOLDOWN_DAYS`` unless the sample grew by ``REFLECTOR_REJECT_NEW_SAMPLES``.
 - Fail closed: a missing report (exit 3), a corrupt or incomplete one (exit 4) or a corrupt proposals.jsonl
   (exit 5) writes no proposal. Exit codes: docs/EXIT_CODES.md.
+
+Rules (Task BB): disable one strategy (trade Brier skill, realized P&L, severe slope); MIN_EDGE + step on an
+overconfident slope; a price-band MIN_EDGE rule on ECE with a bin outside its Wilson interval. Task BE adds, from
+the intervals Task BD put in the report: per-category delta Brier (disable that category), per-edge-tier
+realization (MIN_EDGE to the top of the failing bottom tiers), the calibration intercept (joins the MIN_EDGE +
+step proposal) and the event-cluster share (on every proposal's evidence; a concentrated section is said so in
+its proposals' risk and in the observations). The design's two-batch Kelly rule and cumulative-loss disable are
+not here: Kelly lives in config/risk.toml (no proposal may name it) and the cumulative-loss number is not in the
+repo.
 """
 from __future__ import annotations
 
@@ -46,6 +55,7 @@ from src.thresholds import (  # noqa: E402
     REFLECTOR_DISABLE_SLOPE_CI_HIGH_MAX,
     REFLECTOR_DISABLE_SLOPE_MAX,
     REFLECTOR_ECE_MAX,
+    REFLECTOR_EDGE_TIER_REALIZATION_MAX,
     REFLECTOR_MAX_PER_UTC_DAY,
     REFLECTOR_MIN_EDGE_STEP,
     REFLECTOR_REJECT_COOLDOWN_DAYS,
@@ -209,7 +219,61 @@ def _evidence(report: Mapping[str, Any], report_ref: Mapping[str, Any], section:
         "data_versions": {name: (inputs.get(name) or {}).get("sha256") if isinstance(inputs.get(name), dict)
                           else None for name in ("forecasts", "resolutions", "ledger")}
         | {"bootstrap_seed": report["thresholds"].get("bootstrap_seed")},
+        "event_cluster": _cluster(m),  # Task BE
     }
+
+
+CLUSTER_FLAGS = ("ok", "concentrated", "insufficient")
+
+
+def _cluster(metrics: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Task BE: the section's event_cluster summary for a proposal's evidence (None before Task BD)."""
+    if "event_cluster" not in metrics:
+        return None
+    ec = metrics["event_cluster"]
+    if not isinstance(ec, Mapping) or ec.get("flag") not in CLUSTER_FLAGS:
+        raise ReportError("event_cluster is not an object with a known flag")
+    return {"cluster_key": ec.get("cluster_key"), "flag": ec["flag"], "largest_share": _num(ec, "largest_share"),
+            "max_share": _num(ec, "max_share")}
+
+
+def _groups(report: Mapping[str, Any], section: str, key: str) -> dict[str, Mapping[str, Any]]:
+    """Task BE: judged groups (name -> intervals) of ``section.key``; absent (before Task BD) = none."""
+    node = report[section]
+    if key not in node:
+        return {}
+    groups = node[key]
+    if not isinstance(groups, Mapping):
+        raise ReportError(f"{section}.{key} is not an object")
+    out = {}
+    for name, group in groups.items():
+        if not isinstance(group, Mapping):
+            raise ReportError(f"{section}.{key}.{name} is not an object")
+        intervals = group.get("intervals")
+        if intervals is None:
+            continue
+        if not isinstance(intervals, Mapping):
+            raise ReportError(f"{section}.{key}.{name}.intervals is not an object")
+        for field in ("realization_ci", "delta_brier_ci", "intercept_ci", "slope_ci"):
+            _interval(intervals, field)  # type-check every interval a rule may read
+        if group.get("status") == "sufficient":
+            out[str(name)] = intervals
+    return out
+
+
+def _edge_tiers(report: Mapping[str, Any]) -> list[tuple[str, float | None, float | None]]:
+    """(label, low, high) of the trade edge tiers, labelled exactly as src/calibration.py tier() does."""
+    bounds = report["thresholds"].get("edge_tiers")
+    if bounds is None:
+        return []
+    if (not isinstance(bounds, list) or not bounds
+            or any(isinstance(b, bool) or not isinstance(b, (int, float)) or not math.isfinite(b) for b in bounds)
+            or any(lo >= hi for lo, hi in zip(bounds, bounds[1:]))):
+        raise ReportError("thresholds.edge_tiers is not a rising list of numbers")
+    tiers: list[tuple[str, float | None, float | None]] = [(f"<{bounds[0]:g}", None, float(bounds[0]))]
+    tiers += [(f"[{lo:g}, {hi:g})", float(lo), float(hi)) for lo, hi in zip(bounds, bounds[1:])]
+    tiers.append((f">={bounds[-1]:g}", float(bounds[-1]), None))
+    return tiers
 
 
 def candidates(report: Mapping[str, Any], report_ref: Mapping[str, Any]) -> tuple[list[dict], list[str]]:
@@ -284,13 +348,56 @@ def candidates(report: Mapping[str, Any], report_ref: Mapping[str, Any]) -> tupl
             "rollback": f"Re-enable {strategy} (no strategy switch exists in code; the Operator decides how).",
         })
 
+    # (a2) Task BE: disable one category of the trade sample when its delta Brier (model - market) interval lies
+    # wholly above 0. Not when the strategy itself is being disabled (that covers every category).
+    a_strategy = _single_strategy(report, "trades") if a["status"] == "sufficient" else None
+    category_groups = _groups(report, "trades", "by_category")
+    tier_groups = _groups(report, "trades", "by_edge_tier")
+    tiers = _edge_tiers(report)
+    if a["status"] == "sufficient" and a_strategy not in disable:
+        scope = a_strategy or "all"
+        for name in sorted(category_groups):
+            if name == "(unknown)":
+                continue
+            ci = _interval(category_groups[name], "delta_brier_ci")
+            if ci is None or not ci[0] > 0:
+                continue
+            ref = f"trades.by_category.{name}.intervals.delta_brier_ci"
+            drafts.append({
+                "type": "disable",
+                "target": {"strategy": scope, "key": "enabled", "file": None, "category": name},
+                "current_value": "enabled", "proposed_value": "disabled",
+                "evidence": _evidence(report, report_ref, "trades", [ref],
+                                      {"category": name,
+                                       "delta_brier": _num(category_groups[name], "delta_brier")
+                                       if "delta_brier" in category_groups[name] else None,
+                                       "brier": _num(category_groups[name], "brier")
+                                       if "brier" in category_groups[name] else None,
+                                       "brier_market": _num(category_groups[name], "brier_market")
+                                       if "brier_market" in category_groups[name] else None}),
+                "confidence": {"ci_level": level, "intervals": {f"delta_brier[{name}]": ci}},
+                "rationale": f"In category {name} the model's Brier is worse than the market's with the whole delta "
+                             f"Brier interval above 0 ({ci[0]:.4f}, {ci[1]:.4f}).",
+                "expected_impact": f"No new paper entries in category {name} for {scope}; open paper positions run "
+                                   "to settlement.",
+                "risk": "One category of a small sample can be noise; a later report with the interval reaching 0 "
+                        "says this was wrong.",
+                "rollback": f"Re-enable category {name} (no category switch exists in code; the Operator decides "
+                            "how).",
+            })
+
     # (b) tighten parameters (forecast sample B). Not for a strategy that is being disabled.
+    if b["status"] == "sufficient":
+        calibration_b = _get(b, "calibration")
+        intercept_ci = _interval(calibration_b, "intercept_ci")  # Task BE; type-checked even when unused
+        intercept = _num(calibration_b, "intercept") if "intercept" in calibration_b else None
     if b["status"] == "sufficient" and b_strategy not in disable:
         scope_strategy = b_strategy or "all"
         proposed = round(MIN_EDGE + REFLECTOR_MIN_EDGE_STEP, 10)
+        min_edge_draft: dict[str, Any] | None = None
         if (slope is not None and slope_ci is not None and REFLECTOR_DISABLE_SLOPE_MAX <= slope
                 < REFLECTOR_TIGHTEN_SLOPE_MAX and slope_ci[1] < REFLECTOR_TIGHTEN_SLOPE_CI_HIGH_MAX):
-            drafts.append({
+            min_edge_draft = {
                 "type": "param_change",
                 "target": {"strategy": scope_strategy, "key": "MIN_EDGE", "file": "src/thresholds.py"},
                 "current_value": MIN_EDGE, "proposed_value": proposed,
@@ -304,7 +411,35 @@ def candidates(report: Mapping[str, Any], report_ref: Mapping[str, Any]) -> tupl
                 "expected_impact": "Fewer low-edge paper entries; slower settled-sample growth.",
                 "risk": "If the next sample shows a slope interval reaching 1, this was noise.",
                 "rollback": f"Restore MIN_EDGE = {MIN_EDGE} (revert the PR that applies it).",
-            })
+            }
+        # Task BE: a calibration intercept whose whole interval is off 0 is a systematic bias; it joins the same
+        # MIN_EDGE + step proposal (one target, one proposal).
+        if intercept_ci is not None and (intercept_ci[0] > 0 or intercept_ci[1] < 0):
+            word = "positive" if intercept_ci[0] > 0 else "negative"
+            reason = (f"Calibration intercept {_fmt(intercept)} with its whole interval {'above' if word == 'positive' else 'below'} 0: "
+                      f"a {word} bias (outcomes happen {'more' if word == 'positive' else 'less'} often than p says).")
+            if min_edge_draft is None:
+                min_edge_draft = {
+                    "type": "param_change",
+                    "target": {"strategy": scope_strategy, "key": "MIN_EDGE", "file": "src/thresholds.py"},
+                    "current_value": MIN_EDGE, "proposed_value": proposed,
+                    "evidence": _evidence(report, report_ref, "forecasts",
+                                          ["forecasts.metrics.calibration.intercept_ci"],
+                                          {"calibration_intercept": intercept, "brier": _num(b, "brier"),
+                                           "ece": _num(_get(b, "reliability"), "ece")}),
+                    "confidence": {"ci_level": level, "intervals": {"calibration_intercept": intercept_ci}},
+                    "rationale": reason,
+                    "expected_impact": "Fewer low-edge paper entries; slower settled-sample growth.",
+                    "risk": "If the next sample shows an intercept interval reaching 0, this was noise.",
+                    "rollback": f"Restore MIN_EDGE = {MIN_EDGE} (revert the PR that applies it).",
+                }
+            else:
+                min_edge_draft["evidence"]["sections"].append("forecasts.metrics.calibration.intercept_ci")
+                min_edge_draft["evidence"]["metrics"]["calibration_intercept"] = intercept
+                min_edge_draft["confidence"]["intervals"]["calibration_intercept"] = intercept_ci
+                min_edge_draft["rationale"] += " " + reason
+        if min_edge_draft is not None:
+            drafts.append(min_edge_draft)
         reliability = _get(b, "reliability")
         ece = _num(reliability, "ece")
         bins = _get(reliability, "bins")
@@ -337,9 +472,79 @@ def candidates(report: Mapping[str, Any], report_ref: Mapping[str, Any]) -> tupl
                 "risk": "One bin of a small sample; a band-specific MIN_EDGE needs a new parameter.",
                 "rollback": f"Drop the band rule; MIN_EDGE stays {MIN_EDGE} elsewhere.",
             })
+    # (c) Task BE: per-edge-tier realization (trade sample A). Walk up from the tier holding MIN_EDGE; each judged
+    # tier whose realization interval lies wholly below REFLECTOR_EDGE_TIER_REALIZATION_MAX extends the run, and
+    # MIN_EDGE is proposed at the top of the highest bounded tier of that run. A failing tier above a passing or
+    # unjudged one is only an observation (raising MIN_EDGE past it would cut the good tier too).
+    if a["status"] == "sufficient" and a_strategy not in disable and tiers and tier_groups:
+        def failing(label: str) -> list[float] | None:
+            if label not in tier_groups:
+                return None
+            ci = _interval(tier_groups[label], "realization_ci")
+            return ci if ci is not None and ci[1] < REFLECTOR_EDGE_TIER_REALIZATION_MAX else None
+
+        start = next((i for i, (_, lo, hi) in enumerate(tiers)
+                      if (lo is None or lo <= MIN_EDGE) and (hi is None or MIN_EDGE < hi)), None)
+        run_tiers: list[tuple[str, float | None, float | None, list[float]]] = []
+        if start is not None:
+            for label, lo, hi in tiers[start:]:
+                ci = failing(label)
+                if ci is None:
+                    break
+                run_tiers.append((label, lo, hi, ci))
+            for label, _, _ in tiers[start + len(run_tiers):]:
+                if failing(label) is not None:
+                    notes.append(f"trades: edge tier {label} realization interval below "
+                                 f"{REFLECTOR_EDGE_TIER_REALIZATION_MAX} but it is not the bottom of a failing run "
+                                 "from MIN_EDGE; observation only")
+        bounded = [t for t in run_tiers if t[2] is not None]
+        if any(t[2] is None for t in run_tiers):
+            notes.append(f"trades: edge tier {run_tiers[-1][0]} also fails realization but has no upper bound; "
+                         "MIN_EDGE is proposed at the last bound only")
+        if bounded and bounded[-1][2] > MIN_EDGE:  # type: ignore[operator]
+            top_label, _, top, _ = bounded[-1]
+            scope = a_strategy or "all"
+            refs = [f"trades.by_edge_tier.{label}.intervals.realization_ci" for label, *_ in bounded]
+            drafts.append({
+                "type": "param_change",
+                "target": {"strategy": scope, "key": "MIN_EDGE", "file": "src/thresholds.py",
+                           "edge_tier": top_label},
+                "current_value": MIN_EDGE, "proposed_value": round(float(top), 10),  # type: ignore[arg-type]
+                "evidence": _evidence(report, report_ref, "trades", refs,
+                                      {"edge_tiers": {label: _num(tier_groups[label], "realization")
+                                                      if "realization" in tier_groups[label] else None
+                                                      for label, *_ in bounded}}),
+                "confidence": {"ci_level": level,
+                               "intervals": {f"realization{label}": ci for label, _, _, ci in bounded}},
+                "rationale": f"Edge tiers {', '.join(t[0] for t in bounded)} (from MIN_EDGE up) have their whole "
+                             f"realization interval below {REFLECTOR_EDGE_TIER_REALIZATION_MAX}: the edge there is "
+                             "not realized.",
+                "expected_impact": f"No paper entries with edge below {top:g}; fewer trades.",
+                "risk": "Tier samples are small; a later report with the tier interval reaching the threshold says "
+                        "this was wrong.",
+                "rollback": f"Restore MIN_EDGE = {MIN_EDGE} (revert the PR that applies it).",
+            })
+
+    # (d) Task BE: event-cluster share. Every proposal carries its section's event_cluster in its evidence; a
+    # concentrated section says so in the proposal's risk and in the observations.
+    for section, metrics in (("forecasts", b), ("trades", a)):
+        ec = _cluster(metrics)
+        if ec is not None and ec["flag"] == "concentrated":
+            notes.append(f"{section}: event_cluster concentrated (largest share {_fmt(ec['largest_share'])} > "
+                         f"{_fmt(ec['max_share'])}); its proposals say so")
+    for draft in drafts:
+        ec = draft["evidence"].get("event_cluster")
+        if ec is not None and ec["flag"] == "concentrated":
+            draft["risk"] += (f" The {draft['evidence']['sample']['section']} sample is concentrated: its largest "
+                              f"cluster ({ec['cluster_key']}) holds {_fmt(ec['largest_share'])} of the samples "
+                              f"(> {_fmt(ec['max_share'])}), so the evidence rests on few events.")
     if not drafts and not notes:
         notes.append("all intervals cross their thresholds; observations only")
     return drafts, notes
+
+
+def _fmt(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.3g}"
 
 
 def direction(target: Mapping[str, Any], current: object, proposed: object) -> str:

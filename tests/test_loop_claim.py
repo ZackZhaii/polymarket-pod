@@ -168,5 +168,7 @@ def test_repo_queue_has_i_done_and_no_open_task():
     assert task_bc["status"] == "done" and task_bc["surface"] == "grok-bot"
     task_bd = next(task for task in state["tasks"] if task["id"] == "BD")
     assert task_bd["status"] == "done" and task_bd["surface"] == "grok-bot"
+    task_be = next(task for task in state["tasks"] if task["id"] == "BE")
+    assert task_be["status"] == "done" and task_be["surface"] == "grok-bot"
     assert loop_claim.next_todo(state) is None
     assert path.read_bytes() == before

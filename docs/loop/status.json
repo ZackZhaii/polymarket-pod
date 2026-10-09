@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T15:48:52Z",
+  "ts": "2026-10-09T16:42:20Z",
   "live_enabled": false,
-  "last_done": "BD",
+  "last_done": "BE",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "BD (calibration report: intervals per category and edge tier, intercept CI + verdict, event_cluster share flagged against CALIBRATION_MAX_CLUSTER_SHARE 0.30, M3 pending) done by grok-bot. Report only, keys added. No open todo. No live gate."
+  "note": "BE (Reflector rules: per-category delta Brier disable, per-edge-tier realization MIN_EDGE tightening with REFLECTOR_EDGE_TIER_REALIZATION_MAX 0.25 M3 pending, intercept joins MIN_EDGE + step, event_cluster on proposal evidence) done by grok-bot. Proposals only, tightening only. Kelly two-batch and cumulative-loss rules still open. No open todo. No live gate."
 }

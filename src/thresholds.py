@@ -273,6 +273,9 @@ REFLECTOR_ECE_MAX = 0.05  # param_change: ECE above this and a judged bin outsid
 REFLECTOR_MIN_EDGE_STEP = 0.01  # a MIN_EDGE tightening proposes MIN_EDGE + this
 REFLECTOR_REJECT_COOLDOWN_DAYS = 7  # a rejected target is not proposed again for this many days ...
 REFLECTOR_REJECT_NEW_SAMPLES = 15  # ... unless the sample grew by at least this many
+# Task BE (design section 4, per-edge-tier realization): the bottom edge tiers whose realization interval lies
+# wholly below this get a MIN_EDGE tightening to the top of the highest such tier. M3 pending.
+REFLECTOR_EDGE_TIER_REALIZATION_MAX = 0.25
 
 
 def consistency_problems() -> list[str]:
@@ -417,6 +420,10 @@ def consistency_problems() -> list[str]:
         problems.append("need 0 < REFLECTOR_DISABLE_SLOPE_CI_HIGH_MAX <= REFLECTOR_TIGHTEN_SLOPE_CI_HIGH_MAX <= 1")
     if not 0 <= REFLECTOR_DISABLE_REALIZATION_MAX < 1:
         problems.append("REFLECTOR_DISABLE_REALIZATION_MAX must be in [0, 1)")
+    if (isinstance(REFLECTOR_EDGE_TIER_REALIZATION_MAX, bool)
+            or not isinstance(REFLECTOR_EDGE_TIER_REALIZATION_MAX, (int, float))
+            or not 0 <= REFLECTOR_EDGE_TIER_REALIZATION_MAX < 1):
+        problems.append("REFLECTOR_EDGE_TIER_REALIZATION_MAX must be in [0, 1)")
     if not 0 < REFLECTOR_ECE_MAX < 1:
         problems.append("REFLECTOR_ECE_MAX must be in (0, 1)")
     if not 0 < REFLECTOR_MIN_EDGE_STEP < 1:
