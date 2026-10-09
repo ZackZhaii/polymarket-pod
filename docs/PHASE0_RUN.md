@@ -83,7 +83,13 @@ It prints one `PASS`/`FAIL` line per check with the reason, then a summary line:
 - `e2e`: the end-to-end offline gate below (Task AJ). It loads the checked repo's own `scripts/e2e_offline.py`,
   runs the real pipeline on `tests/fixtures/e2e/` and compares it exactly with `golden.json`. About 0.1 s; no
   pytest needed.
-- `halt` (Task AL) and `heartbeat` (Task AP): the same harness's halt-consumer and heartbeat scenarios must hold
+- `halt`: the Task AL halt consumer on the same offline run.
+- `secret_scan` (Task AQ): no private key, mnemonic or credential value in any tracked file or in `logs/`
+  (`src/secret_scan.py`; reports file:line, rule, length and a sha256 prefix only), plus a self-test on fresh
+  random canaries. `.env` files are never opened. The guard itself records no halt; for that run
+  `python -m src.secret_scan` (exit 0 clean, 1 secret found and a global Sentinel halt, 2 scan error and a
+  global halt, 3 usage; `--path RUN_DIR` adds a folder, `--no-halt` only reports).
+- `heartbeat` (Task AP): the same harness's heartbeat scenarios must hold
   semantically (stale / corrupt heartbeat and a lost Sentinel are global halts, exit-code matrix, gap-resync storm,
   all-markets-stale, stale-resume re-alarm, Reconciler halt stored, recording dir read).
 

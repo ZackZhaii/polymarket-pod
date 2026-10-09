@@ -74,6 +74,10 @@ EXPECTED = {
     "MAX_SOURCE_LOGIT_GAP": 1.0,
     # Task AN: M3 settlement snapshot hold (not coupled to ENDGAME_WINDOW_HOURS).
     "RESOLUTION_HOLD_HOURS": 48.0,
+    # Task AQ: secret-string scan of the bus and logs (M2 pending).
+    "SECRET_VALUE_MIN_LEN": 16,
+    "MNEMONIC_MIN_WORDS": 12,
+    "SECRET_HASH_PREFIX_CHARS": 8,
     # Task AP: heartbeats and the resident Sentinel (first values from the Sentinel design; M2 pending).
     "HEARTBEAT_RECORDER_EVERY_S": 10.0,
     "HEARTBEAT_RECORDER_TIMEOUT_S": 120.0,
@@ -136,6 +140,8 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               # Task AO: signal -> OrderIntent.
               "INTENT_ASSUMED_SLIPPAGE", "INTENT_TTL_S", "MAX_SIGNAL_AGE_NEWS_S", "MAX_SIGNAL_AGE_SPORTS_DEVIG_S",
               "MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S", "MAX_SOURCE_LOGIT_GAP",
+              # Task AQ: secret scan.
+              "SECRET_VALUE_MIN_LEN", "MNEMONIC_MIN_WORDS", "SECRET_HASH_PREFIX_CHARS",
               # Task AP: heartbeats, the resident Sentinel and its escalations.
               "HEARTBEAT_RECORDER_EVERY_S", "HEARTBEAT_RECORDER_TIMEOUT_S", "HEARTBEAT_REST_TIMEOUT_S",
               "SCANNER_HANG_S", "SCANNER_MAX_SUCCESS_AGE_S", "SCANNER_INCOMPLETE_CONSECUTIVE",
@@ -305,6 +311,12 @@ def test_relations_hold():
         ("MAX_SIGNAL_AGE_NEWS_S = 3600.0", "MAX_SIGNAL_AGE_NEWS_S = 0.0"),
         ("MAX_SOURCE_LOGIT_GAP = 1.0", "MAX_SOURCE_LOGIT_GAP = 0.0"),
         ("RESOLUTION_HOLD_HOURS = 48.0", "RESOLUTION_HOLD_HOURS = 0.0"),
+        ("SECRET_VALUE_MIN_LEN = 16", "SECRET_VALUE_MIN_LEN = 64"),
+        ("SECRET_VALUE_MIN_LEN = 16", "SECRET_VALUE_MIN_LEN = 16.0"),
+        ("MNEMONIC_MIN_WORDS = 12", "MNEMONIC_MIN_WORDS = 13"),
+        ("MNEMONIC_MIN_WORDS = 12", "MNEMONIC_MIN_WORDS = 24"),
+        ("SECRET_HASH_PREFIX_CHARS = 8", "SECRET_HASH_PREFIX_CHARS = 64"),
+        ("SECRET_HASH_PREFIX_CHARS = 8", "SECRET_HASH_PREFIX_CHARS = 0"),
     ],
 )
 def test_an_inconsistent_edit_fails_at_import(line, replacement):

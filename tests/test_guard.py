@@ -16,7 +16,7 @@ from scripts import guard
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / "scripts" / "guard.py"
 CHECKS = ["risk_sha_worktree", "risk_sha_head", "live_enabled", "banned_dependencies", "banned_imports",
-          "url_allowlist", "thresholds_doc", "e2e", "halt", "heartbeat"]
+          "url_allowlist", "thresholds_doc", "e2e", "halt", "secret_scan", "heartbeat"]
 PINNED = "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04"
 _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc")
 
@@ -747,3 +747,69 @@ def test_the_e2e_check_loads_the_checked_repos_own_harness(repo):
     found = results(repo)["e2e"]  # in-process: the real repo's scripts package is already imported
     assert found.status == "FAIL" and "copy harness ran" in found.reason
     assert results(ROOT)["e2e"].status == "PASS"
+
+
+# ---------------------------------------------------------------- 8. secret_scan (Task AQ)
+
+def _fake_key() -> str:
+    import secrets
+
+    return "0x" + secrets.token_hex(32)
+
+
+def test_the_secret_scan_check_passes_on_the_real_repo():
+    found = results(ROOT)["secret_scan"]
+    assert found.status == "PASS" and "self-test canaries detected" in found.reason, found
+
+
+def test_a_key_in_logs_fails_only_secret_scan_and_is_not_echoed(repo):
+    key = _fake_key()
+    (repo / "logs").mkdir()
+    (repo / "logs" / "bus.jsonl").write_text(
+        '{"from":"Quant","payload":{"note":"ok"}}\n{"from":"Quant","payload":{"private_key":"' + key + '"}}\n',
+        encoding="utf-8")
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "secret_scan")
+    assert "SEV-1 logs/bus.jsonl:2 rule=key_context:private_key len=66 sha256=" in lines["secret_scan"][1]
+    assert key not in out and key[2:] not in out
+
+
+def test_a_mnemonic_in_a_doc_fails_secret_scan(repo):
+    import random
+
+    from src import secret_scan
+
+    words = sorted(secret_scan.bip39_words())
+    phrase = " ".join(random.SystemRandom().choice(words) for _ in range(12))
+    with (repo / "docs" / "LOOP.md").open("a", encoding="utf-8") as handle:
+        handle.write("\n" + phrase + "\n")
+    code, lines, out = run(repo)
+    failed_only(lines, "secret_scan")
+    assert "rule=bip39_mnemonic len=12" in lines["secret_scan"][1]
+    assert phrase not in out
+
+
+def test_a_weakened_scanner_fails_its_self_test(repo):
+    edit(repo / "src" / "secret_scan.py", 'PEM_RE = re.compile(r"-----BEGIN', 'PEM_RE = re.compile(r"NEVER-----BEGIN')
+    code, lines, out = run(repo)
+    failed_only(lines, "secret_scan")
+    assert "self-test: canary for pem_private_key not detected" in lines["secret_scan"][1]
+
+
+def test_env_files_are_never_scanned(repo):
+    (repo / ".env").write_text("POLY_PRIVATE_KEY=" + _fake_key() + "\n", encoding="utf-8")
+    (repo / "logs").mkdir()
+    (repo / "logs" / ".env.local").write_text("POLY_PRIVATE_KEY=" + _fake_key() + "\n", encoding="utf-8")
+    code, lines, out = run(repo)
+    assert code == 0, out
+    failed_only(lines)
+
+
+def test_a_missing_word_list_fails_secret_scan(repo):
+    (repo / "src" / "bip39_english.txt").unlink()
+    code, lines, out = run(repo)
+    # fail closed: without the list no bus message can be checked, so the e2e, halt and heartbeat gates fail too
+    failed_only(lines, "e2e", "halt", "secret_scan", "heartbeat")
+    reason = lines["secret_scan"][1]
+    assert "self-test: cannot run (bip39 word list unreadable" in reason and "scan error: bip39 word list" in reason

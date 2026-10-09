@@ -153,6 +153,18 @@ MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S = 600.0
 # log-odds are source_conflict: no blend, no intent.
 MAX_SOURCE_LOGIT_GAP = 1.0
 
+# --- Secret-string scan of the bus and logs (Task AQ, Sentinel design gap 9) ------------------
+# src/secret_scan.py only. A hit is a global halt (SEV-1); each can only widen what is caught.
+# M2 pending. A value after a credential key name (private_key=, "api_secret": ...) counts as a
+# secret when it is at least this many token characters with a letter and a digit. Must be <= 32.
+SECRET_VALUE_MIN_LEN = 16
+# M2 pending. This many consecutive BIP39 words on one line is a mnemonic. Must be <= 12 (the
+# shortest standard phrase), so no 12-word phrase can slip through.
+MNEMONIC_MIN_WORDS = 12
+# M2 pending. Hex characters of the matched value's sha256 that a finding reports (to tell hits
+# apart without echoing them). Kept between 4 and 12 so the prefix never identifies a value.
+SECRET_HASH_PREFIX_CHARS = 8
+
 # --- Heartbeats and the resident Sentinel tick (Task AP, Poly哨兵 design gaps 2, 12, 13, 14) -------
 # Every value is a first value from the Sentinel design review (dev@f760e51), M2 pending. A
 # heartbeat older than its timeout (or unreadable, corrupt, malformed, or lost after it was written
@@ -277,6 +289,11 @@ def consistency_problems() -> list[str]:
         RESOLUTION_HOLD_HOURS > 0.0
     ):
         problems.append("RESOLUTION_HOLD_HOURS must be > 0")
+    for name, value, low, high in (("SECRET_VALUE_MIN_LEN", SECRET_VALUE_MIN_LEN, 8, 32),
+                                   ("MNEMONIC_MIN_WORDS", MNEMONIC_MIN_WORDS, 3, 12),
+                                   ("SECRET_HASH_PREFIX_CHARS", SECRET_HASH_PREFIX_CHARS, 4, 12)):
+        if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+            problems.append(f"{name} must be a whole number in [{low}, {high}]")
     return problems
 
 

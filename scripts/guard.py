@@ -50,7 +50,15 @@ scratch files in a temp folder outside the repo and remove it):
    global halt for RiskGate and paper_cycle; a market resume cannot lift a global halt; a resume
    not from Operator (or without approved_by) is rejected by halt_store and by the bus; both
    corrupt-ledger cases leave a global halt. Checked by meaning and against golden.json.
-8. heartbeat (Task AP): the heartbeat / resident Sentinel scenarios of the same offline run
+8. secret_scan (Task AQ, Sentinel design gap 9): the checked repo's own src/secret_scan.py scans
+   logs/ (the bus included, when the folder exists) and every tracked file (``git ls-files``; without
+   git, every file outside .git, .worktrees, virtualenvs, caches, data/ and logs/) for a private key,
+   mnemonic or credential value: a credential key name with a long token value, a PEM private-key
+   armour line, or 12+ consecutive BIP39 words. Never a bare 0x+64hex. A hit or an unreadable file
+   FAILs and is reported as file:line, rule, length and a sha256 prefix only (never the text). It
+   also runs the scanner's self-test on fresh random canaries, so a weakened rule FAILs. .env files
+   are never opened. Read only: the guard records no halt (python -m src.secret_scan does).
+9. heartbeat (Task AP): the heartbeat / resident Sentinel scenarios of the same offline run
    (e2e_offline.heartbeat_gate): a stale recorder heartbeat, a corrupt heartbeat and a lost
    Sentinel are global halts that veto intents; the exit-code event matrix (alert / log / global
    halt); a gap-resync storm halts its market only and a reconnect storm alerts; every market stale
@@ -710,7 +718,59 @@ def check_halt(root: Path) -> Result:
     return Result(name, PASS, summary)
 
 
-# ---------------------------------------------------------------- 8. heartbeat (Task AP)
+# ---------------------------------------------------------------- 8. secret_scan (Task AQ)
+
+SKIP_DIRS = frozenset({".git", ".worktrees", "venv", ".venv", "__pycache__", ".pytest_cache", "node_modules",
+                       "logs", "data"})
+
+
+def _walk_repo_files(root: Path) -> list[Path]:
+    found = []
+    for folder, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith(".venv"))
+        found += [Path(folder) / name for name in sorted(files)
+                  if not name.endswith(".pyc") and not (name == ".env" or name.startswith(".env."))]
+    return found
+
+
+def repo_files(root: Path) -> tuple[list[Path], str]:
+    """Tracked files (``git ls-files``) when root is a git checkout top, else a filtered walk."""
+    git = shutil.which("git")
+    if git is not None:
+        try:
+            top = subprocess.run([git, "-C", str(root), "rev-parse", "--show-toplevel"], capture_output=True,
+                                 timeout=30, check=False)
+            if top.returncode == 0 and _same_path(top.stdout.decode("utf-8", "replace").strip(), root):
+                listed = subprocess.run([git, "-C", str(root), "ls-files", "-z"], capture_output=True, timeout=60,
+                                        check=False)
+                if listed.returncode == 0:
+                    names = [n for n in listed.stdout.decode("utf-8", "replace").split("\0") if n]
+                    paths = [root / n for n in names
+                             if not (Path(n).name == ".env" or Path(n).name.startswith(".env."))]
+                    return [p for p in paths if p.is_file() and not p.is_symlink()], "tracked"
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return _walk_repo_files(root), "walked"
+
+
+def check_secret_scan(root: Path) -> Result:
+    name = "secret_scan"
+    scanner = _repo_module(root, "src.secret_scan")
+    problems = [f"self-test: {problem}" for problem in scanner.self_test()]
+    files, how = repo_files(root)
+    logs = root / "logs"
+    targets = files + ([logs] if logs.is_dir() else [])
+    findings, errors = scanner.scan_paths(targets, root)
+    problems += [f"SEV-1 {finding.line_text()}" for finding in findings]
+    problems += [f"scan error: {error}" for error in errors]
+    if problems:
+        return Result(name, FAIL, _summary(problems))
+    log_note = "logs/ scanned" if logs.is_dir() else "no logs/ folder"
+    return Result(name, PASS, f"no private key, mnemonic or credential value in {len(files)} {how} files; "
+                              f"{log_note}; self-test canaries detected")
+
+
+# ---------------------------------------------------------------- 9. heartbeat (Task AP)
 
 def check_heartbeat(root: Path) -> Result:
     name = "heartbeat"
@@ -736,11 +796,12 @@ def run_checks(root: Path, require_git: bool = False) -> list[Result]:
         lambda: check_thresholds_doc(root),
         lambda: check_e2e(root),
         lambda: check_halt(root),
+        lambda: check_secret_scan(root),
         lambda: check_heartbeat(root),
     ]
     results = []
     names = ["risk_sha_worktree", "risk_sha_head", "live_enabled", "banned_dependencies", "banned_imports",
-             "url_allowlist", "thresholds_doc", "e2e", "halt", "heartbeat"]
+             "url_allowlist", "thresholds_doc", "e2e", "halt", "secret_scan", "heartbeat"]
     for name, check in zip(names, checks):
         try:
             results.append(check())
@@ -758,7 +819,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="guard.py",
         description="M0 guard: offline, read-only safety checks (risk.toml pin, live_enabled, banned "
                     "packages and imports, URL allowlist, THRESHOLDS.md, the end-to-end offline gate, the halt consumer, "
-                    "heartbeats and the resident Sentinel).",
+                    "the secret-string scan of tracked files and logs/, heartbeats and the resident Sentinel).",
         epilog="Exit codes: 0 all checks pass (risk_sha_head may SKIP without git); 1 a check failed; "
                "2 usage error or no repo root found.",
     )

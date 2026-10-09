@@ -5,5 +5,5 @@
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AP (Sentinel heartbeat: heartbeat files, resident src/sentinel_tick.py event matrix, lost Sentinel = global halt, Reconciler halts in halt_store, stale-resume re-alarm, paper_cycle --recording-dir/--loop, guard check 10) done by grok-bot on dev@9f1b010. AQ (private-key scan) is a parallel task. M2 pending adds 17 heartbeat/Sentinel numbers (HEARTBEAT_*, SCANNER_HANG_S, SCANNER_MAX_SUCCESS_AGE_S, SCANNER_INCOMPLETE_CONSECUTIVE, SENTINEL_TICK_S, SENTINEL_HEARTBEAT_TIMEOUT_S, RECORDER_*, ALL_STALE_CONSECUTIVE_CYCLES). No open todo. No live gate."
+  "note": "AP (Sentinel heartbeat: heartbeat files, resident src/sentinel_tick.py event matrix, lost Sentinel = global halt, Reconciler halts in halt_store, stale-resume re-alarm, paper_cycle --recording-dir/--loop, guard check 11 heartbeat) done by grok-bot; merged origin/dev with AQ (#44 secret-string scan, guard check 10 secret_scan). M2 pending also has AQ's SECRET_VALUE_MIN_LEN, MNEMONIC_MIN_WORDS, SECRET_HASH_PREFIX_CHARS. M2 pending adds 17 heartbeat/Sentinel numbers (HEARTBEAT_*, SCANNER_HANG_S, SCANNER_MAX_SUCCESS_AGE_S, SCANNER_INCOMPLETE_CONSECUTIVE, SENTINEL_TICK_S, SENTINEL_HEARTBEAT_TIMEOUT_S, RECORDER_*, ALL_STALE_CONSECUTIVE_CYCLES). No open todo. No live gate."
 }
