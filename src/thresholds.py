@@ -53,8 +53,14 @@ ENDGAME_PRICE_MAX = 0.99
 ENDGAME_WINDOW_HOURS = 48.0
 
 # --- Other signal and ledger constants -----------------------------------------------------
-# Task H: SportsDevig's assumed slippage (price units) before an edge counts.
-SPORTS_DEVIG_ASSUMED_SLIPPAGE = 0.005
+# Task AT: the ONE assumed slippage (price units per share) added to the price before an edge counts.
+# M2 pending. Every user reads this value; the per-user names below are aliases, so no copy can drift
+# (consistency_problems fails the import if one does). 0.005 is the value SportsDevig (Task H), the
+# intent builder (Task AO), the paper_ledger CLI default and self-check and the e2e fixtures all used
+# before Task AT; no value moved.
+ASSUMED_SLIPPAGE = 0.005
+# Task H: SportsDevig's assumed slippage before an edge counts. Alias of ASSUMED_SLIPPAGE (Task AT).
+SPORTS_DEVIG_ASSUMED_SLIPPAGE = ASSUMED_SLIPPAGE
 # Task P: a leg with at most this many open shares counts as closed.
 LEDGER_OPEN_EPS = 1e-9
 # Task B: at most this many Reflector proposals per UTC day.
@@ -136,9 +142,9 @@ RESOLUTION_HOLD_HOURS = 48.0
 
 # --- Signal -> OrderIntent (Task AO, forecaster/SPEC_signal_to_intent.md) ------------------------
 # src/intent_builder.py only. Every one can only reject or shrink an intent (RiskGate still re-checks).
-# M2 pending. Price units added to the book-walk price before the edge counts (same 0.005 as the
-# e2e fixtures, the paper_ledger CLI default and SPORTS_DEVIG_ASSUMED_SLIPPAGE); RiskGate gets the same value.
-INTENT_ASSUMED_SLIPPAGE = 0.005
+# M2 pending. Price units added to the book-walk price before the edge counts; RiskGate gets the same
+# value. Alias of ASSUMED_SLIPPAGE (Task AT), so it moves only with it.
+INTENT_ASSUMED_SLIPPAGE = ASSUMED_SLIPPAGE
 # Share rounding step: shares are rounded DOWN to a multiple of this (never up past the size).
 INTENT_SHARE_STEP = 0.01
 # M2 pending. An intent expires at the earliest of now + this, book_ts + MAX_BOOK_AGE_S and
@@ -253,6 +259,11 @@ def consistency_problems() -> list[str]:
         problems.append("DATA_API_MAX_LAG_S and DATA_API_IDENTITY_TOL_USDC must be > 0")
     if not LEDGER_OPEN_EPS <= RECONCILE_SHARES_TOL:
         problems.append("RECONCILE_SHARES_TOL must be >= LEDGER_OPEN_EPS")
+    if not 0.0 <= ASSUMED_SLIPPAGE < 1.0:
+        problems.append("ASSUMED_SLIPPAGE must satisfy 0 <= ASSUMED_SLIPPAGE < 1")
+    if not SPORTS_DEVIG_ASSUMED_SLIPPAGE == INTENT_ASSUMED_SLIPPAGE == ASSUMED_SLIPPAGE:
+        problems.append("SPORTS_DEVIG_ASSUMED_SLIPPAGE and INTENT_ASSUMED_SLIPPAGE must equal ASSUMED_SLIPPAGE "
+                        "(Task AT: one slippage)")
     if not 0.0 <= INTENT_ASSUMED_SLIPPAGE < 1.0:
         problems.append("INTENT_ASSUMED_SLIPPAGE must satisfy 0 <= INTENT_ASSUMED_SLIPPAGE < 1")
     if not 0.0 < INTENT_SHARE_STEP <= 1.0:

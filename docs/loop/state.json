@@ -357,6 +357,15 @@
       "note": "Requested by Poly指挥 (backlog #4); done by grok-bot. Policy left to the Operator: netting realized gains against losses (not done: counting losses only is the tighter default). Newly fail-closed: counted rows with an unparseable ts, a side other than buy/sell, or negative shares / notional / fee (they used to be ignored or, for a negative fee, lowered the sum).",
       "done_at": "2026-10-09T09:00:57Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AT",
+      "status": "done",
+      "title": "One assumed slippage: ASSUMED_SLIPPAGE in src/thresholds.py is the single source (SPORTS_DEVIG_/INTENT_ASSUMED_SLIPPAGE aliases, paper_ledger literals removed, drift fails at import) and docs/ROLES.md matches RiskGate (no Kelly sizing; Kelly shadow-only in intent_builder)",
+      "finish": "src/thresholds.py: ASSUMED_SLIPPAGE = 0.005 (M2 pending) is the only slippage literal; SPORTS_DEVIG_ASSUMED_SLIPPAGE and INTENT_ASSUMED_SLIPPAGE are aliases and consistency_problems fails the import if either differs; src/paper_ledger.py CLI --slippage default, self-check intents and the no-edge touch filter read it. Every copy was 0.005, so no number, veto or golden moved. tests/test_slippage_unified.py (no float 0.005 literal in src/ or scripts/ outside thresholds.py, e2e fixtures equal the constant, ROLES row, RiskGate never reads kelly_fraction); tests/test_thresholds.py and docs/THRESHOLDS.md updated. docs/ROLES.md RiskGate row: hard 1% cap and the veto checks, Kelly only in shadow mode in src/intent_builder.py, never used for size. README edge formula follows src/fees.py. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (queue after EXIT_CODES and daily_loss-realized; SPEC_signal_to_intent inconsistencies 1 and 2); done by grok-bot. AS (EXIT_CODES + runtime pins) ran in parallel. Not done: a RiskGate floor vetoing assumed_slippage below ASSUMED_SLIPPAGE (new veto; callers such as the paper_ledger CLI can still pass a lower value). Kelly enforcement stays KEY (backlog #7).",
+      "done_at": "2026-10-09T09:29:18Z",
+      "surface": "grok-bot"
     }
   ]
 }
