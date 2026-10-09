@@ -139,6 +139,54 @@ def append_jsonl(path: Path, row: dict[str, Any]) -> None:
         handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+# Issue #55: a shared-bus append that cannot serialize or write its message records one global halt
+# at once and fails to its caller. Fixed, redacted reason code (a diagnostic string, not a number).
+BUS_WRITE_HALT_CODE = "bus_write_failed"
+
+
+class BusWriteError(RuntimeError):
+    """A bus message could not be serialized or appended (issue #55): it was NOT published.
+
+    The diagnostic is fixed and redacted: the reason code, the failing error's type and the
+    role / message type - never the payload and never the raw error text. ``halt_persisted`` says
+    truthfully where the global halt record landed: halt_store's PERSISTED_STATE ("state"),
+    PERSISTED_FALLBACK ("fallback") after a failed state write (the existing logs/HALT fallback),
+    or "none" when even that failed - nothing then claims the halt is stored.
+    """
+
+    def __init__(self, code: str, error_type: str, role: str, kind: str, halt_persisted: str) -> None:
+        self.code = code
+        self.error_type = error_type
+        self.role = role
+        self.kind = kind
+        self.halt_persisted = halt_persisted
+        super().__init__(f"{code} error={error_type} role={role} type={kind} halt_persisted={halt_persisted}")
+
+
+def _bus_append_failed(frm: str, to: str, kind: str, exc: BaseException) -> BusWriteError:
+    """Record one global halt for a failed bus append and build the sanitized failure (issue #55).
+
+    The halt goes straight to halt_store.record_halt, never through bus(): a bus that cannot append
+    cannot carry its own halt (no recursion). A failed halt-state write keeps the existing logs/HALT
+    fallback; when even that fails (or recording raises) the error says ``halt_persisted=none`` and
+    claims nothing was stored. Only the reason code, the error type and the role / message type are
+    recorded; the payload and the raw error text are never echoed.
+    """
+    error_type = type(exc).__name__
+    role = f"{frm}->{to}"
+    reason = f"{BUS_WRITE_HALT_CODE} error={error_type} role={role} type={kind}"
+    persisted = "none"
+    try:
+        from src import halt_store  # local: halt_store imports podlib (no import cycle)
+
+        record = halt_store.record_halt(scope=halt_store.SCOPE_GLOBAL, reason=reason, source=frm)
+        where = record.get("persisted")
+        persisted = where if where in (halt_store.PERSISTED_STATE, halt_store.PERSISTED_FALLBACK) else "none"
+    except Exception:  # noqa: BLE001 - the failure below still reaches the caller
+        persisted = "none"
+    return BusWriteError(BUS_WRITE_HALT_CODE, error_type, role, kind, persisted)
+
+
 def canonical_role(name: str) -> str:
     """Return the ROSTER bus name for a legacy role name; any other name is returned unchanged."""
     return ROLE_ALIASES.get(name, name)
@@ -173,7 +221,13 @@ def bus(
     # Task AQ (Sentinel design gap 9): a message holding a private key, mnemonic or credential value
     # is never written; a global halt is recorded and SecretRefused raised (nothing echoed).
     _secret_check(message)
-    append_jsonl(path or BUS_PATH, message)
+    # Issue #55: a serialization or append failure records one global halt (fixed redacted reason,
+    # straight through halt_store, never through this bus) and is raised to the caller - the message
+    # was not published. The validations above keep their own errors unchanged.
+    try:
+        append_jsonl(path or BUS_PATH, message)
+    except (OSError, ValueError, TypeError) as exc:
+        raise _bus_append_failed(frm, to, kind, exc) from None
     return message
 
 
