@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 
 import pytest
 
@@ -405,6 +406,109 @@ def test_resume_of_a_corrupt_state_moves_it_aside(tmp_path):
     assert _veto("m1") == []
     bad = [p for p in halt_store.HALT_STATE_PATH.parent.iterdir() if ".bad-" in p.name]
     assert len(bad) == 1 and bad[0].read_text(encoding="utf-8") == "{bad"
+
+
+# ---------------------------------------------------------------- issue #52: concurrent read-modify-write
+
+def test_a_global_halt_added_during_a_market_resume_is_not_overwritten(tmp_path, monkeypatch):
+    """The issue #52 regression, deterministic: another writer's record_halt lands at the resume's
+    bus step (between the resume's read and its write-back). The resume re-reads under the shared
+    mutex and releases only its own id: the new global halt survives and still blocks other markets."""
+    old = halt_store.record_halt(scope="market", market="m1", reason="stale_book", source="Sentinel")
+    added = {}
+    real_bus = podlib.bus
+
+    def bus_then_halt(*args, **kwargs):
+        added["record"] = halt_store.record_halt(scope="global", reason="ledger_integrity", source="Executor")
+        return real_bus(*args, **kwargs)
+
+    monkeypatch.setattr(halt_store, "bus", bus_then_halt)
+    result = _resume(old["id"], "market", tmp_path, market="m1")
+    assert result["released"] == old["id"]
+    assert added["record"]["persisted"] == halt_store.PERSISTED_STATE
+    rows = json.loads(halt_store.HALT_STATE_PATH.read_text(encoding="utf-8"))["halts"]
+    assert [(r["scope"], r["reason"], r["active"]) for r in rows] == [
+        ("market", "stale_book", False), ("global", "ledger_integrity", True)]
+    assert halt_store.halt_problems("m1") == [f"halt_global:{added['record']['id']}"]  # only its own id released
+    assert halt_store.halt_problems("m2") == [f"halt_global:{added['record']['id']}"]  # other market still blocked
+
+
+def test_two_concurrent_record_halt_calls_keep_both_records(monkeypatch):
+    """Two writers racing (issue #52): the second record_halt starts while the first is between
+    its read and its write-back. The shared mutex serialises them and both records survive."""
+    real_write, real_lock = halt_store._atomic_write, halt_store.StateLock
+    holder: dict[str, threading.Thread] = {}
+    second_started, second = threading.Event(), {}
+
+    class SignallingLock(real_lock):
+        def acquire(self):
+            if threading.current_thread() is holder.get("second"):
+                second_started.set()
+            return super().acquire()
+
+    def second_record():
+        second["record"] = halt_store.record_halt(scope="global", reason="raced_global", source="Executor")
+
+    def write_after_race(target, records):
+        if "second" not in holder:
+            holder["second"] = threading.Thread(target=second_record, name="second-record")
+            holder["second"].start()
+            assert second_started.wait(10)  # the other writer is at the mutex (or past it, unlocked)
+        return real_write(target, records)
+
+    monkeypatch.setattr(halt_store, "StateLock", SignallingLock)
+    monkeypatch.setattr(halt_store, "_atomic_write", write_after_race)
+    first = halt_store.record_halt(scope="market", market="m1", reason="raced_market", source="Sentinel")
+    holder["second"].join(10)
+    assert first["persisted"] == halt_store.PERSISTED_STATE and second["record"]["persisted"] == halt_store.PERSISTED_STATE
+    rows = json.loads(halt_store.HALT_STATE_PATH.read_text(encoding="utf-8"))["halts"]
+    assert [(r["scope"], r["reason"], r["active"]) for r in rows] == [
+        ("market", "raced_market", True), ("global", "raced_global", True)]  # final records are complete
+    assert halt_store.halt_problems("m2") == [f"halt_global:{second['record']['id']}"]  # other market still blocked
+
+
+def test_a_resume_refuses_to_release_when_the_state_mutex_is_held(tmp_path, monkeypatch):
+    """issue #52: when the mutex cannot be taken the resume is refused and the halt stays in force."""
+    rec = halt_store.record_halt(scope="market", market="m1", reason="r", source="Sentinel")
+    monkeypatch.setattr(halt_store, "HALT_STATE_LOCK_TIMEOUT_S", 0.1)
+    held = halt_store.StateLock(halt_store.state_path())
+    assert held.acquire()
+    try:
+        with pytest.raises(halt_store.ResumeRejected) as info:
+            _resume(rec["id"], "market", tmp_path, market="m1")
+        assert info.value.reason == halt_store.LOCK_FAILED
+    finally:
+        held.release()
+    assert halt_store.halt_problems("m1") == [f"halt_market:{rec['id']}"]  # still halted, nothing released
+
+
+def test_record_halt_falls_back_to_logs_halt_when_the_state_mutex_is_held(monkeypatch):
+    """issue #52: a writer that cannot take the mutex never writes unguarded; the halt still blocks."""
+    monkeypatch.setattr(halt_store, "HALT_STATE_LOCK_TIMEOUT_S", 0.1)
+    held = halt_store.StateLock(halt_store.state_path())
+    assert held.acquire()
+    try:
+        record = halt_store.record_halt(scope="global", reason="raced", source="Executor")
+    finally:
+        held.release()
+    assert record["persisted"] == halt_store.PERSISTED_FALLBACK
+    assert record["state_problem"] == halt_store.LOCK_FAILED
+    assert not halt_store.HALT_STATE_PATH.exists()  # nothing was written outside the mutex
+    assert _veto("m2") == [halt_store.FALLBACK_ACTIVE]  # fail closed: every market is still blocked
+
+
+def test_a_resume_write_failure_releases_nothing(tmp_path, monkeypatch):
+    """issue #52: a failed write-back refuses the resume and keeps the halt in force."""
+    rec = halt_store.record_halt(scope="market", market="m1", reason="r", source="Sentinel")
+
+    def broken_write(path, rows):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(halt_store, "_atomic_write", broken_write)
+    with pytest.raises(halt_store.ResumeRejected) as info:
+        _resume(rec["id"], "market", tmp_path, market="m1")
+    assert info.value.reason == "release_write_failed"
+    assert halt_store.halt_problems("m1") == [f"halt_market:{rec['id']}"]
 
 
 # ---------------------------------------------------------------- bus rules

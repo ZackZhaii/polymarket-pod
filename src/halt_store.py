@@ -17,8 +17,17 @@ RiskGate, paper_cycle and the Maker read it before they act:
   market-level resume can never lift a global halt (and a global resume does not lift a
   market halt: the scope must match the halt). The resume is logged on the bus (type
   ``resume``) before the halt is released; if that bus write fails nothing is released.
+* Issue #52: ``record_halt`` and a normal-record ``resume`` share one cross-process mutex
+  (``StateLock``) and hold it across the halt-state read, the validation and the write-back, so
+  two processes can never interleave those steps and overwrite each other's records. A resume
+  re-reads and re-validates inside the mutex and flips only its own ``halt_ref`` id: a halt
+  another process added meanwhile (market or global) is never dropped. If the mutex cannot be
+  taken or the write fails, the resume is refused (``ResumeRejected``) and every halt stays in
+  force (the bus line is already logged: nothing is released after it).
 
-No network, no orders, no exchange action, no edits to config/risk.toml. No new thresholds.
+No network, no orders, no exchange action, no edits to config/risk.toml. The only new numbers are
+the halt-state mutex timings (HALT_STATE_LOCK_TIMEOUT_S, HALT_STATE_LOCK_POLL_S in
+src/thresholds.py, M2 pending).
 """
 from __future__ import annotations
 
@@ -28,6 +37,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +46,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.podlib import LOG_DIR, bus, canonical_role, utc_now  # noqa: E402
+from src.thresholds import HALT_STATE_LOCK_POLL_S, HALT_STATE_LOCK_TIMEOUT_S  # noqa: E402
 
 HALT_STATE_PATH = LOG_DIR / "halt_state.json"
 HALT_FALLBACK_PATH = LOG_DIR / "HALT"
@@ -61,6 +72,9 @@ FALLBACK_ACTIVE = "halt_file"
 PERSISTED_STATE = "state"
 PERSISTED_FALLBACK = "fallback"
 PERSISTED_NONE = "none"
+
+# Issue #52: refused release / unguarded write when the halt-state mutex cannot be taken.
+LOCK_FAILED = "halt_lock_failed"
 
 
 class ResumeRejected(ValueError):
@@ -260,6 +274,88 @@ def global_halt_active(path: Path | None = None, fallback: Path | None = None) -
         return [CHECK_FAILED]
 
 
+# ---------------------------------------------------------------- cross-process mutex (issue #52)
+
+if os.name == "nt":  # the Windows dev machines
+    import msvcrt
+
+    def _lock_fd(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+
+    def _unlock_fd(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+else:  # CI runs Linux
+    import fcntl
+
+    def _lock_fd(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _unlock_fd(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def state_lock_path(path: Path | None = None) -> Path:
+    """The mutex file beside a halt state file. It is never deleted, only locked, so the mutex
+    always lives on a path no writer replaces."""
+    target = state_path(path)
+    return target.with_name(target.name + ".lock")
+
+
+class StateLock:
+    """One cross-process mutex over a halt-state read-modify-write (issue #52).
+
+    ``record_halt`` and a normal-record ``resume`` take this mutex and hold it across the read,
+    the validation and the write-back of the state file, so two writers can never interleave
+    those steps and overwrite each other's records. The lock is the platform byte lock
+    (``msvcrt.locking`` on Windows, ``fcntl.flock`` elsewhere) on ``<state file>.lock``, waited
+    for at most HALT_STATE_LOCK_TIMEOUT_S in HALT_STATE_LOCK_POLL_S steps.
+
+    ``acquire()`` is False when the mutex is held elsewhere or the lock file cannot be opened:
+    the caller must fail closed then and never run an unguarded read-modify-write.
+    """
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = state_lock_path(path)
+        self._fd: int | None = None
+
+    def acquire(self) -> bool:
+        deadline = time.monotonic() + HALT_STATE_LOCK_TIMEOUT_S
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError:
+            return False
+        while True:
+            try:
+                _lock_fd(fd)
+                self._fd = fd
+                return True
+            except OSError:
+                if time.monotonic() >= deadline:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                    return False
+                time.sleep(HALT_STATE_LOCK_POLL_S)
+
+    def release(self) -> None:
+        fd, self._fd = self._fd, None
+        if fd is None:
+            return
+        try:
+            _unlock_fd(fd)
+        except OSError:
+            pass  # closing the fd drops the OS lock either way
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 # ---------------------------------------------------------------- writing
 
 def _atomic_write(path: Path, records: list[dict[str, Any]]) -> None:
@@ -321,8 +417,10 @@ def record_halt(
 
     An identical active halt (same scope, market, source and reason) is returned as is. If the
     state file is bad it is left untouched as evidence (that is already a global halt) and the
-    halt goes to logs/HALT; so does a failed write. ``persisted="none"`` means even logs/HALT
-    failed: the caller must still treat the halt as active.
+    halt goes to logs/HALT; so does a failed write, and so does a halt-state mutex that cannot be
+    taken (issue #52: the read, the duplicate check and the write-back run under the shared
+    cross-process mutex, never as an unguarded read-modify-write). ``persisted="none"`` means
+    even logs/HALT failed: the caller must still treat the halt as active.
     """
     if scope not in SCOPES:
         raise ValueError("halt scope must be global or market")
@@ -337,22 +435,30 @@ def record_halt(
         raise ValueError("halt reason and source required")
     stamp = ts or utc_now()
     target = state_path(path)
-    records, problem = read_state(target)
     record: dict[str, Any] = {"scope": scope, "market": market, "reason": reason, "source": source, "ts": stamp,
                               "active": True}
-    if problem is None:
-        for existing in records:
-            if existing["active"] and all(existing[k] == record[k] for k in ("scope", "market", "reason", "source")):
-                return dict(existing, persisted=PERSISTED_STATE, duplicate=True)
-        record["id"] = _halt_id(len(records) + 1, stamp, scope, market, source, reason)
+    mutex = StateLock(target)
+    if mutex.acquire():
         try:
-            _atomic_write(target, records + [record])
-            return dict(record, persisted=PERSISTED_STATE)
-        except (OSError, ValueError, TypeError):
-            pass
+            records, problem = read_state(target)
+            if problem is None:
+                for existing in records:
+                    if existing["active"] and all(existing[k] == record[k] for k in ("scope", "market", "reason", "source")):
+                        return dict(existing, persisted=PERSISTED_STATE, duplicate=True)
+                record["id"] = _halt_id(len(records) + 1, stamp, scope, market, source, reason)
+                try:
+                    _atomic_write(target, records + [record])
+                    return dict(record, persisted=PERSISTED_STATE)
+                except (OSError, ValueError, TypeError):
+                    pass
+            else:
+                record["id"] = _halt_id(0, stamp, scope, market, source, reason)
+                record["state_problem"] = problem
+        finally:
+            mutex.release()
     else:
         record["id"] = _halt_id(0, stamp, scope, market, source, reason)
-        record["state_problem"] = problem
+        record["state_problem"] = LOCK_FAILED
     line = f"{stamp} halt id={record['id']} scope={scope} market={market or '-'} source={source} reason={reason}"
     persisted = PERSISTED_FALLBACK if write_fallback(line, fallback) else PERSISTED_NONE
     return dict(record, persisted=persisted)
@@ -383,7 +489,11 @@ def resume(
     """Release exactly one active halt. Raises ResumeRejected (nothing released) on any doubt.
 
     Order: validate, write the ``resume`` bus line (from=Operator), then release. A failed bus
-    write releases nothing. Special halt ids: ``halt-file`` (logs/HALT, renamed aside so the
+    write releases nothing. Issue #52: the release is a halt-state read-modify-write, so it runs
+    under the shared cross-process mutex (StateLock) and re-reads and re-validates inside it,
+    flipping only ``halt_ref``'s id — a halt a concurrent process added is never overwritten.
+    When the mutex cannot be taken or the write fails, ResumeRejected is raised and every halt
+    stays in force. Special halt ids: ``halt-file`` (logs/HALT, renamed aside so the
     evidence stays) and ``halt-state-problem`` (the bad state file is moved aside and a fresh
     state written); both are global and need ``scope="global"``.
     """
@@ -430,22 +540,44 @@ def resume(
     stamp = message["ts"]
     resolved = {"ts": stamp, "approved_by": approved, "root_cause": cause, "postmortem": post}
 
+    # Issue #52: release under the shared halt-state mutex, as one read-validate-write transaction.
+    mutex = StateLock(target)
+    if not mutex.acquire():
+        raise ResumeRejected(LOCK_FAILED,
+                             f"{state_lock_path(target).name} busy after {HALT_STATE_LOCK_TIMEOUT_S}s")
     try:
-        if halt_id == FALLBACK_ID:
-            src = fallback_path(fallback)
-            os.replace(src, src.with_name(f"{src.name}.resolved-{stamp.replace(':', '')}"))
-        elif halt_id == STATE_PROBLEM_ID:
-            if target.exists():
-                os.replace(target, target.with_name(f"{target.name}.bad-{stamp.replace(':', '')}"))
-            note = {"id": _halt_id(1, stamp, SCOPE_GLOBAL, "", "halt_store", str(problem)), "scope": SCOPE_GLOBAL,
-                    "market": "", "reason": str(problem), "source": "halt_store", "ts": stamp, "active": False,
-                    "resolved": resolved}
-            _atomic_write(target, [note])
-        else:
-            updated = [dict(r, active=False, resolved=resolved) if r["id"] == halt_id else r for r in records]
-            _atomic_write(target, updated)
-    except (OSError, ValueError, TypeError) as exc:
-        raise ResumeRejected("release_write_failed", f"{type(exc).__name__}: {exc}") from exc
+        try:
+            if halt_id == FALLBACK_ID:
+                src = fallback_path(fallback)
+                os.replace(src, src.with_name(f"{src.name}.resolved-{stamp.replace(':', '')}"))
+            elif halt_id == STATE_PROBLEM_ID:
+                if target.exists():
+                    os.replace(target, target.with_name(f"{target.name}.bad-{stamp.replace(':', '')}"))
+                note = {"id": _halt_id(1, stamp, SCOPE_GLOBAL, "", "halt_store", str(problem)), "scope": SCOPE_GLOBAL,
+                        "market": "", "reason": str(problem), "source": "halt_store", "ts": stamp, "active": False,
+                        "resolved": resolved}
+                _atomic_write(target, [note])
+            else:
+                records, problem = read_state(target)  # the mutex covers read, validation and write-back
+                if problem is not None:
+                    raise ResumeRejected("halt_state_problem", f"{problem}: resume {STATE_PROBLEM_ID} first")
+                current = next((r for r in records if r["id"] == halt_id), None)
+                if current is None or not current["active"]:
+                    raise ResumeRejected("halt_ref_not_active", halt_id)
+                if current["scope"] == SCOPE_GLOBAL and scope != SCOPE_GLOBAL:
+                    raise ResumeRejected("market_resume_cannot_lift_global", halt_id)
+                if current["scope"] != scope:
+                    raise ResumeRejected("scope_mismatch", f"halt is {current['scope']}, resume is {scope}")
+                if scope == SCOPE_MARKET and market and market != current["market"]:
+                    raise ResumeRejected("market_mismatch", f"halt is {current['market']!r}")
+                updated = [dict(r, active=False, resolved=resolved) if r["id"] == halt_id else r for r in records]
+                _atomic_write(target, updated)
+        except ResumeRejected:
+            raise  # a doubt about the halt itself, not a write failure
+        except (OSError, ValueError, TypeError) as exc:
+            raise ResumeRejected("release_write_failed", f"{type(exc).__name__}: {exc}") from exc
+    finally:
+        mutex.release()
     return {"released": halt_id, "scope": scope, "message": message}
 
 

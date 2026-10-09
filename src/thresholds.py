@@ -219,6 +219,17 @@ RECORDER_GAP_RESYNC_HALT_COUNT = 3
 ALL_STALE_CONSECUTIVE_CYCLES = 2
 
 
+# --- Halt-state read-modify-write mutex (issue #52) ------------------------------------------
+# M2 pending. record_halt and a normal-record resume share one cross-process mutex and hold it
+# across the halt-state read, the validation and the write-back, so two processes can never
+# interleave those steps and overwrite each other's halt records (a market resume used to drop a
+# concurrent new global halt). Fail closed when the mutex cannot be taken within this long
+# (seconds): a resume releases nothing (halt_lock_failed), record_halt goes to logs/HALT.
+HALT_STATE_LOCK_TIMEOUT_S = 5.0
+# M2 pending. Retry step (seconds) while waiting for the halt-state mutex.
+HALT_STATE_LOCK_POLL_S = 0.05
+
+
 # --- Runtime pin checks (Task AS, Poly哨兵 design gaps 5 and 6) -----------------------------
 # M2 pending. A running ws_recorder / m1_run (and paper_cycle --loop, every cycle) re-reads
 # config/risk.toml and checks every pinned key and its sha256 at least this often; drift stops the
@@ -368,6 +379,8 @@ def consistency_problems() -> list[str]:
         0.0 < PIN_RECHECK_S <= SENTINEL_HEARTBEAT_TIMEOUT_S
     ):
         problems.append("PIN_RECHECK_S must be in (0, SENTINEL_HEARTBEAT_TIMEOUT_S]")
+    if not 0.0 < HALT_STATE_LOCK_POLL_S < HALT_STATE_LOCK_TIMEOUT_S:
+        problems.append("halt-state mutex must satisfy 0 < HALT_STATE_LOCK_POLL_S < HALT_STATE_LOCK_TIMEOUT_S")
     # Task AZ: M3 calibration report.
     for name in ("CALIBRATION_MIN_SAMPLES", "CALIBRATION_MIN_MARKETS", "CALIBRATION_MIN_RESOLUTION_DAYS",
                  "CALIBRATION_GROUP_MIN_SAMPLES", "CALIBRATION_GROUP_MIN_MARKETS",
