@@ -54,6 +54,10 @@ CLI: ``python -m src.reconcile --user 0x<40 hex> [--ledger PATH] [--bus PATH] [-
 Exit codes: 0 reconciled; 1 mismatch (data valid, numbers disagree); 2 usage; 3 Data API unusable
 (network/HTTP error, malformed or missing field, incomplete walk); 4 ledger invalid. Every non-zero
 exit except 2 writes one ``halt`` bus message from Reconciler (``exchange_action: none``).
+Task AP (AL follow-up): that halt now goes through sentinel.halt, so it is first persisted in the
+halt store (logs/halt_state.json) as a GLOBAL halt from source Reconciler, which RiskGate, the
+Maker and paper_cycle obey until the Operator resumes it; open paper quotes are closed by it; a
+failed record, quote or bus step falls back to logs/HALT. The bus line keeps market ``*``.
 """
 from __future__ import annotations
 
@@ -459,9 +463,14 @@ def main(argv: list[str] | None = None, getter: Getter = public_get) -> int:
         return EXIT_OK if exc.code == 0 else EXIT_USAGE
     report = reconcile(args.user, args.ledger, getter)
     if report.exit_code not in (EXIT_OK, EXIT_USAGE):
-        bus("Reconciler", "Sentinel", "halt", "*",
-            {"reason": "reconcile_failed", "exit_code": report.exit_code, "problems": report.problems[:50],
-             "exchange_action": "none", "live_enabled": False}, path=args.bus)
+        from src import sentinel  # local: only a failing run needs the halt path
+
+        def emit(frm: str, to: str, kind: str, market: str, payload: dict, path: Path | None = None) -> dict:
+            return bus(frm, to, kind, "*", payload, path=path)
+
+        sentinel.halt(reason=f"reconcile_failed exit={report.exit_code}", scope="global", source="Reconciler",
+                      to="Sentinel", bus_path=args.bus, emit=emit,
+                      extra={"exit_code": report.exit_code, "problems": report.problems[:50], "live_enabled": False})
     if args.json:
         print(json.dumps(report.as_dict(), ensure_ascii=False, sort_keys=True))
     else:

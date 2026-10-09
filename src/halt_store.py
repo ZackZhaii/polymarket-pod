@@ -49,6 +49,7 @@ OPERATOR = "Operator"
 # Synthetic global halts (never stored as records): the fallback file and a bad state file.
 FALLBACK_ID = "halt-file"
 STATE_PROBLEM_ID = "halt-state-problem"
+SENTINEL_LOST_ID = "sentinel-lost"  # Task AP: only while the lost-Sentinel halt could not be stored
 
 STATE_MISSING = "halt_state_missing"
 STATE_UNREADABLE = "halt_state_unreadable"
@@ -90,7 +91,7 @@ def _valid_record(record: object) -> bool:
     if not isinstance(record, dict):
         return False
     rid, scope, market = record.get("id"), record.get("scope"), record.get("market")
-    if not isinstance(rid, str) or not rid or rid in (FALLBACK_ID, STATE_PROBLEM_ID):
+    if not isinstance(rid, str) or not rid or rid in (FALLBACK_ID, STATE_PROBLEM_ID, SENTINEL_LOST_ID):
         return False
     if scope not in SCOPES or not isinstance(market, str):
         return False
@@ -153,10 +154,51 @@ def fallback_active(fallback: Path | None = None) -> bool:
     return True
 
 
+SENTINEL_LOST_PREFIX = "sentinel_heartbeat_"
+
+
+def sentinel_heartbeat_problem() -> str | None:
+    """Task AP (design: "Sentinel 失联时 consumer 按 halt"): the halt reason when the resident Sentinel
+    is lost, else None. Only after the Sentinel has beaten once (its ``.seen`` marker): then a missing,
+    unreadable, corrupt, malformed, future-stamped or too-old (SENTINEL_HEARTBEAT_TIMEOUT_S) Sentinel
+    heartbeat, or a Sentinel that finished or crashed, is a global halt. Any error while checking is too.
+    """
+    try:
+        from src import heartbeat  # local: heartbeat imports podlib only
+        from src.thresholds import SENTINEL_HEARTBEAT_TIMEOUT_S
+
+        record, problem = heartbeat.read_beat(heartbeat.beat_path("sentinel"), "sentinel")
+        if problem is not None:
+            return SENTINEL_LOST_PREFIX + problem.replace("heartbeat_", "")
+        if record is None:
+            return None  # the Sentinel has never run here: nothing to lose yet
+        if record["state"] in (heartbeat.STATE_FINISHED, heartbeat.STATE_CRASHED):
+            return SENTINEL_LOST_PREFIX + "stopped"
+        age = heartbeat.beat_age_s(record, heartbeat.datetime.now(heartbeat.timezone.utc))
+        if age is None or age > SENTINEL_HEARTBEAT_TIMEOUT_S:
+            return SENTINEL_LOST_PREFIX + "stale"
+        return None
+    except Exception:  # noqa: BLE001 - a broken check is a lost Sentinel (fail closed)
+        return SENTINEL_LOST_PREFIX + "check_failed"
+
+
 def active_halts(path: Path | None = None, fallback: Path | None = None) -> list[dict[str, Any]]:
-    """Every halt now in force, the synthetic global ones (bad state file, logs/HALT) included."""
+    """Every halt now in force, the synthetic global ones (bad state file, logs/HALT) included.
+
+    Task AP: a lost resident Sentinel (sentinel_heartbeat_problem) is persisted here as a global
+    halt from source halt_store, so it too stays until the Operator resumes it (and is recorded
+    again at once if the Sentinel is still lost after the resume).
+    """
     records, problem = read_state(path)
+    lost = sentinel_heartbeat_problem()
+    if lost is not None and problem is None:
+        record_halt(scope=SCOPE_GLOBAL, reason=lost, source="halt_store", path=path, fallback=fallback)
+        records, problem = read_state(path)
     active = [record for record in records if record["active"]]
+    if lost is not None and not any(r["scope"] == SCOPE_GLOBAL and r["reason"] == lost for r in active):
+        # the state file could not take it (already a global halt) or the write went to logs/HALT
+        active.append({"id": SENTINEL_LOST_ID, "scope": SCOPE_GLOBAL, "market": "", "reason": lost,
+                       "source": "halt_store", "active": True})
     if problem is not None:
         active.append({"id": STATE_PROBLEM_ID, "scope": SCOPE_GLOBAL, "market": "", "reason": problem,
                        "source": "halt_store", "active": True})
@@ -181,6 +223,8 @@ def halt_problems(market: object, path: Path | None = None, fallback: Path | Non
                 reasons.append(record["reason"])
             elif record["id"] == FALLBACK_ID:
                 reasons.append(FALLBACK_ACTIVE)
+            elif record["id"] == SENTINEL_LOST_ID:
+                reasons.append(record["reason"])
             elif record["scope"] == SCOPE_GLOBAL:
                 reasons.append(f"halt_global:{record['id']}")
             elif record["market"] == key and key:
@@ -188,6 +232,24 @@ def halt_problems(market: object, path: Path | None = None, fallback: Path | Non
         return reasons
     except Exception:  # noqa: BLE001 - any failure to check is a halt (fail closed)
         return [CHECK_FAILED]
+
+
+def has_active_halt(*, scope: str, market: str = "", reason_prefix: str = "", path: Path | None = None) -> bool | None:
+    """Task AP: is a stored, active halt with this scope/market and reason prefix in force?
+
+    None when the state file cannot be read (that is already a global halt; the caller must not
+    treat None as "no halt"). Used to re-alarm at once after an Operator resume when the cause is
+    still there (a stale book, a lost process), without writing a duplicate halt every check.
+    """
+    try:
+        records, problem = read_state(path)
+        if problem is not None:
+            return None
+        key = str(market or "") if scope == SCOPE_MARKET else ""
+        return any(r["active"] and r["scope"] == scope and r["market"] == key and r["reason"].startswith(reason_prefix)
+                   for r in records)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def global_halt_active(path: Path | None = None, fallback: Path | None = None) -> list[str]:

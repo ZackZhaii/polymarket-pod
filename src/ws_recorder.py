@@ -75,6 +75,11 @@ CLI: ``python -m src.ws_recorder --assets TOKEN [TOKEN ...] --max-runtime SECOND
 --max-runtime and wrote at least one book row; 1 wrote no book row (no usable snapshot);
 2 usage error; 3 the optional ``websockets`` package is not installed; 4 writing the output file
 failed (the recorder stops instead of reconnecting).
+
+Task AP (Sentinel design gaps 2 and 13): the CLI writes logs/heartbeat/ws_recorder.json every
+HEARTBEAT_RECORDER_EVERY_S (10 s, also while backing off) and a last beat with the exit code; the
+heartbeat progress carries the sliding-window reconnect and gap-resync counts (class Escalation)
+that src/sentinel_tick.py escalates on. Nothing here changes what a row says or when a book is fresh.
 """
 from __future__ import annotations
 
@@ -84,7 +89,7 @@ import math
 import os
 import sys
 import time
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
@@ -98,6 +103,10 @@ from src.book import book_timestamp  # noqa: E402
 from src.book_staleness import INVALID_BOOK_TS, latest_by_time  # noqa: E402
 from src.podlib import BOOKS_PATH, MARKETS_PATH, read_jsonl, utc_now  # noqa: E402
 from src.thresholds import (  # noqa: E402
+    HEARTBEAT_RECORDER_EVERY_S,
+    RECORDER_ESCALATION_WINDOW_S,
+    RECORDER_GAP_RESYNC_HALT_COUNT,
+    RECORDER_RECONNECT_ALERT_COUNT,
     WS_BACKOFF_BASE_S,
     WS_BACKOFF_CAP_S,
     WS_PING_INTERVAL_S,
@@ -838,6 +847,52 @@ class RunReport:
     ended_by: str = ""  # "deadline" or "stopped" (Task AI)
 
 
+class Escalation:
+    """Task AP (Sentinel design gap 13): sliding-window counts the recorder reports in its heartbeat.
+
+    ``reconnects_in_window``: connect attempts after the first (a failed connect or a disconnect)
+    within RECORDER_ESCALATION_WINDOW_S. ``gap_resyncs_in_window``: per asset, resyncs not caused by a
+    disconnect within the window. src/sentinel_tick.py alerts at RECORDER_RECONNECT_ALERT_COUNT
+    reconnects and halts the asset's market at RECORDER_GAP_RESYNC_HALT_COUNT gap resyncs.
+    """
+
+    def __init__(self, window_s: float = RECORDER_ESCALATION_WINDOW_S,
+                 monotonic: Callable[[], float] | None = None) -> None:
+        self.window_s = float(window_s)
+        self.monotonic = monotonic or time.monotonic
+        self.reconnects: deque[float] = deque()
+        self.gaps: dict[str, deque[float]] = {}
+
+    def _prune(self, queue: deque[float], now: float) -> None:
+        while queue and now - queue[0] > self.window_s:
+            queue.popleft()
+
+    def reconnect(self) -> bool:
+        """Record one; True when the alert count is reached by it."""
+        now = self.monotonic()
+        self.reconnects.append(now)
+        self._prune(self.reconnects, now)
+        return len(self.reconnects) >= RECORDER_RECONNECT_ALERT_COUNT
+
+    def gap_resync(self, asset: str) -> bool:
+        now = self.monotonic()
+        queue = self.gaps.setdefault(asset, deque())
+        queue.append(now)
+        self._prune(queue, now)
+        return len(queue) >= RECORDER_GAP_RESYNC_HALT_COUNT
+
+    def snapshot(self) -> dict[str, Any]:
+        now = self.monotonic()
+        self._prune(self.reconnects, now)
+        gaps = {}
+        for asset, queue in sorted(self.gaps.items()):
+            self._prune(queue, now)
+            if queue:
+                gaps[asset] = len(queue)
+        return {"window_s": self.window_s, "reconnects_in_window": len(self.reconnects),
+                "gap_resyncs_in_window": gaps}
+
+
 def validate_assets(assets: Iterable[str]) -> list[str]:
     cleaned: list[str] = []
     for asset in assets:
@@ -865,11 +920,15 @@ class Recorder:
         now: Callable[[], str] | None = None,
         stop: Callable[[], bool] | None = None,
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        heartbeat: Any = None,
     ) -> None:
         """``stop`` (Task AI): polled at least every WS_STOP_POLL_S; once true the run ends like a deadline
         (graceful shutdown). ``on_event`` (Task AI) receives one dict per connect, disconnect, backoff,
         resync, resubscribe, asset going live and end of run. Both are optional; without them the
-        recorder behaves exactly as in Task AG."""
+        recorder behaves exactly as in Task AG.
+        ``heartbeat`` (Task AP): a src.heartbeat.Heartbeat; beaten at least every
+        HEARTBEAT_RECORDER_EVERY_S from the main loop, also while backing off (state ``paused``), with
+        the gap-13 escalation counts in its progress (written at once when a count is reached)."""
         check_market_url(url)
         runtime = _number(max_runtime_s)
         if runtime is None or runtime <= 0:
@@ -886,6 +945,9 @@ class Recorder:
         self.stop = stop
         self.on_event = on_event
         self.report = RunReport(unmapped_assets=[a for a in self.assets if a not in (meta or {})])
+        self.meta = dict(meta or {})
+        self.heartbeat = heartbeat
+        self.escalation = Escalation(monotonic=self.monotonic)
 
     def _stopped(self) -> bool:
         return self.stop is not None and bool(self.stop())
@@ -894,11 +956,30 @@ class Recorder:
         if self.on_event is not None:
             self.on_event({"ts": self.now(), "event": name, **fields})
 
+    def progress(self) -> dict[str, Any]:
+        """Heartbeat progress: counts plus the gap-13 escalation window (with each asset's market id)."""
+        esc = self.escalation.snapshot()
+        markets = {asset: str((self.meta.get(asset) or {}).get("market_id") or "")
+                   for asset in esc["gap_resyncs_in_window"]}
+        return {"rows": self.report.rows, "connects": self.report.connects,
+                "connect_failures": self.report.connect_failures, "assets": len(self.assets),
+                "assets_live": len(self.assets) - len(self.core.awaiting()), **esc, "asset_markets": markets}
+
+    def _beat(self, state: str = "running", *, force: bool = False) -> None:
+        if self.heartbeat is not None:
+            self.heartbeat.beat(state, self.progress(), force=force)
+
     def _write(self, out: Outcome, before: set[str] | None = None) -> None:
         for row in out.rows:
             self.sink.write(row)
             self.report.rows += 1
         self.report.counts.update(out.counts)
+        escalate = False
+        for asset, reason in out.resyncs:
+            if not reason.startswith("disconnect_"):
+                escalate = self.escalation.gap_resync(asset) or escalate
+        if escalate:
+            self._beat(force=True)
         if self.on_event is not None:
             for asset, reason in out.resyncs:
                 self._event("resync", asset=asset, reason=reason)
@@ -915,21 +996,27 @@ class Recorder:
         delay = min(backoff_delay(attempt), max(0.0, deadline - self.monotonic()))
         self.report.backoffs.append(delay)
         self._event("backoff", delay_s=delay, attempt=attempt)
+        self._beat("paused", force=True)
         if delay <= 0:
             return
-        if self.stop is None:
+        if self.stop is None and self.heartbeat is None:
             self.sleep(delay)
             return
+        # Short slices: a shutdown is not held up by a long backoff, and the heartbeat keeps beating.
+        step = min(WS_STOP_POLL_S if self.stop is not None else delay,
+                   HEARTBEAT_RECORDER_EVERY_S if self.heartbeat is not None else delay)
         end = self.monotonic() + delay
-        while not self._stopped():  # sleep in short slices so a shutdown is not held up by a long backoff
+        while not self._stopped():
             left = end - self.monotonic()
             if left <= 0:
                 break
-            self.sleep(min(left, WS_STOP_POLL_S))
+            self.sleep(min(left, step))
+            self._beat("paused")
 
     def run(self) -> RunReport:
         deadline = self.monotonic() + self.max_runtime_s
         attempt = 0
+        self._beat(force=True)
         while self.monotonic() < deadline and not self._stopped():
             try:
                 connection = self.transport.connect(
@@ -939,6 +1026,8 @@ class Recorder:
             except Exception as exc:  # noqa: BLE001 - any connect failure backs off and retries
                 self.report.connect_failures += 1
                 self._event("connect_failed", error=type(exc).__name__)
+                if self.escalation.reconnect():
+                    self._beat(force=True)
                 self._pause(attempt, deadline)
                 attempt += 1
                 continue
@@ -952,6 +1041,8 @@ class Recorder:
                 break
             self.report.disconnects[reason] += 1
             self._event("disconnected", reason=reason, healthy=healthy)
+            if self.escalation.reconnect():
+                self._beat(force=True)
             self._write(self.core.invalidate_all(f"disconnect_{reason}", self.now()))
             if healthy:
                 attempt = 0
@@ -975,6 +1066,7 @@ class Recorder:
                 return "deadline", healthy
             if self._stopped():
                 return "stopped", healthy
+            self._beat()
             try:
                 if current >= next_ping:
                     self._send(connection, PING)
@@ -986,6 +1078,8 @@ class Recorder:
                 waits = [deadline - current, next_ping - current]
                 if self.stop is not None:
                     waits.append(WS_STOP_POLL_S)
+                if self.heartbeat is not None:
+                    waits.append(HEARTBEAT_RECORDER_EVERY_S)
                 if oldest is not None:
                     waits.append(oldest + WS_RESYNC_TIMEOUT_S - current)
                 text = connection.recv(max(0.0, min(waits)))
@@ -1026,6 +1120,23 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None, *, transport: Transport | None = None) -> int:
+    """Task AP: the run writes logs/heartbeat/ws_recorder.json (src.heartbeat) every
+    HEARTBEAT_RECORDER_EVERY_S and a final beat with the exit code (exit 4 is a global halt for the
+    resident Sentinel, src/sentinel_tick.py)."""
+    from src.heartbeat import Heartbeat  # local: keeps the module import light
+
+    hb = Heartbeat("ws_recorder", every_s=HEARTBEAT_RECORDER_EVERY_S)
+    hb.beat("starting", force=True)
+    try:
+        code = _main(argv, transport=transport, heartbeat=hb)
+    except BaseException:
+        hb.finish(None, crashed=True)
+        raise
+    hb.finish(code)
+    return code
+
+
+def _main(argv: list[str] | None, *, transport: Transport | None, heartbeat: Any) -> int:
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
@@ -1043,7 +1154,7 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None) -
     meta = asset_meta(read_jsonl(args.markets))
     sink = JsonlAppender(args.out)
     recorder = Recorder(assets, transport=transport or WebsocketsTransport(), sink=sink,
-                        max_runtime_s=runtime, meta=meta)
+                        max_runtime_s=runtime, meta=meta, heartbeat=heartbeat)
     try:
         report = recorder.run()
     except TransportUnavailable as exc:

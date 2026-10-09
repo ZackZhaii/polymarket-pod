@@ -151,4 +151,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Task AP: start/finish heartbeat (logs/heartbeat/loop_claim.json) for the resident Sentinel.
+    from src.heartbeat import run_main
+
+    raise SystemExit(run_main("loop_claim", main))

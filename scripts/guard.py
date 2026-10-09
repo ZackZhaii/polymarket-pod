@@ -50,6 +50,13 @@ scratch files in a temp folder outside the repo and remove it):
    global halt for RiskGate and paper_cycle; a market resume cannot lift a global halt; a resume
    not from Operator (or without approved_by) is rejected by halt_store and by the bus; both
    corrupt-ledger cases leave a global halt. Checked by meaning and against golden.json.
+8. heartbeat (Task AP): the heartbeat / resident Sentinel scenarios of the same offline run
+   (e2e_offline.heartbeat_gate): a stale recorder heartbeat, a corrupt heartbeat and a lost
+   Sentinel are global halts that veto intents; the exit-code event matrix (alert / log / global
+   halt); a gap-resync storm halts its market only and a reconnect storm alerts; every market stale
+   two cycles in a row is a global halt; a resumed stale-book halt is raised again at the next
+   stale check; a failing Reconciler run is stored as a global halt; paper_cycle reads an M1
+   recording directory. Checked by meaning and against golden.json.
 """
 from __future__ import annotations
 
@@ -703,6 +710,21 @@ def check_halt(root: Path) -> Result:
     return Result(name, PASS, summary)
 
 
+# ---------------------------------------------------------------- 8. heartbeat (Task AP)
+
+def check_heartbeat(root: Path) -> Result:
+    name = "heartbeat"
+    if not (root / E2E_HARNESS_REL).is_file():
+        return Result(name, FAIL, f"{E2E_HARNESS_REL} is missing")
+    harness = _load_e2e(root)
+    if not hasattr(harness, "heartbeat_gate"):
+        return Result(name, FAIL, f"{E2E_HARNESS_REL} has no heartbeat_gate (Task AP)")
+    problems, summary = harness.heartbeat_gate(root)
+    if problems:
+        return Result(name, FAIL, _summary(problems))
+    return Result(name, PASS, summary)
+
+
 def run_checks(root: Path, require_git: bool = False) -> list[Result]:
     checks = [
         lambda: check_risk_sha_worktree(root),
@@ -714,10 +736,11 @@ def run_checks(root: Path, require_git: bool = False) -> list[Result]:
         lambda: check_thresholds_doc(root),
         lambda: check_e2e(root),
         lambda: check_halt(root),
+        lambda: check_heartbeat(root),
     ]
     results = []
     names = ["risk_sha_worktree", "risk_sha_head", "live_enabled", "banned_dependencies", "banned_imports",
-             "url_allowlist", "thresholds_doc", "e2e", "halt"]
+             "url_allowlist", "thresholds_doc", "e2e", "halt", "heartbeat"]
     for name, check in zip(names, checks):
         try:
             results.append(check())
@@ -734,7 +757,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="guard.py",
         description="M0 guard: offline, read-only safety checks (risk.toml pin, live_enabled, banned "
-                    "packages and imports, URL allowlist, THRESHOLDS.md, the end-to-end offline gate, the halt consumer).",
+                    "packages and imports, URL allowlist, THRESHOLDS.md, the end-to-end offline gate, the halt consumer, "
+                    "heartbeats and the resident Sentinel).",
         epilog="Exit codes: 0 all checks pass (risk_sha_head may SKIP without git); 1 a check failed; "
                "2 usage error or no repo root found.",
     )

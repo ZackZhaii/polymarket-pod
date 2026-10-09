@@ -16,7 +16,7 @@ from scripts import guard
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / "scripts" / "guard.py"
 CHECKS = ["risk_sha_worktree", "risk_sha_head", "live_enabled", "banned_dependencies", "banned_imports",
-          "url_allowlist", "thresholds_doc", "e2e", "halt"]
+          "url_allowlist", "thresholds_doc", "e2e", "halt", "heartbeat"]
 PINNED = "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04"
 _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc")
 
@@ -138,7 +138,7 @@ def test_worktree_risk_change_fails(repo):
     assert found["risk_sha_worktree"].status == "FAIL" and PINNED in found["risk_sha_worktree"].reason
     code, lines, _ = run(repo)
     assert code == 1
-    failed_only(lines, "risk_sha_worktree", "e2e", "halt")  # the e2e and halt gates pin risk.toml too
+    failed_only(lines, "risk_sha_worktree", "e2e", "halt", "heartbeat")  # the e2e gates pin risk.toml too
 
 
 def test_worktree_threshold_change_fails(repo):
@@ -632,7 +632,7 @@ def test_a_missing_harness_or_fixture_fails_e2e(repo, rel):
     assert results(repo)["e2e"].status == "FAIL"
     code, lines, out = run(repo)
     assert code == 1, out
-    failed_only(lines, "e2e", "halt")  # Task AL: the halt check runs the same harness and fixtures
+    failed_only(lines, "e2e", "halt", "heartbeat")  # halt (AL) and heartbeat (AP) run the same harness
 
 
 def test_a_loosened_risk_gate_rule_fails_e2e(repo):
@@ -652,7 +652,7 @@ def test_a_src_regression_that_fetches_quietly_fails_e2e(repo):
                                          "    except Exception:\n        pass\n" + marker), encoding="utf-8")
     code, lines, out = run(repo)
     assert code == 1, out
-    failed_only(lines, "e2e", "halt")
+    failed_only(lines, "e2e", "halt", "heartbeat")
     assert "network touched" in lines["e2e"][1] and "network touched" in lines["halt"][1]
 
 
@@ -668,7 +668,7 @@ def test_a_risk_gate_that_ignores_halts_fails_halt_and_e2e(repo):
          "reasons.extend(halt_store.halt_problems(intent.market, halt_path, halt_fallback_path))", "pass")
     code, lines, out = run(repo)
     assert code == 1, out
-    failed_only(lines, "e2e", "halt")
+    failed_only(lines, "e2e", "halt", "heartbeat")
     assert "(a)" in lines["halt"][1] or "(b)" in lines["halt"][1]
 
 
@@ -708,6 +708,36 @@ def test_a_harness_without_halt_gate_fails_halt(repo):
     code, lines, out = run(repo)
     assert code == 1, out
     failed_only(lines, "halt")
+
+
+# ---------------------------------------------------------------- 8. heartbeat (Task AP)
+
+def test_the_heartbeat_check_passes_on_the_real_repo():
+    found = results(ROOT)["heartbeat"]
+    assert found.status == "PASS", found
+
+
+def test_a_harness_without_heartbeat_gate_fails_heartbeat(repo):
+    path = repo / "scripts" / "e2e_offline.py"
+    path.write_text(path.read_text(encoding="utf-8").replace("def heartbeat_gate(", "def _old_heartbeat_gate("),
+                    encoding="utf-8")
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "heartbeat")
+
+
+def test_a_sentinel_that_ignores_stale_heartbeats_fails_heartbeat(repo):
+    edit(repo / "src" / "sentinel_tick.py", "        if age > spec.timeout_s:\n", "        if False:\n")
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "e2e", "halt", "heartbeat")  # a scenario's unhalted commit also trips the shared ledger check
+
+
+def test_consumers_that_ignore_a_lost_sentinel_fail_heartbeat(repo):
+    edit(repo / "src" / "halt_store.py", "    lost = sentinel_heartbeat_problem(", "    lost = None and sentinel_heartbeat_problem(")
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "e2e", "halt", "heartbeat")
 
 
 def test_the_e2e_check_loads_the_checked_repos_own_harness(repo):

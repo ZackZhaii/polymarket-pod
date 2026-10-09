@@ -922,10 +922,52 @@ in shadow, runs in the e2e gate in shadow mode, and `python -m pytest` and guard
   risk.toml key, no URL, no order code. Tests: `tests/test_intent_builder.py` (T-* plan and properties P1-P5,
   fixed seeds), `tests/test_e2e_offline.py`. config/risk.toml unchanged, `live_enabled` false.
 
+## Task AP — Sentinel heartbeat: heartbeat files, resident Sentinel tick, event matrix (Poly哨兵 design gaps 2, 4, 11, 12, 13, 14)
+
+Status: done.
+
+Requested by Poly指挥 (ruling on Poly哨兵's sentinel design; heartbeat was left open by AL), done by grok-bot on
+dev@9f1b010. AQ (private-key scan) runs in parallel in its own worktree.
+
+Finish when every loop writes a heartbeat at the design cadence, a resident Sentinel tick halts on timeouts
+(stale = halt, fail closed) and applies the event matrix, the AL follow-ups hold, the e2e gate covers it, and
+`python -m pytest` and guard --require-git pass offline.
+
+- `src/heartbeat.py`: `logs/heartbeat/<proc>.json` (proc, pid, host, started_at, ts, seq, git_sha, risk_sha256,
+  live_enabled, mode, state, exit_code, progress), atomic with a `.seen` marker; a write failure never raises.
+  Unreadable, corrupt, malformed, lost after the marker or future-stamped = stale. `run_main` for start/finish CLIs
+  (scanner, endgame_scan, loop_claim) carries exit_streak / last_success_ts. ws_recorder and m1_run beat every
+  `HEARTBEAT_RECORDER_EVERY_S` (also while backing off, `paused`), m1_rest after every sample, paper_cycle every cycle.
+- `src/sentinel_tick.py` (resident, `SENTINEL_TICK_S`; `--once` is check-only and writes no Sentinel heartbeat):
+  own heartbeat, risk.toml pins, each process heartbeat (timeouts, pin fields, exit codes by (module, code), recorder
+  reconnect / gap-resync window), ledger verify. Halts through `sentinel.halt` into halt_store, deduped by an active
+  halt with the same reason, so a condition still there after an Operator resume is halted on the next tick; one-off
+  exit events once per run (`logs/sentinel_tick.json`). Alerts: `logs/alerts.jsonl` + Sentinel->Operator signal; a
+  failed bus write writes `logs/HALT`.
+- Consumers (`halt_store.active_halts`): once the resident Sentinel has beaten, its heartbeat older than
+  `SENTINEL_HEARTBEAT_TIMEOUT_S`, missing, corrupt or finished is a stored global halt (Operator resume only).
+- AL follow-ups: Reconciler exits 1/3/4 are a global halt in halt_store; a resumed stale-book market halt re-alarms
+  on the next stale check (no fresh check needed).
+- Gap 11: `paper_cycle --recording-dir` reads the run's rotated `books/books-*.jsonl` (empty = every leg stale);
+  `--loop --every <= 60`. Gap 14: all checked markets stale `ALL_STALE_CONSECUTIVE_CYCLES` cycles = global halt.
+- e2e: golden `sentinel_heartbeat` scenarios a-i (recorder stale, corrupt heartbeat, exit codes, Sentinel lost,
+  recorder storm, all stale, stale resume re-alarm, Reconciler halt, recording dir), on their own bus; golden only via
+  `--update-golden`. guard check 10 `heartbeat`.
+- New numbers (M2 pending): `HEARTBEAT_RECORDER_EVERY_S = 10`, `HEARTBEAT_RECORDER_TIMEOUT_S = 120`,
+  `HEARTBEAT_REST_TIMEOUT_S = 900`, `SCANNER_HANG_S = 1800`, `SCANNER_MAX_SUCCESS_AGE_S = 86400`,
+  `SCANNER_INCOMPLETE_CONSECUTIVE = 2`, `HEARTBEAT_PAPER_CYCLE_EVERY_S = 60`, `HEARTBEAT_PAPER_CYCLE_TIMEOUT_S = 180`,
+  `HEARTBEAT_PAPER_CYCLE_HALT_FACTOR = 2`, `HEARTBEAT_CONSUMER_EVERY_S = 5`, `HEARTBEAT_CONSUMER_TIMEOUT_S = 30`,
+  `SENTINEL_TICK_S = 30`, `SENTINEL_HEARTBEAT_TIMEOUT_S = 90`, `RECORDER_ESCALATION_WINDOW_S = 600`,
+  `RECORDER_RECONNECT_ALERT_COUNT = 4`, `RECORDER_GAP_RESYNC_HALT_COUNT = 3`, `ALL_STALE_CONSECUTIVE_CYCLES = 2`.
+  No risk.toml key, no URL, no order code. Tests: `tests/test_heartbeat.py`, `tests/test_sentinel_tick.py`,
+  `tests/test_heartbeat_loops.py`, `tests/test_guard.py`, `tests/test_e2e_offline.py`. config/risk.toml unchanged,
+  `live_enabled` false.
+- Later: resume precondition signal, bus sensitive-string filter, WS hash/tick resync; no halt_consumer process yet.
+
 ## Latest
 
-- 2026-10-09: Merge origin/dev (incl. #42 AN) into Task AO (#43). AM, AN, and AO all kept.
-- Task AN (merged #42): `src/resolutions.py` Gamma closed markets, 48 h hold, `data/resolutions.jsonl`; `RESOLUTION_HOLD_HOURS=48` not M2 pending.
-- Task AO: `src/intent_builder.py` signal->OrderIntent; pure, tightening only; Kelly shadow; e2e shadow gate; INTENT_*/MAX_SIGNAL_AGE_* M2 pending.
-- pytest + guard pass after merge. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty after AM+AN+AO. Heartbeat (gap 2) later.
+- 2026-10-09: Task AP (Sentinel heartbeat) on dev@9f1b010; AQ (private-key scan) runs in parallel.
+- Task AP: `src/heartbeat.py` heartbeat files; resident `src/sentinel_tick.py` event matrix; stale/corrupt heartbeat = global halt.
+- AP: lost resident Sentinel = global halt for consumers; Reconciler halts in halt_store; stale resume re-alarms; paper_cycle --recording-dir.
+- pytest + guard (10 checks) pass. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
+- 17 new heartbeat/Sentinel numbers M2 pending. Queue empty after AP.

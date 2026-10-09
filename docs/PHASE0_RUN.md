@@ -83,6 +83,9 @@ It prints one `PASS`/`FAIL` line per check with the reason, then a summary line:
 - `e2e`: the end-to-end offline gate below (Task AJ). It loads the checked repo's own `scripts/e2e_offline.py`,
   runs the real pipeline on `tests/fixtures/e2e/` and compares it exactly with `golden.json`. About 0.1 s; no
   pytest needed.
+- `halt` (Task AL) and `heartbeat` (Task AP): the same harness's halt-consumer and heartbeat scenarios must hold
+  semantically (stale / corrupt heartbeat and a lost Sentinel are global halts, exit-code matrix, gap-resync storm,
+  all-markets-stale, stale-resume re-alarm, Reconciler halt stored, recording dir read).
 
 Exit codes: 0 every check passed (`risk_sha_head` may be `SKIP`), 1 a check failed, 2 usage error or no repo root.
 It writes nothing in the repo (the `e2e` check keeps its scratch files in a temp folder outside the repo and
@@ -177,6 +180,33 @@ python -m src.halt_store resume --scope global --halt-id halt-state-problem ... 
 The resume is written to the bus first (`type: resume`, `from: Operator`, `to: Sentinel`, `halt_ref`,
 `approved_by`); if that fails nothing is released. A market resume never lifts a global halt, and a global resume
 does not lift a market halt. Bots never run `resume`. No exchange action anywhere.
+
+## Heartbeats and the resident Sentinel (Task AP)
+
+Each loop writes `logs/heartbeat/<proc>.json` (atomic; a `.seen` marker beside it): ws_recorder and m1_run every
+10 s (also while backing off), m1_rest after every REST sample, paper_cycle every cycle (`--every` <= 60 s),
+scanner / endgame_scan / loop_claim at start and finish, the Sentinel every tick. The resident Sentinel:
+
+```
+python -m src.sentinel_tick            # resident: a tick every 30 s (SENTINEL_TICK_S); never resumes anything
+python -m src.sentinel_tick --once     # one check-only tick, writes no Sentinel heartbeat; exit 3 if it raised
+python -m src.paper_cycle --loop --recording-dir runs/<m1 run>   # read the run's rotated books/books-*.jsonl
+```
+
+Timeouts (src/thresholds.py, M2 pending): ws_recorder / m1_run 120 s and halt_consumer 30 s = global halt;
+m1_rest 900 s = alert; scanner / endgame_scan / loop_claim started but not finished after 1800 s = alert;
+paper_cycle 180 s = alert, 360 s = global halt. A heartbeat that is unreadable, corrupt, malformed, future-stamped,
+lost after its marker exists or stamped off the risk pins is a global halt (fail closed). Exit codes per
+(module, code): ws_recorder / m1_run 4, endgame_scan 4, loop_claim 2 = global halt; scanner 1 / 2 and scanner 3
+twice in a row, m1_run 1 / 2 / 3 and any other non-zero = alert; m1_run 5 = log. Recorder: 4 reconnects in 600 s =
+alert, 3 gap resyncs of one asset in 600 s = that market halted. All checked markets stale 2 cycles in a row =
+global halt. Alerts go to `logs/alerts.jsonl` plus a Sentinel->Operator bus `signal`.
+
+Once the resident Sentinel has beaten, RiskGate, the Maker and paper_cycle treat its heartbeat older than 90 s,
+missing, corrupt or finished as a stored global halt (`sentinel_heartbeat_*`): stopping the Sentinel halts
+everything until the Operator resumes it after restarting the Sentinel. Halts are released only by the Operator
+resume above; a condition that still holds is halted again on the next tick or check. To retire a process for
+good, let it finish cleanly, or (Operator) remove its heartbeat file and `.seen` marker.
 
 ## Resolutions snapshot (Task AN)
 
