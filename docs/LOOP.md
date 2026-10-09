@@ -1267,6 +1267,26 @@ provably reads none of it, the standalone recorder can save raw book frames like
 - Docs: `docs/M3_CALIBRATION.md` Step 2b, `docs/EXIT_CODES.md`, `docs/THRESHOLDS.md` wording.
 - No new number, no decision, threshold or size moved. config/risk.toml unchanged, `live_enabled` false.
 
+## Task BB — M3 calibration step 4: structured Reflector proposals (src/reflector_proposals.py)
+
+Status: done.
+
+Requested by Poly指挥 (Poly反思's M3 calibration design sections 4 and 5, step 4), done by grok-bot on
+dev@e667e4a. BA (#62) ran in parallel; merged in from dev (dev@ff21802).
+
+Finish when the Reflector turns a calibration report.json into structured, tightening-only proposals (jsonl, md,
+bus with `exchange_action: none`) within the daily cap, never applies one, never writes config/, a .toml or
+thresholds.py, proposes nothing from an `insufficient` section, marks loosening for KEY, fails closed on a missing
+or corrupt report, and `python -m pytest` and guard --require-git pass offline.
+
+- `src/reflector_proposals.py`: rules (disable, MIN_EDGE tightening, price-band tightening), `PROPOSAL_FIELDS`
+  schema, `validate`, rejected-target cooldown, CLI exit 0 / 2 / 3 missing / 4 corrupt report / 5 corrupt
+  proposals.jsonl / 6 write failed (`docs/EXIT_CODES.md`, 21 entry points).
+- `src/reflector.py`: `propose(payload=...)`, `exchange_action: none` on every proposal, `refused_path`.
+- New numbers (M3 pending): `REFLECTOR_*` rule thresholds; `REFLECTOR_MAX_PER_UTC_DAY` (3) now M3 pending.
+- Docs: `docs/M3_CALIBRATION.md` Step 4. Letter note: PR #61 (pod-flash) titled itself "Task AZ" but added only
+  a test file and no queue entry; AZ stays #60.
+
 ## Task BC — Calibration at market_mid; both Kelly values; fill_context and no_book_context
 
 Status: done.
@@ -1300,8 +1320,10 @@ at fill time, and `python -m pytest` and guard --require-git pass offline.
 - 2026-10-09: Task BC: calibration q = `market_mid` (pre-BA fills fall back to `market_price`, labelled);
   `kelly_frac_raw` recorded next to `kelly_fraction_used`; `fill_context` stamped at fill time and the report
   drops operator CLI / gate-check fills as `no_book_context`. Recorded only; RiskGate and size never read them.
+- Task BB (merged #66): `python -m src.reflector_proposals` turns a calibration report.json into structured,
+  tightening-only proposals (never applied; loosening needs KEY). BC only adds report keys.
 - Task BA (merged #62): fill market context and `ws_recorder --raw-books`. Task AZ (merged #60): offline
-  calibration report. Task BB (#66, Reflector proposals) open in parallel.
+  calibration report.
 - pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 - Open: run M1 with `--raw-books` before deciding on hash enforcement; Operator choice on netting realized
   gains (AR). Queue empty after BC.

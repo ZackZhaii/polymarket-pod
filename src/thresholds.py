@@ -247,6 +247,19 @@ CALIBRATION_BIN_EDGES = (0.0, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 1.0)
 CALIBRATION_EDGE_TIERS = (0.02, 0.04, 0.08)
 CALIBRATION_EXPIRY_TIERS_H = (24.0, 72.0, 336.0)
 
+# --- M3 Reflector proposal rules (Task BB, Poly反思's M3 calibration design section 4) -------------------
+# M3 pending (the user decides at M3). Tightening triggers read from report.json intervals only; the daily cap is
+# REFLECTOR_MAX_PER_UTC_DAY. Proposals are never applied by code.
+REFLECTOR_DISABLE_REALIZATION_MAX = 0.25  # disable: realized P&L CI below 0 and realization below this
+REFLECTOR_DISABLE_SLOPE_MAX = 0.5  # disable: calibration slope below this ...
+REFLECTOR_DISABLE_SLOPE_CI_HIGH_MAX = 0.8  # ... and its CI upper bound below this
+REFLECTOR_TIGHTEN_SLOPE_MAX = 0.8  # param_change: slope in [DISABLE_SLOPE_MAX, this) ...
+REFLECTOR_TIGHTEN_SLOPE_CI_HIGH_MAX = 1.0  # ... and its CI upper bound below this
+REFLECTOR_ECE_MAX = 0.05  # param_change: ECE above this and a judged bin outside its Wilson interval
+REFLECTOR_MIN_EDGE_STEP = 0.01  # a MIN_EDGE tightening proposes MIN_EDGE + this
+REFLECTOR_REJECT_COOLDOWN_DAYS = 7  # a rejected target is not proposed again for this many days ...
+REFLECTOR_REJECT_NEW_SAMPLES = 15  # ... unless the sample grew by at least this many
+
 
 def consistency_problems() -> list[str]:
     """Relations the values must keep. Import fails if any is broken (explicit, survives -O)."""
@@ -378,6 +391,21 @@ def consistency_problems() -> list[str]:
         if (not isinstance(tiers, tuple) or not tiers or tiers[0] <= 0
                 or any(not a < b for a, b in zip(tiers, tiers[1:]))):
             problems.append(f"{name} must be positive and rise strictly")
+    # Task BB: M3 Reflector proposal rules.
+    if not 0 < REFLECTOR_DISABLE_SLOPE_MAX < REFLECTOR_TIGHTEN_SLOPE_MAX <= 1:
+        problems.append("need 0 < REFLECTOR_DISABLE_SLOPE_MAX < REFLECTOR_TIGHTEN_SLOPE_MAX <= 1")
+    if not 0 < REFLECTOR_DISABLE_SLOPE_CI_HIGH_MAX <= REFLECTOR_TIGHTEN_SLOPE_CI_HIGH_MAX <= 1:
+        problems.append("need 0 < REFLECTOR_DISABLE_SLOPE_CI_HIGH_MAX <= REFLECTOR_TIGHTEN_SLOPE_CI_HIGH_MAX <= 1")
+    if not 0 <= REFLECTOR_DISABLE_REALIZATION_MAX < 1:
+        problems.append("REFLECTOR_DISABLE_REALIZATION_MAX must be in [0, 1)")
+    if not 0 < REFLECTOR_ECE_MAX < 1:
+        problems.append("REFLECTOR_ECE_MAX must be in (0, 1)")
+    if not 0 < REFLECTOR_MIN_EDGE_STEP < 1:
+        problems.append("REFLECTOR_MIN_EDGE_STEP must be in (0, 1) (a tightening step, never negative)")
+    for name in ("REFLECTOR_REJECT_COOLDOWN_DAYS", "REFLECTOR_REJECT_NEW_SAMPLES", "REFLECTOR_MAX_PER_UTC_DAY"):
+        value = globals()[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            problems.append(f"{name} must be a whole number >= 1")
     return problems
 
 
