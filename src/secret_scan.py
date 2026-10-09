@@ -288,7 +288,7 @@ def _label(path: Path, root: Path | None) -> str:
             return path.resolve().relative_to(Path(root).resolve()).as_posix()
         except ValueError:
             pass
-    return str(path)
+    return Path(path).as_posix()
 
 
 def halt_reason(findings: list[Finding], errors: list[str]) -> str:

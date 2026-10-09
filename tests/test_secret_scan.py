@@ -63,7 +63,8 @@ def test_word_list_is_the_pinned_bip39_english_list():
 
 def test_a_changed_or_missing_word_list_is_a_scan_error(tmp_path):
     changed = tmp_path / "list.txt"
-    changed.write_bytes(secret_scan.WORDLIST_PATH.read_bytes().replace(b"zoo\n", b"zoom\n"))
+    lf = secret_scan.WORDLIST_PATH.read_bytes().replace(b"\r\n", b"\n")  # a Windows checkout may be CRLF
+    changed.write_bytes(lf.replace(b"zoo\n", b"zoom\n"))
     with pytest.raises(secret_scan.ScanError, match="sha256"):
         secret_scan.bip39_words(changed)
     with pytest.raises(secret_scan.ScanError, match="unreadable"):
@@ -72,7 +73,8 @@ def test_a_changed_or_missing_word_list_is_a_scan_error(tmp_path):
 
 def test_a_crlf_checkout_of_the_word_list_still_matches_the_pin(tmp_path):
     crlf = tmp_path / "list.txt"
-    crlf.write_bytes(secret_scan.WORDLIST_PATH.read_bytes().replace(b"\n", b"\r\n"))
+    lf = secret_scan.WORDLIST_PATH.read_bytes().replace(b"\r\n", b"\n")
+    crlf.write_bytes(lf.replace(b"\n", b"\r\n"))
     assert len(secret_scan.bip39_words(crlf)) == 2048
 
 
