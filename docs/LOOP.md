@@ -994,10 +994,40 @@ Finish when every loop writes a heartbeat at the design cadence, a resident Sent
   `live_enabled` false.
 - Later: resume precondition signal, WS hash/tick resync, the Sentinel tick running AQ's secret scan; no halt_consumer process yet.
 
+
+## Task AR — daily_loss counts realized losses (backlog #4, tightening only)
+
+Status: done.
+
+Requested by Poly指挥 (backlog #4; SPEC_signal_to_intent inconsistency 12: `daily_loss_usd` summed only fees, so
+`max_daily_loss` was a daily fee cap), done by grok-bot on dev@9ec24df.
+
+Finish when RiskGate's `max_daily_loss` check counts today's realized losses as well as today's fees, nothing it
+counted before drops out, the day boundary is explicit and corrupt ledger data fails closed.
+
+- `src/daily_loss.py` (pure): `daily_loss_usd = today's booked fees + today's gross realized losses`. Realized P&L is
+  replayed per leg (market + token_id, `ledger_store.leg_key`) over the rows that count toward risk
+  (`ledger_store.counts`), in ledger order, at average cost: a sell closing a long realizes proceeds minus average
+  cost, a buy closing a short average proceeds minus cost, a remainder opens the other side. Fees stay out of P&L
+  (counted once). A missing notional (legacy rows) is valued at the worst price (buy 1 USD/share, sell 0).
+- Gains are reported (`daily_realized_gain_usd`) but never offset a loss or the fees; netting is left to the Operator.
+- Day boundary: the UTC calendar day of `utc_now()` (the existing convention). A loss belongs to the UTC day of the
+  closing fill's `ts`. A row counts toward today when its `ts` starts with today's date (old rule) or its UTC date is
+  today or later.
+- Fail closed: a counted row with a missing/unparseable `ts`, a side other than buy/sell, or shares / notional / fee
+  not finite and >= 0 gives `daily_loss_problems` + `ledger_problems`, `daily_loss_usd = None`, RiskGate
+  `invalid_risk_state` and the Task AL global halt.
+- `paper_ledger.load_state` also returns `daily_fees_usd`, `daily_realized_loss_usd`, `daily_realized_gain_usd`.
+- e2e: golden `daily_loss` cases a-f (loss closed at 00:00:00Z today vetoes, the same loss closed 23:59:59Z
+  yesterday allows, a gain does not offset, 29 USD allows, fees + loss over the cap veto, unparseable ts = global
+  halt); golden only via `--update-golden`. Tests: `tests/test_daily_loss.py`, `tests/test_e2e_offline.py`,
+  `tests/test_ledger_integrity.py` (legacy_mixed now also counts its 0.05 USD realized loss).
+- No new number. `max_daily_loss_pct` and config/risk.toml unchanged, `live_enabled` false.
+
 ## Latest
 
-- 2026-10-09: Merge origin/dev (AQ #44) into Task AP; AQ and AP both kept (guard checks 10 `secret_scan`, 11 `heartbeat`).
-- Task AQ (merged #44): `src/secret_scan.py` secret-string scan; `podlib.bus()` refuses hits and halts globally.
-- Task AP: heartbeat files, resident `src/sentinel_tick.py` event matrix; stale/corrupt heartbeat or lost Sentinel = global halt.
+- 2026-10-09: Task AR: `max_daily_loss` now counts today's (UTC) fees plus gross realized losses (`src/daily_loss.py`).
+- Gains never offset; corrupt counted ledger rows = `invalid_risk_state` = global halt. e2e golden `daily_loss`.
+- Task AP (merged #45) and AQ (merged #44) are on dev: guard checks 10 `secret_scan`, 11 `heartbeat`.
 - pytest + guard (11 checks) pass. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
-- M2 pending adds AQ's 3 and AP's 17 numbers. Queue empty after AQ+AP.
+- No new number from AR. Open Operator choice: netting realized gains. Queue empty after AR.

@@ -152,12 +152,12 @@
       "Endgame>RiskGate:signal": 1,
       "Executor>Sentinel:fill": 3,
       "Executor>Sentinel:halt": 1,
-      "NewsForecaster>RiskGate:signal": 16,
+      "NewsForecaster>RiskGate:signal": 22,
       "Operator>Sentinel:resume": 2,
       "RiskGate>Executor:signal": 4,
-      "RiskGate>Executor:veto": 12,
+      "RiskGate>Executor:veto": 16,
       "Scanner>BookWatcher:signal": 7,
-      "Sentinel>Executor:halt": 2
+      "Sentinel>Executor:halt": 3
     },
     "fills": 3,
     "halts": [
@@ -177,6 +177,12 @@
         "from": "Sentinel",
         "market": "e2e-charlie",
         "reason": "stale_book_consecutive: 2 consecutive stale or failed book checks (last: stale_book)",
+        "to": "Executor"
+      },
+      {
+        "from": "Sentinel",
+        "market": "e2e-bravo",
+        "reason": "invalid_risk_state",
         "to": "Executor"
       }
     ]
@@ -299,6 +305,123 @@
     ],
     "state_problem": null,
     "write_problem": null
+  },
+  "daily_loss": {
+    "a_loss_closed_today": {
+      "allow": false,
+      "booked_rows": 0,
+      "expect": "veto",
+      "global_halts": [],
+      "halted": false,
+      "ledger_unchanged": true,
+      "reasons": [
+        "max_daily_loss"
+      ],
+      "state": {
+        "daily_fees_usd": 0.0,
+        "daily_loss_usd": 31.0,
+        "daily_realized_gain_usd": 0.0,
+        "daily_realized_loss_usd": 31.0,
+        "ledger_problems": []
+      },
+      "via": "commit_if_allowed"
+    },
+    "b_loss_closed_yesterday": {
+      "allow": true,
+      "expect": "allow",
+      "global_halts": [],
+      "ledger_unchanged": true,
+      "reasons": [],
+      "state": {
+        "daily_fees_usd": 0.0,
+        "daily_loss_usd": 0.0,
+        "daily_realized_gain_usd": 0.0,
+        "daily_realized_loss_usd": 0.0,
+        "ledger_problems": []
+      },
+      "via": "evaluate"
+    },
+    "c_gain_does_not_offset": {
+      "allow": false,
+      "booked_rows": 0,
+      "expect": "veto",
+      "global_halts": [],
+      "halted": false,
+      "ledger_unchanged": true,
+      "reasons": [
+        "max_daily_loss"
+      ],
+      "state": {
+        "daily_fees_usd": 0.0,
+        "daily_loss_usd": 31.0,
+        "daily_realized_gain_usd": 40.0,
+        "daily_realized_loss_usd": 31.0,
+        "ledger_problems": []
+      },
+      "via": "commit_if_allowed"
+    },
+    "d_below_cap": {
+      "allow": true,
+      "expect": "allow",
+      "global_halts": [],
+      "ledger_unchanged": true,
+      "reasons": [],
+      "state": {
+        "daily_fees_usd": 0.0,
+        "daily_loss_usd": 29.0,
+        "daily_realized_gain_usd": 0.0,
+        "daily_realized_loss_usd": 29.0,
+        "ledger_problems": []
+      },
+      "via": "evaluate"
+    },
+    "e_fees_plus_loss": {
+      "allow": false,
+      "booked_rows": 0,
+      "expect": "veto",
+      "global_halts": [],
+      "halted": false,
+      "ledger_unchanged": true,
+      "reasons": [
+        "max_daily_loss"
+      ],
+      "state": {
+        "daily_fees_usd": 0.2,
+        "daily_loss_usd": 30.1,
+        "daily_realized_gain_usd": 0.0,
+        "daily_realized_loss_usd": 29.9,
+        "ledger_problems": []
+      },
+      "via": "commit_if_allowed"
+    },
+    "f_unparseable_ts": {
+      "allow": false,
+      "booked_rows": 0,
+      "expect": "halt",
+      "global_halts": [
+        {
+          "market": "",
+          "reason": "invalid_risk_state",
+          "scope": "global",
+          "source": "Sentinel"
+        }
+      ],
+      "halted": true,
+      "ledger_unchanged": true,
+      "reasons": [
+        "invalid_risk_state"
+      ],
+      "state": {
+        "daily_fees_usd": null,
+        "daily_loss_usd": null,
+        "daily_realized_gain_usd": null,
+        "daily_realized_loss_usd": null,
+        "ledger_problems": [
+          "daily_loss_invalid_ts:e2e-dl-f-01"
+        ]
+      },
+      "via": "commit_if_allowed"
+    }
   },
   "decisions": [
     {
@@ -789,7 +912,7 @@
   },
   "invariants": {
     "booked_fill_ids": 3,
-    "live_checks": 26,
+    "live_checks": 32,
     "live_enabled": [
       "False"
     ],
