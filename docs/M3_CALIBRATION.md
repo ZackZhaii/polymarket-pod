@@ -305,6 +305,26 @@ intervals only: B `calibration_slope` = `overconfident` (slope CI below 1), `und
 CI above 0), `better_than_market` (below 0), `inconclusive`, or `not_estimable`. These are observations, not
 proposals. Every report states "UMA dispute status not checked" and "Not a promise of profit".
 
+### Group intervals, intercept CI and event-cluster share (Task BD)
+
+- `forecasts.by_category`, `trades.by_category` and `trades.by_edge_tier`: every group gains `intervals`.
+  A group at the group minimums gets `{brier, brier_ci, ece, ece_ci, slope, slope_ci, intercept,
+  intercept_ci}` (model p against y; same market-clustered bootstrap, seed and level as above); trade groups
+  add `brier_market`, `delta_brier`, `delta_brier_ci` (model - market) and `realization`, `realization_ci`
+  (sum R / sum E, None when sum E <= 0). A group below them gets `intervals: null`; nothing is computed from it.
+  Other group keys (strategy, model_version, side, expiry tier, price band) are unchanged.
+- A sufficient B section adds `calibration.intercept_ci`, `ece_ci` and the verdict key
+  `calibration_intercept` = `positive_bias` (CI above 0: outcomes happen more often than p says),
+  `negative_bias` (CI below 0), `no_clear_bias`, or `intercept_not_estimable`. An insufficient section adds
+  none of them (the verdict stays the string `insufficient`).
+- Both sections add `event_cluster`: `{cluster_key, n, n_clusters, largest_cluster, largest_cluster_n,
+  largest_share, max_share, status, flag}`. `flag` is `insufficient` when the section is below its minimums,
+  else `concentrated` when `largest_share` > `CALIBRATION_MAX_CLUSTER_SHARE` (0.30, design 3, M3 pending),
+  else `ok`. Ties go to the smallest name. No event id is recorded on forecasts or fills yet, so
+  `cluster_key` is `condition_id` (one market per cluster): markets of one event count separately and the
+  share is a lower bound. Reported only; no verdict, proposal or gate reads it yet.
+- `report.json` stays `schema_version` 1 and only gains keys; `thresholds.max_cluster_share` is listed.
+
 ## Step 4: structured Reflector proposals (Task BB)
 
 Design: Poly反思's M3 calibration design, sections 4 and 5. Code: `src/reflector_proposals.py`;
@@ -352,8 +372,10 @@ The report is read-only input (default: the newest dated folder). Each proposal 
   `REFLECTOR_TIGHTEN_SLOPE_MAX`) with interval upper bound below `REFLECTOR_TIGHTEN_SLOPE_CI_HIGH_MAX`; and,
   for the worst price band, ECE above `REFLECTOR_ECE_MAX` with a judged bin outside its Wilson interval. Not
   for a strategy being disabled the same day.
-- Not implemented (the report has no interval for them yet): per-edge-tier realization, per-category delta
-  Brier, intercept, the two-batch Kelly rule, the cumulative-loss disable, the event-cluster share.
+- Not implemented yet: per-edge-tier realization, per-category delta Brier, intercept, the two-batch Kelly
+  rule, the cumulative-loss disable, the event-cluster share. Task BD added the report intervals the first
+  three need (`intervals` on by_edge_tier / by_category, `calibration.intercept_ci`) and the
+  `event_cluster` share; the rules themselves are a later task.
 
 ### Limits
 

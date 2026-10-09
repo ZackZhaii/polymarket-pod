@@ -1315,9 +1315,37 @@ at fill time, and `python -m pytest` and guard --require-git pass offline.
 - Docs: `docs/M3_CALIBRATION.md` step 2c and the drop table. No new number, no decision, threshold or size
   moved. config/risk.toml unchanged, `live_enabled` false.
 
+## Task BD — Calibration intervals per edge tier and category; intercept CI; event-cluster share
+
+Status: done.
+
+Requested by Poly指挥 after Task BC (#67), done by grok-bot on dev@cfefc52. Report changes are additive only
+(BB's src/reflector_proposals.py reads report.json); the six missing Reflector rules are a later task.
+
+Finish when judged by_category / by_edge_tier groups carry bootstrap intervals, a sufficient forecast section
+carries an intercept interval and verdict, both sections report the largest-cluster share flagged under the
+existing minimums, and `python -m pytest` and guard --require-git pass offline.
+
+- `src/calibration.py`: `group_counts(..., intervals=True)` on `forecasts.by_category`, `trades.by_category`,
+  `trades.by_edge_tier`: `intervals` = Brier, ECE, slope, intercept with market-clustered bootstrap intervals
+  (`CALIBRATION_BOOTSTRAP_*`, fixed seed); trades add `brier_market`, `delta_brier(_ci)`, `realization(_ci)`.
+  Groups below `CALIBRATION_GROUP_MIN_*` get `intervals: null`.
+- Sufficient B section: `calibration.intercept_ci`, `ece_ci`, verdict `calibration_intercept`
+  (`positive_bias` / `negative_bias` / `no_clear_bias` / `intercept_not_estimable`).
+- `event_cluster` on both sections: largest cluster share; `insufficient` below the section minimums, else
+  `concentrated` above `CALIBRATION_MAX_CLUSTER_SHARE` (0.30, design 3, new M3-pending number in
+  src/thresholds.py and docs/THRESHOLDS.md only), else `ok`. No event id is recorded, so the cluster is the
+  market (condition_id): a lower bound on event concentration. Reported only.
+- Tests: `tests/test_calibration_intervals.py`; two exact-shape assertions in tests/test_calibration.py widened
+  for the added keys. Docs: `docs/M3_CALIBRATION.md` (Task BD subsection, Step 4 not-implemented list).
+- No decision, threshold, size or proposal moved. config/risk.toml unchanged, `live_enabled` false.
+
 ## Latest
 
-- 2026-10-09: Task BC: calibration q = `market_mid` (pre-BA fills fall back to `market_price`, labelled);
+- 2026-10-09: Task BD: calibration report intervals per category and edge tier (Brier, ECE, slope, intercept;
+  trades also delta Brier and realization), intercept CI + verdict, `event_cluster` share flagged against
+  `CALIBRATION_MAX_CLUSTER_SHARE` (M3 pending). Report only; additive keys.
+- Task BC (merged #67): calibration q = `market_mid` (pre-BA fills fall back to `market_price`, labelled);
   `kelly_frac_raw` recorded next to `kelly_fraction_used`; `fill_context` stamped at fill time and the report
   drops operator CLI / gate-check fills as `no_book_context`. Recorded only; RiskGate and size never read them.
 - Task BB (merged #66): `python -m src.reflector_proposals` turns a calibration report.json into structured,
@@ -1326,4 +1354,5 @@ at fill time, and `python -m pytest` and guard --require-git pass offline.
   calibration report.
 - pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 - Open: run M1 with `--raw-books` before deciding on hash enforcement; Operator choice on netting realized
-  gains (AR). Queue empty after BC.
+  gains (AR); record an event id on forecasts / fills so `event_cluster` groups markets of one event; the six
+  missing Reflector rules. Queue empty after BD.
