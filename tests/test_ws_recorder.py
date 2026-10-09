@@ -7,6 +7,7 @@ without ``websockets`` installed.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import re
 import subprocess
@@ -24,9 +25,11 @@ from src.book_staleness import INVALID_BOOK_TS, book_age_problem, parse_book_ts
 from src.podlib import read_jsonl
 from src.thresholds import (
     MAX_BOOK_AGE_S,
+    RECORDER_RECONNECT_ALERT_COUNT,
     WS_BACKOFF_BASE_S,
     WS_BACKOFF_CAP_S,
     WS_PING_INTERVAL_S,
+    WS_PONG_TIMEOUT_S,
     WS_RESYNC_TIMEOUT_S,
     WS_ROW_REFRESH_S,
 )
@@ -155,12 +158,36 @@ def test_deltas_before_a_snapshot_are_ignored():
     assert not _live(core)
 
 
-def test_unsubscribed_assets_and_unknown_events_are_ignored():
+def test_unsubscribed_assets_and_unknown_events_for_other_assets_are_ignored():
     core = _core()
-    out = _feed(core, _book("999"), {"event_type": "best_bid_ask", "asset_id": A}, "PONG")
-    assert out.rows == [] and out.resyncs == []
-    assert out.counts["unsubscribed_asset"] == 1 and out.counts["ignored_event:best_bid_ask"] == 1
+    _feed(core, _book())
+    out = _feed(core, _book("999"), {"event_type": "best_bid_ask", "asset_id": "999"},
+                {"event_type": "best_bid_ask", "market": "other-market"}, "PONG")
+    assert out.rows == [] and out.resyncs == [] and _live(core)
+    assert out.counts["unsubscribed_asset"] == 1 and out.counts["ignored_event:best_bid_ask"] == 2
     assert out.counts["pong"] == 1
+
+
+@pytest.mark.parametrize("frame", [
+    {"event_type": "best_bid_ask", "asset_id": A},
+    {"event_type": "new_market", "market": M},
+    {"event_type": "market_resolved", "assets_ids": ["999", A]},
+    {"event_type": "mystery", "price_changes": [{"asset_id": A}]},
+    {"event_type": "mystery"},  # names nothing: every asset
+])
+def test_task_aw_an_unknown_event_for_a_subscribed_asset_resyncs_it(frame):
+    core = _core()
+    _feed(core, _book())
+    out = _feed(core, frame)
+    _assert_resync(core, out, "unknown_event")
+    assert out.counts[f"unknown_event:{frame['event_type']}"] == 1
+
+
+def test_task_aw_an_unknown_event_names_only_its_assets():
+    core = _core(A, B)
+    _feed(core, _book(A), _book(B))
+    out = _feed(core, {"event_type": "best_bid_ask", "asset_id": B})
+    assert out.resyncs == [(B, "unknown_event")] and core.books[A].state == w.LIVE
 
 
 # --- core: invalid values fail closed -----------------------------------------------------------
@@ -318,12 +345,21 @@ def _tick(old="0.01", new="0.001", ts=T0 + 1000, market=M, asset=A):
             "old_tick_size": old, "new_tick_size": new, "timestamp": str(ts)}
 
 
-def test_tick_size_change_is_recorded_and_checked():
+def test_task_aw_a_valid_tick_size_change_resnapshots_the_asset():
     core = _core()
     _feed(core, _book(tick_size="0.01"))
     out = _feed(core, _tick())
-    assert out.rows[-1]["tick_size"] == 0.001 and out.resyncs == []
-    _assert_resync(core, _feed(core, _tick(old="0.01", new="0.0001", ts=T0 + 2000)), "tick_size_mismatch")
+    _assert_resync(core, out, "tick_size_change")
+    assert out.counts["tick_size_resnapshot"] == 1
+    assert _feed(core, _pc(_ch(price="0.401", ts=T0 + 1100))).rows == []  # no prices until a fresh snapshot
+    out = _feed(core, _book(tick_size="0.001", ts=T0 + 1200))
+    assert out.rows[-1]["tick_size"] == 0.001 and _live(core)
+
+
+def test_tick_size_change_is_checked_against_the_tick_held():
+    core = _core()
+    _feed(core, _book(tick_size="0.01"))
+    _assert_resync(core, _feed(core, _tick(old="0.001", new="0.0001")), "tick_size_mismatch")
 
 
 @pytest.mark.parametrize("bad", ["nan", "0", "1", "-0.01", "x", None])
@@ -385,19 +421,28 @@ class Clock:
 
 
 class FakeConnection:
-    def __init__(self, script, clock, sent):
+    """Plays a script; answers each PING with a PONG unless ``pong`` is False (Task AW)."""
+
+    def __init__(self, script, clock, sent, pong=True):
         self.script = list(script)
         self.clock = clock
         self.sent = sent
         self.closed = False
+        self.pong = pong
+        self.pending: list[str] = []
 
     def send(self, text):
         if self.closed:
             raise w.TransportClosed("closed")
         self.sent.append(text)
+        if text == "PING" and self.pong:
+            self.pending.append("PONG")
 
     def recv(self, timeout):
         assert timeout >= 0
+        if self.pending:
+            self.clock.t += 0.01
+            return self.pending.pop(0)
         if not self.script:
             self.clock.t += timeout
             return None
@@ -416,9 +461,10 @@ class FakeConnection:
 
 
 class FakeTransport:
-    def __init__(self, sessions, clock):
+    def __init__(self, sessions, clock, pong=True):
         self.sessions = list(sessions)
         self.clock = clock
+        self.pong = pong
         self.sent: list[str] = []
         self.urls: list[str] = []
 
@@ -430,7 +476,7 @@ class FakeTransport:
         session = self.sessions.pop(0)
         if isinstance(session, BaseException):
             raise session
-        return FakeConnection(session, self.clock, self.sent)
+        return FakeConnection(session, self.clock, self.sent, self.pong)
 
 
 class ListSink:
@@ -442,9 +488,9 @@ class ListSink:
         self.rows.append(row)
 
 
-def _run(sessions, *, assets=(A,), runtime=100.0, meta=None):
+def _run(sessions, *, assets=(A,), runtime=100.0, meta=None, pong=True):
     clock = Clock()
-    transport = FakeTransport(sessions, clock)
+    transport = FakeTransport(sessions, clock, pong)
     sink = ListSink()
     recorder = w.Recorder(list(assets), transport=transport, sink=sink, max_runtime_s=runtime, meta=meta,
                           monotonic=clock.monotonic, sleep=clock.sleep, now=lambda: TS)
@@ -1014,3 +1060,112 @@ def test_cli_refuses_with_6_before_connecting(tmp_path, monkeypatch):
     _drift_after(monkeypatch, tmp_path, 0)
     code, transport = _cli(tmp_path, ["--assets", A, "--max-runtime", "5"], [[_book(A)]], monkeypatch)
     assert code == w.EXIT_PIN_DRIFT and transport.urls == [] and not (tmp_path / "books.jsonl").exists()
+
+
+# --- Task AW: snapshot hash (recorded, not enforced), PONG timeout, escalation ------------------------
+
+
+def _hashed_book(**changes):
+    """A synthetic snapshot whose hash is the SHA-1 of the literal compact JSON below (field order pinned)."""
+    literal = ('{"market":"%s","asset_id":"%s","timestamp":"%d","hash":"","bids":[{"price":"0.48","size":"30"}],'
+               '"asks":[{"price":"0.52","size":"25"}],"min_order_size":"5","tick_size":"0.01","neg_risk":false,'
+               '"last_trade_price":"0.5"}') % (M, A, T0)
+    message = _book(min_order_size="5", tick_size="0.01", neg_risk=False, last_trade_price="0.5")
+    message["hash"] = hashlib.sha1(literal.encode()).hexdigest()
+    message.update(changes)
+    return message
+
+
+def test_task_aw_book_hash_check_matches_the_documented_field_order():
+    assert w.book_hash_check(_hashed_book()) == "match"
+    # the hash covers the levels: a frame whose levels differ from what was hashed mismatches
+    assert w.book_hash_check(_hashed_book(bids=[{"price": "0.47", "size": "30"}])) == "mismatch"
+    reordered = _hashed_book()
+    assert w.book_hash_check({k: reordered[k] for k in sorted(reordered)}) == "match"  # frame key order is irrelevant
+
+
+@pytest.mark.parametrize("change, expected", [
+    ({"hash": ""}, "absent"), ({"hash": None}, "absent"), ({"hash": 5}, "absent"),
+    ({"neg_risk": float("nan")}, "uncomputable"),
+])
+def test_task_aw_book_hash_check_outcomes(change, expected):
+    assert w.book_hash_check(_hashed_book(**change)) == expected
+
+
+def test_task_aw_book_hash_check_needs_every_hashed_field():
+    message = _hashed_book()
+    del message["last_trade_price"]
+    assert w.book_hash_check(message) == "incomplete"
+    assert w.book_hash_check(_book()) == "incomplete"  # WS frames without min_order_size etc.
+
+
+def test_task_aw_the_hash_is_recorded_but_a_mismatch_does_not_resync():
+    assert w.BOOK_HASH_ENFORCED is False  # Poly指挥 ruling: not validated on real WS snapshots yet
+    core = _core()
+    out = _feed(core, _hashed_book(), _hashed_book(hash="f" * 40, timestamp=str(T0 + 1)), _book(ts=T0 + 2))
+    assert out.resyncs == [] and _live(core)
+    assert [row["book_hash_check"] for row in out.rows] == ["match", "mismatch", "incomplete"]
+    assert out.counts["hash_check:match"] == 1 and out.counts["hash_check:mismatch"] == 1
+
+
+def test_task_aw_an_enforced_hash_mismatch_resyncs_and_counts_as_a_gap(monkeypatch):
+    monkeypatch.setattr(w, "BOOK_HASH_ENFORCED", True)
+    core = _core()
+    assert _feed(core, _hashed_book()).rows[0]["book_hash_check"] == "match" and _live(core)
+    _assert_resync(core, _feed(core, _hashed_book(hash="f" * 40, timestamp=str(T0 + 1))), "book_hash_mismatch")
+    core = _core()
+    assert _feed(core, _book()).rows == [] and not _live(core)  # enforced: an uncheckable snapshot is not trusted
+    report, *_ = _run([[_hashed_book(hash="f" * 40)]], runtime=5)
+    assert report.counts["resync:book_hash_mismatch"] >= 1
+
+
+def test_task_aw_no_pong_within_the_timeout_reconnects():
+    report, transport, sink, clock = _run([[_book()], [_book(ts=T0 + 9000)]], pong=False,
+                                          runtime=WS_PING_INTERVAL_S + WS_PONG_TIMEOUT_S + 5)
+    assert report.disconnects == {"pong_timeout": 1} and report.connects == 2
+    assert [row["ws_state"] for row in sink.rows] == ["live", "resync", "live"]
+    assert sink.rows[1]["resync_reason"] == "disconnect_pong_timeout"
+
+
+def test_task_aw_the_pong_timeout_runs_from_the_first_unanswered_ping():
+    # PINGs keep going every WS_PING_INTERVAL_S; a later PING does not restart the 30 s wait
+    report, transport, *_ = _run([[_book()]], pong=False, runtime=WS_PING_INTERVAL_S + WS_PONG_TIMEOUT_S - 0.5)
+    assert report.disconnects == {} and report.pings >= 3
+    report, *_ = _run([[_book()]], pong=False, runtime=WS_PING_INTERVAL_S + WS_PONG_TIMEOUT_S + 0.5)
+    assert report.disconnects == {"pong_timeout": 1}
+
+
+def test_task_aw_answered_pings_keep_the_connection():
+    report, *_ = _run([[_book()]], runtime=WS_PONG_TIMEOUT_S * 6)
+    assert report.disconnects == {} and report.connects == 1 and report.pings >= 15
+
+
+def test_task_aw_pong_timeouts_count_toward_the_reconnect_escalation():
+    sessions = [[_book()] for _ in range(RECORDER_RECONNECT_ALERT_COUNT + 1)]
+    clock = Clock()
+    rec = w.Recorder([A], transport=FakeTransport(sessions, clock, pong=False), sink=ListSink(),
+                     max_runtime_s=(WS_PING_INTERVAL_S + WS_PONG_TIMEOUT_S + WS_BACKOFF_BASE_S) * 3,
+                     monotonic=clock.monotonic, sleep=clock.sleep, now=lambda: TS)
+    rec.run()
+    assert rec.report.disconnects["pong_timeout"] >= 2
+    assert rec.progress()["reconnects_in_window"] >= rec.report.disconnects["pong_timeout"]
+    assert rec.progress()["gap_resyncs_in_window"] == {}  # a disconnect is not a gap
+
+
+def test_task_aw_gap_escalation_counts_unknown_events_but_not_tick_changes():
+    clock = Clock()
+    rec = w.Recorder([A], transport=FakeTransport([], clock), sink=ListSink(), max_runtime_s=10,
+                     monotonic=clock.monotonic, sleep=clock.sleep, now=lambda: TS)
+    rec._write(w.Outcome(resyncs=[(A, "tick_size_change")]))
+    assert rec.progress()["gap_resyncs_in_window"] == {}
+    rec._write(w.Outcome(resyncs=[(A, "unknown_event"), (A, "book_hash_mismatch")]))
+    assert rec.progress()["gap_resyncs_in_window"] == {A: 2}
+
+
+def test_task_aw_a_tick_change_resubscribes_the_asset_for_a_fresh_snapshot():
+    report, transport, sink, _ = _run([[_book(), _tick(), _book(tick_size="0.001", ts=T0 + 2000)]], runtime=5)
+    frames = [json.loads(f) for f in transport.sent if f != "PING"]
+    assert [f.get("operation") for f in frames] == [None, "unsubscribe", "subscribe"]
+    assert frames[2]["assets_ids"] == [A]
+    assert [row["ws_state"] for row in sink.rows] == ["live", "resync", "live"]
+    assert sink.rows[1]["resync_reason"] == "tick_size_change" and sink.rows[2]["tick_size"] == 0.001

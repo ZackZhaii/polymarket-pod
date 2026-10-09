@@ -65,17 +65,25 @@ def _book(asset=A, bid="0.48", ask="0.52", at=1.0):
 
 
 class FakeConnection:
+    """Plays a script and answers every PING with a PONG (Task AW: an unanswered PING disconnects)."""
+
     def __init__(self, script, clock, sent, timeouts):
         self.script = list(script)
         self.clock = clock
         self.sent = sent
         self.timeouts = timeouts
+        self.pending: list[str] = []
 
     def send(self, text):
         self.sent.append(text)
+        if text == "PING":
+            self.pending.append("PONG")
 
     def recv(self, timeout):
         assert timeout >= 0
+        if self.pending:
+            self.clock.t += 0.01
+            return self.pending.pop(0)
         self.timeouts.append(timeout)
         if not self.script:
             self.clock.t += timeout

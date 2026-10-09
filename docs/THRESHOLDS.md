@@ -34,6 +34,7 @@ proposals waiting for the user's decision at M2. Task AC moved no value and chan
 | `WS_BACKOFF_CAP_S` | `60.0` | s | Cap on the WebSocket recorder reconnect backoff. Operational, not a risk threshold. | `src/thresholds.py` | Task AG | no (operational) |
 | `WS_RESYNC_TIMEOUT_S` | `30.0` | s | An asset waiting this long for a fresh snapshot (after subscribe or a detected gap) makes the recorder reconnect. Also the connect timeout. A waiting asset writes no priced rows: only the one price-less invalidation row written when it left live (already stale), so this never makes a book look fresh. Operational. | `src/thresholds.py` | Task AG | no (operational) |
 | `WS_PING_INTERVAL_S` | `10.0` | s | Application heartbeat: the text frame `PING` this often (Polymarket market-channel docs). Operational. | `src/thresholds.py` | Task AG, docs.polymarket.com | no (operational) |
+| `WS_PONG_TIMEOUT_S` | `30.0` | s | A `PING` not answered by a `PONG` within this long means the connection is dead: the recorder disconnects (`pong_timeout`, every asset resyncs) and reconnects, counted toward the Task AP reconnect escalation. The wait runs from the first unanswered PING. Must stay above `WS_PING_INTERVAL_S`. New, not yet validated on a live run. | `src/thresholds.py` | Task AW, Poly研究's market-channel notes (research_dataapi_ws_m2.md) | yes |
 | `WS_ROW_REFRESH_S` | `30.0` | s (exchange time) | A live book with an unchanged top still gets a new row once the exchange time of its latest applied event is this far past the last row, so `book_ts` keeps up with a live stream. Rows lag the stream by at most this, never lead it. Staleness-relevant; must stay below `MAX_BOOK_AGE_S`. | `src/thresholds.py` | Task AG | yes |
 | `WS_STOP_POLL_S` | `1.0` | s | With a stop callback (the M1 run's SIGINT/SIGTERM handling) the recorder checks it at least this often, also while backing off. Operational; must stay <= `WS_PING_INTERVAL_S`. | `src/thresholds.py` | Task AI | no (operational) |
 | `M1_TOP_MARKETS` | `5` | markets | Default `src.m1_run --top`: markets taken from the latest scanner batch (24h volume order), both outcome tokens each. Decides what is recorded, not what passes. | `src/thresholds.py` | Task AI | no (operational) |
@@ -90,7 +91,7 @@ Relations checked when `src/thresholds.py` is imported (an explicit `RuntimeErro
 `SENTINEL_STALE_CONSECUTIVE` a whole number >= 1, `0 <= SCANNER_MIN_PRICE < SCANNER_MAX_PRICE <= 1`,
 `SCANNER_MAX_PRICE < ENDGAME_PRICE_MIN <= ENDGAME_PRICE_MAX < 1`, `0 < MIN_HOURS_TO_EXPIRY < ENDGAME_WINDOW_HOURS`,
 `0 < WS_BACKOFF_BASE_S <= WS_BACKOFF_CAP_S`, `0 < WS_PING_INTERVAL_S < WS_RESYNC_TIMEOUT_S`, `0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S`,
-`0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S`; M1 (Task AI): `M1_TOP_MARKETS`, `M1_ROTATE_BYTES`, `M1_REST_ASSETS`,
+`0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S`, `0 < WS_PING_INTERVAL_S < WS_PONG_TIMEOUT_S` (Task AW); M1 (Task AI): `M1_TOP_MARKETS`, `M1_ROTATE_BYTES`, `M1_REST_ASSETS`,
 `M1_MIN_REST_MATCHED` whole numbers >= 1, `M1_MAX_RECONNECTS` and `M1_MAX_GAP_RESYNCS_PER_ASSET` whole numbers >= 0,
 `M1_ROTATE_S`, `M1_REST_EVERY_S`, `M1_MIN_RUN_S` > 0, `0 < M1_REPORT_STEP_S <= WS_ROW_REFRESH_S`, `0 < M1_MIN_COVERAGE <= 1`,
 both M1 rates in `[0, 1)`, `0 < M1_REST_MATCH_WINDOW_S <= WS_ROW_REFRESH_S`, and a full run can collect enough REST

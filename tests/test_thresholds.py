@@ -43,6 +43,7 @@ EXPECTED = {
     "WS_BACKOFF_CAP_S": 60.0,
     "WS_RESYNC_TIMEOUT_S": 30.0,
     "WS_PING_INTERVAL_S": 10.0,
+    "WS_PONG_TIMEOUT_S": 30.0,  # Task AW
     "WS_ROW_REFRESH_S": 30.0,
     # Task AI: M1 acceptance (first values; the criteria are M2 pending).
     "WS_STOP_POLL_S": 1.0,
@@ -150,6 +151,8 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "ASSUMED_SLIPPAGE",
               # Task AQ: secret scan.
               "SECRET_VALUE_MIN_LEN", "MNEMONIC_MIN_WORDS", "SECRET_HASH_PREFIX_CHARS",
+              # Task AW: WS heartbeat liveness.
+              "WS_PONG_TIMEOUT_S",
               # Task AP: heartbeats, the resident Sentinel and its escalations.
               "HEARTBEAT_RECORDER_EVERY_S", "HEARTBEAT_RECORDER_TIMEOUT_S", "HEARTBEAT_REST_TIMEOUT_S",
               "SCANNER_HANG_S", "SCANNER_MAX_SUCCESS_AGE_S", "SCANNER_INCOMPLETE_CONSECUTIVE",
@@ -296,6 +299,7 @@ def test_relations_hold():
         ("WS_BACKOFF_CAP_S = 60.0", "WS_BACKOFF_CAP_S = 0.5"),
         ("WS_BACKOFF_BASE_S = 1.0", "WS_BACKOFF_BASE_S = 0.0"),
         ("WS_PING_INTERVAL_S = 10.0", "WS_PING_INTERVAL_S = 30.0"),
+        ("WS_PONG_TIMEOUT_S = 30.0", "WS_PONG_TIMEOUT_S = 10.0"),
         ("WS_ROW_REFRESH_S = 30.0", "WS_ROW_REFRESH_S = 120.0"),
         ("WS_STOP_POLL_S = 1.0", "WS_STOP_POLL_S = 0.0"),
         ("WS_STOP_POLL_S = 1.0", "WS_STOP_POLL_S = 11.0"),

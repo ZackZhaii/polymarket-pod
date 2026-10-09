@@ -395,6 +395,15 @@
       "surface": "grok-bot"
     },
     {
+      "id": "AW",
+      "status": "done",
+      "title": "WS recorder resync hardening (market channel): tick_size_change re-snapshots the asset, no PONG within 30 s reconnects, unknown events for a subscribed asset resync it, snapshot hash computed and recorded (not enforced: unvalidated on WS snapshots)",
+      "finish": "src/ws_recorder.py: a valid tick_size_change resyncs the asset (reason tick_size_change, invalidation row + resubscribe; not a gap for the escalation); a PING unanswered for WS_PONG_TIMEOUT_S (30 s, src/thresholds.py, M2 pending) disconnects (pong_timeout, every asset resyncs, counted toward the reconnect escalation); an unknown event_type naming a subscribed asset or its market, or naming nothing, resyncs (unknown_event, a gap resync); book_hash_check(): SHA-1 of compact JSON of market, asset_id, timestamp, hash=\"\", bids, asks, min_order_size, tick_size, neg_risk, last_trade_price (Poly研究's notes from old clients/Nautilus), recorded per row (book_hash_check) and counted, never acted on (BOOK_HASH_ENFORCED = False per Poly指挥: the M1 recording had 0 snapshots with levels to validate against; enforced path tested). No new URL, dependency or frame. docs/THRESHOLDS.md row and relation. Tests offline with synthetic frames. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (Poly研究's research_dataapi_ws_m2.md WS part); hash ruling by Poly指挥: record, do not verify, unless every tested real snapshot matches. Done by grok-bot. Behaviour changes: a tick change, an unknown event for a subscribed asset and a silent server now invalidate books (more resync rows); rows gain book_hash_check.",
+      "done_at": "2026-10-09T11:10:40Z",
+      "surface": "grok-bot"
+    },
+    {
       "id": "AX",
       "status": "done",
       "title": "M3 calibration step 2 (prerequisite): identity fields on forecasts, scanner rows and paper fills, plus the sealed forecast log logs/forecasts.jsonl, so forecasts and fills can be joined to data/resolutions.jsonl",
