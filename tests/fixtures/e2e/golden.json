@@ -200,6 +200,21 @@
     ],
     "halt_reason": "invalid_risk_state",
     "halted": true,
+    "intent_builder": {
+      "edge_no": -0.085,
+      "edge_yes": 0.055,
+      "first_reason": null,
+      "intent": true,
+      "kelly_frac": 0.01410256,
+      "limit_price": 0.41,
+      "marks": [
+        "top_of_book_only"
+      ],
+      "outcome_index": 0,
+      "reasons": [],
+      "shares": 24.39,
+      "size_pct": 0.01
+    },
     "label": "alpha-allow",
     "ledger_problems": [
       "unterminated_last_row",
@@ -229,6 +244,21 @@
     ],
     "halt_reason": "ledger_integrity",
     "halted": true,
+    "intent_builder": {
+      "edge_no": -0.085,
+      "edge_yes": 0.055,
+      "first_reason": null,
+      "intent": true,
+      "kelly_frac": 0.01410256,
+      "limit_price": 0.41,
+      "marks": [
+        "top_of_book_only"
+      ],
+      "outcome_index": 0,
+      "reasons": [],
+      "shares": 24.39,
+      "size_pct": 0.01
+    },
     "label": "alpha-allow",
     "ledger_is_start_plus_tear": true,
     "ledger_problems": [
@@ -277,6 +307,21 @@
       "edge": 0.085,
       "fee_usd": 0.0,
       "halted": false,
+      "intent_builder": {
+        "edge_no": -0.115,
+        "edge_yes": 0.085,
+        "first_reason": "stale_book",
+        "intent": false,
+        "kelly_frac": 0.01861314,
+        "limit_price": 0.31,
+        "marks": [],
+        "outcome_index": 0,
+        "reasons": [
+          "stale_book"
+        ],
+        "shares": 32.25,
+        "size_pct": 0.01
+      },
       "label": "charlie-stale",
       "market": "e2e-charlie",
       "reasons": [
@@ -291,6 +336,21 @@
       "edge": -1.0,
       "fee_usd": 0.0,
       "halted": false,
+      "intent_builder": {
+        "edge_no": -0.115,
+        "edge_yes": -1.0,
+        "first_reason": "non_positive_edge",
+        "intent": false,
+        "kelly_frac": 0.0,
+        "limit_price": 0.51,
+        "marks": [],
+        "outcome_index": 1,
+        "reasons": [
+          "non_positive_edge"
+        ],
+        "shares": 19.6,
+        "size_pct": 0.01
+      },
       "label": "delta-nan",
       "market": "e2e-delta",
       "reasons": [
@@ -309,6 +369,21 @@
       "edge": 0.085,
       "fee_usd": 0.0,
       "halted": false,
+      "intent_builder": {
+        "edge_no": null,
+        "edge_yes": null,
+        "first_reason": "sell_requires_position",
+        "intent": false,
+        "kelly_frac": null,
+        "limit_price": null,
+        "marks": [],
+        "outcome_index": null,
+        "reasons": [
+          "sell_requires_position"
+        ],
+        "shares": null,
+        "size_pct": null
+      },
       "label": "echo-wash",
       "market": "e2e-echo",
       "reasons": [
@@ -323,6 +398,21 @@
       "edge": 0.015,
       "fee_usd": 0.0,
       "halted": false,
+      "intent_builder": {
+        "edge_no": -0.015,
+        "edge_yes": 0.015,
+        "first_reason": "edge_below_min",
+        "intent": false,
+        "kelly_frac": 0.00463918,
+        "limit_price": 0.51,
+        "marks": [],
+        "outcome_index": 0,
+        "reasons": [
+          "edge_below_min"
+        ],
+        "shares": 19.6,
+        "size_pct": 0.01
+      },
       "label": "foxtrot-thin-edge",
       "market": "e2e-foxtrot",
       "reasons": [
@@ -350,6 +440,21 @@
         "ts": "2026-09-01T12:00:00Z"
       },
       "halted": false,
+      "intent_builder": {
+        "edge_no": -0.085,
+        "edge_yes": 0.055,
+        "first_reason": null,
+        "intent": true,
+        "kelly_frac": 0.01410256,
+        "limit_price": 0.41,
+        "marks": [
+          "top_of_book_only"
+        ],
+        "outcome_index": 0,
+        "reasons": [],
+        "shares": 24.39,
+        "size_pct": 0.01
+      },
       "label": "alpha-allow",
       "market": "e2e-alpha",
       "reasons": [],
@@ -375,6 +480,21 @@
         "ts": "2026-09-01T12:00:00Z"
       },
       "halted": false,
+      "intent_builder": {
+        "edge_no": -0.1233,
+        "edge_yes": 0.0727,
+        "first_reason": null,
+        "intent": true,
+        "kelly_frac": 0.02925946,
+        "limit_price": 0.61,
+        "marks": [
+          "top_of_book_only"
+        ],
+        "outcome_index": 0,
+        "reasons": [],
+        "shares": 16.39,
+        "size_pct": 0.01
+      },
       "label": "bravo-allow",
       "market": "e2e-bravo",
       "reasons": [],
@@ -387,6 +507,21 @@
       "edge": 0.085,
       "fee_usd": 0.0,
       "halted": false,
+      "intent_builder": {
+        "edge_no": -0.115,
+        "edge_yes": 0.085,
+        "first_reason": null,
+        "intent": true,
+        "kelly_frac": 0.02383178,
+        "limit_price": 0.46,
+        "marks": [
+          "top_of_book_only"
+        ],
+        "outcome_index": 0,
+        "reasons": [],
+        "shares": 21.73,
+        "size_pct": 0.01
+      },
       "label": "golf-cap",
       "market": "e2e-golf",
       "reasons": [
@@ -457,6 +592,21 @@
         "ts": "2026-09-01T12:00:00Z"
       },
       "halted": false,
+      "intent_builder": {
+        "edge_no": -0.085,
+        "edge_yes": 0.055,
+        "first_reason": null,
+        "intent": true,
+        "kelly_frac": 0.01410256,
+        "limit_price": 0.41,
+        "marks": [
+          "top_of_book_only"
+        ],
+        "outcome_index": 0,
+        "reasons": [],
+        "shares": 24.39,
+        "size_pct": 0.01
+      },
       "label": "alpha-again",
       "market": "e2e-alpha",
       "reasons": [],
@@ -501,6 +651,21 @@
         "edge": 0.085,
         "fee_usd": 0.0,
         "halted": false,
+        "intent_builder": {
+          "edge_no": -0.115,
+          "edge_yes": 0.085,
+          "first_reason": "stale_book",
+          "intent": false,
+          "kelly_frac": 0.01861314,
+          "limit_price": 0.31,
+          "marks": [],
+          "outcome_index": 0,
+          "reasons": [
+            "stale_book"
+          ],
+          "shares": 32.25,
+          "size_pct": 0.01
+        },
         "label": "charlie-stale",
         "market": "e2e-charlie",
         "reasons": [
@@ -522,6 +687,21 @@
         "edge": 0.0727,
         "fee_usd": 0.2,
         "halted": false,
+        "intent_builder": {
+          "edge_no": -0.1233,
+          "edge_yes": 0.0727,
+          "first_reason": null,
+          "intent": true,
+          "kelly_frac": 0.02925946,
+          "limit_price": 0.61,
+          "marks": [
+            "top_of_book_only"
+          ],
+          "outcome_index": 0,
+          "reasons": [],
+          "shares": 16.39,
+          "size_pct": 0.01
+        },
         "label": "bravo-allow",
         "market": "e2e-bravo",
         "reasons": [

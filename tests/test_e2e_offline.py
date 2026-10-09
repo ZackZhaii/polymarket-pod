@@ -260,6 +260,55 @@ def test_market_resume_cannot_lift_a_global_halt_and_only_the_operator_resumes(r
                                      and r["payload"]["halt_ref"]["id"] for r in resumes)
 
 
+# ---------------------------------------------------------------- Task AO: intent_builder shadow (phase 1)
+
+SHADOW_EXPECTED = {  # SPEC_signal_to_intent 9.3 phase 1
+    "charlie-stale": ["stale_book"],
+    "delta-nan": ["non_positive_edge"],  # the NaN YES ask cannot be walked; the NO side has no edge
+    "echo-wash": ["sell_requires_position"],
+    "foxtrot-thin-edge": ["edge_below_min"],
+    "alpha-allow": [],
+    "bravo-allow": [],
+    "golf-cap": [],  # the position cap stays RiskGate's
+}
+
+
+def test_intent_builder_shadow_reasons_per_scenario(run):
+    for label, reasons in SHADOW_EXPECTED.items():
+        shadow = decision(run, label)["intent_builder"]
+        assert shadow["reasons"] == reasons, label
+        assert shadow["intent"] is (not reasons), label
+
+
+def test_intent_builder_shadow_allows_are_capped_and_kelly_is_shadow(run):
+    for label in ("alpha-allow", "bravo-allow", "golf-cap"):
+        shadow = decision(run, label)["intent_builder"]
+        assert shadow["outcome_index"] == 0 and shadow["size_pct"] == 0.01
+        assert shadow["kelly_frac"] > 0.01 and shadow["marks"] == ["top_of_book_only"]
+    assert decision(run, "alpha-allow")["intent_builder"]["kelly_frac"] == pytest.approx(0.15 * 0.055 / 0.585)
+
+
+def test_intent_builder_shadow_does_not_change_riskgate_decisions(run, golden):
+    def strip(value):
+        if isinstance(value, dict):
+            return {k: strip(v) for k, v in value.items() if k != "intent_builder"}
+        if isinstance(value, list):
+            return [strip(v) for v in value]
+        return value
+    assert strip(run["actual"]) == strip(golden)
+    assert [d["allow"] for d in run["actual"]["decisions"]] == [False, False, False, False, True, True, False]
+
+
+def test_a_looser_intent_builder_breaks_the_gate(monkeypatch):
+    """If the builder produced an intent RiskGate vetoes for an edge reason, the run reports it."""
+    from src import intent_builder
+
+    monkeypatch.setattr(intent_builder, "MIN_EDGE", -1.0)  # never edge_below_min, and no edge floor at all
+    monkeypatch.setattr(intent_builder, "EDGE_TOLERANCE", 0.0)
+    result = harness.run_once(FIXTURES)
+    assert any("intent_builder produced an intent RiskGate vetoes" in p for p in result["problems"])
+
+
 # ---------------------------------------------------------------- invariants
 
 def test_conservation_holds_and_fill_ids_are_unique(run):

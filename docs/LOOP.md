@@ -764,7 +764,7 @@ the guard fails on any drift, golden changes only with `--update-golden`, and `p
   (stdlib + src, ~0.1 s; no pytest, so it works in the M1 venv). `tests/test_e2e_offline.py` runs it plus one test per
   scenario/invariant. Golden: `python -m pytest tests/test_e2e_offline.py --update-golden` (off by default, tested;
   that run fails on purpose). Docs: `docs/PHASE0_RUN.md` "E2E offline gate", `tests/fixtures/e2e/README.md`.
-- Not connected in src yet: signal -> Intent (harness `build_intent`; fee_rate/slippage are fixture inputs), Endgame
+- Not connected in src yet (signal -> Intent: Task AO, shadow): signal -> Intent (harness `build_intent`; fee_rate/slippage are fixture inputs), Endgame
   -> Intent (no model probability), halt consumers (nothing blocks later intents after a halt). No new threshold or URL.
 
 ## Task AK — Data API v2 reconciliation: read-only src/reconcile.py on /v2/positions and /v2/trades (backlog #25)
@@ -837,10 +837,48 @@ is a global halt, only an Operator resume releases one, the e2e gate and guard p
 - No new threshold (no M2 addition), no URL, risk.toml unchanged. Docs: PROTOCOL.md, COORDINATION (Operator bus
   exception, #26), PHASE0_RUN "Halts and resume".
 
+## Task AO — Signal -> OrderIntent: pure, tightening-only src/intent_builder.py, Kelly shadow, e2e shadow gate (SPEC_signal_to_intent)
+
+Status: done.
+
+Requested by Poly指挥 (queue: signal→intent after AK/AL), done by grok-bot from Poly预测's
+`forecaster/SPEC_signal_to_intent.md` (baseline dev@f760e51). No src module turned a signal into a RiskGate
+Intent; the e2e harness glue `build_intent` was the only producer. Letters AM (CI workflow) and AN (M3
+resolution snapshot) were taken by the user's Grok Build sessions, so this is AO.
+
+Finish when a pure builder produces an OrderIntent or canonical reasons, is never looser than RiskGate, keeps Kelly
+in shadow, runs in the e2e gate in shadow mode, and `python -m pytest` and guard --require-git pass offline.
+
+- `src/intent_builder.py` (stdlib + fees, book_staleness, expiry_rule, thresholds, podlib.pin_problems,
+  risk_gate): `ProbabilitySignal`, `BookSnapshot`, `MarketContext`, `OrderIntent`, `IntentResult`;
+  `build_order_intent`, `to_risk_intent`, `combine_probability`, `walk_asks`, `side_edge`, `kelly_size`, pure
+  adapters `signal_from_bus` / `book_snapshot_from_row` / `market_context_from_row`. No clock read (`now`
+  injected, else `invalid_now`), no file, bus or network; inputs never mutated (T-PURE).
+- Edge per side with the conservative interval end, the book-walk price, `INTENT_ASSUMED_SLIPPAGE` and
+  `fees.stress_fee` unchanged; bit-for-bit RiskGate's edge (T-EQ). Better side wins, tie -> outcome 0. Reasons in the
+  SPEC 5 order; any reason means no intent. Price band by source (news [0.03, 0.97], endgame_confirm [0.98, 0.99]);
+  a risk.toml band override can only narrow it. A raw Endgame signal is `missing_model_prob`.
+- Size = RiskGate's 1% clip, shares rounded down at the tick-rounded limit, under `min_order_size` rejected. Kelly
+  (kelly_fraction 0.15) is SHADOW only: kelly_raw / kelly_frac / Kelly size reported, never used;
+  `kelly_not_enforced_by_riskgate` marks intents whose Kelly is below the clip. Enforcing it needs RiskGate
+  `Intent.size_usd` (KEY, backlog #7).
+- Deviations: open-only (sell -> `sell_requires_position`, or `sell_not_supported` with a position; no reduce path
+  yet); extra fail-closed codes `invalid_outcome_index`, `market_mismatch`, `not_binary_market`,
+  `invalid_book_levels`; `not_accepting_orders` also for unknown (None); blend freshness = strictest source limit.
+- e2e phase 1 (shadow): each decision in golden gains `intent_builder` (only additions; RiskGate decisions,
+  fills, cash unchanged). The run fails if the builder's Intent differs from `build_intent`'s on the same token or
+  if it produces an intent RiskGate vetoes for an edge/price/spread/liquidity/staleness reason (tested by loosening
+  it). Golden rewritten only with `--update-golden`.
+- New numbers (src/thresholds.py, docs/THRESHOLDS.md): `INTENT_ASSUMED_SLIPPAGE = 0.005`, `INTENT_TTL_S = 60.0`,
+  `MAX_SIGNAL_AGE_NEWS_S = 3600.0`, `MAX_SIGNAL_AGE_SPORTS_DEVIG_S = 300.0`, `MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S = 600.0`,
+  `MAX_SOURCE_LOGIT_GAP = 1.0` (M2 pending; each can only reject); `INTENT_SHARE_STEP = 0.01` (rounding). No
+  risk.toml key, no URL, no order code. Tests: `tests/test_intent_builder.py` (T-* plan and properties P1-P5,
+  fixed seeds), `tests/test_e2e_offline.py`. config/risk.toml unchanged, `live_enabled` false.
+
 ## Latest
 
-- 2026-10-09: Task AL done by grok-bot (requested by Poly指挥, Poly哨兵 design gaps 1/3/7/8/10, backlog #26). Halts are persisted (`src/halt_store.py`) and obeyed.
-- RiskGate, Maker and paper_cycle veto a halted market or everything under a global halt; a bad halt file or `logs/HALT` is global; `invalid_risk_state` and Executor ledger halts are global.
-- `resume` bus type only from Operator (approved_by + halt_ref); a market resume cannot lift a global halt; release only via `python -m src.halt_store resume`. Markets without a book row are stale.
-- e2e golden `halt_consumer` + guard check `halt`; `python -m pytest` passed offline (1771 passed; on Windows 1767 passed, 4 symlink tests skipped); guard --require-git 9/9 PASS. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty (AK merged in #39 and merged into this branch). AL adds no M2 number; AK's five stay pending. Heartbeat (gap 2) is a later task.
+- 2026-10-09: Task AO done by grok-bot (requested by Poly指挥; Poly预测's SPEC_signal_to_intent). `src/intent_builder.py` turns a signal + scanner row + books into an OrderIntent or canonical reasons; pure, tightening only, bit-for-bit RiskGate's edge.
+- Kelly is shadow only (reported, never sized); size stays RiskGate's 1% clip. Enforcing Kelly / phase 2 needs RiskGate `Intent.size_usd` (KEY, backlog #7).
+- e2e gate runs the builder in shadow mode: golden gains `intent_builder` per decision (only additions); a builder looser than RiskGate fails the gate.
+- Six new M2-pending numbers (INTENT_ASSUMED_SLIPPAGE, INTENT_TTL_S, three MAX_SIGNAL_AGE_*_S, MAX_SOURCE_LOGIT_GAP) and INTENT_SHARE_STEP; config/risk.toml unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
+- Before AO: Task AL (halt consumer, #40) and AK (Data API v2 reconciliation, #39) merged into dev.

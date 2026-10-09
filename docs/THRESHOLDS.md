@@ -54,6 +54,13 @@ proposals waiting for the user's decision at M2. Task AC moved no value and chan
 | `DATA_API_TRADES_MIN_SHARES` | `0.01` | shares | Data API v2 `/v2/trades` smallest served fill (`filter_amount` default; 0 means the same). A ledger fill below it cannot be verified: `ledger_fill_below_data_api_trade_floor` (fails). Contract fact, not a choice. | `src/thresholds.py` (used by `src/reconcile.py`) | Task AK, docs.polymarket.com Data API v2 openapi | yes |
 | `DATA_API_MAX_LAG_S` | `120.0` | s | Reconciler reads `/v2/status` first each round; snapshot `age_seconds` + `serving.lag_seconds` above this (or either missing/null, or the chain not polygon/137) fails closed (`status_lag_too_large`, exit 3). | `src/thresholds.py` (used by `src/reconcile.py`) | Task AK, Poly研究 research_dataapi_ws_m2.md | yes |
 | `DATA_API_IDENTITY_TOL_USDC` | `1e-06` | USDC | Each `/v2/positions` row must satisfy the documented identities (`current_value = current_size * current_price`, `unrealized_pnl = current_value - entry_cost_usdc`, `total_pnl = realized_pnl + unrealized_pnl`, `total_cost_usdc = entry_cost_usdc + entry_fees_usdc`) within this, or it is malformed (exit 3). Live rows on 2026-10-09 were within 1.2e-10. | `src/thresholds.py` (used by `src/reconcile.py`) | Task AK, Poly研究 research_dataapi_ws_m2.md | yes |
+| `INTENT_ASSUMED_SLIPPAGE` | `0.005` | price | Signal -> OrderIntent: slippage added to the book-walk price before the edge counts (`edge = p_side - (exec_price + slippage) - fee`); passed to RiskGate as `assumed_slippage`, so both compute the same edge. | `src/thresholds.py` (used by `src/intent_builder.py`) | Task AO, SPEC_signal_to_intent 2.1 / 7-2 | yes |
+| `INTENT_SHARE_STEP` | `0.01` | shares | OrderIntent shares are rounded down to a multiple of this; below the book's `min_order_size` is `size_below_min_order` (never rounded up). | `src/thresholds.py` (used by `src/intent_builder.py`) | Task AO, SPEC 3 | no (rounding) |
+| `INTENT_TTL_S` | `60.0` | s | An OrderIntent expires at the earliest of `now + INTENT_TTL_S`, `book_ts + MAX_BOOK_AGE_S` and `end_date - MIN_HOURS_TO_EXPIRY`. Must be <= `MAX_BOOK_AGE_S`. | `src/thresholds.py` (used by `src/intent_builder.py`) | Task AO, SPEC 4 | yes |
+| `MAX_SIGNAL_AGE_NEWS_S` | `3600.0` | s | A NewsForecaster (or forecaster_override) signal older than this is `stale_signal`; missing, unparseable or future `signal_ts` also rejects. | `src/thresholds.py` (used by `src/intent_builder.py`) | Task AO, SPEC 1.3 | yes |
+| `MAX_SIGNAL_AGE_SPORTS_DEVIG_S` | `300.0` | s | Same for a SportsDevig signal. A blend uses the smallest of the three limits. | `src/thresholds.py` (used by `src/intent_builder.py`) | Task AO, SPEC 1.3 | yes |
+| `MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S` | `600.0` | s | Same for an `endgame_confirm` probability (a raw Endgame signal has none: `missing_model_prob`). | `src/thresholds.py` (used by `src/intent_builder.py`) | Task AO, SPEC 1.3 | yes |
+| `MAX_SOURCE_LOGIT_GAP` | `1.0` | log-odds | Two model sources for one outcome whose point estimates differ by more than this are `source_conflict` (no blend, no intent). | `src/thresholds.py` (used by `src/intent_builder.py`) | Task AO, SPEC 1.3 | yes |
 
 Relations checked when `src/thresholds.py` is imported (an explicit `RuntimeError`, not `assert`):
 `SENTINEL_STALE_S == MAX_BOOK_AGE_S`, `PAPER_CYCLE_STALE_AFTER_S == MAX_BOOK_AGE_S`,
@@ -66,7 +73,9 @@ Relations checked when `src/thresholds.py` is imported (an explicit `RuntimeErro
 both M1 rates in `[0, 1)`, `0 < M1_REST_MATCH_WINDOW_S <= WS_ROW_REFRESH_S`, and a full run can collect enough REST
 samples: `M1_MIN_RUN_S / M1_REST_EVERY_S * M1_REST_ASSETS >= M1_MIN_REST_MATCHED`; reconcile (Task AK):
 `0 < RECONCILE_SHARES_TOL < DATA_API_TRADES_MIN_SHARES <= DATA_API_POSITIONS_DUST_SHARES` and
-`LEDGER_OPEN_EPS <= RECONCILE_SHARES_TOL`, `DATA_API_MAX_LAG_S > 0`, `DATA_API_IDENTITY_TOL_USDC > 0`.
+`LEDGER_OPEN_EPS <= RECONCILE_SHARES_TOL`, `DATA_API_MAX_LAG_S > 0`, `DATA_API_IDENTITY_TOL_USDC > 0`; intent builder
+(Task AO): `0 <= INTENT_ASSUMED_SLIPPAGE < 1`, `0 < INTENT_SHARE_STEP <= 1`, `0 < INTENT_TTL_S <= MAX_BOOK_AGE_S`,
+every `MAX_SIGNAL_AGE_*_S > 0`, `MAX_SOURCE_LOGIT_GAP > 0`.
 `src/sentinel.py` keeps its own `SENTINEL_STALE_S != MAX_BOOK_AGE_S` guard as well.
 
 ## Operational limits (stay in their modules)
@@ -105,5 +114,5 @@ is copied into `src/thresholds.py`. `mode`, `live_enabled`, `require_human_gate`
 | `max_open_positions` | `5` | legs | Open legs (market + token) cap. | `risk.toml: max_open_positions` | config/risk.toml | file-governed |
 | `min_liquidity_usd` | `10000` | USD | Scanner and RiskGate liquidity floor (and the Gamma pre-filter). | `risk.toml: min_liquidity_usd` | config/risk.toml | file-governed |
 | `max_spread` | `0.04` | price | Scanner and RiskGate spread ceiling. | `risk.toml: max_spread` | config/risk.toml | file-governed |
-| `kelly_fraction` | `0.15` | fraction | Not used by RiskGate today (backlog #7). | `risk.toml: kelly_fraction` | config/risk.toml | file-governed |
+| `kelly_fraction` | `0.15` | fraction | Not used by RiskGate today (backlog #7). `src/intent_builder.py` (Task AO) computes a Kelly size with it in shadow mode only (reported, never used for size). | `risk.toml: kelly_fraction` | config/risk.toml | file-governed |
 | `require_human_gate` | `true` | — | A human gate is required. Pinned. | `risk.toml: require_human_gate` | config/risk.toml | file-governed |
