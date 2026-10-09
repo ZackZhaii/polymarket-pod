@@ -45,7 +45,9 @@ GAMMA_CLOSED_KEYSET = (
     "?closed=true&order=closedTime&ascending=false"
 )
 
-EXIT_PIN = 4
+# Task AV: exit 4 used to mean both pin drift and a bad snapshot clock. Now split; 4 is retired.
+EXIT_BAD_CLOCK = 5  # the snapshot clock is not a zoned ISO timestamp; nothing fetched (global halt)
+EXIT_PIN_DRIFT = 6  # same code as scanner/book/ws_recorder/m1_run: risk.toml / paper pins drifted (global halt)
 ROW_FIELDS = (
     "condition_id",
     "winning_token_id",
@@ -229,17 +231,17 @@ def main(
     from src.pins import refuse_start  # Task AS (gap 5): the risk file pins (sha + every key) at start
 
     if refuse_start("resolutions"):
-        return EXIT_PIN
+        return EXIT_PIN_DRIFT
     cfg = load_risk()
     drifted = pin_problems(cfg)
     if drifted:
         print("resolutions refused: paper pins drifted: " + "; ".join(drifted), file=sys.stderr)
-        return EXIT_PIN
+        return EXIT_PIN_DRIFT
     stamp = ts or utc_now()
     now_dt = now if _aware(now) else parse_end_date(stamp)
     if now_dt is None or not _aware(now_dt):
         print("resolutions refused: snapshot clock is not a zoned ISO timestamp", file=sys.stderr)
-        return EXIT_PIN
+        return EXIT_BAD_CLOCK
     path = resolutions_path or RESOLUTIONS_PATH
     raw, fetch = fetch_all_markets(
         getter,
@@ -276,4 +278,8 @@ def main(
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Task AV: start/finish heartbeat (logs/heartbeat/resolutions.json) so the resident Sentinel acts
+    # on exit 5 / 6 (docs/EXIT_CODES.md).
+    from src.heartbeat import run_main
+
+    raise SystemExit(run_main("resolutions", main))

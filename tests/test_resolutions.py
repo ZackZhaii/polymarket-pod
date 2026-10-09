@@ -214,8 +214,30 @@ def test_pin_drift_does_not_fetch(tmp_path, monkeypatch):
         ts=TS,
         now=NOW,
     )
-    assert code == resolutions.EXIT_PIN != 0
+    assert code == resolutions.EXIT_PIN_DRIFT == 6
     assert calls == [] and not path.exists()
+
+
+@pytest.mark.parametrize("ts", ["not-a-time", "2026-10-09T10:00:00"])
+def test_bad_snapshot_clock_has_its_own_code_and_does_not_fetch(tmp_path, ts):
+    # Task AV: a snapshot clock that is not a zoned ISO timestamp is exit 5, not the pin-drift code
+    calls: list[str] = []
+    path = tmp_path / "resolutions.jsonl"
+    code = resolutions.main(
+        getter=lambda url: calls.append(url) or {"markets": [_closed(1)], "next_cursor": ""},
+        resolutions_path=path,
+        ts=ts,
+    )
+    assert code == resolutions.EXIT_BAD_CLOCK == 5
+    assert code != resolutions.EXIT_PIN_DRIFT
+    assert calls == [] and not path.exists()
+
+
+def test_exit_4_is_retired():
+    codes = {name: value for name, value in vars(resolutions).items() if name.startswith("EXIT_")}
+    assert 4 not in codes.values()
+    assert not hasattr(resolutions, "EXIT_PIN")
+    assert codes["EXIT_PIN_DRIFT"] == 6 and codes["EXIT_BAD_CLOCK"] == 5 and codes["EXIT_INCOMPLETE"] == 3
 
 
 def test_closed_true_url_and_not_closed_false(tmp_path):
@@ -277,3 +299,9 @@ def test_does_not_redefine_hold_hours():
     tree_src = Path(resolutions.__file__).read_text(encoding="utf-8")
     assert "RESOLUTION_HOLD_HOURS =" not in tree_src
     assert "from src.thresholds import RESOLUTION_HOLD_HOURS" in tree_src
+
+
+def test_main_block_writes_a_start_finish_heartbeat():
+    # Task AV: the Sentinel can only act on exit 5 / 6 if resolutions beats (like scanner, endgame_scan)
+    text = Path(resolutions.__file__).read_text(encoding="utf-8")
+    assert 'run_main("resolutions", main)' in text.split('if __name__ == "__main__":', 1)[1]

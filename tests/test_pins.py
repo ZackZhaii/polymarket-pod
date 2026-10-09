@@ -205,11 +205,12 @@ def test_endgame_scan_refuses_with_4(drift):
     assert len(halts()) == 1
 
 
-def test_resolutions_refuses_with_4(drift, tmp_path):
+def test_resolutions_refuses_with_6(drift, tmp_path):
     from src import resolutions
 
     out = tmp_path / "resolutions.jsonl"
-    assert resolutions.main(getter=_no_network, resolutions_path=out) == resolutions.EXIT_PIN == 4
+    # Task AV: pin drift is 6 (scanner's code), no longer the shared 4
+    assert resolutions.main(getter=_no_network, resolutions_path=out) == resolutions.EXIT_PIN_DRIFT == 6
     assert not out.exists() and len(halts()) == 1
 
 

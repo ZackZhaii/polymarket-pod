@@ -54,9 +54,21 @@ def test_every_entry_point_is_registered():
 def test_the_pin_drift_codes_are_global_halts():
     events, procs = exit_codes.sentinel_matrix(ROOT)
     for proc, code in [("scanner", 6), ("ws_recorder", 6), ("m1_run", 6), ("paper_cycle", 1),
-                       ("loop_claim", 2), ("endgame_scan", 4), ("m1_run", 4), ("ws_recorder", 4)]:
+                       ("loop_claim", 2), ("endgame_scan", 4), ("m1_run", 4), ("ws_recorder", 4),
+                       ("resolutions", 6), ("resolutions", 5)]:
         assert events[(proc, code)] == "global halt", (proc, code)
     assert exit_codes.module_constants(ROOT, "src/loop_claim.py")["EXIT_USAGE"] == 5  # no longer argparse's 2
+
+
+def test_resolutions_exit_4_is_split():
+    # Task AV: one code per meaning; pin drift and a bad snapshot clock are both global halts
+    sections, problems = exit_codes.parse_registry((ROOT / exit_codes.REGISTRY_REL).read_text(encoding="utf-8"))
+    assert problems == []
+    rows = {code: (name, word) for code, name, _, word in sections["src/resolutions.py"]}
+    assert 4 not in rows
+    assert rows[6] == ("EXIT_PIN_DRIFT", "global halt") and rows[5] == ("EXIT_BAD_CLOCK", "global halt")
+    assert exit_codes.module_constants(ROOT, "src/resolutions.py") == {
+        "EXIT_OK": 0, "EXIT_INCOMPLETE": 3, "EXIT_BAD_CLOCK": 5, "EXIT_PIN_DRIFT": 6}
 
 
 def test_constants_resolve_through_imports():

@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T09:34:19Z",
+  "ts": "2026-10-09T10:39:01Z",
   "live_enabled": false,
-  "last_done": "AS",
+  "last_done": "AV",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AS (exit-code registry docs/EXIT_CODES.md for all 18 entry points, kept in sync by tests/test_exit_codes.py and guard check 12 exit_codes; runtime pin checks src/pins.py: config/risk.toml sha256 + all 9 keys at start of scanner/book/ws_recorder/m1_run/endgame_scan/resolutions/loop_claim, before every paper_cycle cycle and every PIN_RECHECK_S in ws_recorder/m1_run; drift = refuse + one global halt) done by grok-bot. Behaviour changes: loop_claim usage exit 5 (was 2), paper_cycle exit 1 = global halt, new exit 6 for scanner/book/ws_recorder/m1_run. M2 pending adds PIN_RECHECK_S. AR (#46 daily_loss counts realized losses) and AT (#47 one ASSUMED_SLIPPAGE) merged into this branch from dev. No open todo. No live gate."
+  "note": "AV (resolutions exit 4 split: pin drift 6, bad snapshot clock 5, both global halts; resolutions start/finish heartbeat, Sentinel PROC_SPECS + EXIT_EVENTS, docs/EXIT_CODES.md) done by grok-bot. No new number. AU (#49) in flight. No open todo. No live gate."
 }

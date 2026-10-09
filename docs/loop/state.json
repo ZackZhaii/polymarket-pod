@@ -375,6 +375,15 @@
       "note": "Requested by Poly指挥 (queue: heartbeat -> EXIT_CODES/pins); done by grok-bot from Poly哨兵's sentinel_design.md gaps 4-6. AR (#46, daily_loss) landed on dev first and was merged into this branch. Behaviour changes: loop_claim usage errors exit 5 (was argparse's 2 = EXIT_PIN, a global halt); paper_cycle exit 1 is now a Sentinel global halt (was an alert); new exit 6 for scanner, book, ws_recorder, m1_run; processes record the global halt themselves on drift. podlib.PINS stays at 5 keys (tests vary the in-memory config); the file pins are separate. Left: resolutions exit 4 still covers both pin drift and a bad snapshot clock (documented).",
       "done_at": "2026-10-09T09:34:19Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AV",
+      "status": "done",
+      "title": "Split resolutions exit 4 (pin drift or bad snapshot clock): pin drift = 6 (scanner's EXIT_PIN_DRIFT), bad snapshot clock = 5 (EXIT_BAD_CLOCK), both Sentinel global halts; resolutions gets a start/finish heartbeat",
+      "finish": "src/resolutions.py: EXIT_PIN (4) retired; EXIT_PIN_DRIFT = 6 (risk file pins via refuse_start, global halt recorded, or the in-memory podlib PINS) and EXIT_BAD_CLOCK = 5 (snapshot clock not a zoned ISO timestamp); nothing fetched or written on either. __main__ runs through heartbeat.run_main('resolutions'). src/sentinel_tick.py: PROC_SPECS resolutions (SCANNER_HANG_S, started_at clock, hang = alert); EXIT_EVENTS (resolutions, 6) and (resolutions, 5) = GLOBAL (no design row for the clock: the stricter action, like heartbeat_bad_time). docs/EXIT_CODES.md section (3 now alert, 5 and 6 global halt, no 4), checked by tests/test_exit_codes.py and guard check 12 exit_codes. Tests: test_resolutions (exit 5 for a bad / unzoned clock, no fetch; 4 retired; heartbeat in __main__), test_pins (6), test_sentinel_tick (matrix rows), test_exit_codes. No new number. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (follow-up left open by AS); done by grok-bot. Behaviour changes: resolutions pin drift exits 6 (was 4); a bad snapshot clock exits 5 (was 4) and is a global halt once the Sentinel reads the new heartbeat; resolutions exit 3 is now an alert (it had no heartbeat before). AU (RiskGate slippage floor, #49) runs in parallel.",
+      "done_at": "2026-10-09T10:39:01Z",
+      "surface": "grok-bot"
     }
   ]
 }

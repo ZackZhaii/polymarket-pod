@@ -266,7 +266,7 @@ No live trading, no key material, no CLOB authentication, no withdraw, no automa
 ## Runtime pin checks (Task AS)
 
 `src/pins.py` checks config/risk.toml as a file: sha256 `0aea23af…bc04` (CRLF normalised) and all 9 keys with value
-and type (`RISK_FILE_PINS`), no unknown key. scanner, book, ws_recorder, m1_run (exit 6), endgame_scan, resolutions
+and type (`RISK_FILE_PINS`), no unknown key. scanner, book, ws_recorder, m1_run, resolutions (exit 6), endgame_scan
 (exit 4) and loop_claim (exit 2) check it at start, paper_cycle before every cycle (exit 1), ws_recorder and m1_run
 again at least every `PIN_RECHECK_S` (60 s) while running (stop, exit 6, m1 manifest status `pin_drift`). Drift, or a
 check that cannot run, records one global Sentinel halt `risk_toml_pin_drift` (the same one the Sentinel tick

@@ -66,7 +66,7 @@ def test_specs_follow_the_thresholds():
     assert st.PROC_SPECS["m1_rest"].timeout_s == HEARTBEAT_REST_TIMEOUT_S
     assert st.PROC_SPECS["paper_cycle"].halt_after_s == 2 * HEARTBEAT_PAPER_CYCLE_TIMEOUT_S
     assert st.PROC_SPECS["halt_consumer"].timeout_s == HEARTBEAT_CONSUMER_TIMEOUT_S
-    assert {p for p, s in st.PROC_SPECS.items() if s.clock == "started_at"} == {"scanner", "endgame_scan", "loop_claim"}
+    assert {p for p, s in st.PROC_SPECS.items() if s.clock == "started_at"} == {"scanner", "endgame_scan", "loop_claim", "resolutions"}
 
 
 def test_a_quiet_world_raises_nothing(env):
@@ -171,6 +171,9 @@ def test_scanner_success_age(env):
     # Task AS (gaps 4 and 5): pin drift codes are global halts; loop_claim usage moved to 5 (an alert)
     ("paper_cycle", 1, True, "exit_1"), ("scanner", 6, True, "exit_6"), ("ws_recorder", 6, True, "exit_6"),
     ("m1_run", 6, True, "exit_6"), ("paper_cycle", 2, False, "exit_2"), ("loop_claim", 5, False, "exit_5"),
+    # Task AV: resolutions' old 4 split into 6 (pin drift) and 5 (bad snapshot clock), both global halts
+    ("resolutions", 6, True, "exit_6"), ("resolutions", 5, True, "exit_5"), ("resolutions", 3, False, "exit_3"),
+    ("resolutions", 4, False, "exit_4"),
 ])
 def test_the_exit_matrix(env, proc, code, halts, alert):
     progress = {"last_success_ts": heartbeat.utc_stamp(NOW)} if proc == "scanner" else {}

@@ -1086,8 +1086,31 @@ running and refuse + halt globally on drift, and `python -m pytest` and guard --
   `tests/test_sentinel_tick.py`, `tests/test_ws_recorder.py`, `tests/test_m1_run.py`, `tests/test_thresholds.py`.
 - Left: resolutions exit 4 still means pin drift or a bad snapshot clock (documented in the registry).
 
+## Task AV — Split resolutions exit 4 (pin drift vs. bad snapshot clock)
+
+Status: done.
+
+Requested by Poly指挥 (left open by Task AS), done by grok-bot on dev@690a63b.
+
+Finish when resolutions has one exit code per meaning, the Sentinel acts on both, the registry and the matrix agree,
+and `python -m pytest` and guard --require-git pass offline.
+
+- `src/resolutions.py`: `EXIT_PIN = 4` retired. Pin drift (risk file pins via `refuse_start`, global halt recorded,
+  or the in-memory `podlib.PINS`) is `EXIT_PIN_DRIFT = 6`, the code scanner / book / ws_recorder / m1_run use. A
+  snapshot clock that is not a zoned ISO timestamp is `EXIT_BAD_CLOCK = 5`. Neither fetches nor writes.
+- `__main__` runs through `heartbeat.run_main("resolutions", main)` (start/finish heartbeat, like scanner), so the
+  resident Sentinel sees its exit codes. `src/sentinel_tick.py`: `PROC_SPECS["resolutions"]` (`SCANNER_HANG_S`,
+  started_at clock, hang = alert); `EXIT_EVENTS` (resolutions, 6) and (resolutions, 5) = global halt. The design
+  has no row for the clock; the stricter action was chosen (as for `heartbeat_bad_time`).
+- `docs/EXIT_CODES.md`: resolutions section 0 / 3 alert / 5 global halt / 6 global halt. PHASE0_RUN and
+  COORDINATION #27 / #31 annotated.
+- Tests: `tests/test_resolutions.py`, `tests/test_pins.py`, `tests/test_sentinel_tick.py`, `tests/test_exit_codes.py`.
+- No new number. config/risk.toml unchanged, `live_enabled` false.
+
 ## Latest
 
+- 2026-10-09: Task AV: resolutions exit 4 split: pin drift 6, bad snapshot clock 5, both global halts; resolutions
+  now beats start/finish and is in the Sentinel's PROC_SPECS (exit 3 = alert). No new number.
 - 2026-10-09: Merge origin/dev (AR #46 daily_loss, AT #47 one ASSUMED_SLIPPAGE) into Task AS; AR, AT and AS all kept.
 - Task AS: `docs/EXIT_CODES.md` registry of all 18 entry points, kept in sync by tests and guard check 12 `exit_codes`.
 - Task AS: `src/pins.py` checks config/risk.toml (sha + all 9 keys) at start and while running; drift = refuse + global halt.
