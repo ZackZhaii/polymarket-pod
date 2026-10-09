@@ -922,10 +922,40 @@ in shadow, runs in the e2e gate in shadow mode, and `python -m pytest` and guard
   risk.toml key, no URL, no order code. Tests: `tests/test_intent_builder.py` (T-* plan and properties P1-P5,
   fixed seeds), `tests/test_e2e_offline.py`. config/risk.toml unchanged, `live_enabled` false.
 
+## Task AQ — Secret-string scan of the bus and logs: src/secret_scan.py, bus() filter, guard check secret_scan (Sentinel design gap 9)
+
+Status: done.
+
+Finish when a private key, mnemonic or credential value on the bus or in logs/ is a global halt, the matched text
+is never echoed, the repo's own files pass, and `python -m pytest` plus `python scripts/guard.py --require-git` pass.
+
+- Source: Poly哨兵's sentinel_design.md (event matrix, SEV-1: report only file:line / category / hash prefix, never
+  echo; no bare 0x+64hex; key-name context reusing guard.py's words, PEM blocks, 12/24 consecutive BIP39 words), gap 9.
+- `src/secret_scan.py` (stdlib + thresholds). Rules: `key_context:<word>` (a credential key name, then `:` or `=`,
+  quotes / JSON escaping / `Bearer` allowed, then a value of >= `SECRET_VALUE_MIN_LEN` token characters with a letter
+  and a digit; the words are guard.py `CREDENTIAL_WORDS` plus private/secret key, mnemonic, seed/recovery phrase,
+  password, access/auth/refresh token, authorization), `pem_private_key` (a BEGIN ... PRIVATE KEY armour line of any
+  type), `bip39_mnemonic` (>= `MNEMONIC_MIN_WORDS` consecutive words of the pinned list `src/bip39_english.txt` on one
+  line, separated by whitespace, commas, semicolons, bars or list numbers). A transaction hash, condition id or token
+  id alone never hits.
+- A finding is `file:line rule=<rule> len=<n> sha256=<8 hex>`; the text is not kept, printed, raised or stored.
+- Runtime: `podlib.bus()` scans each message before writing it. A hit (or a scan that cannot run) is not written; a
+  global halt is recorded (halt_store, source Sentinel) and `SecretRefused` raised. `python -m src.secret_scan
+  [--path P] [--no-halt]` scans logs/ (and any `--path`, e.g. an M1 RUN dir): a hit or an unreadable file is a global
+  `sentinel.halt` (record, paper quotes cancelled, halt bus line); exit 0 clean, 1 secret, 2 scan error, 3 usage.
+  `.env` files are never opened. Lifting it is the Operator's resume after the key is rotated and the logs cleaned.
+- Guard check 10 `secret_scan`: tracked files (`git ls-files`; without git a walk that skips .git, .worktrees,
+  virtualenvs, caches, data/, logs/) and logs/, read only, plus a self-test on fresh random canaries (a weakened rule
+  or one that flags a bare hash FAILs). The repo's own files and fixtures pass.
+- New numbers (src/thresholds.py, docs/THRESHOLDS.md, M2 pending): `SECRET_VALUE_MIN_LEN = 16`,
+  `MNEMONIC_MIN_WORDS = 12` (must stay <= 12), `SECRET_HASH_PREFIX_CHARS = 8`. No risk.toml key, no URL, no order code.
+- Later (not here): bus() write-error handling and ts monotonicity (rest of gap 9), a resident Sentinel tick that
+  runs the scan (gaps 2/12). Tests: `tests/test_secret_scan.py`, `tests/test_guard.py` (fake secrets made at run time).
+
 ## Latest
 
-- 2026-10-09: Merge origin/dev (incl. #42 AN) into Task AO (#43). AM, AN, and AO all kept.
-- Task AN (merged #42): `src/resolutions.py` Gamma closed markets, 48 h hold, `data/resolutions.jsonl`; `RESOLUTION_HOLD_HOURS=48` not M2 pending.
-- Task AO: `src/intent_builder.py` signal->OrderIntent; pure, tightening only; Kelly shadow; e2e shadow gate; INTENT_*/MAX_SIGNAL_AGE_* M2 pending.
-- pytest + guard pass after merge. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty after AM+AN+AO. Heartbeat (gap 2) later.
+- Task AQ: `src/secret_scan.py` secret-string scan (key-name context, PEM private key, 12+ BIP39 words; never a bare 0x+64hex).
+- `podlib.bus()` refuses a message with a hit and records a global halt; `python -m src.secret_scan` halts on hits in logs/.
+- Guard check 10 `secret_scan` (tracked files + logs/, canary self-test). Only file:line, rule, length, sha256 prefix are shown.
+- New M2 pending: SECRET_VALUE_MIN_LEN=16, MNEMONIC_MIN_WORDS=12, SECRET_HASH_PREFIX_CHARS=8. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- AP (heartbeat) runs in parallel. Later: bus write-error handling / ts monotonicity, Sentinel tick running the scan.

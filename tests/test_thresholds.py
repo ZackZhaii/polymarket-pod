@@ -74,6 +74,10 @@ EXPECTED = {
     "MAX_SOURCE_LOGIT_GAP": 1.0,
     # Task AN: M3 settlement snapshot hold (not coupled to ENDGAME_WINDOW_HOURS).
     "RESOLUTION_HOLD_HOURS": 48.0,
+    # Task AQ: secret-string scan of the bus and logs (M2 pending).
+    "SECRET_VALUE_MIN_LEN": 16,
+    "MNEMONIC_MIN_WORDS": 12,
+    "SECRET_HASH_PREFIX_CHARS": 8,
 }
 
 # Old import paths that callers and tests use; each must stay the very same object.
@@ -117,7 +121,9 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "DATA_API_MAX_LAG_S", "DATA_API_IDENTITY_TOL_USDC",
               # Task AO: signal -> OrderIntent.
               "INTENT_ASSUMED_SLIPPAGE", "INTENT_TTL_S", "MAX_SIGNAL_AGE_NEWS_S", "MAX_SIGNAL_AGE_SPORTS_DEVIG_S",
-              "MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S", "MAX_SOURCE_LOGIT_GAP"}
+              "MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S", "MAX_SOURCE_LOGIT_GAP",
+              # Task AQ: secret scan.
+              "SECRET_VALUE_MIN_LEN", "MNEMONIC_MIN_WORDS", "SECRET_HASH_PREFIX_CHARS"}
 HEADER = ["Name", "Value", "Unit", "Meaning", "Where", "Source", "M2 pending"]
 
 
@@ -280,6 +286,12 @@ def test_relations_hold():
         ("MAX_SIGNAL_AGE_NEWS_S = 3600.0", "MAX_SIGNAL_AGE_NEWS_S = 0.0"),
         ("MAX_SOURCE_LOGIT_GAP = 1.0", "MAX_SOURCE_LOGIT_GAP = 0.0"),
         ("RESOLUTION_HOLD_HOURS = 48.0", "RESOLUTION_HOLD_HOURS = 0.0"),
+        ("SECRET_VALUE_MIN_LEN = 16", "SECRET_VALUE_MIN_LEN = 64"),
+        ("SECRET_VALUE_MIN_LEN = 16", "SECRET_VALUE_MIN_LEN = 16.0"),
+        ("MNEMONIC_MIN_WORDS = 12", "MNEMONIC_MIN_WORDS = 13"),
+        ("MNEMONIC_MIN_WORDS = 12", "MNEMONIC_MIN_WORDS = 24"),
+        ("SECRET_HASH_PREFIX_CHARS = 8", "SECRET_HASH_PREFIX_CHARS = 64"),
+        ("SECRET_HASH_PREFIX_CHARS = 8", "SECRET_HASH_PREFIX_CHARS = 0"),
     ],
 )
 def test_an_inconsistent_edit_fails_at_import(line, replacement):

@@ -83,6 +83,12 @@ It prints one `PASS`/`FAIL` line per check with the reason, then a summary line:
 - `e2e`: the end-to-end offline gate below (Task AJ). It loads the checked repo's own `scripts/e2e_offline.py`,
   runs the real pipeline on `tests/fixtures/e2e/` and compares it exactly with `golden.json`. About 0.1 s; no
   pytest needed.
+- `halt`: the Task AL halt consumer on the same offline run.
+- `secret_scan` (Task AQ): no private key, mnemonic or credential value in any tracked file or in `logs/`
+  (`src/secret_scan.py`; reports file:line, rule, length and a sha256 prefix only), plus a self-test on fresh
+  random canaries. `.env` files are never opened. The guard itself records no halt; for that run
+  `python -m src.secret_scan` (exit 0 clean, 1 secret found and a global Sentinel halt, 2 scan error and a
+  global halt, 3 usage; `--path RUN_DIR` adds a folder, `--no-halt` only reports).
 
 Exit codes: 0 every check passed (`risk_sha_head` may be `SKIP`), 1 a check failed, 2 usage error or no repo root.
 It writes nothing in the repo (the `e2e` check keeps its scratch files in a temp folder outside the repo and
