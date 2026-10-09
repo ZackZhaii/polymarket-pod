@@ -134,6 +134,25 @@ DATA_API_IDENTITY_TOL_USDC = 1e-6
 RESOLUTION_HOLD_HOURS = 48.0
 
 
+# --- Signal -> OrderIntent (Task AO, forecaster/SPEC_signal_to_intent.md) ------------------------
+# src/intent_builder.py only. Every one can only reject or shrink an intent (RiskGate still re-checks).
+# M2 pending. Price units added to the book-walk price before the edge counts (same 0.005 as the
+# e2e fixtures, the paper_ledger CLI default and SPORTS_DEVIG_ASSUMED_SLIPPAGE); RiskGate gets the same value.
+INTENT_ASSUMED_SLIPPAGE = 0.005
+# Share rounding step: shares are rounded DOWN to a multiple of this (never up past the size).
+INTENT_SHARE_STEP = 0.01
+# M2 pending. An intent expires at the earliest of now + this, book_ts + MAX_BOOK_AGE_S and
+# end_date - MIN_HOURS_TO_EXPIRY. Must be <= MAX_BOOK_AGE_S.
+INTENT_TTL_S = 60.0
+# M2 pending. A signal older than this (seconds, now - signal_ts) is stale_signal. Per source;
+# forecaster_override follows news, a blend gets the smallest of the three.
+MAX_SIGNAL_AGE_NEWS_S = 3600.0
+MAX_SIGNAL_AGE_SPORTS_DEVIG_S = 300.0
+MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S = 600.0
+# M2 pending. Two model sources for one outcome whose point estimates differ by more than this in
+# log-odds are source_conflict: no blend, no intent.
+MAX_SOURCE_LOGIT_GAP = 1.0
+
 def consistency_problems() -> list[str]:
     """Relations the values must keep. Import fails if any is broken (explicit, survives -O)."""
     problems = []
@@ -183,6 +202,17 @@ def consistency_problems() -> list[str]:
         problems.append("DATA_API_MAX_LAG_S and DATA_API_IDENTITY_TOL_USDC must be > 0")
     if not LEDGER_OPEN_EPS <= RECONCILE_SHARES_TOL:
         problems.append("RECONCILE_SHARES_TOL must be >= LEDGER_OPEN_EPS")
+    if not 0.0 <= INTENT_ASSUMED_SLIPPAGE < 1.0:
+        problems.append("INTENT_ASSUMED_SLIPPAGE must satisfy 0 <= INTENT_ASSUMED_SLIPPAGE < 1")
+    if not 0.0 < INTENT_SHARE_STEP <= 1.0:
+        problems.append("INTENT_SHARE_STEP must satisfy 0 < INTENT_SHARE_STEP <= 1")
+    if not 0.0 < INTENT_TTL_S <= MAX_BOOK_AGE_S:
+        problems.append("INTENT_TTL_S must satisfy 0 < INTENT_TTL_S <= MAX_BOOK_AGE_S")
+    if not (MAX_SIGNAL_AGE_NEWS_S > 0.0 and MAX_SIGNAL_AGE_SPORTS_DEVIG_S > 0.0
+            and MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S > 0.0):
+        problems.append("MAX_SIGNAL_AGE_*_S must be > 0")
+    if not MAX_SOURCE_LOGIT_GAP > 0.0:
+        problems.append("MAX_SOURCE_LOGIT_GAP must be > 0")
     if isinstance(RESOLUTION_HOLD_HOURS, bool) or not isinstance(RESOLUTION_HOLD_HOURS, (int, float)) or not (
         RESOLUTION_HOLD_HOURS > 0.0
     ):

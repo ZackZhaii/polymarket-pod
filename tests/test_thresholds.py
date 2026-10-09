@@ -64,6 +64,14 @@ EXPECTED = {
     "DATA_API_TRADES_MIN_SHARES": 0.01,
     "DATA_API_MAX_LAG_S": 120.0,
     "DATA_API_IDENTITY_TOL_USDC": 1e-6,
+    # Task AO: signal -> OrderIntent (first values; all but the share step are M2 pending).
+    "INTENT_ASSUMED_SLIPPAGE": 0.005,
+    "INTENT_SHARE_STEP": 0.01,
+    "INTENT_TTL_S": 60.0,
+    "MAX_SIGNAL_AGE_NEWS_S": 3600.0,
+    "MAX_SIGNAL_AGE_SPORTS_DEVIG_S": 300.0,
+    "MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S": 600.0,
+    "MAX_SOURCE_LOGIT_GAP": 1.0,
     # Task AN: M3 settlement snapshot hold (not coupled to ENDGAME_WINDOW_HOURS).
     "RESOLUTION_HOLD_HOURS": 48.0,
 }
@@ -106,7 +114,10 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "M1_REST_MATCH_WINDOW_S", "M1_MIN_REST_MATCHED", "M1_MAX_TOP_MISMATCH_RATE", "M1_MAX_REST_UNMATCHED_RATE",
               # Task AK: Data API v2 reconciliation.
               "RECONCILE_SHARES_TOL", "DATA_API_POSITIONS_DUST_SHARES", "DATA_API_TRADES_MIN_SHARES",
-              "DATA_API_MAX_LAG_S", "DATA_API_IDENTITY_TOL_USDC"}
+              "DATA_API_MAX_LAG_S", "DATA_API_IDENTITY_TOL_USDC",
+              # Task AO: signal -> OrderIntent.
+              "INTENT_ASSUMED_SLIPPAGE", "INTENT_TTL_S", "MAX_SIGNAL_AGE_NEWS_S", "MAX_SIGNAL_AGE_SPORTS_DEVIG_S",
+              "MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S", "MAX_SOURCE_LOGIT_GAP"}
 HEADER = ["Name", "Value", "Unit", "Meaning", "Where", "Source", "M2 pending"]
 
 
@@ -262,6 +273,12 @@ def test_relations_hold():
         ("M1_REST_MATCH_WINDOW_S = 30.0", "M1_REST_MATCH_WINDOW_S = 0.0"),
         ("M1_MIN_REST_MATCHED = 50", "M1_MIN_REST_MATCHED = 1000"),
         ("M1_REST_EVERY_S = 600.0", "M1_REST_EVERY_S = 7200.0"),
+        ("INTENT_TTL_S = 60.0", "INTENT_TTL_S = 300.0"),
+        ("INTENT_TTL_S = 60.0", "INTENT_TTL_S = 0.0"),
+        ("INTENT_SHARE_STEP = 0.01", "INTENT_SHARE_STEP = 0.0"),
+        ("INTENT_ASSUMED_SLIPPAGE = 0.005", "INTENT_ASSUMED_SLIPPAGE = -0.005"),
+        ("MAX_SIGNAL_AGE_NEWS_S = 3600.0", "MAX_SIGNAL_AGE_NEWS_S = 0.0"),
+        ("MAX_SOURCE_LOGIT_GAP = 1.0", "MAX_SOURCE_LOGIT_GAP = 0.0"),
         ("RESOLUTION_HOLD_HOURS = 48.0", "RESOLUTION_HOLD_HOURS = 0.0"),
     ],
 )

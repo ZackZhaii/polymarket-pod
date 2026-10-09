@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T12:00:00Z",
+  "ts": "2026-10-09T07:41:29Z",
   "live_enabled": false,
-  "last_done": "AN",
+  "last_done": "AO",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AN (M3 calibration step 1: read-only src/resolutions.py on Gamma /markets/keyset?closed=true, 48 h closedTime hold, fail-closed fields, data/resolutions.jsonl; docs/M3_CALIBRATION.md) done by grok-build-local; merged origin/dev which already has AM (#41 CI + docs/DECISIONS.md), AK (#39), AL (#40). Task letters after Z are AA..AL, AM, AN. RESOLUTION_HOLD_HOURS=48 is not M2 pending. M2 pending unchanged from AM note (MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S, eight M1_* criteria, AK reconcile tolerances). No open todo. No live gate."
+  "note": "AO (signal -> OrderIntent: pure, tightening-only src/intent_builder.py; edge bit-for-bit RiskGate's; Kelly shadow; e2e shadow gate) done by grok-bot on #43; merged origin/dev which now includes AN (#42 M3 settlement snapshot at f467f1b), AM (#41 CI + docs/DECISIONS.md), AK (#39), AL (#40). Task letters after Z are AA..AL, AM, AN, AO. RESOLUTION_HOLD_HOURS=48 is not M2 pending. M2 pending includes AK reconcile tolerances and AO's INTENT_ASSUMED_SLIPPAGE, INTENT_TTL_S, MAX_SIGNAL_AGE_*_S, MAX_SOURCE_LOGIT_GAP. No open todo. No live gate."
 }

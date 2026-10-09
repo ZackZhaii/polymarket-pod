@@ -7,7 +7,11 @@ One run of the real pipeline on fixed, sanitised recordings in tests/fixtures/e2
     paper_cycle.run   -> gap / stale signals and Sentinel StaleWatch check 1
     endgame_scan      -> Endgame signals (to RiskGate only)
     forecasts         -> forecaster.emit_probability (NewsForecaster -> RiskGate signal)
-    signal + book row + scanner row -> risk_gate.Intent  (build_intent below; no src module does this yet)
+    signal + book row + scanner row -> risk_gate.Intent  (build_intent below)
+        Task AO shadow: src/intent_builder.build_order_intent runs on the same inputs; its reasons are
+        recorded (golden key ``intent_builder``), its risk Intent must equal build_intent's field for
+        field when it picks the same token, and it must reject whatever RiskGate vetoes for an edge,
+        price, spread, liquidity or staleness reason. RiskGate still receives build_intent's intent.
     paper_ledger.commit_if_allowed  -> RiskGate (fees.py, MIN_EDGE, staleness, wash, non_finite, caps)
         -> simulated paper fill -> ledger_store.book -> ledger_store.verify (conservation)
     paper_cycle.run   -> StaleWatch check 2 -> Sentinel halt after two consecutive stale checks
@@ -28,6 +32,7 @@ writes it. scripts/guard.py (check ``e2e``) runs gate() in-process: stdlib + src
 from __future__ import annotations
 
 import copy
+import dataclasses
 import hashlib
 import http.client
 import json
@@ -293,6 +298,63 @@ def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: d
     )
 
 
+# RiskGate veto reasons the intent builder must also reject on (SPEC 9.2 P3, same token).
+SHADOW_MUST_REJECT = frozenset({"non_positive_edge", "edge_below_min", "spread_above_max", "negative_spread",
+                                "invalid_spread", "missing_spread", "liquidity_below_min", "invalid_liquidity",
+                                "missing_liquidity", "stale_book", "future_book_ts", "invalid_book_ts",
+                                "missing_book_ts", "market_price_out_of_range", "effective_price_out_of_range",
+                                "non_finite_market_price", "invalid_market_price", "model_prob_out_of_range"})
+
+
+def shadow_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: dict[str, Any],
+                  books: dict[tuple[str, str], dict[str, Any]], cfg: dict, now: datetime):
+    """Task AO phase 1 (shadow): src/intent_builder on the same signal, scanner row and book rows.
+
+    fee_rate is the fixture input build_intent uses (no src module derives it per market yet).
+    held_shares is 0: the runner does not pass positions yet, so a sell is sell_requires_position.
+    Returns (IntentResult, golden view).
+    """
+    from src import intent_builder
+
+    sig = intent_builder.signal_from_bus(signal)
+    if sig is not None and forecast.get("outcome_index") is not None:
+        sig = dataclasses.replace(sig, outcome_index=forecast["outcome_index"])
+    context = intent_builder.market_context_from_row(market_row, fee_rate=forecast["fee_rate"])
+    snaps = {str(token): intent_builder.book_snapshot_from_row(books[(market_row["id"], str(token))])
+             for token in market_row.get("token_ids") or [] if (market_row["id"], str(token)) in books}
+    result = intent_builder.build_order_intent(sig, context, snaps, cfg, now=now, strategy=forecast["strategy"],
+                                               side=forecast["side"], held_shares=0.0)
+    detail = result.detail
+    view = {"reasons": list(result.reasons), "first_reason": result.first_reason,
+            "intent": result.intent is not None, "outcome_index": detail.get("outcome_index"),
+            "edge_yes": detail.get("edge_yes"), "edge_no": detail.get("edge_no"),
+            "size_pct": detail.get("size_pct"), "kelly_frac": detail.get("kelly_frac"),
+            "shares": detail.get("shares"), "limit_price": detail.get("limit_price"),
+            "marks": list(result.intent.reasons) if result.intent is not None else []}
+    return result, view
+
+
+def shadow_problems(label: str, result, harness_intent, decision_reasons: list[str]) -> list[str]:
+    """Phase 1 invariants: same risk Intent as build_intent on the same token, never looser than RiskGate."""
+    from dataclasses import asdict
+
+    from src import intent_builder
+
+    out: list[str] = []
+    oi = result.intent
+    if oi is None or oi.token_id != harness_intent.token_id or oi.side != harness_intent.side:
+        return out
+    built = asdict(intent_builder.to_risk_intent(oi))
+    harness = asdict(harness_intent)
+    if built != harness:
+        diff = sorted(k for k in harness if built.get(k) != harness.get(k))
+        out.append(f"{label}: intent_builder risk Intent differs from build_intent in {diff}")
+    looser = sorted(set(decision_reasons) & SHADOW_MUST_REJECT)
+    if looser:
+        out.append(f"{label}: intent_builder produced an intent RiskGate vetoes for {looser}")
+    return out
+
+
 def _latest_books(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
     latest: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
@@ -422,9 +484,14 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
             intent = build_intent(forecast, signal, markets[forecast["market"]], books)
             before = _ledger_view(Path(path))  # a plain path: the gate's own reads never count as a writer's
             paper_ledger.PAPER_PATH = path
-            result = paper_ledger.commit_if_allowed(intent, risk_cfg())
+            cfg_now = risk_cfg()
+            shadow, shadow_view = shadow_intent(forecast, signal, markets[forecast["market"]], books, cfg_now,
+                                                clock.now)
+            result = paper_ledger.commit_if_allowed(intent, cfg_now)
             after = _ledger_view(Path(path))
             row = _decision_row(label, intent, result, before["unique_rows"], after["unique_rows"])
+            row["intent_builder"] = shadow_view
+            problems.extend(shadow_problems(label, shadow, intent, row["reasons"]))
             if result.get("allow"):
                 booked_ids.append(result["fill"]["fill_id"])
                 booked_by_label[label] = result["fill"]["fill_id"]

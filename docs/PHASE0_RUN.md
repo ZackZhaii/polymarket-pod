@@ -117,10 +117,15 @@ halt, that market's paper quote cancelled). Every run also checks: no network, e
 `exchange_action` none and no order flag, fills only from a RiskGate allow, unique fill ids, risk.toml at the pin
 and byte-identical, `live_enabled` false at every stage, no default `data/` or `logs/` path written.
 
-Not connected in code yet (the gate builds or skips them, and says so): no src module turns a NewsForecaster
-signal into an Intent (`build_intent` in the harness does: model_prob from the signal, price/spread/book_ts from
-the book row, liquidity from the scanner row; fee_rate and slippage are fixture inputs); Endgame signals carry no
-model probability, so they stop at the signal. (Task AL connected the halt consumer: see "Halts and resume".)
+Signal -> Intent (Task AO): `src/intent_builder.py` is the pure, tightening-only builder (SPEC_signal_to_intent).
+The gate runs it in shadow mode (phase 1): RiskGate still receives the harness `build_intent` Intent (model_prob
+from the signal, price/spread/book_ts from the book row, liquidity from the scanner row; fee_rate and slippage are
+fixture inputs), the builder's reasons are recorded under `intent_builder` in golden (charlie `stale_book`, delta
+`non_positive_edge`, echo `sell_requires_position`, foxtrot `edge_below_min`, alpha/bravo/golf none), its Intent
+must equal `build_intent`'s field for field on the same token, and it must reject anything RiskGate vetoes for an
+edge, price, spread, liquidity or staleness reason. Kelly is shadow only (computed, never sized); enforcing the
+builder (phase 2) and a Kelly size need RiskGate `Intent.size_usd` (KEY, backlog #7). Endgame signals carry no
+model probability (`missing_model_prob`). (Task AL connected the halt consumer: see "Halts and resume".)
 
 Task AL halt scenarios (`halt_consumer` in golden, also guard check `halt`): (a) the Sentinel market halt from
 check 2 vetoes a later intent on that market (`halt_market`) and the Maker refuses to quote it, while another

@@ -11,7 +11,7 @@ Fixed, sanitised recordings for `tests/test_e2e_offline.py` and the guard's `e2e
 | `forecasts.json` | NewsForecaster inputs (model_prob per market and outcome) plus the per-intent fee_rate and assumed_slippage. |
 | `ledger_start.jsonl` | The paper ledger start state: three fills written by the real `paper_ledger.commit_if_allowed` / `ledger_store.book` with readable fill ids. |
 | `quotes_start.jsonl` | Paper maker quotes (two open, one cancelled) that Sentinel's halt cancels and the wash check reads. |
-| `golden.json` | The expected output: every allow/veto with its reasons, fills, cash, positions, Sentinel halts, bus counts. |
+| `golden.json` | The expected output: every allow/veto with its reasons, fills, cash, positions, Sentinel halts, bus counts; each decision also carries the Task AO `intent_builder` shadow result (reasons, chosen outcome, both edges, 1% size, shadow Kelly). |
 | `.gitattributes` | `eol=lf`, so a Windows checkout replays the same ledger bytes (the harness also normalises CRLF). |
 
 Sanitised: market ids are `e2e-*`, token ids are short synthetic numbers, condition ids are `0xe2e*`

@@ -618,7 +618,7 @@ def test_the_e2e_check_passes_on_the_real_repo_and_names_golden():
 
 def test_a_golden_edit_fails_only_e2e(repo):
     path = repo / "tests" / "fixtures" / "e2e" / "golden.json"
-    edit(path, '"edge_below_min"', '"edge_ok"')
+    edit(path, '"wash_same_market"', '"wash_ok"')  # unique in golden (edge_below_min also appears under intent_builder)
     code, lines, out = run(repo)
     assert code == 1, out
     failed_only(lines, "e2e")
