@@ -26,11 +26,12 @@ files in a temp folder outside the repo and removes it):
    including importlib.import_module / __import__ with a literal name. ORDER_CAPABLE here is the
    single list; tests/test_ws_recorder.py (Task AG) uses it too.
 4. url_allowlist: every URL in src/ code is one of ALLOWED_ENDPOINTS (built from what the code
-   uses today: Gamma /markets and /markets/keyset, CLOB public /book, the WS market channel), with
+   uses today: Gamma /markets and /markets/keyset, CLOB public /book, the WS market channel, and
+   since Task AK the Data API v2 /v2/status, /v2/positions and /v2/trades reads of src/reconcile.py), with
    no port, user info, order/auth path or credential in the query; a host-less URL piece (an
    f-string building the host) fails, and so does any bare hostname literal outside those hosts.
-   Docstrings and comments may also link documentation hosts (REFERENCE_HOSTS). The Data API is
-   not used today, so it is not allowlisted; adding it is a one-line change here when a task needs it.
+   Docstrings and comments may also link documentation hosts (REFERENCE_HOSTS). Only those three
+   Data API v2 paths are allowlisted; the retired v1 routes and other v2 routes are not.
 5. thresholds_doc: docs/THRESHOLDS.md agrees with src/thresholds.py, parsed with the Task AC table
    parser (markdown_tables, shared with tests/test_thresholds.py): every code constant once with
    its value and type, the relations in thresholds.consistency_problems hold, documented
@@ -86,6 +87,11 @@ ALLOWED_ENDPOINTS = frozenset({
     ("https", "gamma-api.polymarket.com", "/markets/keyset"),
     ("https", "clob.polymarket.com", "/book"),
     ("wss", "ws-subscriptions-clob.polymarket.com", "/ws/market"),
+    # Task AK: the Reconciler's three Data API v2 reads (freshness first) (v1 retires 2026-10-24). Exact paths only:
+    # v1 /positions and /trades, /v2/positions/combos and every other v2 route stay refused.
+    ("https", "data-api.polymarket.com", "/v2/positions"),
+    ("https", "data-api.polymarket.com", "/v2/trades"),
+    ("https", "data-api.polymarket.com", "/v2/status"),
 })
 ENDPOINT_HOSTS = frozenset(host for _, host, _ in ALLOWED_ENDPOINTS)
 # Documentation links, allowed only in docstrings and comments (never in code).
