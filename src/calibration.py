@@ -23,7 +23,14 @@ each with a market-clustered bootstrap interval); a group below them carries ``i
 sufficient forecast section adds the intercept interval, the ECE interval and an intercept verdict. Both
 sections report ``event_cluster``: the largest cluster's share of the samples, flagged ``insufficient``
 below the section minimums, else ``concentrated`` above CALIBRATION_MAX_CLUSTER_SHARE, else ``ok``.
-No event id is recorded yet, so a cluster is one market (condition_id): a lower bound on concentration.
+
+Task BF: a cluster is one Polymarket event (event_id, recorded on forecasts and fills since Task BF) where
+a sample has one, else that sample's market (condition_id). ``event_cluster.cluster_key`` says which:
+``event_id`` (every sample), ``condition_id`` (none, e.g. rows from before Task BF: a lower bound on
+event concentration) or ``mixed``; ``event_id_samples`` / ``condition_id_fallback_samples`` count them.
+A trade sample takes its first fill's event_id, else its joined forecast's; when both are usable and
+differ it falls back to condition_id. Missing or malformed event data never drops or corrupts a row.
+The bootstrap intervals stay market-clustered (condition_id).
 
 Fail closed. Nothing is imputed: a row with calibration_problems, a missing join, a pending,
 UMA-unconfirmed, disputed, void or ambiguous resolution, or a token / outcome that disagrees with
@@ -99,8 +106,10 @@ NOTES = (
     "market_mid key at all, uses market_price instead (price_source=market_price, design 3); a recorded but "
     "null mid is a drop (fill_market_mid_missing), never a fallback. trades.price_sources counts both.",
     "Fills built without book context (fill_context operator_cli / gate_check) are dropped as no_book_context.",
-    "event_cluster: no event id is recorded yet, so each market (condition_id) is its own cluster; markets of one "
-    "event count separately, so the share is a lower bound on event concentration. Reported only.",
+    "event_cluster: a cluster is the sample's Polymarket event (event_id) when recorded, else its market "
+    "(condition_id); cluster_key says event_id, condition_id or mixed and condition_id_fallback_samples counts "
+    "the fallbacks. Markets of one event without an event id count separately, so a condition_id or mixed share "
+    "is a lower bound on event concentration. Reported only.",
     "Group intervals (by_category, by_edge_tier) exist only for groups at the group minimums; read conclusions "
     "from intervals only and mind the number of groups.",
 )
@@ -160,9 +169,10 @@ def check_forecast_rows(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
     """Schema of logs/forecasts.jsonl (calibration_ids.FORECAST_ROW_FIELDS); id -> row."""
     by_id: dict[str, dict[str, Any]] = {}
     want = set(calibration_ids.FORECAST_ROW_FIELDS)
+    EVENT_FIELDS = set(calibration_ids.FORECAST_EVENT_FIELDS)
     for number, row in enumerate(rows, 1):
         where = f"forecasts:{number}"
-        if set(row) != want:
+        if not want - EVENT_FIELDS <= set(row) <= want:  # Task BF: event keys optional (rows before BF)
             raise CorruptInput(f"{where}: keys differ from FORECAST_ROW_FIELDS")
         if not (isinstance(row["forecast_id"], str) and row["forecast_id"] and isinstance(row["ts"], str)
                 and _number(row["model_prob"]) and isinstance(row["calibration_problems"], list)
@@ -441,14 +451,26 @@ def group_intervals(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return out
 
 
-def cluster_share(samples: Sequence[Mapping[str, Any]], *, status: str, key: str = "condition_id") -> dict[str, Any]:
+def cluster_name(sample: Mapping[str, Any]) -> tuple[str, bool]:
+    """Task BF: (cluster name, True when it is the event_id). event_id when usable, else condition_id."""
+    event = calibration_ids.event_value(sample.get("event_id"))
+    return (event, True) if event is not None else (str(sample["condition_id"]), False)
+
+
+def cluster_share(samples: Sequence[Mapping[str, Any]], *, status: str) -> dict[str, Any]:
     """Task BD: share of the samples in the largest cluster (ties: the smallest name), flagged.
 
     ``insufficient`` when the section is below its minimums (no flag is judged), else ``concentrated``
     when the share exceeds CALIBRATION_MAX_CLUSTER_SHARE, else ``ok``. Reported only; gates nothing.
+    Task BF: a sample's cluster is its event_id, else its condition_id (cluster_name); cluster_key is
+    ``event_id`` / ``condition_id`` when all samples use one, ``mixed`` otherwise (an empty section:
+    ``condition_id``).
     """
-    counts = Counter(str(s[key]) for s in samples)
+    names = [cluster_name(s) for s in samples]
+    by_event = sum(1 for _, is_event in names if is_event)
+    counts = Counter(name for name, _ in names)
     n = len(samples)
+    key = "event_id" if n and by_event == n else "condition_id" if by_event == 0 else "mixed"
     largest = min(counts.items(), key=lambda item: (-item[1], item[0])) if counts else None
     share = largest[1] / n if largest else None
     if status != "sufficient":
@@ -457,7 +479,8 @@ def cluster_share(samples: Sequence[Mapping[str, Any]], *, status: str, key: str
         flag = "concentrated" if share is not None and share > CALIBRATION_MAX_CLUSTER_SHARE else "ok"
     return {"cluster_key": key, "n": n, "n_clusters": len(counts),
             "largest_cluster": largest[0] if largest else None, "largest_cluster_n": largest[1] if largest else 0,
-            "largest_share": share, "max_share": CALIBRATION_MAX_CLUSTER_SHARE, "status": status, "flag": flag}
+            "largest_share": share, "max_share": CALIBRATION_MAX_CLUSTER_SHARE, "status": status, "flag": flag,
+            "event_id_samples": by_event, "condition_id_fallback_samples": n - by_event}  # Task BF
 
 
 # ------------------------------------------------------------------ groups
@@ -531,6 +554,7 @@ def forecast_samples(forecasts: Mapping[str, dict[str, Any]], resolutions: Mappi
                          "outcome_index": row["outcome_index"], "p": float(row["model_prob"]), "y": y,
                          "strategy": row["strategy"], "model_version": row["model_version"],
                          "category": row["category"], "tags": row["tags"],
+                         "event_id": calibration_ids.event_value(row.get("event_id")),  # Task BF
                          "resolution_day": resolution["closed_ts"][:10]})  # type: ignore[index]
     return eligible, dropped, reasons, problem_counts
 
@@ -618,8 +642,19 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
                          "expiry_tier": tier(_hours_between(first.get("ts"), first.get("end_date")),
                                              CALIBRATION_EXPIRY_TIERS_H, "h"),
                          "price_band": price_band(float(first["market_price"])),
+                         "event_id": trade_event(first, forecast),  # Task BF
                          "resolution_day": resolution["closed_ts"][:10]})  # type: ignore[index]
     return eligible, dropped, reasons, problem_counts
+
+
+def trade_event(fill: Mapping[str, Any], forecast: Mapping[str, Any]) -> str | None:
+    """Task BF: a trade sample's event_id: the fill's, else its joined forecast's (same market). When both
+    are usable and differ, None (the sample falls back to condition_id; never guessed)."""
+    own = calibration_ids.event_value(fill.get("event_id"))
+    joined = calibration_ids.event_value(forecast.get("event_id"))
+    if own is not None and joined is not None and own != joined:
+        return None
+    return own if own is not None else joined
 
 
 def _context_problems(row: Mapping[str, Any]) -> list[str]:
@@ -841,7 +876,8 @@ def _cluster_line(metrics: Mapping[str, Any]) -> str:
     ec = metrics.get("event_cluster") or {}
     return (f"- event cluster ({ec.get('cluster_key')}): largest {_fmt(ec.get('largest_cluster'))} holds "
             f"{ec.get('largest_cluster_n')} of {ec.get('n')} ({_fmt(ec.get('largest_share'))}; limit "
-            f"{_fmt(ec.get('max_share'))}), {ec.get('n_clusters')} clusters: **{ec.get('flag')}**")
+            f"{_fmt(ec.get('max_share'))}), {ec.get('n_clusters')} clusters: **{ec.get('flag')}**"
+            f"; {ec.get('condition_id_fallback_samples', '-')} samples fell back to condition_id (no event_id)")
 
 
 def render_markdown(report: Mapping[str, Any]) -> str:

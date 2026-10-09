@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T16:42:20Z",
+  "ts": "2026-10-09T17:28:46Z",
   "live_enabled": false,
-  "last_done": "BE",
+  "last_done": "BF",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "BE (Reflector rules: per-category delta Brier disable, per-edge-tier realization MIN_EDGE tightening with REFLECTOR_EDGE_TIER_REALIZATION_MAX 0.25 M3 pending, intercept joins MIN_EDGE + step, event_cluster on proposal evidence) done by grok-bot. Proposals only, tightening only. Kelly two-batch and cumulative-loss rules still open. No open todo. No live gate."
+  "note": "BF (Polymarket event id / slug on scanner rows, forecasts and fills; calibration event_cluster keyed by event_id with per-sample condition_id fallback, cluster_key event_id / condition_id / mixed) done by grok-bot. Recorded and reported only. Kelly two-batch and cumulative-loss rules still open. No open todo. No live gate."
 }

@@ -320,10 +320,34 @@ proposals. Every report states "UMA dispute status not checked" and "Not a promi
 - Both sections add `event_cluster`: `{cluster_key, n, n_clusters, largest_cluster, largest_cluster_n,
   largest_share, max_share, status, flag}`. `flag` is `insufficient` when the section is below its minimums,
   else `concentrated` when `largest_share` > `CALIBRATION_MAX_CLUSTER_SHARE` (0.30, design 3, M3 pending),
-  else `ok`. Ties go to the smallest name. No event id is recorded on forecasts or fills yet, so
-  `cluster_key` is `condition_id` (one market per cluster): markets of one event count separately and the
-  share is a lower bound. Reported only; no verdict, proposal or gate reads it yet.
+  else `ok`. Ties go to the smallest name. Before Task BF no event id was recorded, so `cluster_key` was
+  `condition_id` (one market per cluster) and the share a lower bound; see the Task BF subsection below.
+  Reported only; no verdict, proposal or gate reads it yet.
 - `report.json` stays `schema_version` 1 and only gains keys; `thresholds.max_cluster_share` is listed.
+
+### Event id and the event-cluster key (Task BF)
+
+- Source: Gamma market rows carry an `events` list (the scanner keyset already sends `include_tag=true`).
+  `calibration_ids.scanner_event(market)` gives `(event_id, event_slug)`: the one event id every usable entry
+  (an object whose `id` is a non-blank string or an int) names, and the first usable slug of that event.
+  No `events` list, no usable entry, or entries naming different events -> `(None, None)`; never guessed and
+  never an error. `calibration_ids.event_value` is the shared rule (non-blank string stripped, int as its
+  decimal string, anything else None).
+- Recorded on: scanner rows (`data/markets.jsonl` `event_id`, `event_slug`) -> `MarketContext` ->
+  `OrderIntent` -> `risk_gate.Intent` -> paper fills (`FILL_EVENT_FIELDS`, next to the Task BA market fields),
+  and `logs/forecasts.jsonl` rows (`FORECAST_EVENT_FIELDS`, the last two keys of `FORECAST_ROW_FIELDS`;
+  `emit_probability(event_id=, event_slug=)`). Not part of `forecast_id`, not in the signal payload, never a
+  `calibration_problems` entry and never a join field. RiskGate, sizing and every gate never read them.
+- Old rows stay valid: a forecast row without the two event keys (written before BF) is read as before; an
+  event key with an unusable value is read as no event. A fill without them has no event.
+- `event_cluster`: a sample's cluster is its `event_id` when usable, else its `condition_id` (per sample). A
+  trade sample takes its first fill's `event_id`, else its joined forecast's; when both are usable and
+  differ it falls back to `condition_id`. `cluster_key` is `event_id` (every sample has one), `condition_id`
+  (none has; also an empty section) or `mixed`; `event_id_samples` and `condition_id_fallback_samples` count
+  them. With `condition_id` or `mixed`, markets of one event without an event id still count separately, so
+  the share is a lower bound. Same flag rule and the same `CALIBRATION_MAX_CLUSTER_SHARE` (no new number).
+- The bootstrap intervals (Task BD) stay market-clustered (`condition_id`). The markdown cluster line names
+  the key and the fallback count. Reflector proposals (Task BE) carry `cluster_key` through unchanged.
 
 ## Step 4: structured Reflector proposals (Task BB)
 
@@ -387,8 +411,8 @@ The report is read-only input (default: the newest dated folder). Each proposal 
   makes that proposal when the slope rule does not fire. Not for a strategy being disabled.
 - Task BE, event-cluster share: every proposal's `evidence.event_cluster` = `{cluster_key, flag, largest_share,
   max_share}` of its section (null for a report before BD); a `concentrated` section is stated in the
-  proposal's `risk` and in the run's observations. It gates nothing (the cluster is still the market, a lower
-  bound on event concentration).
+  proposal's `risk` and in the run's observations. It gates nothing. Since Task BF `cluster_key` may be
+  `event_id`, `condition_id` or `mixed` (the report's key, carried through as is).
 - Order under the daily cap: strategy disables, category disables, then MIN_EDGE (slope / intercept), band and
   edge-tier tightenings. A report from before BD (no group `intervals`, no `intercept_ci`, no
   `event_cluster`) gives no new proposal; a wrongly typed new field is a corrupt report (exit 4).
