@@ -429,6 +429,15 @@
       "note": "Requested by Poly指挥 (Poly反思's M3 calibration design, step 3); done by grok-bot. Read-only, no network, no bus/halt, no proposal (step 4), no trading or risk change, config/strategies.toml not created. AY (#59) ran in parallel and was merged in from dev. Not yet: mid price on fills (q is market_price), event-cluster share, Reflector proposals.",
       "done_at": "2026-10-09T14:00:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "BA",
+      "status": "done",
+      "title": "M3 fill market context (market_mid, best_bid, best_ask, hours_to_expiry_at_entry, kelly_fraction_used; recorded only, null + calibration_problems when not computable) and ws_recorder --raw-books DIR",
+      "finish": "risk_gate.Intent gains best_bid, best_ask, kelly_fraction_used (None default; RiskGate never reads them, tested by source and by identical decisions). intent_builder.to_risk_intent passes the chosen token's BookSnapshot best_bid/best_ask and its shadow Kelly multiplier (kelly_fraction); the e2e harness intent and the paper_ledger no-edge check pass their book row's top. paper_ledger.market_fields computes calibration_ids.FILL_MARKET_FIELDS at commit: prices finite in (0,1), mid = (bid+ask)/2 only when both usable and bid <= ask, hours = end_date - fill ts, kelly in (0,1]; anything else None plus missing_<field>/invalid_<field> in the stored calibration_problems (fill_problems unchanged). e2e golden: only the new calibration fills market_fields (--update-golden). RotatingJsonl/RawBookSink moved to src/ws_recorder.py (m1_run re-exports); python -m src.ws_recorder --raw-books DIR (new or empty, else exit 2) uses the same writer and caps. docs/M3_CALIBRATION.md Step 2b, EXIT_CODES, THRESHOLDS wording. src/calibration.py untouched. No new number, no decision or size moved; config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (rest of m3_calibration_design.md 1.5 after AX; AY left the ws_recorder CLI without --raw-books). AZ (#60, src/calibration.py) runs in parallel; switching calibration to market_mid is a later step. Done by grok-bot. Note: AZ's report drops fills with non-empty stored calibration_problems, so fills without market context (operator CLI, gate checks, old rows) are not calibration samples.",
+      "done_at": "2026-10-09T13:40:44Z",
+      "surface": "grok-bot"
     }
   ]
 }

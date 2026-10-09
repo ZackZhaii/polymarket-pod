@@ -78,11 +78,15 @@ from src.thresholds import (  # noqa: E402
     WS_STOP_POLL_S,
 )
 from src.ws_recorder import (  # noqa: E402
+    RAW_BOOKS,  # Task BA: moved to ws_recorder with RotatingJsonl / RawBookSink (re-exported here)
     JsonlAppender,
+    RawBookSink,
     Recorder,
+    RotatingJsonl,
     Transport,
     TransportUnavailable,
     WebsocketsTransport,
+    _line_bytes,
     asset_meta,
     validate_assets,
 )
@@ -91,7 +95,6 @@ SCHEMA = "m1_run/1"
 PINNED_RISK_SHA256 = "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04"
 MANIFEST = "manifest.json"
 STREAMS = ("books", "events", "rest")
-RAW_BOOKS = "raw_books"  # Task AY: opt-in stream, not one of STREAMS (m1_report does not read it)
 
 EXIT_OK = 0
 EXIT_NO_ROWS = 1
@@ -160,102 +163,6 @@ def select_assets(rows: list[dict[str, Any]], top: int) -> dict[str, Any]:
                 "outcomes": row.get("outcomes") or [], "volume_24h_usd": row.get("volume_24h_usd")} for row in chosen]
     return {"assets": assets, "meta": meta, "markets": markets, "scan_ts": str(batch[0].get("ts")),
             "skipped": dict(skipped)}
-
-
-# --- rotating JSONL ----------------------------------------------------------------------------
-
-
-def _line_bytes(row: dict[str, Any]) -> int:
-    return len(json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) + 1
-
-
-class RotatingJsonl:
-    """Append-only JSONL in ``folder/prefix-NNNNNN.jsonl``; a new file before ``max_bytes`` would be
-    passed or once the current file has been open ``max_age_s`` (monotonic). Thread-safe."""
-
-    def __init__(self, folder: Path, prefix: str, max_bytes: int, max_age_s: float,
-                 monotonic: Callable[[], float] = time.monotonic) -> None:
-        if not (isinstance(max_bytes, int) and max_bytes >= 1) or not max_age_s > 0:
-            raise ValueError("rotation limits must be > 0")
-        self.folder = Path(folder)
-        self.prefix = prefix
-        self.max_bytes = max_bytes
-        self.max_age_s = float(max_age_s)
-        self.monotonic = monotonic
-        self.files: list[str] = []
-        self.rows = 0
-        self._current: JsonlAppender | None = None
-        self._size = 0
-        self._opened = 0.0
-        self._lock = threading.Lock()
-
-    def _rotate(self) -> None:
-        if self._current is not None:
-            self._current.close()
-        name = f"{self.prefix}-{len(self.files) + 1:06d}.jsonl"
-        self.files.append(f"{self.folder.name}/{name}")
-        self._current = JsonlAppender(self.folder / name)
-        self._size = 0
-        self._opened = self.monotonic()
-
-    def write(self, row: dict[str, Any]) -> None:
-        size = _line_bytes(row)  # also refuses NaN before anything is written
-        with self._lock:
-            if (self._current is None or (self._size and self._size + size > self.max_bytes)
-                    or self.monotonic() - self._opened >= self.max_age_s):
-                self._rotate()
-            self._current.write(row)
-            self._size += size
-            self.rows += 1
-
-    def close(self) -> None:
-        with self._lock:
-            if self._current is not None:
-                self._current.close()
-                self._current = None
-
-
-class RawBookSink:
-    """Task AY: capped raw book frames in ``raw_books/raw_books-NNNNNN.jsonl`` (whole-line appends).
-
-    No file passes ``file_max_bytes``; the run stops saving once ``run_max_bytes`` would be passed. A frame
-    that is not strict JSON, or alone bigger than a file, is dropped. Drops are counted, never raised."""
-
-    def __init__(self, folder: Path, file_max_bytes: int, run_max_bytes: int, max_age_s: float,
-                 monotonic: Callable[[], float] = time.monotonic,
-                 on_event: Callable[[dict[str, Any]], None] | None = None,
-                 now: Callable[[], str] = utc_now_ms) -> None:
-        if not (isinstance(run_max_bytes, int) and 0 < file_max_bytes <= run_max_bytes):
-            raise ValueError("raw book caps must satisfy 0 < file cap <= run cap")
-        self.files = RotatingJsonl(folder, RAW_BOOKS, file_max_bytes, max_age_s, monotonic)
-        self.run_max_bytes = run_max_bytes
-        self.on_event = on_event
-        self.now = now
-        self.bytes = 0
-        self.saved = 0
-        self.dropped: Counter = Counter()
-
-    def write(self, row: dict[str, Any]) -> None:
-        try:
-            size = _line_bytes(row)
-        except (TypeError, ValueError):
-            self.dropped["unserialisable"] += 1
-            return
-        if size > self.files.max_bytes:
-            self.dropped["too_large"] += 1
-            return
-        if self.bytes + size > self.run_max_bytes:
-            if not self.dropped["run_cap"] and self.on_event is not None:
-                self.on_event({"ts": self.now(), "event": "raw_books_capped", "bytes": self.bytes,
-                               "saved": self.saved, "run_max_bytes": self.run_max_bytes})
-            self.dropped["run_cap"] += 1
-            return
-        self.files.write(row)
-        self.bytes += size
-        self.saved += 1
-
-    def close(self) -> None:
-        self.files.close()
 
 
 # --- REST /book sampler ------------------------------------------------------------------------

@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T14:00:00Z",
+  "ts": "2026-10-09T13:40:44Z",
   "live_enabled": false,
-  "last_done": "AZ",
+  "last_done": "BA",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AZ (M3 step 3: offline calibration report python -m src.calibration; drops counted by reason, corrupt input exit 3, ledger exit 4, 'insufficient' below the M3-pending CALIBRATION_* minimums) done by grok-bot. AY (#59, raw WS book snapshots + ws_hash_check) merged into this branch from dev. No open todo. No live gate."
+  "note": "BA (fill market context: market_mid, best_bid, best_ask, hours_to_expiry_at_entry, kelly_fraction_used recorded at commit, null + calibration_problems when not computable, RiskGate never reads them; ws_recorder --raw-books DIR with the m1_run writer and caps) done by grok-bot. No new number. AZ (#60, calibration report) merged into this branch from dev. No open todo. No live gate."
 }

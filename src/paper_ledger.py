@@ -51,6 +51,7 @@ from src.ledger_store import (  # noqa: E402,F401 - Task AF: moved here, re-expo
 from src.ledger_store import counts as _counts  # noqa: E402 - Task AF: moved, same rule
 from src.risk_gate import Decision, Intent, evaluate  # noqa: E402
 from src.daily_loss import daily_loss  # noqa: E402 - Task AR: fees + realized losses
+from src.expiry_rule import hours_to_expiry, parse_end_date  # noqa: E402 - Task BA: hours at entry
 
 DIRECTIONAL = "Single-leg fill is directional exposure, not risk-free arbitrage."
 
@@ -219,7 +220,11 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
     # Task AX (M3 step 2): identity fields, then the join check. A fill that cannot be joined is still
     # booked (RiskGate already decided; nothing here changes that) but says why in calibration_problems.
     fill.update(identity_fields(intent))
-    fill["calibration_problems"] = calibration_ids.fill_problems(fill)
+    # Task BA: market context at commit (mid, top of book, hours to expiry, shadow Kelly multiplier).
+    # A value that cannot be computed stays None and is named in calibration_problems.
+    market, market_problems = market_fields(intent, fill["ts"])
+    fill.update(market)
+    fill["calibration_problems"] = sorted(set(calibration_ids.fill_problems(fill)) | set(market_problems))
     try:
         fill = ledger_store.book(PAPER_PATH, fill)
     except LedgerIntegrityError as exc:
@@ -267,6 +272,62 @@ def identity_fields(intent: Intent) -> dict[str, Any]:
         "end_date": intent.end_date,
         "model_version": intent.model_version,
     }
+
+
+def _price(value: object) -> tuple[float | None, str | None]:
+    """A top-of-book price: a finite number strictly between 0 and 1 (bool and str refused)."""
+    if value is None:
+        return None, "missing"
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value < 1:
+        return None, "invalid"
+    return float(value), None
+
+
+def market_fields(intent: Intent, fill_ts: str) -> tuple[dict[str, Any], list[str]]:
+    """Task BA: calibration_ids.FILL_MARKET_FIELDS for a fill committed at ``fill_ts``, and their problems.
+
+    best_bid / best_ask: the intent's own top of book (the data RiskGate's caller already had), each a
+    finite price in (0, 1), else None (missing_ / invalid_<field>). market_mid = (bid + ask) / 2 when
+    both are usable and not crossed (bid <= ask); else None (missing_market_mid if a side is unusable,
+    invalid_market_mid if crossed). hours_to_expiry_at_entry = end_date - fill ts in hours (negative
+    when already past, as computed), None if end_date is missing or not a zoned ISO time.
+    kelly_fraction_used: intent_builder's shadow Kelly multiplier as given, a finite number in (0, 1],
+    else None. Recorded only: nothing reads these for a decision or a size. Never invented.
+    """
+    problems: list[str] = []
+    bid, bid_problem = _price(intent.best_bid)
+    ask, ask_problem = _price(intent.best_ask)
+    for name, problem in (("best_bid", bid_problem), ("best_ask", ask_problem)):
+        if problem:
+            problems.append(f"{problem}_{name}")
+    mid = None
+    if bid is None or ask is None:
+        problems.append("missing_market_mid")
+    elif bid > ask:
+        problems.append("invalid_market_mid")
+    else:
+        mid = round((bid + ask) / 2, 8)
+    hours = None
+    if intent.end_date is None:
+        problems.append("missing_hours_to_expiry_at_entry")
+    else:
+        now = parse_end_date(fill_ts)
+        hours = hours_to_expiry(intent.end_date, now) if now is not None else None
+        if hours is None or not math.isfinite(hours):
+            hours = None
+            problems.append("invalid_hours_to_expiry_at_entry")
+        else:
+            hours = round(hours, 6)
+    kelly = intent.kelly_fraction_used
+    if kelly is None:
+        problems.append("missing_kelly_fraction_used")
+    elif isinstance(kelly, bool) or not isinstance(kelly, (int, float)) or not math.isfinite(kelly) or not 0 < kelly <= 1:
+        kelly = None
+        problems.append("invalid_kelly_fraction_used")
+    else:
+        kelly = float(kelly)
+    return ({"market_mid": mid, "best_bid": bid, "best_ask": ask, "hours_to_expiry_at_entry": hours,
+             "kelly_fraction_used": kelly}, problems)
 
 
 def _decision_payload(intent: Intent, decision: Decision) -> dict[str, Any]:
@@ -428,6 +489,9 @@ def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
             hypothetical=False,
             # The exchange's own book time (Task R/T), never the recorder's ts.
             book_ts=book.get("book_ts"),
+            # Task BA: the same book row's top of book (recorded on the fill only; RiskGate never reads it).
+            best_bid=book.get("best_bid"),
+            best_ask=book.get("best_ask"),
             note="Public ask used as both model and price. Must not fill. Not a forecast.",
         ),
         cfg,

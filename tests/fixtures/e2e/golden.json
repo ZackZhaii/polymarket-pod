@@ -205,7 +205,14 @@
           "outcome_index",
           "tags"
         ],
-        "joins_forecast": true
+        "joins_forecast": true,
+        "market_fields": {
+          "best_ask": 0.41,
+          "best_bid": 0.39,
+          "hours_to_expiry_at_entry": 1044.0,
+          "kelly_fraction_used": 0.15,
+          "market_mid": 0.4
+        }
       },
       "alpha-allow": {
         "calibration_problems": [],
@@ -222,7 +229,14 @@
           "outcome_index",
           "tags"
         ],
-        "joins_forecast": true
+        "joins_forecast": true,
+        "market_fields": {
+          "best_ask": 0.41,
+          "best_bid": 0.39,
+          "hours_to_expiry_at_entry": 1044.0,
+          "kelly_fraction_used": 0.15,
+          "market_mid": 0.4
+        }
       },
       "bravo-allow": {
         "calibration_problems": [],
@@ -239,7 +253,14 @@
           "outcome_index",
           "tags"
         ],
-        "joins_forecast": true
+        "joins_forecast": true,
+        "market_fields": {
+          "best_ask": 0.61,
+          "best_bid": 0.59,
+          "hours_to_expiry_at_entry": 1044.0,
+          "kelly_fraction_used": 0.15,
+          "market_mid": 0.6
+        }
       }
     },
     "forecast_problems": [],

@@ -63,6 +63,13 @@ class Intent:
     tags: tuple[str, ...] | None = None
     end_date: str | None = None
     model_version: str | None = None
+    # Task BA (M3 step 2, rest of design 1.5): market context at commit for the calibration baseline.
+    # RiskGate never reads these either (it keeps using market_price and spread); paper_ledger derives
+    # market_mid / hours_to_expiry_at_entry from them. kelly_fraction_used is intent_builder's shadow
+    # Kelly multiplier: recorded only, never used for size. None = unknown (never guessed).
+    best_bid: float | None = None
+    best_ask: float | None = None
+    kelly_fraction_used: float | None = None
 
 
 @dataclass
