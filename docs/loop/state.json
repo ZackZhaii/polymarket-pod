@@ -314,6 +314,15 @@
       "surface": "grok-build-local"
     },
     {
+      "id": "AN",
+      "status": "done",
+      "title": "M3 calibration step 1: read-only settlement snapshot (docs/M3_CALIBRATION.md, src/resolutions.py); Gamma closed markets held 48 h, fail-closed fields, data/resolutions.jsonl",
+      "finish": "src/resolutions.py walks public Gamma /markets/keyset?closed=true (scanner.fetch_all_markets base_url; no new host), writes data/resolutions.jsonl only when closedTime is a zoned ISO time at least RESOLUTION_HOLD_HOURS=48 h ago (boundary passes) and every required field is present: condition_id, winning_token_id (unique 1.0/0.0 outcomePrices, version-aware token ids), outcome_prices_final, closed_ts, snapshot_ts, status, uma_checked. Missing umaResolutionStatus skips the row; uma_checked is true only for exact resolved. Incomplete paging writes nothing (exit 3). Paper-pin drift writes nothing (exit 4) and does not fetch. Dedup by condition_id. No bus, no fill, no order. docs/M3_CALIBRATION.md. pytest passes offline. config/risk.toml unchanged.",
+      "note": "Requested by Poly指挥 (M3 calibration prerequisite step 1); done by grok-build-local. Poly指挥 design draft was not in the OpenClaw workspace; this PR records the dispatch. Letter AL is merged (PR #40). Letter AM is a local in-progress worktree so this PR uses AN. COORDINATION #27. RESOLUTION_HOLD_HOURS is not M2 pending and is not coupled to ENDGAME_WINDOW_HOURS. Later Brier/join/proposals are out of scope.",
+      "done_at": "2026-10-09T12:00:00Z",
+      "surface": "grok-build-local"
+    },
+    {
       "id": "AO",
       "status": "done",
       "title": "Signal -> OrderIntent: pure, tightening-only src/intent_builder.py (SPEC_signal_to_intent) producing an OrderIntent or canonical reason codes, edge bit-for-bit RiskGate's via fees.stress_fee, Kelly in shadow mode only, run in the e2e gate in shadow mode (phase 1)",

@@ -128,6 +128,11 @@ DATA_API_MAX_LAG_S = 120.0
 # total_cost = entry_cost + entry_fees) must hold within this many USDC, or the row is malformed.
 DATA_API_IDENTITY_TOL_USDC = 1e-6
 
+# --- M3 calibration snapshot (Task AN) ---------------------------------------------------------
+# Hours a market must stay closed (Gamma closedTime) before it is written to data/resolutions.jsonl.
+# Exactly 48 h passes. Same number as ENDGAME_WINDOW_HOURS by coincidence; they are not coupled.
+RESOLUTION_HOLD_HOURS = 48.0
+
 
 # --- Signal -> OrderIntent (Task AO, forecaster/SPEC_signal_to_intent.md) ------------------------
 # src/intent_builder.py only. Every one can only reject or shrink an intent (RiskGate still re-checks).
@@ -208,6 +213,10 @@ def consistency_problems() -> list[str]:
         problems.append("MAX_SIGNAL_AGE_*_S must be > 0")
     if not MAX_SOURCE_LOGIT_GAP > 0.0:
         problems.append("MAX_SOURCE_LOGIT_GAP must be > 0")
+    if isinstance(RESOLUTION_HOLD_HOURS, bool) or not isinstance(RESOLUTION_HOLD_HOURS, (int, float)) or not (
+        RESOLUTION_HOLD_HOURS > 0.0
+    ):
+        problems.append("RESOLUTION_HOLD_HOURS must be > 0")
     return problems
 
 

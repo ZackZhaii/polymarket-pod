@@ -72,6 +72,8 @@ EXPECTED = {
     "MAX_SIGNAL_AGE_SPORTS_DEVIG_S": 300.0,
     "MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S": 600.0,
     "MAX_SOURCE_LOGIT_GAP": 1.0,
+    # Task AN: M3 settlement snapshot hold (not coupled to ENDGAME_WINDOW_HOURS).
+    "RESOLUTION_HOLD_HOURS": 48.0,
 }
 
 # Old import paths that callers and tests use; each must stay the very same object.
@@ -102,6 +104,7 @@ REEXPORTS = {
     "sports_devig.ASSUMED_SLIPPAGE": "SPORTS_DEVIG_ASSUMED_SLIPPAGE",
     "paper_ledger.OPEN_EPS": "LEDGER_OPEN_EPS",
     "reflector.MAX_PER_UTC_DAY": "REFLECTOR_MAX_PER_UTC_DAY",
+    "resolutions.RESOLUTION_HOLD_HOURS": "RESOLUTION_HOLD_HOURS",
 }
 
 M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
@@ -276,6 +279,7 @@ def test_relations_hold():
         ("INTENT_ASSUMED_SLIPPAGE = 0.005", "INTENT_ASSUMED_SLIPPAGE = -0.005"),
         ("MAX_SIGNAL_AGE_NEWS_S = 3600.0", "MAX_SIGNAL_AGE_NEWS_S = 0.0"),
         ("MAX_SOURCE_LOGIT_GAP = 1.0", "MAX_SOURCE_LOGIT_GAP = 0.0"),
+        ("RESOLUTION_HOLD_HOURS = 48.0", "RESOLUTION_HOLD_HOURS = 0.0"),
     ],
 )
 def test_an_inconsistent_edit_fails_at_import(line, replacement):

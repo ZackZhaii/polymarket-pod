@@ -861,6 +861,29 @@ five decisions, and `python -m pytest` passes with no network and no credentials
   `origin/main`, unclosed PRs, and remaining local/remote branches.
 - Tests: `tests/test_ci_workflow.py`. Do not edit `config/risk.toml`.
 
+## Task AN — M3 calibration step 1: read-only settlement snapshot (docs/M3_CALIBRATION.md, src/resolutions.py)
+
+Status: done.
+
+Requested by Poly指挥 (M3 calibration prerequisite step 1); done by grok-build-local. The Poly指挥 design
+draft was not in the OpenClaw workspace; `docs/M3_CALIBRATION.md` records the dispatch. Letter AL is merged
+(PR #40). Letter AM is a local in-progress worktree, so this PR uses AN.
+
+Finish when closed Gamma markets are snapshotted only after a 48 h hold, required fields fail closed, offline
+tests pass, and `config/risk.toml` is unchanged.
+
+- `src/resolutions.py` walks public Gamma `/markets/keyset?closed=true&order=closedTime` through
+  `scanner.fetch_all_markets(..., base_url=)` (no new host). `closedTime` must be a zoned ISO time
+  (`expiry_rule.parse_end_date`); `endDate` is never the close clock. Write `data/resolutions.jsonl` (gitignored)
+  only when `now - closedTime >= RESOLUTION_HOLD_HOURS` (48 h, boundary passes) and every required field is
+  present: `condition_id`, unique 1.0/0.0 `outcome_prices_final`, version-aware `winning_token_id`, `closed_ts`,
+  `snapshot_ts`, `status`, `uma_checked`. Missing `umaResolutionStatus` skips the row. `uma_checked` is true only
+  for exact `resolved`; a unique winner with another UMA status is written as `status=closed`.
+- Incomplete paging writes nothing (exit 3). Paper-pin drift writes nothing (exit 4) and does not fetch. A
+  complete empty universe is exit 0. Dedup by `condition_id`. No bus, no fill, no order.
+- `RESOLUTION_HOLD_HOURS = 48.0` in `src/thresholds.py` (re-exported; not coupled to `ENDGAME_WINDOW_HOURS`;
+  not M2 pending). Tests: `tests/test_resolutions.py`. Docs: `docs/M3_CALIBRATION.md`, `docs/PHASE0_RUN.md`.
+
 ## Task AO — Signal -> OrderIntent: pure, tightening-only src/intent_builder.py, Kelly shadow, e2e shadow gate (SPEC_signal_to_intent)
 
 Status: done.
@@ -901,8 +924,8 @@ in shadow, runs in the e2e gate in shadow mode, and `python -m pytest` and guard
 
 ## Latest
 
-- 2026-10-09: Merge origin/dev into Task AO (#43). Both AM (CI + DECISIONS.md, #41) and AO (signal->intent) kept.
-- Task AM: `.github/workflows/ci.yml` runs guard --require-git and full pytest on PRs/pushes to dev/main; docs/DECISIONS.md records five roadmap decisions.
-- Task AO: `src/intent_builder.py` turns a signal + books into an OrderIntent or reasons; pure, tightening only; Kelly shadow; e2e shadow gate.
+- 2026-10-09: Merge origin/dev (incl. #42 AN) into Task AO (#43). AM, AN, and AO all kept.
+- Task AN (merged #42): `src/resolutions.py` Gamma closed markets, 48 h hold, `data/resolutions.jsonl`; `RESOLUTION_HOLD_HOURS=48` not M2 pending.
+- Task AO: `src/intent_builder.py` signal->OrderIntent; pure, tightening only; Kelly shadow; e2e shadow gate; INTENT_*/MAX_SIGNAL_AGE_* M2 pending.
 - pytest + guard pass after merge. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty after AM+AO. AN (#42 M3 snapshot) is a separate open PR, not yet on origin/dev. Heartbeat (gap 2) later.
+- Queue empty after AM+AN+AO. Heartbeat (gap 2) later.

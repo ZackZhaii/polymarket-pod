@@ -5,5 +5,5 @@
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AO (signal -> OrderIntent: pure, tightening-only src/intent_builder.py; edge bit-for-bit RiskGate's; Kelly shadow; e2e shadow gate) done by grok-bot; merged origin/dev which already has AM (#41 CI + docs/DECISIONS.md), AK (#39), AL (#40). AN (#42 M3 settlement snapshot) is a separate open PR not yet on origin/dev. Task letters after Z are AA..AL, AM, AO. M2 pending includes AK reconcile tolerances and AO's INTENT_ASSUMED_SLIPPAGE, INTENT_TTL_S, MAX_SIGNAL_AGE_*_S, MAX_SOURCE_LOGIT_GAP. No open todo. No live gate."
+  "note": "AO (signal -> OrderIntent: pure, tightening-only src/intent_builder.py; edge bit-for-bit RiskGate's; Kelly shadow; e2e shadow gate) done by grok-bot on #43; merged origin/dev which now includes AN (#42 M3 settlement snapshot at f467f1b), AM (#41 CI + docs/DECISIONS.md), AK (#39), AL (#40). Task letters after Z are AA..AL, AM, AN, AO. RESOLUTION_HOLD_HOURS=48 is not M2 pending. M2 pending includes AK reconcile tolerances and AO's INTENT_ASSUMED_SLIPPAGE, INTENT_TTL_S, MAX_SIGNAL_AGE_*_S, MAX_SOURCE_LOGIT_GAP. No open todo. No live gate."
 }

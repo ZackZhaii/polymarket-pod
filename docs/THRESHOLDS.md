@@ -61,6 +61,7 @@ proposals waiting for the user's decision at M2. Task AC moved no value and chan
 | `MAX_SIGNAL_AGE_SPORTS_DEVIG_S` | `300.0` | s | Same for a SportsDevig signal. A blend uses the smallest of the three limits. | `src/thresholds.py` (used by `src/intent_builder.py`) | Task AO, SPEC 1.3 | yes |
 | `MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S` | `600.0` | s | Same for an `endgame_confirm` probability (a raw Endgame signal has none: `missing_model_prob`). | `src/thresholds.py` (used by `src/intent_builder.py`) | Task AO, SPEC 1.3 | yes |
 | `MAX_SOURCE_LOGIT_GAP` | `1.0` | log-odds | Two model sources for one outcome whose point estimates differ by more than this are `source_conflict` (no blend, no intent). | `src/thresholds.py` (used by `src/intent_builder.py`) | Task AO, SPEC 1.3 | yes |
+| `RESOLUTION_HOLD_HOURS` | `48.0` | h | A closed market is snapshotted only after it has been closed this long (`closedTime`). Exactly 48 h passes. Same number as `ENDGAME_WINDOW_HOURS` by coincidence; they are not coupled. | `src/thresholds.py`; re-exported as `resolutions.RESOLUTION_HOLD_HOURS` | Task AN | no |
 
 Relations checked when `src/thresholds.py` is imported (an explicit `RuntimeError`, not `assert`):
 `SENTINEL_STALE_S == MAX_BOOK_AGE_S`, `PAPER_CYCLE_STALE_AFTER_S == MAX_BOOK_AGE_S`,
@@ -73,9 +74,7 @@ Relations checked when `src/thresholds.py` is imported (an explicit `RuntimeErro
 both M1 rates in `[0, 1)`, `0 < M1_REST_MATCH_WINDOW_S <= WS_ROW_REFRESH_S`, and a full run can collect enough REST
 samples: `M1_MIN_RUN_S / M1_REST_EVERY_S * M1_REST_ASSETS >= M1_MIN_REST_MATCHED`; reconcile (Task AK):
 `0 < RECONCILE_SHARES_TOL < DATA_API_TRADES_MIN_SHARES <= DATA_API_POSITIONS_DUST_SHARES` and
-`LEDGER_OPEN_EPS <= RECONCILE_SHARES_TOL`, `DATA_API_MAX_LAG_S > 0`, `DATA_API_IDENTITY_TOL_USDC > 0`; intent builder
-(Task AO): `0 <= INTENT_ASSUMED_SLIPPAGE < 1`, `0 < INTENT_SHARE_STEP <= 1`, `0 < INTENT_TTL_S <= MAX_BOOK_AGE_S`,
-every `MAX_SIGNAL_AGE_*_S > 0`, `MAX_SOURCE_LOGIT_GAP > 0`.
+`LEDGER_OPEN_EPS <= RECONCILE_SHARES_TOL`, `DATA_API_MAX_LAG_S > 0`, `DATA_API_IDENTITY_TOL_USDC > 0`, `RESOLUTION_HOLD_HOURS > 0` (not equal to `ENDGAME_WINDOW_HOURS`; the shared 48 is coincidence); intent builder (Task AO): `0 <= INTENT_ASSUMED_SLIPPAGE < 1`, `0 < INTENT_SHARE_STEP <= 1`, `0 < INTENT_TTL_S <= MAX_BOOK_AGE_S`, every `MAX_SIGNAL_AGE_*_S > 0`, `MAX_SOURCE_LOGIT_GAP > 0`.
 `src/sentinel.py` keeps its own `SENTINEL_STALE_S != MAX_BOOK_AGE_S` guard as well.
 
 ## Operational limits (stay in their modules)

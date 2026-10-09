@@ -122,6 +122,7 @@ def fetch_all_markets(
     page_limit: int = PAGE_LIMIT,
     max_pages: int = MAX_PAGES,
     server_min_liquidity: float | None = None,
+    base_url: str | None = None,
 ) -> tuple[list[dict], dict[str, Any]]:
     """Walk Gamma keyset pages until next_cursor is empty, a cap is hit, or paging stalls.
 
@@ -131,6 +132,8 @@ def fetch_all_markets(
     are reported as incomplete instead of spinning up to max_pages requests.
     A page that still fails after public_get's retries stops the walk with
     stop_reason "network_error" (incomplete, so main() exits 3 and writes nothing).
+    base_url defaults to GAMMA_KEYSET (closed=false). The resolution snapshot passes
+    a closed=true keyset; the scanner's own callers still omit it.
     """
     get = getter or public_get
     rows: list[dict] = []
@@ -140,7 +143,8 @@ def fetch_all_markets(
     pages = 0
     stop = "exhausted"
     error = ""
-    base = f"{GAMMA_KEYSET}&limit={int(page_limit)}"
+    keyset = base_url or GAMMA_KEYSET
+    base = f"{keyset}&limit={int(page_limit)}"
     if server_min_liquidity is not None:
         base += f"&liquidity_num_min={float(server_min_liquidity):g}"
     while True:
@@ -200,6 +204,7 @@ def fetch_all_markets(
         "complete": stop == "exhausted",
         "max_markets": max_markets,
         "server_min_liquidity": server_min_liquidity,
+        "base_url": keyset,
     }
     if error:
         meta["error"] = error
