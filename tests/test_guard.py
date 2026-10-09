@@ -591,11 +591,16 @@ def test_the_guard_never_writes_or_fetches():
             assert len(node.args) == 2, ast.unparse(node)
 
 
-def test_no_ci_config_is_added():
-    assert not (ROOT / ".github" / "workflows" / "guard.yml").exists()
+def test_ci_is_the_am_workflow_only():
+    """Task AH left CI with the user. Task AM added .github/workflows/ci.yml only."""
     workflows = ROOT / ".github" / "workflows"
-    if workflows.is_dir():
-        assert not any("guard" in p.read_text(encoding="utf-8", errors="replace") for p in workflows.iterdir() if p.is_file())
+    assert workflows.is_dir()
+    files = sorted(p.name for p in workflows.iterdir() if p.is_file())
+    assert files == ["ci.yml"]
+    text = (workflows / "ci.yml").read_text(encoding="utf-8")
+    assert "python scripts/guard.py --require-git" in text
+    assert "python -m pytest" in text
+    assert "secrets:" not in text
 
 
 def test_the_pin_matches_the_rest_of_the_repo():

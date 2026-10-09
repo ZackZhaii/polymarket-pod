@@ -837,6 +837,30 @@ is a global halt, only an Operator resume releases one, the e2e gate and guard p
 - No new threshold (no M2 addition), no URL, risk.toml unchanged. Docs: PROTOCOL.md, COORDINATION (Operator bus
   exception, #26), PHASE0_RUN "Halts and resume".
 
+## Task AM — GitHub Actions CI (guard --require-git + full pytest) and docs/DECISIONS.md
+
+Status: done.
+
+Assigned by Operator 2026-10-09, done by grok-build-local. Task AH added `scripts/guard.py` and left CI
+with the user. This task is that CI, plus a written record of the five roadmap decisions.
+
+Finish when `.github/workflows/ci.yml` runs `python scripts/guard.py --require-git` and full
+`python -m pytest` only on pull requests and on pushes to `dev` and `main`, actions are pinned to a
+full commit SHA, `permissions: contents: read`, no secrets are used, `docs/DECISIONS.md` records the
+five decisions, and `python -m pytest` passes with no network and no credentials.
+
+- Triggers: `pull_request` and `push` to `dev` and `main` only. No `workflow_dispatch`, no schedule.
+- `permissions: contents: read`. Checkout sets `persist-credentials: false`. No `secrets:` key.
+- Actions pinned: `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` (v7.0.1),
+  `actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97` (v7.0.0). Python 3.12; pytest from
+  `requirements-dev.txt`.
+- `docs/DECISIONS.md`: (1) Phase 0 paper only, (2) daily truth is `origin/dev`, (3) `risk.toml` pin,
+  (4) CI is KEY, (5) M2 thresholds stay code constants until the Operator decides.
+- Letter AM: AK landed as PR #39 and AL as PR #40 while this worktree was open. AN is the unpublished
+  local worktree `task-an/m3-resolution-snapshot`. AM is the next letter unused on `origin/dev`,
+  `origin/main`, unclosed PRs, and remaining local/remote branches.
+- Tests: `tests/test_ci_workflow.py`. Do not edit `config/risk.toml`.
+
 ## Task AO — Signal -> OrderIntent: pure, tightening-only src/intent_builder.py, Kelly shadow, e2e shadow gate (SPEC_signal_to_intent)
 
 Status: done.
@@ -877,8 +901,8 @@ in shadow, runs in the e2e gate in shadow mode, and `python -m pytest` and guard
 
 ## Latest
 
-- 2026-10-09: Task AO done by grok-bot (requested by Poly指挥; Poly预测's SPEC_signal_to_intent). `src/intent_builder.py` turns a signal + scanner row + books into an OrderIntent or canonical reasons; pure, tightening only, bit-for-bit RiskGate's edge.
-- Kelly is shadow only (reported, never sized); size stays RiskGate's 1% clip. Enforcing Kelly / phase 2 needs RiskGate `Intent.size_usd` (KEY, backlog #7).
-- e2e gate runs the builder in shadow mode: golden gains `intent_builder` per decision (only additions); a builder looser than RiskGate fails the gate.
-- Six new M2-pending numbers (INTENT_ASSUMED_SLIPPAGE, INTENT_TTL_S, three MAX_SIGNAL_AGE_*_S, MAX_SOURCE_LOGIT_GAP) and INTENT_SHARE_STEP; config/risk.toml unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
-- Before AO: Task AL (halt consumer, #40) and AK (Data API v2 reconciliation, #39) merged into dev.
+- 2026-10-09: Merge origin/dev into Task AO (#43). Both AM (CI + DECISIONS.md, #41) and AO (signal->intent) kept.
+- Task AM: `.github/workflows/ci.yml` runs guard --require-git and full pytest on PRs/pushes to dev/main; docs/DECISIONS.md records five roadmap decisions.
+- Task AO: `src/intent_builder.py` turns a signal + books into an OrderIntent or reasons; pure, tightening only; Kelly shadow; e2e shadow gate.
+- pytest + guard pass after merge. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty after AM+AO. AN (#42 M3 snapshot) is a separate open PR, not yet on origin/dev. Heartbeat (gap 2) later.
