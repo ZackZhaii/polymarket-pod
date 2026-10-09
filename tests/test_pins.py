@@ -12,7 +12,7 @@ from src import pins
 from src.thresholds import PIN_RECHECK_S, SENTINEL_HEARTBEAT_TIMEOUT_S
 
 ROOT = Path(__file__).resolve().parents[1]
-REAL = (ROOT / "config" / "risk.toml").read_bytes()
+REAL = (ROOT / "config" / "risk.toml").read_bytes().replace(b"\r\n", b"\n")  # LF form (Windows checkouts are CRLF)
 
 
 @pytest.fixture(autouse=True)
