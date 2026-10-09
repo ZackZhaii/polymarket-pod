@@ -1217,8 +1217,33 @@ disk use, and an offline tool can say whether the AW algorithm matches them; `py
 - Tests: `tests/test_ws_raw_snapshots.py` (synthetic frames, sockets patched to fail; secret scan clean on the raw
   files). No new URL, dependency or outgoing frame. config/risk.toml unchanged, `live_enabled` false.
 
+## Task AZ — M3 calibration step 3: offline calibration report (src/calibration.py)
+
+Status: done.
+
+Requested by Poly指挥 (Poly反思's M3 calibration design sections 1-3 and 6, step 3), done by grok-bot on
+dev@d2af163. AY (#59) ran in parallel; merged in from dev (dev@39aebfa).
+
+Finish when forecasts and fills join the settlement snapshot offline, the design's metrics are reported, every
+dropped row is counted by reason (never imputed), corrupt input exits with an error and writes nothing, the
+minimums say `insufficient` instead of a verdict, and `python -m pytest` and guard --require-git pass offline.
+
+- `src/calibration.py`: `python -m src.calibration` writes `reports/calibration/<UTC date>/` (report.json,
+  report.md, samples.jsonl). B (forecasts) and A (trades by decision_id) samples; Brier, log loss,
+  reliability + Wilson, ECE, slope / intercept, market-clustered bootstrap intervals; Brier vs market,
+  skill, E / R / realization; groups by category, strategy, model_version (and side, edge tier, expiry tier,
+  price band for A).
+- Exit codes 0 / 2 / 3 corrupt input / 4 ledger fails verify / 5 write failed in `docs/EXIT_CODES.md`
+  (20 entry points with AY's ws_hash_check; no heartbeat, Sentinel `-`).
+- New numbers (M3 pending): `CALIBRATION_*` in `src/thresholds.py` and `docs/THRESHOLDS.md`.
+- Docs: `docs/M3_CALIBRATION.md` Step 3. `reports/calibration/` git-ignored. No e2e/guard change (the e2e
+  fixtures have no resolutions to join).
+
 ## Latest
 
+- 2026-10-09: Task AZ: offline M3 calibration report `python -m src.calibration` (Brier, reliability, ECE,
+  slope, vs-market, edge realization; drops counted by reason; corrupt input = exit 3, bad ledger = exit 4;
+  `insufficient` below the M3-pending `CALIBRATION_*` minimums). No trading change.
 - 2026-10-09: Task AY: `m1_run --raw-books` (opt-in) keeps full book frames in `raw_books/` (16 MiB per file,
   256 MiB per run, M2 pending); `python -m src.ws_hash_check <run dir>` checks the AW hash on them, read-only.
   `BOOK_HASH_ENFORCED` stays False.

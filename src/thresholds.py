@@ -225,6 +225,29 @@ ALL_STALE_CONSECUTIVE_CYCLES = 2
 # run and records a global halt. Must not exceed SENTINEL_HEARTBEAT_TIMEOUT_S.
 PIN_RECHECK_S = 60.0
 
+# --- M3 calibration report (Task AZ, Poly反思's M3 calibration design sections 2 and 3) -----------
+# M3 pending (the user decides at M3). Below these the report says "insufficient" and gives no verdict.
+CALIBRATION_MIN_SAMPLES = 30  # eligible samples for an overall verdict
+CALIBRATION_MIN_MARKETS = 20  # distinct markets (condition_id) among them
+CALIBRATION_MIN_RESOLUTION_DAYS = 5  # distinct UTC days of closedTime among them
+CALIBRATION_GROUP_MIN_SAMPLES = 10  # a category / strategy / model_version / bin group with a verdict
+CALIBRATION_GROUP_MIN_MARKETS = 5
+CALIBRATION_FIXED_BINS_MIN_SAMPLES = 100  # fewer samples: equal-frequency bins instead of the fixed edges
+CALIBRATION_EQUAL_FREQ_BINS = 5
+CALIBRATION_EQUAL_FREQ_MIN_PER_BIN = 6
+CALIBRATION_MAX_DECISIONS_PER_MARKET = 2  # trade sample: re-entries beyond this per market are not scored
+CALIBRATION_BOOTSTRAP_RESAMPLES = 2000  # resampled by market (condition_id)
+CALIBRATION_BOOTSTRAP_SEED = 20261009
+CALIBRATION_CI_LEVEL = 0.95  # bootstrap percentile intervals and Wilson intervals
+CALIBRATION_LOGLOSS_CLIP = 0.01  # p clipped to [clip, 1 - clip] for log loss and the logit
+# Fixed reliability bins (design 2.3): finer at both ends. Not a number constant; checked below.
+CALIBRATION_BIN_EDGES = (0.0, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 1.0)
+# Trade-sample groups (design 2.5 / 2.6): edge tiers [0.02, 0.04) [0.04, 0.08) [0.08, ...) and hours to expiry at
+# the first fill [24, 72) [72, 336) [336, ...). Grouping labels only; nothing is filtered by them.
+CALIBRATION_EDGE_TIERS = (0.02, 0.04, 0.08)
+CALIBRATION_EXPIRY_TIERS_H = (24.0, 72.0, 336.0)
+
+
 def consistency_problems() -> list[str]:
     """Relations the values must keep. Import fails if any is broken (explicit, survives -O)."""
     problems = []
@@ -329,6 +352,32 @@ def consistency_problems() -> list[str]:
         0.0 < PIN_RECHECK_S <= SENTINEL_HEARTBEAT_TIMEOUT_S
     ):
         problems.append("PIN_RECHECK_S must be in (0, SENTINEL_HEARTBEAT_TIMEOUT_S]")
+    # Task AZ: M3 calibration report.
+    for name in ("CALIBRATION_MIN_SAMPLES", "CALIBRATION_MIN_MARKETS", "CALIBRATION_MIN_RESOLUTION_DAYS",
+                 "CALIBRATION_GROUP_MIN_SAMPLES", "CALIBRATION_GROUP_MIN_MARKETS",
+                 "CALIBRATION_FIXED_BINS_MIN_SAMPLES", "CALIBRATION_EQUAL_FREQ_BINS",
+                 "CALIBRATION_EQUAL_FREQ_MIN_PER_BIN", "CALIBRATION_MAX_DECISIONS_PER_MARKET", "CALIBRATION_BOOTSTRAP_RESAMPLES", "CALIBRATION_BOOTSTRAP_SEED"):
+        value = globals()[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            problems.append(f"{name} must be a whole number >= 1")
+    if not (CALIBRATION_GROUP_MIN_SAMPLES <= CALIBRATION_MIN_SAMPLES
+            and CALIBRATION_GROUP_MIN_MARKETS <= CALIBRATION_MIN_MARKETS <= CALIBRATION_MIN_SAMPLES):
+        problems.append("calibration group minimums must not exceed the overall ones (markets <= samples)")
+    if not CALIBRATION_MIN_SAMPLES <= CALIBRATION_FIXED_BINS_MIN_SAMPLES:
+        problems.append("CALIBRATION_FIXED_BINS_MIN_SAMPLES must be >= CALIBRATION_MIN_SAMPLES")
+    if not 0.5 < CALIBRATION_CI_LEVEL < 1:
+        problems.append("CALIBRATION_CI_LEVEL must be in (0.5, 1)")
+    if not 0 < CALIBRATION_LOGLOSS_CLIP < 0.5:
+        problems.append("CALIBRATION_LOGLOSS_CLIP must be in (0, 0.5)")
+    edges = CALIBRATION_BIN_EDGES
+    if (not isinstance(edges, tuple) or len(edges) < 3 or edges[0] != 0.0 or edges[-1] != 1.0
+            or any(not a < b for a, b in zip(edges, edges[1:]))):
+        problems.append("CALIBRATION_BIN_EDGES must rise strictly from 0.0 to 1.0")
+    for name in ("CALIBRATION_EDGE_TIERS", "CALIBRATION_EXPIRY_TIERS_H"):
+        tiers = globals()[name]
+        if (not isinstance(tiers, tuple) or not tiers or tiers[0] <= 0
+                or any(not a < b for a, b in zip(tiers, tiers[1:]))):
+            problems.append(f"{name} must be positive and rise strictly")
     return problems
 
 
