@@ -131,6 +131,8 @@ def test_to_risk_intent_matches_the_harness_shape():
         "best_bid": 0.39, "best_ask": 0.41, "kelly_fraction_used": 0.15,
         # Task BC: this trade's raw (full) Kelly fraction and the path that built the intent.
         "kelly_frac_raw": oi.kelly_raw, "fill_context": "intent_builder",
+        # Task BF: the market's Polymarket event (none on the test market), recorded on the fill only.
+        "event_id": None, "event_slug": None,
     }
     assert intent.kelly_fraction_used == oi.kelly_fraction and intent.best_ask == oi.best_ask
     assert intent.kelly_frac_raw == pytest.approx(0.055 / (1 - 0.415))

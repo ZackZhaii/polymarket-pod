@@ -474,6 +474,15 @@
       "note": "Requested by Poly指挥 after BD (#71) merged. Done by grok-bot. Not done: the design's two-batch Kelly rule (kelly_fraction lives in config/risk.toml, which no proposal may name, and the rule is about raising Kelly) and the cumulative-loss disable (its threshold is not in the repo); both need Poly反思's numbers and a decision on where they live.",
       "done_at": "2026-10-09T16:42:20Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "BF",
+      "status": "done",
+      "title": "Polymarket event id on forecasts and fills; event_id as the calibration event_cluster key (per-sample condition_id fallback)",
+      "finish": "src/calibration_ids.py scanner_event reads Gamma's market events list into (event_id, event_slug) (missing, malformed or conflicting -> None, never guessed); scanner rows, MarketContext, OrderIntent, risk_gate.Intent, paper fills (FILL_EVENT_FIELDS) and logs/forecasts.jsonl rows (FORECAST_EVENT_FIELDS appended to FORECAST_ROW_FIELDS) record them; never a calibration problem, never in forecast_id or the signal payload; RiskGate never reads them (source scan + identical decisions). src/calibration.py clusters event_cluster by event_id, else condition_id per sample (trades: fill event, else joined forecast event; conflicting -> condition_id), with cluster_key event_id / condition_id / mixed and event_id_samples / condition_id_fallback_samples; forecast rows from before BF and malformed event values stay valid. Bootstrap intervals unchanged. No new number; report.json schema_version 1, keys only added; reflector_proposals unchanged. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 as the follow-up flagged in Task BD (#71). Done by grok-bot on the box (NoisePC fallback). Bootstrap intervals stay market-clustered (condition_id); clustering them by event is a possible later task.",
+      "done_at": "2026-10-09T17:28:46Z",
+      "surface": "grok-bot"
     }
   ]
 }

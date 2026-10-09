@@ -76,6 +76,10 @@ class Intent:
     # and neither ever changes a decision or a size.
     kelly_frac_raw: float | None = None
     fill_context: str | None = None
+    # Task BF: the market's Polymarket event (Gamma ``events``), copied onto the fill for calibration
+    # clustering. Recorded only: RiskGate never reads either; None = unknown (never guessed).
+    event_id: str | None = None
+    event_slug: str | None = None
 
 
 @dataclass

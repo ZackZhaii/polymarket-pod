@@ -28,7 +28,8 @@ def forecast(i: int, p: float, *, outcome_index: int = 0, token: str | None = No
            "market_id": market, "condition_id": condition, "outcome_index": outcome_index,
            "outcome": "Yes" if outcome_index == 0 else "No", "token_id": token, "model_prob": p, "p_low": None,
            "p_high": None, "category": category, "tags": ["x"], "end_date": "2026-10-20T00:00:00Z",
-           "model_version": version, "note": "", "sealed_before_book_read": True, "calibration_problems": []}
+           "model_version": version, "note": "", "sealed_before_book_read": True, "calibration_problems": [],
+           "event_id": None, "event_slug": None}  # Task BF event fields (None: falls back to condition_id)
     row["forecast_id"] = ci.make_forecast_id(source="news", ts=ts, market_id=market, condition_id=condition,
                                              outcome_index=outcome_index, token_id=token, model_prob=p, p_low=None,
                                              p_high=None, model_version=version)

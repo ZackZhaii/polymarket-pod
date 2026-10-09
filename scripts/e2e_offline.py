@@ -343,6 +343,8 @@ def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: d
         kelly_fraction_used=podlib.load_risk().get("kelly_fraction"),
         kelly_frac_raw=kelly_frac_raw,
         fill_context="intent_builder",
+        event_id=market_row.get("event_id"),  # Task BF: the scanner row's event, recorded on the fill only
+        event_slug=market_row.get("event_slug"),
     )
 
 
@@ -356,7 +358,8 @@ def forecast_kwargs(forecast: dict[str, Any], market_row: dict[str, Any]) -> dic
             "token_id": str(tokens[index]) if len(tokens) > index else None,
             "outcome": str(outcomes[index]) if len(outcomes) > index else None,
             "condition_id": market_row.get("condition_id") or None, "end_date": market_row.get("end_date") or None,
-            "category": market_row.get("category"), "tags": market_row.get("tags")}
+            "category": market_row.get("category"), "tags": market_row.get("tags"),
+            "event_id": market_row.get("event_id"), "event_slug": market_row.get("event_slug")}  # Task BF
 
 
 # RiskGate veto reasons the intent builder must also reject on (SPEC 9.2 P3, same token).

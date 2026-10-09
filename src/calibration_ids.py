@@ -58,10 +58,19 @@ FILL_CONTEXT_GATE_CHECK = "gate_check"
 FILL_CONTEXTS = (FILL_CONTEXT_INTENT_BUILDER, FILL_CONTEXT_OPERATOR_CLI, FILL_CONTEXT_GATE_CHECK)
 NO_BOOK_CONTEXTS = frozenset({FILL_CONTEXT_OPERATOR_CLI, FILL_CONTEXT_GATE_CHECK})
 
-# logs/forecasts.jsonl: one row per sealed forecast, these keys in this order (no extras).
+# Task BF: the Polymarket event of the market (Gamma market ``events``), on forecasts and fills, so the
+# calibration report can cluster markets of one event. None when Gamma gives none or something unusable
+# (never guessed). Never a calibration problem and never a join field: the report falls back to
+# condition_id per sample. Recorded only: RiskGate, sizing and every gate never read them.
+FILL_EVENT_FIELDS = ("event_id", "event_slug")
+FORECAST_EVENT_FIELDS = ("event_id", "event_slug")
+
+# logs/forecasts.jsonl: one row per sealed forecast, these keys in this order (no extras). Rows written
+# before Task BF lack FORECAST_EVENT_FIELDS and stay valid for the calibration report.
 FORECAST_ROW_FIELDS = ("schema_version", "forecast_id", "ts", "source", "strategy", "market_id", "condition_id",
                        "outcome_index", "outcome", "token_id", "model_prob", "p_low", "p_high", "category", "tags",
-                       "end_date", "model_version", "note", "sealed_before_book_read", "calibration_problems")
+                       "end_date", "model_version", "note", "sealed_before_book_read", "calibration_problems",
+                       *FORECAST_EVENT_FIELDS)
 FORECAST_JOIN_FIELDS = ("forecast_id", "ts", "market_id", "condition_id", "outcome_index", "token_id",
                         "model_prob", "end_date", "model_version")
 
@@ -125,6 +134,39 @@ def scanner_tags(market: Mapping[str, Any]) -> list[str] | None:
         if isinstance(value, str) and value.strip() and value.strip() not in out:
             out.append(value.strip())
     return out
+
+
+def event_value(value: object) -> str | None:
+    """Task BF: an event id / slug as recorded: a non-blank string (stripped) or an int (as its decimal
+    string); None for anything else (missing, blank, bool, float, list, object). Never raises."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def scanner_event(market: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    """Task BF: (event_id, event_slug) from Gamma's market ``events`` list (include_tag=true rows).
+
+    The event id is the one id every usable entry (an object with an event_value id) names; (None, None)
+    when there is no ``events`` list, no usable entry, or entries naming different events (ambiguous:
+    never guessed). The slug is the first usable slug among the entries of that event, else None.
+    Malformed data never raises.
+    """
+    raw = market.get("events") if isinstance(market, Mapping) else None
+    if not isinstance(raw, list):
+        return None, None
+    entries = [(event_value(item.get("id")), item) for item in raw if isinstance(item, Mapping)]
+    ids = {eid for eid, _ in entries if eid is not None}
+    if len(ids) != 1:
+        return None, None
+    (event_id,) = ids
+    slug = next((event_value(item.get("slug")) for eid, item in entries
+                 if eid == event_id and isinstance(item.get("slug"), str) and event_value(item.get("slug"))), None)
+    return event_id, slug
 
 
 def _valid_index(value: object) -> bool:
