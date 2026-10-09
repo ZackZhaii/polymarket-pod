@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T07:00:39Z",
+  "ts": "2026-10-09T12:00:00Z",
   "live_enabled": false,
-  "last_done": "AM",
+  "last_done": "AN",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AM (GitHub Actions CI: .github/workflows/ci.yml runs python scripts/guard.py --require-git and full pytest only on PRs and pushes to dev/main; permissions contents: read; no secrets; actions pinned to full commit SHAs; docs/DECISIONS.md records the five roadmap decisions) done by grok-build-local. Task letters after Z are AA, AB, AC, AD, AE, AF, AG, AH, AI, AJ, AK, AL, AM. AK landed as PR #39 and AL as PR #40 while this worktree was open. AN is the unpublished local worktree task-an/m3-resolution-snapshot. AL adds no M2 number. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S and the M1 criteria M1_MIN_RUN_S, M1_MIN_COVERAGE, M1_MAX_RECONNECTS, M1_MAX_GAP_RESYNCS_PER_ASSET, M1_REST_MATCH_WINDOW_S, M1_MIN_REST_MATCHED, M1_MAX_TOP_MISMATCH_RATE, M1_MAX_REST_UNMATCHED_RATE, and AK's RECONCILE_SHARES_TOL, DATA_API_POSITIONS_DUST_SHARES, DATA_API_TRADES_MIN_SHARES, DATA_API_MAX_LAG_S, DATA_API_IDENTITY_TOL_USDC. No open todo. No live gate."
+  "note": "AN (M3 calibration step 1: read-only src/resolutions.py on Gamma /markets/keyset?closed=true, 48 h closedTime hold, fail-closed fields, data/resolutions.jsonl; docs/M3_CALIBRATION.md) done by grok-build-local; merged origin/dev which already has AM (#41 CI + docs/DECISIONS.md), AK (#39), AL (#40). Task letters after Z are AA..AL, AM, AN. RESOLUTION_HOLD_HOURS=48 is not M2 pending. M2 pending unchanged from AM note (MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S, eight M1_* criteria, AK reconcile tolerances). No open todo. No live gate."
 }

@@ -861,10 +861,33 @@ five decisions, and `python -m pytest` passes with no network and no credentials
   `origin/main`, unclosed PRs, and remaining local/remote branches.
 - Tests: `tests/test_ci_workflow.py`. Do not edit `config/risk.toml`.
 
+## Task AN — M3 calibration step 1: read-only settlement snapshot (docs/M3_CALIBRATION.md, src/resolutions.py)
+
+Status: done.
+
+Requested by Poly指挥 (M3 calibration prerequisite step 1); done by grok-build-local. The Poly指挥 design
+draft was not in the OpenClaw workspace; `docs/M3_CALIBRATION.md` records the dispatch. Letter AL is merged
+(PR #40). Letter AM is a local in-progress worktree, so this PR uses AN.
+
+Finish when closed Gamma markets are snapshotted only after a 48 h hold, required fields fail closed, offline
+tests pass, and `config/risk.toml` is unchanged.
+
+- `src/resolutions.py` walks public Gamma `/markets/keyset?closed=true&order=closedTime` through
+  `scanner.fetch_all_markets(..., base_url=)` (no new host). `closedTime` must be a zoned ISO time
+  (`expiry_rule.parse_end_date`); `endDate` is never the close clock. Write `data/resolutions.jsonl` (gitignored)
+  only when `now - closedTime >= RESOLUTION_HOLD_HOURS` (48 h, boundary passes) and every required field is
+  present: `condition_id`, unique 1.0/0.0 `outcome_prices_final`, version-aware `winning_token_id`, `closed_ts`,
+  `snapshot_ts`, `status`, `uma_checked`. Missing `umaResolutionStatus` skips the row. `uma_checked` is true only
+  for exact `resolved`; a unique winner with another UMA status is written as `status=closed`.
+- Incomplete paging writes nothing (exit 3). Paper-pin drift writes nothing (exit 4) and does not fetch. A
+  complete empty universe is exit 0. Dedup by `condition_id`. No bus, no fill, no order.
+- `RESOLUTION_HOLD_HOURS = 48.0` in `src/thresholds.py` (re-exported; not coupled to `ENDGAME_WINDOW_HOURS`;
+  not M2 pending). Tests: `tests/test_resolutions.py`. Docs: `docs/M3_CALIBRATION.md`, `docs/PHASE0_RUN.md`.
+
 ## Latest
 
-- 2026-10-09: Task AM done by grok-build-local (assigned by Operator). GitHub Actions CI plus docs/DECISIONS.md.
-- `.github/workflows/ci.yml` runs only on PRs and pushes to `dev`/`main`: `python scripts/guard.py --require-git` then full pytest. `permissions: contents: read`. No secrets. Actions pinned to full commit SHAs.
-- `docs/DECISIONS.md` records five roadmap decisions: paper-only Phase 0; daily truth `origin/dev`; pinned `risk.toml`; CI is KEY; M2 thresholds stay code constants.
-- `python -m pytest` passed offline (1971 passed, 4 symlink tests skipped on Windows). Guard `--require-git` 9/9 PASS. `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. AK merged in #39, AL merged in #40. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S, the eight M1_* criteria, and AK's RECONCILE_SHARES_TOL, DATA_API_POSITIONS_DUST_SHARES, DATA_API_TRADES_MIN_SHARES, DATA_API_MAX_LAG_S, DATA_API_IDENTITY_TOL_USDC. Heartbeat (gap 2) is a later task.
+- 2026-10-09: Merge origin/dev into Task AN (#42). Both AM (CI + DECISIONS.md, #41) and AN (M3 settlement snapshot) kept.
+- Task AM: `.github/workflows/ci.yml` runs guard --require-git and full pytest on PRs/pushes to dev/main; docs/DECISIONS.md records five roadmap decisions.
+- Task AN: `src/resolutions.py` walks Gamma `/markets/keyset?closed=true`, 48 h `closedTime` hold, writes `data/resolutions.jsonl`; fail-closed fields; no bus/order/new host.
+- pytest + guard pass after merge. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty after AM+AN. `RESOLUTION_HOLD_HOURS=48` not M2 pending. Heartbeat (gap 2) later.

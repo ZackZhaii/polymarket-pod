@@ -128,6 +128,11 @@ DATA_API_MAX_LAG_S = 120.0
 # total_cost = entry_cost + entry_fees) must hold within this many USDC, or the row is malformed.
 DATA_API_IDENTITY_TOL_USDC = 1e-6
 
+# --- M3 calibration snapshot (Task AN) ---------------------------------------------------------
+# Hours a market must stay closed (Gamma closedTime) before it is written to data/resolutions.jsonl.
+# Exactly 48 h passes. Same number as ENDGAME_WINDOW_HOURS by coincidence; they are not coupled.
+RESOLUTION_HOLD_HOURS = 48.0
+
 
 def consistency_problems() -> list[str]:
     """Relations the values must keep. Import fails if any is broken (explicit, survives -O)."""
@@ -178,6 +183,10 @@ def consistency_problems() -> list[str]:
         problems.append("DATA_API_MAX_LAG_S and DATA_API_IDENTITY_TOL_USDC must be > 0")
     if not LEDGER_OPEN_EPS <= RECONCILE_SHARES_TOL:
         problems.append("RECONCILE_SHARES_TOL must be >= LEDGER_OPEN_EPS")
+    if isinstance(RESOLUTION_HOLD_HOURS, bool) or not isinstance(RESOLUTION_HOLD_HOURS, (int, float)) or not (
+        RESOLUTION_HOLD_HOURS > 0.0
+    ):
+        problems.append("RESOLUTION_HOLD_HOURS must be > 0")
     return problems
 
 
