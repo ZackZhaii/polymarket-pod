@@ -40,6 +40,11 @@ FILL_ID_FIELDS = ("decision_id", "forecast_id", "forecast_ts", "condition_id", "
 FILL_JOIN_FIELDS = ("decision_id", "forecast_id", "forecast_ts", "condition_id", "outcome_index", "token_id",
                     "end_date", "model_version")
 
+# Task BA: market context every paper fill row carries (None when it cannot be computed; never guessed).
+# A None here is listed in the fill's stored calibration_problems (missing_<field> / invalid_<field>,
+# see paper_ledger.market_fields); fill_problems (the join check) does not look at them.
+FILL_MARKET_FIELDS = ("market_mid", "best_bid", "best_ask", "hours_to_expiry_at_entry", "kelly_fraction_used")
+
 # logs/forecasts.jsonl: one row per sealed forecast, these keys in this order (no extras).
 FORECAST_ROW_FIELDS = ("schema_version", "forecast_id", "ts", "source", "strategy", "market_id", "condition_id",
                        "outcome_index", "outcome", "token_id", "model_prob", "p_low", "p_high", "category", "tags",

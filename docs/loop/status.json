@@ -5,5 +5,5 @@
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "BB (M3 step 4: structured Reflector proposals from the calibration report; tightening only, cap 3/UTC day, exchange_action none, never applied; missing/corrupt report = exit 3/4) done by grok-bot. BA (#62) open in parallel. No open todo. No live gate."
+  "note": "BB (M3 step 4: structured Reflector proposals from the calibration report; tightening only, cap 3/UTC day, exchange_action none, never applied; missing/corrupt report = exit 3/4) done by grok-bot. BA (#62, fill market fields) merged into this branch from dev. No open todo. No live gate."
 }

@@ -431,11 +431,20 @@
       "surface": "grok-bot"
     },
     {
+      "id": "BA",
+      "status": "done",
+      "title": "M3 fill market context (market_mid, best_bid, best_ask, hours_to_expiry_at_entry, kelly_fraction_used; recorded only, null + calibration_problems when not computable) and ws_recorder --raw-books DIR",
+      "finish": "risk_gate.Intent gains best_bid, best_ask, kelly_fraction_used (None default; RiskGate never reads them, tested by source and by identical decisions). intent_builder.to_risk_intent passes the chosen token's BookSnapshot best_bid/best_ask and its shadow Kelly multiplier (kelly_fraction); the e2e harness intent and the paper_ledger no-edge check pass their book row's top. paper_ledger.market_fields computes calibration_ids.FILL_MARKET_FIELDS at commit: prices finite in (0,1), mid = (bid+ask)/2 only when both usable and bid <= ask, hours = end_date - fill ts, kelly in (0,1]; anything else None plus missing_<field>/invalid_<field> in the stored calibration_problems (fill_problems unchanged). e2e golden: only the new calibration fills market_fields (--update-golden). RotatingJsonl/RawBookSink moved to src/ws_recorder.py (m1_run re-exports); python -m src.ws_recorder --raw-books DIR (new or empty, else exit 2) uses the same writer and caps. docs/M3_CALIBRATION.md Step 2b, EXIT_CODES, THRESHOLDS wording. src/calibration.py untouched. No new number, no decision or size moved; config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (rest of m3_calibration_design.md 1.5 after AX; AY left the ws_recorder CLI without --raw-books). AZ (#60, src/calibration.py) runs in parallel; switching calibration to market_mid is a later step. Done by grok-bot. Note: AZ's report drops fills with non-empty stored calibration_problems, so fills without market context (operator CLI, gate checks, old rows) are not calibration samples.",
+      "done_at": "2026-10-09T13:40:44Z",
+      "surface": "grok-bot"
+    },
+    {
       "id": "BB",
       "status": "done",
       "title": "M3 calibration step 4: structured Reflector proposals from the calibration report.json (proposal only; never applied)",
       "finish": "src/reflector_proposals.py reads report.json read-only (default newest reports/calibration/<date>/) and writes PROPOSAL_FIELDS rows (proposal_id, type disable|param_change, target, current/proposed value, direction, loosens_risk_check, approval, evidence with report sha and section refs and sample counts, confidence intervals, rationale, expected_impact, risk, rollback, scope paper, status proposed, exchange_action none, applied_by_code false) to playbook/proposals.jsonl, a summary block to playbook/proposals.md via reflector.propose (daily cap REFLECTOR_MAX_PER_UTC_DAY = 3) and a Reflector->Operator proposal bus message with exchange_action none. Rules tighten only and read intervals only; insufficient sections give nothing; loosening is marked required_from KEY; open targets are not repeated and rejected ones wait REFLECTOR_REJECT_COOLDOWN_DAYS. No write to config/, any .toml or src/thresholds.py; config/strategies.toml stays nonexistent. Exit 3 missing report, 4 corrupt report, 5 corrupt proposals.jsonl, 6 write failed (EXIT_CODES.md, 21 entry points). New numbers REFLECTOR_* (M3 pending). pytest + guard --require-git pass.",
-      "note": "Requested by Poly指挥 (Poly反思's M3 calibration design sections 4-5, step 4); done by grok-bot. BA (#62) ran in parallel. Not yet: per-tier / per-category / intercept / Kelly / cumulative-loss / cluster rules (the report has no interval for them). PR #61 (pod-flash) used the title 'Task AZ' for a test-only change without a queue entry.",
+      "note": "Requested by Poly指挥 (Poly反思's M3 calibration design sections 4-5, step 4); done by grok-bot. BA (#62) ran in parallel and was merged in from dev. Not yet: per-tier / per-category / intercept / Kelly / cumulative-loss / cluster rules (the report has no interval for them). PR #61 (pod-flash) used the title 'Task AZ' for a test-only change without a queue entry.",
       "done_at": "2026-10-09T15:00:00Z",
       "surface": "grok-bot"
     }

@@ -297,6 +297,7 @@ def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: d
     and liquidity from the scanner row. fee_rate and assumed_slippage are fixture inputs (no src
     module derives them per market). Never hypothetical; no counterparty.
     """
+    from src import podlib
     from src.calibration_ids import make_decision_id
     from src.risk_gate import Intent
 
@@ -333,6 +334,10 @@ def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: d
         tags=None if market_row.get("tags") is None else tuple(market_row["tags"]),
         end_date=market_row.get("end_date") or None,
         model_version=payload.get("model_version"),
+        # Task BA: market context recorded on the fill (RiskGate never reads it), as intent_builder passes it
+        best_bid=book_row.get("best_bid"),
+        best_ask=book_row.get("best_ask"),
+        kelly_fraction_used=podlib.load_risk().get("kelly_fraction"),
     )
 
 
@@ -746,6 +751,8 @@ def calibration_view(forecast_rows: list[dict[str, Any]], booked_by_label: dict[
                   and forecast.get("market_id") == row.get("market"))
         fills[label] = {"calibration_problems": row.get("calibration_problems"),
                         "fields": sorted(k for k in calibration_ids.FILL_ID_FIELDS if k in row),
+                        # Task BA: the market context recorded at commit (never read by RiskGate)
+                        "market_fields": {k: row.get(k) for k in calibration_ids.FILL_MARKET_FIELDS},
                         "joins_forecast": joined, "decision_id_derived": row.get("decision_id") ==
                         calibration_ids.make_decision_id(row.get("strategy"), row.get("market"), row.get("token_id"),
                                                          row.get("forecast_id"))}

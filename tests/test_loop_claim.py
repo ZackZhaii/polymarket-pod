@@ -83,7 +83,7 @@ def test_pin_guard_rejects_live_without_editing_the_file():
 
 
 def test_repo_queue_has_i_done_and_no_open_task():
-    """After I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z, AA, AB, AC, AD, AE, AF, AG, AH, AI, AJ, AK, AL, AN, AQ, AR, AS, AU, AW and AY close, the committed queue has no claim and no todo. The file is not written."""
+    """After I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z, AA, AB, AC, AD, AE, AF, AG, AH, AI, AJ, AK, AL, AN, AQ, AR, AS, AU, AW, AY and BA close, the committed queue has no claim and no todo. The file is not written."""
     path = loop_claim.STATE_PATH
     before = path.read_bytes()
     state = json.loads(before.decode("utf-8"))
@@ -162,5 +162,7 @@ def test_repo_queue_has_i_done_and_no_open_task():
     assert task_aw["status"] == "done" and task_aw["surface"] == "grok-bot"
     task_ay = next(task for task in state["tasks"] if task["id"] == "AY")
     assert task_ay["status"] == "done" and task_ay["surface"] == "grok-bot"
+    task_ba = next(task for task in state["tasks"] if task["id"] == "BA")
+    assert task_ba["status"] == "done" and task_ba["surface"] == "grok-bot"
     assert loop_claim.next_todo(state) is None
     assert path.read_bytes() == before

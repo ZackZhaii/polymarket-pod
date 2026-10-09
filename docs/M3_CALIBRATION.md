@@ -170,8 +170,29 @@ because RiskGate already decided and identity is never a veto, but it lists ever
 field in `calibration_problems`. The calibration join must drop and count those rows; it never
 repairs or guesses an id. Older fills have no such fields and count as not joinable.
 
-Not added yet (design 1.5, later step): `market_mid` / `best_bid` / `best_ask` on the fill,
-`hours_to_expiry_at_entry`, `kelly_fraction_used`. No new number.
+## Step 2b: market context on the fill (Task BA)
+
+The rest of design 1.5. Every paper fill also carries `calibration_ids.FILL_MARKET_FIELDS`, computed
+in `paper_ledger.market_fields` at commit from data the intent already carries (no new read):
+
+- `best_bid`, `best_ask`: the top of book of the filled token as the intent's producer saw it
+  (intent_builder: the chosen token's BookSnapshot; e2e harness: the latest /book row; the
+  paper_ledger no-edge check: the book row it used). Each a finite price in (0, 1), else null.
+- `market_mid`: `(best_bid + best_ask) / 2`, rounded to 8 places, only when both sides are usable and
+  not crossed (`bid <= ask`); else null. The calibration baseline should move from `market_price`
+  (the ask on a buy) to this mid in a later step; src/calibration.py is not changed here.
+- `hours_to_expiry_at_entry`: `end_date` minus the fill's `ts`, in hours (6 places; negative if the
+  end has passed, as computed). Null when `end_date` is missing or not a zoned ISO time.
+- `kelly_fraction_used`: intent_builder's shadow Kelly multiplier (risk.toml `kelly_fraction`, 0.15)
+  that its shadow Kelly size was computed with. Recorded only: RiskGate sizes with its 1% clip and
+  never reads it. Null for intents not built by intent_builder (operator CLI, gate checks).
+
+A null is never invented: each one adds `missing_<field>` (no input) or `invalid_<field>` (input
+not usable; `invalid_market_mid` = crossed book) to the fill's stored `calibration_problems`.
+The join check `fill_problems` is unchanged, so older fills are not re-flagged; but the
+calibration report drops any fill whose stored problems are non-empty, so a fill without this
+context is not a calibration sample. RiskGate reads none of these fields (tested: source and
+identical decisions with any values). No new number, no decision or size moved.
 
 ## Step 3: the offline calibration report (Task AZ)
 

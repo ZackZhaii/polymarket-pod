@@ -821,6 +821,9 @@ def to_risk_intent(oi: OrderIntent) -> Intent:
         tags=oi.tags,
         end_date=oi.end_date,
         model_version=oi.model_version,
+        best_bid=oi.best_bid,  # Task BA: the chosen token's book at build time (recorded on the fill only)
+        best_ask=oi.best_ask,
+        kelly_fraction_used=oi.kelly_fraction,  # shadow Kelly multiplier; RiskGate sizes with its 1% clip
     )
 
 
