@@ -123,6 +123,10 @@ def test_to_risk_intent_matches_the_harness_shape():
         "strategy": "news-forecaster", "market": "m1", "side": "buy", "model_prob": 0.47, "market_price": 0.41,
         "assumed_slippage": 0.005, "fee_rate": 0.0, "liquidity_usd": 52000.0, "spread": 0.02, "token_id": "t-yes",
         "hypothetical": False, "note": "test forecast", "book_ts": BOOK_TS, "counterparty": None,
+        # Task AX: identity. The test signal is a legacy one (no forecast_id), so no decision_id is invented.
+        "decision_id": None, "forecast_id": None, "forecast_ts": None, "condition_id": oi.condition_id,
+        "outcome_index": 0, "outcome": oi.outcome, "category": None, "tags": None, "end_date": oi.end_date,
+        "model_version": None,
     }
 
 
@@ -583,7 +587,8 @@ def test_module_imports_only_the_allowed_modules():
             if node.module == "src":
                 mods |= {f"src.{alias.name}" for alias in node.names}
     allowed = {"__future__", "hashlib", "json", "math", "collections.abc", "dataclasses", "datetime", "src",
-               "src.fees", "src.book_staleness", "src.expiry_rule", "src.podlib", "src.risk_gate", "src.thresholds"}
+               "src.fees", "src.book_staleness", "src.expiry_rule", "src.podlib", "src.risk_gate", "src.thresholds",
+               "src.calibration_ids"}  # Task AX: stdlib-only id helpers
     assert mods <= allowed, mods - allowed
     text = (ROOT / "src" / "intent_builder.py").read_text(encoding="utf-8")
     for banned in ("datetime.now", "utcnow", "open(", "load_risk", "urlopen", "requests", "py_clob_client"):

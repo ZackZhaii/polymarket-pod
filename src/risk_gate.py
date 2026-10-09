@@ -51,6 +51,18 @@ class Intent:
     # Who is on the other side of the fill (counterparty or maker), when known. Paper fills
     # against the public book have none (None). Our own account/role/strategy means veto.
     counterparty: str | None = None
+    # Task AX (M3 calibration step 2): identity for the forecast -> fill -> resolution join. RiskGate
+    # never reads these; paper_ledger copies them onto the fill. None = unknown (never guessed).
+    decision_id: str | None = None
+    forecast_id: str | None = None
+    forecast_ts: str | None = None
+    condition_id: str | None = None
+    outcome_index: int | None = None
+    outcome: str | None = None
+    category: str | None = None
+    tags: tuple[str, ...] | None = None
+    end_date: str | None = None
+    model_version: str | None = None
 
 
 @dataclass

@@ -11,7 +11,9 @@ design for the repo, taken from the operator dispatch for step 1.
 
 1. **This PR.** Read-only settlement snapshot: Gamma closed markets, held 48 h after
    `closedTime`, written to `data/resolutions.jsonl`.
-2. Later: join paper forecasts / signals to those labels (`uma_checked=true` only).
+2. **Task AX (done, prerequisite part).** Identity fields on forecasts, scanner rows and paper
+   fills, and the sealed forecast log `logs/forecasts.jsonl`, so forecasts and fills can be
+   joined to those labels. The join itself (`uma_checked=true` only) comes with step 3.
 3. Later: Brier (and related) report. `src/quant.py` today scores a local fixture only.
 4. Later: Reflector proposals. A human applies any `risk.toml` change.
 
@@ -78,6 +80,98 @@ later UMA resolution is not silently treated as a label.
 `RESOLUTION_HOLD_HOURS = 48.0` lives in `src/thresholds.py`. It is not coupled to
 `ENDGAME_WINDOW_HOURS` (same number by coincidence). Not M2 pending: the dispatch
 fixed 48 h.
+
+## Step 2: identity fields (Task AX)
+
+Design: Poly反思's M3 calibration design, section 1.5. Helpers: `src/calibration_ids.py`
+(standard library only). Data plumbing only: RiskGate never reads these fields, no veto, size,
+threshold or golden decision moved, and `config/strategies.toml` is not created.
+
+Join path:
+
+```
+logs/forecasts.jsonl (forecast_id, market_id, condition_id, token_id)
+  -> logs/paper.jsonl fill (forecast_id, decision_id, condition_id, token_id)
+  -> data/resolutions.jsonl (condition_id, winning_token_id)
+```
+
+### Ids
+
+- `forecast_id` = `fc_` + first 32 hex of sha256 over the canonical JSON of the forecast's
+  own content: source, ts, market_id, condition_id, outcome_index, token_id, model_prob,
+  p_low, p_high, model_version. Minted once, by `forecaster.emit_probability`, when it seals
+  the forecast. Same content (including the second-resolution ts) = same id.
+- `decision_id` = `dc_` + first 32 hex of sha256 over `[strategy, market, token_id,
+  forecast_id]`. Derived, never minted: every fill of one strategy on one token under one
+  forecast shares it. Any part missing -> `null`. A caller-supplied `decision_id` that does not
+  match the derivation is flagged `decision_id_mismatch`.
+- `model_version`: `forecaster.MODEL_VERSION` (`news-forecaster-stub/1`) unless the caller
+  passes its own. Bump it whenever the way p is produced changes.
+
+### `logs/forecasts.jsonl`
+
+One row per sealed forecast, keys in this order, no extras (`FORECAST_ROW_FIELDS`):
+
+| Key | Type | Rule |
+|---|---|---|
+| `schema_version` | int | `1` |
+| `forecast_id` | str | see above |
+| `ts` | str | UTC `Z`, second resolution; also the signal's `forecast_ts` |
+| `source` | str | `news` |
+| `strategy` | str | default `news-forecaster` |
+| `market_id` | str | Gamma market `id` (bus `market`) |
+| `condition_id` | str / null | from the caller (scanner row) |
+| `outcome_index` | int / null | the outcome p is about |
+| `outcome` | str / null | its label |
+| `token_id` | str / null | that outcome's token |
+| `model_prob` | float | 0 < p < 1, finite |
+| `p_low`, `p_high` | float / null | both or neither; `p_low <= model_prob <= p_high` |
+| `category` | str / null | Gamma `category` |
+| `tags` | list[str] / null | Gamma tag slugs; null = unknown, `[]` = none |
+| `end_date` | str / null | scanner `end_date` |
+| `model_version` | str | required |
+| `note` | str | |
+| `sealed_before_book_read` | bool | `true`: written before RiskGate / the intent builder reads a book for it |
+| `calibration_problems` | list[str] | `missing_<field>` / `invalid_<field>` for the join fields; `[]` = joinable |
+
+Writing: `calibration_ids.append_forecast`, one `O_APPEND` write of the whole line plus
+`fsync`. Refused (`ForecastLogError`, nothing written): wrong keys, a value that is not exact
+JSON (nan/inf), a torn last line already in the file, an OS error. A row whose `forecast_id` is
+already on file is not written again. The forecast is written **before** the bus signal; if it
+cannot be written, no signal is sent.
+
+### Signal payload (NewsForecaster -> RiskGate)
+
+Always: `model_prob`, `order: false`, `note`, `forecast_id`, `forecast_ts`, `model_version`.
+When the caller gives them (Poly指挥's signal->intent ruling): `outcome_index`, `outcome`,
+`token_id`, `condition_id`, `p_low`, `p_high`. A field not given stays absent, so
+`intent_builder` keeps its legacy reading (outcome 0, point probability); the forecast row
+lists it in `calibration_problems`. `intent_builder.signal_from_bus` carries `forecast_id`,
+`forecast_ts` and `model_version` into `ProbabilitySignal`, then `OrderIntent` and
+`to_risk_intent`.
+
+### Scanner rows (`data/markets.jsonl`)
+
+New `category` (Gamma `category`, else null) and `tags` (Gamma tag slugs; null when Gamma sent
+none). The scanner keyset URL gains `include_tag=true` (same host and path, read-only). Neither
+field filters or ranks a market. `intent_builder.market_context_from_row` keeps them as
+`gamma_category` / `tags`; `category_banned` still reads only the caller's `category`.
+
+### Paper fills (`logs/paper.jsonl`)
+
+Every fill booked by `paper_ledger.commit_if_allowed` adds `decision_id`, `forecast_id`,
+`forecast_ts`, `condition_id`, `outcome_index`, `outcome`, `category`, `tags`, `end_date`,
+`model_version` (null when unknown) and `calibration_problems`. The RiskGate bus summary
+(allow or veto) carries `forecast_id`.
+
+Fail closed: a fill that misses a join field (`decision_id`, `forecast_id`, `forecast_ts`,
+`condition_id`, `outcome_index`, `token_id`, `end_date`, `model_version`) is still booked,
+because RiskGate already decided and identity is never a veto, but it lists every missing
+field in `calibration_problems`. The calibration join must drop and count those rows; it never
+repairs or guesses an id. Older fills have no such fields and count as not joinable.
+
+Not added yet (design 1.5, later step): `market_mid` / `best_bid` / `best_ask` on the fill,
+`hours_to_expiry_at_entry`, `kelly_fraction_used`. No new number.
 
 ## Out of scope here
 

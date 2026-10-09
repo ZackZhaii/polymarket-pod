@@ -79,7 +79,9 @@ NEW_FILL_ID = re.compile(r"[0-9a-f]{32}")
 PATH_NAMES = ("BUS_PATH", "PAPER_PATH", "QUOTES_PATH", "MARKETS_PATH", "BOOKS_PATH", "SENTINEL_STATE_PATH",
               "SESSIONS_PATH", "HALT_STATE_PATH", "HALT_FALLBACK_PATH",
               # Task AP: heartbeats, Sentinel alerts and tick state (scenarios pass their own paths)
-              "HEARTBEAT_DIR", "ALERTS_PATH", "TICK_STATE_PATH")
+              "HEARTBEAT_DIR", "ALERTS_PATH", "TICK_STATE_PATH",
+              # Task AX: sealed forecasts (M3 calibration step 2)
+              "FORECASTS_PATH")
 BUS_KINDS = frozenset({"signal", "veto", "fill", "halt", "resume"})
 
 
@@ -177,9 +179,11 @@ def offline_sandbox(work: Path, clock: Clock) -> Iterator[dict[str, Any]]:
     unused.mkdir(parents=True, exist_ok=True)
     real_defaults = {name: Path(getattr(podlib, name)) for name in PATH_NAMES if hasattr(podlib, name)}
     paths = {"bus": work / "bus.jsonl", "paper": work / "paper.jsonl", "quotes": work / "quotes.jsonl",
-             "halt": work / "halt" / "halt_state.json", "halt_file": work / "halt" / "HALT"}
+             "halt": work / "halt" / "halt_state.json", "halt_file": work / "halt" / "HALT",
+             "forecasts": work / "forecasts.jsonl"}
     explicit = {"BUS_PATH": paths["bus"], "PAPER_PATH": paths["paper"], "QUOTES_PATH": paths["quotes"],
-                "HALT_STATE_PATH": paths["halt"], "HALT_FALLBACK_PATH": paths["halt_file"]}
+                "HALT_STATE_PATH": paths["halt"], "HALT_FALLBACK_PATH": paths["halt_file"],
+                "FORECASTS_PATH": paths["forecasts"]}
     patches: list[tuple[object, str, object]] = []
     for module in mods.values():
         for name in PATH_NAMES:
@@ -293,9 +297,13 @@ def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: d
     and liquidity from the scanner row. fee_rate and assumed_slippage are fixture inputs (no src
     module derives them per market). Never hypothetical; no counterparty.
     """
+    from src.calibration_ids import make_decision_id
     from src.risk_gate import Intent
 
     token = str(market_row["token_ids"][forecast["outcome_index"]])
+    payload = signal["payload"]
+    outcomes = market_row.get("outcomes") or []
+    index = forecast["outcome_index"]
     book_row = books.get((market_row["id"], token)) or {}
     side = forecast["side"]
     price = book_row.get("best_ask") if side == "buy" else book_row.get("best_bid")
@@ -314,7 +322,31 @@ def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: d
         note=forecast.get("note", ""),
         book_ts=book_row.get("book_ts"),
         counterparty=None,
+        # Task AX (M3 step 2): calibration identity from the sealed forecast and the scanner row
+        decision_id=make_decision_id(forecast["strategy"], market_row["id"], token, payload.get("forecast_id")),
+        forecast_id=payload.get("forecast_id"),
+        forecast_ts=payload.get("forecast_ts"),
+        condition_id=market_row.get("condition_id") or None,
+        outcome_index=index,
+        outcome=str(outcomes[index]) if len(outcomes) > index else None,
+        category=market_row.get("category"),
+        tags=None if market_row.get("tags") is None else tuple(market_row["tags"]),
+        end_date=market_row.get("end_date") or None,
+        model_version=payload.get("model_version"),
     )
+
+
+def forecast_kwargs(forecast: dict[str, Any], market_row: dict[str, Any]) -> dict[str, Any]:
+    """Task AX: emit_probability arguments for a fixture forecast, identity taken from the scanner row."""
+    index = forecast["outcome_index"]
+    tokens = market_row.get("token_ids") or []
+    outcomes = market_row.get("outcomes") or []
+    return {"market": forecast["market"], "model_prob": forecast["model_prob"], "note": forecast.get("note", ""),
+            "strategy": forecast["strategy"], "outcome_index": index,
+            "token_id": str(tokens[index]) if len(tokens) > index else None,
+            "outcome": str(outcomes[index]) if len(outcomes) > index else None,
+            "condition_id": market_row.get("condition_id") or None, "end_date": market_row.get("end_date") or None,
+            "category": market_row.get("category"), "tags": market_row.get("tags")}
 
 
 # RiskGate veto reasons the intent builder must also reject on (SPEC 9.2 P3, same token).
@@ -498,8 +530,8 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
 
         def commit(label: str, path: Path) -> dict[str, Any]:
             forecast = forecasts[label]
-            signal = forecaster.emit_probability(market=forecast["market"], model_prob=forecast["model_prob"],
-                                                 note=forecast.get("note", ""), bus_path=bus_path)
+            signal = forecaster.emit_probability(**forecast_kwargs(forecast, markets[forecast["market"]]),
+                                                 bus_path=bus_path)
             intent = build_intent(forecast, signal, markets[forecast["market"]], books)
             before = _ledger_view(Path(path))  # a plain path: the gate's own reads never count as a writer's
             paper_ledger.PAPER_PATH = path
@@ -578,8 +610,8 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
 
         def intent_for(label: str):
             forecast = forecasts[label]
-            signal = forecaster.emit_probability(market=forecast["market"], model_prob=forecast["model_prob"],
-                                                 note=forecast.get("note", ""), bus_path=bus_path)
+            signal = forecaster.emit_probability(**forecast_kwargs(forecast, markets[forecast["market"]]),
+                                                 bus_path=bus_path)
             return build_intent(forecast, signal, markets[forecast["market"]], books)
 
         daily_loss_section = run_daily_loss_scenarios(scenario["daily_loss"], work, commit, intent_for, paper_ledger,
@@ -590,6 +622,7 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
                                                         paper_ledger, halt_store, markets, books, bus_path,
                                                         ledger_start, quotes_start, clock, risk_cfg, problems)
         bus_rows = podlib.read_jsonl(bus_path)
+        forecast_rows = podlib.read_jsonl(box["forecasts"])
         attempts = list(box["attempts"])
         unused_files = sorted(p.name for p in box["unused"].rglob("*") if p.is_file())
         defaults_after = {name: _stat(path) for name, path in box["real_defaults"].items()}
@@ -633,6 +666,7 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
     problems.extend(_bus_problems(bus_rows, booked_ids))
 
     fills = [row for row in bus_rows if row.get("type") == "fill"]
+    calibration_section = calibration_view(forecast_rows, booked_by_label, bus_rows, problems)
     counts: dict[str, int] = {}
     for row in bus_rows:
         key = f"{row.get('from')}>{row.get('to')}:{row.get('type')}"
@@ -669,6 +703,7 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
         "sentinel_heartbeat": heartbeat_section,
         "daily_loss": daily_loss_section,
         "slippage_floor": slippage_section,
+        "calibration_ids": calibration_section,
         "quotes_after": [{k: q.get(k) for k in ("market", "token_id", "side", "price", "status", "cancelled_by",
                                                 "cancelled_ts")} for q in quotes_after],
         "bus": {"counts": counts, "fills": len(fills),
@@ -682,6 +717,45 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
     detail = {"bus": bus_rows, "booked_ids": booked_ids, "main_ledger": main_ledger, "after_replay": after_replay,
               "quotes": quotes_after, "attempts": attempts}
     return {"actual": norm(actual), "problems": problems, "detail": detail}
+
+
+def calibration_view(forecast_rows: list[dict[str, Any]], booked_by_label: dict[str, str], bus_rows: list[dict[str, Any]],
+                     problems: list[str]) -> dict[str, Any]:
+    """Task AX (M3 step 2): every NewsForecaster signal has its sealed forecast row, and every fill on the
+    main bus carries the identity fields and joins back to its forecast (calibration_problems [])."""
+    from src import calibration_ids
+
+    by_id = {row.get("forecast_id"): row for row in forecast_rows}
+    signals = [r for r in bus_rows if r.get("type") == "signal" and r.get("from") == "NewsForecaster"]
+    for row in forecast_rows:
+        if tuple(row) != calibration_ids.FORECAST_ROW_FIELDS:
+            problems.append(f"calibration: forecast row keys differ: {row.get('forecast_id')}")
+    unsealed = [r.get("market") for r in signals if (r.get("payload") or {}).get("forecast_id") not in by_id]
+    if unsealed:
+        problems.append(f"calibration: signals without a sealed forecast row: {unsealed}")
+    fills: dict[str, Any] = {}
+    label_of = {fill_id: label for label, fill_id in booked_by_label.items()}
+    for message in bus_rows:
+        if message.get("type") != "fill":
+            continue
+        row = message.get("payload") or {}
+        label = label_of.get(row.get("fill_id"), str(row.get("market")))
+        forecast = by_id.get(row.get("forecast_id")) or {}
+        joined = (bool(forecast) and forecast.get("token_id") == row.get("token_id")
+                  and forecast.get("condition_id") == row.get("condition_id")
+                  and forecast.get("market_id") == row.get("market"))
+        fills[label] = {"calibration_problems": row.get("calibration_problems"),
+                        "fields": sorted(k for k in calibration_ids.FILL_ID_FIELDS if k in row),
+                        "joins_forecast": joined, "decision_id_derived": row.get("decision_id") ==
+                        calibration_ids.make_decision_id(row.get("strategy"), row.get("market"), row.get("token_id"),
+                                                         row.get("forecast_id"))}
+        if row.get("calibration_problems") != [] or not joined:
+            problems.append(f"calibration: fill {label} does not join its forecast: "
+                            f"{row.get('calibration_problems')}")
+    return {"forecast_rows": len(forecast_rows), "news_signals": len(signals),
+            "distinct_forecast_ids": len(by_id), "unsealed_signals": len(unsealed),
+            "forecast_problems": sorted({p for r in forecast_rows for p in r.get("calibration_problems") or []}),
+            "fills": fills}
 
 
 def run_halt_scenarios(plan: dict[str, Any], work: Path, commit, paper_ledger, paper_cycle, halt_store, maker,
@@ -1037,8 +1111,7 @@ def run_slippage_floor_scenarios(plan: dict[str, Any], work: Path, forecasts: di
     from src.thresholds import ASSUMED_SLIPPAGE
     forecast = forecasts[plan["forecast"]]
     market_row = markets[forecast["market"]]
-    signal = forecaster.emit_probability(market=forecast["market"], model_prob=forecast["model_prob"],
-                                         note=forecast.get("note", ""), bus_path=bus_path)
+    signal = forecaster.emit_probability(**forecast_kwargs(forecast, market_row), bus_path=bus_path)
     base = build_intent(forecast, signal, market_row, books)
     out: dict[str, Any] = {"floor": ASSUMED_SLIPPAGE, "cases": {}}
     folder = work / "slippage_floor"
