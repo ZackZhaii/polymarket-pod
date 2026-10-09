@@ -1024,12 +1024,41 @@ counted before drops out, the day boundary is explicit and corrupt ledger data f
   `tests/test_ledger_integrity.py` (legacy_mixed now also counts its 0.05 USD realized loss).
 - No new number. `max_daily_loss_pct` and config/risk.toml unchanged, `live_enabled` false.
 
+## Task AT — One assumed slippage (`ASSUMED_SLIPPAGE`) and a ROLES.md that matches RiskGate (no Kelly sizing)
+
+Status: done.
+
+Requested by Poly指挥 (queue: after EXIT_CODES and daily_loss-realized; SPEC_signal_to_intent inconsistencies 1 and 2),
+done by grok-bot on dev@08ae2ae. Ran in parallel with Task AS (EXIT_CODES + runtime pins).
+
+Finish when every assumed slippage reads one constant, no copy can drift, no number or check moves, and
+`docs/ROLES.md` no longer says RiskGate sizes with fractional Kelly.
+
+- `src/thresholds.py`: new `ASSUMED_SLIPPAGE = 0.005` (M2 pending), the one source of truth.
+  `SPORTS_DEVIG_ASSUMED_SLIPPAGE` (Task H) and `INTENT_ASSUMED_SLIPPAGE` (Task AO) are now aliases
+  (`= ASSUMED_SLIPPAGE`); `consistency_problems` fails the import if either differs (looser or tighter) and keeps
+  `0 <= ASSUMED_SLIPPAGE < 1`.
+- `src/paper_ledger.py`: the four literal 0.005s (CLI `--slippage` default, self-check intent default, the
+  no-edge check's touch filter and its intent) read `ASSUMED_SLIPPAGE`.
+- All copies were already 0.005, so the strictest value is that value: no threshold, edge, veto or golden changed.
+- Tests: `tests/test_slippage_unified.py` (one literal only, aliases are names, drifting copies fail at import, no
+  float 0.005 literal in any `src/` or `scripts/` file but thresholds.py, every user and the e2e fixtures equal the
+  constant, ROLES.md RiskGate row, RiskGate never reads `kelly_fraction`); `tests/test_thresholds.py` gains the
+  constant, the re-export `paper_ledger.ASSUMED_SLIPPAGE` and import-failure edits. `docs/THRESHOLDS.md` row and
+  relations.
+- `docs/ROLES.md`: RiskGate = hard 1% order cap, daily loss, exposure, liquidity, spread, edge, staleness, halts;
+  Kelly only in shadow mode in `src/intent_builder.py`, never used for size (enforcing it is KEY, backlog #7).
+  README edge formula updated to the Task AE fee (`max(market_price, effective_price)`). COORDINATION #7 annotated
+  (stays open).
+- `config/risk.toml` unchanged, `live_enabled` false. Not done (would be a new veto, left for review): a RiskGate
+  floor that vetoes an `assumed_slippage` below `ASSUMED_SLIPPAGE` (the paper_ledger CLI still accepts `--slippage 0`).
+
 ## Task AS — Exit-code registry and runtime pin checks (Poly哨兵 design gaps 4, 5, 6)
 
 Status: done.
 
 Requested by Poly指挥 (queue after AP: EXIT_CODES / pins), done by grok-bot on dev@9ec24df;
-merged origin/dev with AR (#46, daily_loss) before the PR.
+merged origin/dev with AR (#46, daily_loss) and AT (#47, one ASSUMED_SLIPPAGE) before the PR.
 
 Finish when every entry point's exit codes are in one registry kept in sync with the code by a test and a guard
 check, the long-running and data-writing processes check config/risk.toml (sha + every key) at start and while
@@ -1059,8 +1088,15 @@ running and refuse + halt globally on drift, and `python -m pytest` and guard --
 
 ## Latest
 
-- 2026-10-09: Merge origin/dev (AR #46, daily_loss counts realized losses) into Task AS; AR and AS both kept.
+- 2026-10-09: Merge origin/dev (AR #46 daily_loss, AT #47 one ASSUMED_SLIPPAGE) into Task AS; AR, AT and AS all kept.
 - Task AS: `docs/EXIT_CODES.md` registry of all 18 entry points, kept in sync by tests and guard check 12 `exit_codes`.
 - Task AS: `src/pins.py` checks config/risk.toml (sha + all 9 keys) at start and while running; drift = refuse + global halt.
 - Exit changes: loop_claim usage 5 (was 2), paper_cycle 1 = global halt, new exit 6 for scanner/book/ws_recorder/m1_run.
 - pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`. M2 pending adds `PIN_RECHECK_S = 60`.
+- 2026-10-09: Task AT: one `ASSUMED_SLIPPAGE = 0.005` in `src/thresholds.py`; SportsDevig/intent names are aliases,
+  paper_ledger literals gone, drift fails at import. ROLES.md: RiskGate has no Kelly sizing (shadow only).
+- 2026-10-09: Task AR: `max_daily_loss` now counts today's (UTC) fees plus gross realized losses (`src/daily_loss.py`).
+- Gains never offset; corrupt counted ledger rows = `invalid_risk_state` = global halt. e2e golden `daily_loss`.
+- Task AP (merged #45) and AQ (merged #44) are on dev: guard checks 10 `secret_scan`, 11 `heartbeat`.
+- pytest + guard (11 checks) pass. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
+- No new number from AR. Open Operator choice: netting realized gains. Queue empty after AR.

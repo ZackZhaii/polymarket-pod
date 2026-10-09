@@ -39,6 +39,7 @@ from src.book_staleness import latest_by_time, parse_book_ts  # noqa: E402
 from src.fees import booked_fee_usd, ledger_fee  # noqa: E402 - Task AE: one fee module
 from src import ledger_store  # noqa: E402 - Task AF: ledger integrity
 from src import sentinel  # noqa: E402 - Task AL: ledger halts and invalid_risk_state are global halts
+from src.thresholds import ASSUMED_SLIPPAGE  # noqa: E402 - Task AT: the one assumed slippage
 from src.ledger_store import (  # noqa: E402,F401 - Task AF: moved here, re-exported unchanged
     LEDGER_NUMBER_FIELDS,
     LedgerIntegrityError,
@@ -263,7 +264,7 @@ def _intent(**kwargs: Any) -> Intent:
         "side": "buy",
         "model_prob": 0.5,
         "market_price": 0.5,
-        "assumed_slippage": 0.005,
+        "assumed_slippage": ASSUMED_SLIPPAGE,
         "fee_rate": 0.0,
         "liquidity_usd": 20000.0,
         "spread": 0.01,
@@ -374,7 +375,7 @@ def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
         if fallback is None:
             fallback = candidate
         # Prefer a touch that stays inside (0, 1) after the default slippage.
-        if 0.0 < float(ask) + 0.005 < 1.0:
+        if 0.0 < float(ask) + ASSUMED_SLIPPAGE < 1.0:
             chosen = candidate
             break
     if chosen is None:
@@ -389,7 +390,7 @@ def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
             side="buy",
             model_prob=float(book["best_ask"]),
             market_price=float(book["best_ask"]),
-            assumed_slippage=0.005,
+            assumed_slippage=ASSUMED_SLIPPAGE,
             fee_rate=0.0,
             liquidity_usd=float(liquidity),
             spread=float(book["spread"]),
@@ -431,7 +432,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--side", choices=("buy", "sell"), default="buy")
     parser.add_argument("--model-prob", type=float, default=None)
     parser.add_argument("--market-price", type=float, default=None)
-    parser.add_argument("--slippage", type=float, default=0.005)
+    parser.add_argument("--slippage", type=float, default=ASSUMED_SLIPPAGE)
     parser.add_argument("--fee-rate", type=float, default=0.0)
     parser.add_argument("--liquidity", type=float, default=None)
     parser.add_argument("--spread", type=float, default=None)

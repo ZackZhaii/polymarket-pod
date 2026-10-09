@@ -359,6 +359,15 @@
       "surface": "grok-bot"
     },
     {
+      "id": "AT",
+      "status": "done",
+      "title": "One assumed slippage: ASSUMED_SLIPPAGE in src/thresholds.py is the single source (SPORTS_DEVIG_/INTENT_ASSUMED_SLIPPAGE aliases, paper_ledger literals removed, drift fails at import) and docs/ROLES.md matches RiskGate (no Kelly sizing; Kelly shadow-only in intent_builder)",
+      "finish": "src/thresholds.py: ASSUMED_SLIPPAGE = 0.005 (M2 pending) is the only slippage literal; SPORTS_DEVIG_ASSUMED_SLIPPAGE and INTENT_ASSUMED_SLIPPAGE are aliases and consistency_problems fails the import if either differs; src/paper_ledger.py CLI --slippage default, self-check intents and the no-edge touch filter read it. Every copy was 0.005, so no number, veto or golden moved. tests/test_slippage_unified.py (no float 0.005 literal in src/ or scripts/ outside thresholds.py, e2e fixtures equal the constant, ROLES row, RiskGate never reads kelly_fraction); tests/test_thresholds.py and docs/THRESHOLDS.md updated. docs/ROLES.md RiskGate row: hard 1% cap and the veto checks, Kelly only in shadow mode in src/intent_builder.py, never used for size. README edge formula follows src/fees.py. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (queue after EXIT_CODES and daily_loss-realized; SPEC_signal_to_intent inconsistencies 1 and 2); done by grok-bot. AS (EXIT_CODES + runtime pins) ran in parallel. Not done: a RiskGate floor vetoing assumed_slippage below ASSUMED_SLIPPAGE (new veto; callers such as the paper_ledger CLI can still pass a lower value). Kelly enforcement stays KEY (backlog #7).",
+      "done_at": "2026-10-09T09:29:18Z",
+      "surface": "grok-bot"
+    },
+    {
       "id": "AS",
       "status": "done",
       "title": "Exit-code registry and runtime pin checks (Poly哨兵 design gaps 4, 5, 6): docs/EXIT_CODES.md for every src/ and scripts/ entry point, kept in sync by tests and guard check exit_codes; config/risk.toml checked as a file (sha256 + every key, value and type, no unknown key) at process start and while running, drift = refuse + global halt",
