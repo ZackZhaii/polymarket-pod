@@ -111,6 +111,23 @@ M1_MAX_TOP_MISMATCH_RATE = 0.02
 # REST samples with no live WS row within the window (or an unusable REST book_ts)
 M1_MAX_REST_UNMATCHED_RATE = 0.10
 
+# --- Data API v2 reconciliation (Task AK) ------------------------------------------------------
+# M2 pending. Ledger vs Data API share amounts may differ by at most this (1e-6 = one on-chain base
+# unit of a 6-decimal outcome token); anything more is a mismatch.
+RECONCILE_SHARES_TOL = 1e-6
+# Data API v2 contract facts (docs.polymarket.com), not choices: /v2/positions hides holdings below
+# its 0.1-share dust floor (filter_type=TOKENS default) and /v2/trades serves fills of at least
+# 0.01 shares. A ledger leg or fill below them cannot be verified and fails closed.
+DATA_API_POSITIONS_DUST_SHARES = 0.1
+DATA_API_TRADES_MIN_SHARES = 0.01
+# M2 pending. /v2/status is read first each round: snapshot age_seconds + serving.lag_seconds above
+# this (seconds behind chain head) means the API is too stale to reconcile against (fails closed).
+DATA_API_MAX_LAG_S = 120.0
+# M2 pending. The documented /v2/positions row identities (current_value = current_size x
+# current_price, unrealized = current_value - entry_cost, total_pnl = realized + unrealized,
+# total_cost = entry_cost + entry_fees) must hold within this many USDC, or the row is malformed.
+DATA_API_IDENTITY_TOL_USDC = 1e-6
+
 
 def consistency_problems() -> list[str]:
     """Relations the values must keep. Import fails if any is broken (explicit, survives -O)."""
@@ -155,6 +172,12 @@ def consistency_problems() -> list[str]:
         problems.append("M1_REST_MATCH_WINDOW_S must satisfy 0 < M1_REST_MATCH_WINDOW_S <= WS_ROW_REFRESH_S")
     if M1_MIN_RUN_S / M1_REST_EVERY_S * M1_REST_ASSETS < M1_MIN_REST_MATCHED:
         problems.append("a full run must be able to collect M1_MIN_REST_MATCHED REST samples")
+    if not 0.0 < RECONCILE_SHARES_TOL < DATA_API_TRADES_MIN_SHARES <= DATA_API_POSITIONS_DUST_SHARES:
+        problems.append("reconcile: 0 < RECONCILE_SHARES_TOL < DATA_API_TRADES_MIN_SHARES <= DATA_API_POSITIONS_DUST_SHARES")
+    if not (DATA_API_MAX_LAG_S > 0.0 and DATA_API_IDENTITY_TOL_USDC > 0.0):
+        problems.append("DATA_API_MAX_LAG_S and DATA_API_IDENTITY_TOL_USDC must be > 0")
+    if not LEDGER_OPEN_EPS <= RECONCILE_SHARES_TOL:
+        problems.append("RECONCILE_SHARES_TOL must be >= LEDGER_OPEN_EPS")
     return problems
 
 

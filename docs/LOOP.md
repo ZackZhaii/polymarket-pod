@@ -767,10 +767,44 @@ the guard fails on any drift, golden changes only with `--update-golden`, and `p
 - Not connected in src yet: signal -> Intent (harness `build_intent`; fee_rate/slippage are fixture inputs), Endgame
   -> Intent (no model probability), halt consumers (nothing blocks later intents after a halt). No new threshold or URL.
 
+## Task AK — Data API v2 reconciliation: read-only src/reconcile.py on /v2/positions and /v2/trades (backlog #25)
+
+Status: done.
+
+Requested by Poly指挥, done by grok-bot. Data API v1 retires on 2026-10-24 and the ROSTER Reconciler (Data API v2
+positions / fills / redeem) did not exist, so any reconciliation would have been written against v1 or not at all
+(COORDINATION backlog #25).
+
+Finish when the read-only reconciliation path uses only Data API v2, every missing or malformed field fails closed,
+only the exact v2 paths are allowlisted, and `python -m pytest` passes with no network.
+
+- `src/reconcile.py` (stdlib): `GET /v2/status` first every round (age_seconds + serving.lag_seconds <=
+  `DATA_API_MAX_LAG_S`, polygon/137, null fails), then `GET /v2/positions?user=W&status=OPEN&filter_type=TOKENS&filter_amount=0.1` and
+  `GET /v2/trades?user=W&taker_only=false&start=1`, first page `limit=500`, then `cursor=` until `next_cursor` is null
+  (trades re-send the same filters every page, per the v2 feed rule). Sources: docs.polymarket.com migration guide and
+  Data API v2 overview, the v2 openapi.json schemas, Poly研究's research_dataapi_ws_m2.md, and a live public read (2026-10-09).
+- Fail closed: envelope (`data` missing / null / not a list, `pagination` missing, `has_more` not bool or disagreeing
+  with `next_cursor`, cursor loop, `MAX_PAGES` with a cursor left, any fetch error) and every used row field
+  (positions: proxy_wallet, token_id, condition_id, current_size, status; trades: proxy_wallet, side, token_id,
+  condition_id, size, price, timestamp, transaction_hash), plus the four position identities (current_value, unrealized,
+  total_pnl, total_cost) within `DATA_API_IDENTITY_TOL_USDC`. No coercion: a string, bool, null, NaN or inf is malformed.
+  Trades dedupe exact repeats on transaction_hash + token_id + side; differing rows under one key stay separate fills.
+- Compares per token the `ledger_store` replay with the API: open shares vs `current_size`, buy / sell shares vs BUY /
+  SELL trade sizes, within `RECONCILE_SHARES_TOL`; legs/fills below the API's 0.1 / 0.01-share floors are unverifiable
+  and fail. Exit 0 / 1 mismatch / 2 usage / 3 Data API unusable / 4 ledger invalid; 1, 3, 4 write one Reconciler `halt`.
+- `podlib.public_get` and guard `url_allowlist` admit exactly `/v2/status`, `/v2/positions`, `/v2/trades` (7 endpoints);
+  v1 `/positions`, `/trades`, `/closed-positions`, `/v1/market-positions` and other v2 routes stay refused (tested).
+- New numbers (M2 pending): `RECONCILE_SHARES_TOL = 1e-06`, `DATA_API_POSITIONS_DUST_SHARES = 0.1`,
+  `DATA_API_TRADES_MIN_SHARES = 0.01` (the two floors are Data API contract facts), `DATA_API_MAX_LAG_S = 120.0`,
+  `DATA_API_IDENTITY_TOL_USDC = 1e-06`. Operational: `reconcile.PAGE_LIMIT`,
+  `reconcile.MAX_PAGES`. Docs: `docs/RECONCILE.md`, `docs/PHASE0_RUN.md`. Tests: `tests/test_reconcile.py`.
+- Not on the paper pipeline or the e2e gate (unchanged): the Phase 0 ledger is paper, so a real wallet mismatches by
+  design. Ambiguities resolved fail-closed (docs/RECONCILE.md). No key, no order, config/risk.toml unchanged.
+
 ## Latest
 
-- 2026-10-09: Task AJ done by grok-bot (requested by Poly指挥, backlog #24). End-to-end offline hard gate on fixed sanitised recordings.
-- `scripts/e2e_offline.py` runs the real scanner -> recorder -> paper cycle/Sentinel -> signals -> RiskGate -> fill -> ledger_store -> conservation path; only clock and I/O paths replaced, network tripwired.
-- Exact `tests/fixtures/e2e/golden.json`; guard check `e2e` (8 checks); golden changes only with `pytest --update-golden`. Scenarios: stale, NaN, wash, thin edge, cap, replay, torn ledger, Sentinel halt.
-- `python -m pytest` passed offline (1716 passed; on Windows 1712 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S, the eight M1_* criteria.
+- 2026-10-09: Task AK done by grok-bot (requested by Poly指挥, backlog #25). Read-only Reconciler on Data API v2 before v1 retires 2026-10-24.
+- `src/reconcile.py` reads `/v2/status` first (lag limit), then only `/v2/positions` and `/v2/trades` (cursor walk), compares per token with the ledger_store replay; exit 0/1/2/3/4, halt on 1/3/4.
+- Any missing, null or malformed field, broken position identity or too-large lag fails closed (exit 3); guard and `public_get` admit exactly the three v2 paths.
+- `python -m pytest` passed offline (1918 passed; on Windows 1914 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. M2 pending adds RECONCILE_SHARES_TOL, DATA_API_POSITIONS_DUST_SHARES, DATA_API_TRADES_MIN_SHARES, DATA_API_MAX_LAG_S, DATA_API_IDENTITY_TOL_USDC.

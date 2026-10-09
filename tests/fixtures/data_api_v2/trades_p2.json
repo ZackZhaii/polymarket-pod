@@ -1,0 +1,52 @@
+{
+ "data": [
+  {
+   "proxy_wallet": "0x1111111111111111111111111111111111111111",
+   "side": "BUY",
+   "token_id": "2000000000000000000000000000000000000000000000000000000000000000000000000000",
+   "condition_id": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "size": 20.0,
+   "price": 0.4,
+   "timestamp": 1791000100,
+   "title": "Synthetic market",
+   "slug": "synthetic",
+   "icon": "",
+   "event_slug": "synthetic",
+   "outcome": "Yes",
+   "outcome_index": 0,
+   "name": "",
+   "pseudonym": "",
+   "bio": "",
+   "profile_image": "",
+   "profile_image_optimized": "",
+   "transaction_hash": "0x0000000000000000000000000000000000000000000000000000000000000002"
+  },
+  {
+   "proxy_wallet": "0x1111111111111111111111111111111111111111",
+   "side": "BUY",
+   "token_id": "1000000000000000000000000000000000000000000000000000000000000000000000000000",
+   "condition_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "size": 10.0,
+   "price": 0.4,
+   "timestamp": 1791000000,
+   "title": "Synthetic market",
+   "slug": "synthetic",
+   "icon": "",
+   "event_slug": "synthetic",
+   "outcome": "Yes",
+   "outcome_index": 0,
+   "name": "",
+   "pseudonym": "",
+   "bio": "",
+   "profile_image": "",
+   "profile_image_optimized": "",
+   "transaction_hash": "0x0000000000000000000000000000000000000000000000000000000000000001"
+  }
+ ],
+ "pagination": {
+  "limit": 2,
+  "offset": 2,
+  "has_more": false,
+  "next_cursor": null
+ }
+}
