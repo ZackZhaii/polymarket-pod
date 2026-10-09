@@ -170,7 +170,8 @@ def _ok_intent(**kw) -> Intent:
                 book_ts=podlib.utc_now(), forecast_id="fc_abc", forecast_ts="2026-10-09T00:00:00Z",
                 condition_id="0xc1", outcome_index=0, outcome="Yes", category=None, tags=("us",),
                 end_date="2026-12-01T00:00:00Z", model_version="v1",
-                best_bid=0.38, best_ask=0.4, kelly_fraction_used=0.15)
+                best_bid=0.38, best_ask=0.4, kelly_fraction_used=0.15,
+                kelly_frac_raw=0.1, fill_context="intent_builder")  # Task BC
     base.update(kw)
     return Intent(**base)
 
@@ -188,7 +189,7 @@ def test_a_full_identity_fill_is_joinable(paths):
 def test_a_fill_without_ids_is_booked_and_flagged(paths):
     bare = _ok_intent(forecast_id=None, forecast_ts=None, condition_id=None, outcome_index=None, outcome=None,
                       tags=None, end_date=None, model_version=None, best_bid=None, best_ask=None,
-                      kelly_fraction_used=None)
+                      kelly_fraction_used=None, kelly_frac_raw=None)
     result = paper_ledger.commit_if_allowed(bare, load_risk())
     assert result["allow"] is True  # RiskGate decided; identity is never a veto
     fill = read_jsonl(paths["tmp"] / "paper.jsonl")[0]
@@ -196,7 +197,8 @@ def test_a_fill_without_ids_is_booked_and_flagged(paths):
     assert fill["calibration_problems"] == ["missing_best_ask", "missing_best_bid", "missing_condition_id",
                                             "missing_decision_id", "missing_end_date", "missing_forecast_id",
                                             "missing_forecast_ts", "missing_hours_to_expiry_at_entry",
-                                            "missing_kelly_fraction_used", "missing_market_mid",
+                                            "missing_kelly_frac_raw", "missing_kelly_fraction_used",
+                                            "missing_market_mid",
                                             "missing_model_version", "missing_outcome_index"]
     assert all(fill[k] is None for k in ci.FILL_MARKET_FIELDS)  # never invented
 

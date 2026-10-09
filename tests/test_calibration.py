@@ -229,7 +229,7 @@ def test_an_overconfident_model_is_called_overconfident():
         rs.append(resolution(i, 0 if rng.random() < truth else 1))
     m = build(fs, rs)[0]["forecasts"]["metrics"]
     assert m["reliability"]["kind"] == "fixed"
-    assert m["verdict"] == {"calibration_slope": "overconfident"}
+    assert m["verdict"]["calibration_slope"] == "overconfident"  # Task BD added calibration_intercept beside it
     assert m["calibration"]["slope"] < 1
 
 
@@ -242,7 +242,8 @@ def test_groups_below_their_minimum_have_no_brier():
     fs, rs = world(40)
     fs[0] = forecast(0, fs[0]["model_prob"], category="Rare")
     groups = build(fs, rs)[0]["forecasts"]["by_category"]
-    assert groups["Rare"] == {"n": 1, "markets": 1, "status": "insufficient", "brier": None}
+    assert groups["Rare"] == {"n": 1, "markets": 1, "status": "insufficient", "brier": None,
+                              "intervals": None}  # Task BD: by_category carries intervals (None when not judged)
     assert groups["Politics"]["status"] == "sufficient" and groups["Politics"]["brier"] is not None
 
 

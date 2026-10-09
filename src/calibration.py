@@ -8,8 +8,22 @@ src/resolutions.py) and scores them as Poly反思's M3 calibration design (secti
   y = 1 when that token won. Brier, log loss, reliability bins with Wilson intervals, ECE, logistic
   calibration slope / intercept, and counts and Brier by category, strategy and model_version.
 - A, trade sample: one sample per decision_id (at most two decisions per market), p = the first
-  fill's model_prob, q = its market_price. Brier of p and of q, delta (model - market), expected
-  (edge x shares) and realized paper P&L.
+  fill's model_prob, q = its market_mid (Task BC; design 3: the decision-time mid, else market_price
+  with price_source noted, which only a fill booked before Task BA can reach). Brier of p and of q,
+  delta (model - market), expected (edge x shares) and realized paper P&L.
+
+Task BC: a fill whose fill_context says it was built without book context (the operator CLI or a
+gate check, calibration_ids.NO_BOOK_CONTEXTS) is dropped as no_book_context, apart from the genuine
+missing-data reasons; a fill whose market_mid key is present but not a usable price is dropped as
+fill_market_mid_missing (never replaced by market_price).
+
+Task BD: by_category (both samples) and by_edge_tier (trades) groups that meet the group minimums carry
+``intervals`` (Brier, ECE, calibration slope and intercept, and for trades delta Brier and realization,
+each with a market-clustered bootstrap interval); a group below them carries ``intervals: None``. A
+sufficient forecast section adds the intercept interval, the ECE interval and an intercept verdict. Both
+sections report ``event_cluster``: the largest cluster's share of the samples, flagged ``insufficient``
+below the section minimums, else ``concentrated`` above CALIBRATION_MAX_CLUSTER_SHARE, else ``ok``.
+No event id is recorded yet, so a cluster is one market (condition_id): a lower bound on concentration.
 
 Fail closed. Nothing is imputed: a row with calibration_problems, a missing join, a pending,
 UMA-unconfirmed, disputed, void or ambiguous resolution, or a token / outcome that disagrees with
@@ -56,6 +70,7 @@ from src.thresholds import (  # noqa: E402
     CALIBRATION_GROUP_MIN_MARKETS,
     CALIBRATION_GROUP_MIN_SAMPLES,
     CALIBRATION_LOGLOSS_CLIP,
+    CALIBRATION_MAX_CLUSTER_SHARE,
     CALIBRATION_MAX_DECISIONS_PER_MARKET,
     CALIBRATION_MIN_MARKETS,
     CALIBRATION_MIN_RESOLUTION_DAYS,
@@ -80,7 +95,14 @@ NOTES = (
     "Labels are only data/resolutions.jsonl rows with uma_checked=true and status=resolved; nothing is imputed.",
     "UMA dispute status not checked (beyond umaResolutionStatus=resolved).",
     "Not a promise of profit. Paper only. This report proposes nothing and changes no setting.",
-    "q is the first fill's market_price (price_source=market_price); no mid is recorded on fills yet.",
+    "q is the first fill's market_mid (price_source=market_mid). Only a fill booked before Task BA, with no "
+    "market_mid key at all, uses market_price instead (price_source=market_price, design 3); a recorded but "
+    "null mid is a drop (fill_market_mid_missing), never a fallback. trades.price_sources counts both.",
+    "Fills built without book context (fill_context operator_cli / gate_check) are dropped as no_book_context.",
+    "event_cluster: no event id is recorded yet, so each market (condition_id) is its own cluster; markets of one "
+    "event count separately, so the share is a lower bound on event concentration. Reported only.",
+    "Group intervals (by_category, by_edge_tier) exist only for groups at the group minimums; read conclusions "
+    "from intervals only and mind the number of groups.",
 )
 
 
@@ -380,6 +402,64 @@ def _slope(samples: Sequence[Mapping[str, Any]]) -> float | None:
     return None if fit is None else fit[1]
 
 
+def _intercept(samples: Sequence[Mapping[str, Any]]) -> float | None:
+    """Task BD: the calibration intercept a of y ~ a + b * logit(p); None when not estimable."""
+    fit = logistic_fit(_pairs(samples))
+    return None if fit is None else fit[0]
+
+
+def _ece(samples: Sequence[Mapping[str, Any]]) -> float | None:
+    return reliability(_pairs(samples))["ece"] if samples else None
+
+
+def _delta_brier(samples: Sequence[Mapping[str, Any]]) -> float | None:
+    if not samples:
+        return None
+    return brier(_pairs(samples, "p")) - brier(_pairs(samples, "q"))  # type: ignore[operator]
+
+
+def _realization(samples: Sequence[Mapping[str, Any]]) -> float | None:
+    expected = sum(s["expected_usd"] for s in samples)
+    return sum(s["realized_usd"] for s in samples) / expected if expected > 0 else None
+
+
+def group_intervals(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Task BD: point values and market-clustered bootstrap intervals for one judged group."""
+    fit = logistic_fit(_pairs(samples))
+    out: dict[str, Any] = {
+        "brier": brier(_pairs(samples)), "brier_ci": cluster_bootstrap(samples, lambda d: brier(_pairs(d))),
+        "ece": _ece(samples), "ece_ci": cluster_bootstrap(samples, _ece),
+        "slope": None if fit is None else fit[1], "slope_ci": cluster_bootstrap(samples, _slope),
+        "intercept": None if fit is None else fit[0], "intercept_ci": cluster_bootstrap(samples, _intercept),
+    }
+    if samples and "q" in samples[0]:
+        out["brier_market"] = brier(_pairs(samples, "q"))
+        out["delta_brier"] = _delta_brier(samples)
+        out["delta_brier_ci"] = cluster_bootstrap(samples, _delta_brier)
+        out["realization"] = _realization(samples)
+        out["realization_ci"] = cluster_bootstrap(samples, _realization)
+    return out
+
+
+def cluster_share(samples: Sequence[Mapping[str, Any]], *, status: str, key: str = "condition_id") -> dict[str, Any]:
+    """Task BD: share of the samples in the largest cluster (ties: the smallest name), flagged.
+
+    ``insufficient`` when the section is below its minimums (no flag is judged), else ``concentrated``
+    when the share exceeds CALIBRATION_MAX_CLUSTER_SHARE, else ``ok``. Reported only; gates nothing.
+    """
+    counts = Counter(str(s[key]) for s in samples)
+    n = len(samples)
+    largest = min(counts.items(), key=lambda item: (-item[1], item[0])) if counts else None
+    share = largest[1] / n if largest else None
+    if status != "sufficient":
+        flag = "insufficient"
+    else:
+        flag = "concentrated" if share is not None and share > CALIBRATION_MAX_CLUSTER_SHARE else "ok"
+    return {"cluster_key": key, "n": n, "n_clusters": len(counts),
+            "largest_cluster": largest[0] if largest else None, "largest_cluster_n": largest[1] if largest else 0,
+            "largest_share": share, "max_share": CALIBRATION_MAX_CLUSTER_SHARE, "status": status, "flag": flag}
+
+
 # ------------------------------------------------------------------ groups
 
 def tier(value: float | None, bounds: Sequence[float], unit: str = "") -> str:
@@ -472,6 +552,9 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
     for row in fills:
         if not ledger_store.counts(row) or row.get("risk_decision") != "allow":
             continue  # not a trade sample at all (hypothetical / not counted); not a drop
+        if row.get("fill_context") in calibration_ids.NO_BOOK_CONTEXTS:
+            drop(row, "no_book_context")  # Task BC: stamped at fill time; never inferred from missing fields
+            continue
         excluded = _excluded(row.get("strategy"), row.get("market"))
         if excluded:
             drop(row, excluded)
@@ -480,7 +563,7 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
             drop(row, "fill_missing_identity")  # booked before Task AX
             continue
         stored = row["calibration_problems"] if isinstance(row["calibration_problems"], list) else ["unreadable"]
-        problems = sorted(set(map(str, stored)) | set(calibration_ids.fill_problems(row)))
+        problems = sorted(set(map(str, stored)) | set(calibration_ids.fill_problems(row)) | set(_context_problems(row)))
         if problems:
             problem_counts.update(problems)
             drop(row, "fill_calibration_problems")
@@ -512,6 +595,10 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
         if per_market[condition] >= CALIBRATION_MAX_DECISIONS_PER_MARKET:
             drop(ref, "re_entry_cap", len(rows))
             continue
+        q, price_source = market_probability(first)
+        if q is None:
+            drop(ref, "fill_market_mid_missing", len(rows))
+            continue
         per_market[condition] += 1
         bought = sum(float(r["shares"]) for r in rows if r.get("side") == "buy")
         sold = sum(float(r["shares"]) for r in rows if r.get("side") == "sell")
@@ -522,7 +609,8 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
         eligible.append({"kind": "trade", "decision_id": decision_id, "forecast_id": first["forecast_id"],
                          "market_id": first["market"], "condition_id": condition, "token_id": first["token_id"],
                          "side": first.get("side"), "p": float(first["model_prob"]),
-                         "q": float(first["market_price"]), "y": y, "fills": len(rows),
+                         "q": q, "price_source": price_source, "fill_context": first.get("fill_context"),
+                         "y": y, "fills": len(rows),
                          "re_entry": per_market[condition] > 1, "expected_usd": expected, "realized_usd": realized,
                          "strategy": first.get("strategy"), "model_version": first.get("model_version"),
                          "category": first.get("category"),
@@ -532,6 +620,32 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
                          "price_band": price_band(float(first["market_price"])),
                          "resolution_day": resolution["closed_ts"][:10]})  # type: ignore[index]
     return eligible, dropped, reasons, problem_counts
+
+
+def _context_problems(row: Mapping[str, Any]) -> list[str]:
+    """Task BC: a stored fill_context must be a known one (a row from before Task BC has no key: no problem)."""
+    if "fill_context" not in row:
+        return []
+    value = row["fill_context"]
+    if value is None:
+        return ["missing_fill_context"]
+    return [] if value in calibration_ids.FILL_CONTEXTS else ["invalid_fill_context"]
+
+
+def market_probability(fill: Mapping[str, Any]) -> tuple[float | None, str]:
+    """Task BC: q for a trade sample and its price_source.
+
+    market_mid when the fill records one (Task BA onward). A fill that has the key but no usable mid
+    (null, non-finite, outside (0, 1)) gives (None, "market_mid"): the caller drops it, never falling
+    back. Only a fill with no market_mid key at all (booked before Task BA) uses its market_price, as
+    design section 3 allows ("mid if there is one, else market_price, with price_source noted").
+    """
+    if "market_mid" in fill:
+        mid = fill["market_mid"]
+        if isinstance(mid, bool) or not isinstance(mid, (int, float)) or not math.isfinite(mid) or not 0 < mid < 1:
+            return None, "market_mid"
+        return float(mid), "market_mid"
+    return float(fill["market_price"]), "market_price"
 
 
 # ------------------------------------------------------------------ report (pure)
@@ -548,12 +662,16 @@ def forecast_section(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "mean_p": (sum(p for p, _ in pairs) / len(pairs)) if pairs else None,
         "reliability": reliability(pairs),
         "calibration": {"intercept": None if fit is None else fit[0], "slope": None if fit is None else fit[1]},
+        "event_cluster": cluster_share(samples, status=gate["status"]),  # Task BD
         "verdict": None,
     }
     if gate["status"] == "sufficient":
         section["brier_ci"] = cluster_bootstrap(samples, lambda s: brier(_pairs(s)))
+        section["ece_ci"] = cluster_bootstrap(samples, _ece)  # Task BD
         slope_ci = cluster_bootstrap(samples, _slope)
         section["calibration"]["slope_ci"] = slope_ci
+        intercept_ci = cluster_bootstrap(samples, _intercept)  # Task BD
+        section["calibration"]["intercept_ci"] = intercept_ci
         if slope_ci is None:
             slope_verdict = "slope_not_estimable"
         elif slope_ci[1] < 1.0:
@@ -562,7 +680,15 @@ def forecast_section(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
             slope_verdict = "underconfident"
         else:
             slope_verdict = "no_clear_miscalibration"
-        section["verdict"] = {"calibration_slope": slope_verdict}
+        if intercept_ci is None:
+            intercept_verdict = "intercept_not_estimable"
+        elif intercept_ci[0] > 0:
+            intercept_verdict = "positive_bias"  # outcomes happen more often than p says
+        elif intercept_ci[1] < 0:
+            intercept_verdict = "negative_bias"  # outcomes happen less often than p says
+        else:
+            intercept_verdict = "no_clear_bias"
+        section["verdict"] = {"calibration_slope": slope_verdict, "calibration_intercept": intercept_verdict}
     else:
         section["verdict"] = "insufficient"
     return section
@@ -591,6 +717,7 @@ def trade_section(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "expected_usd": expected, "realized_usd": realized,
         "realization": realized / expected if expected > 0 else None,
         "re_entries": sum(1 for s in samples if s["re_entry"]),
+        "event_cluster": cluster_share(samples, status=gate["status"]),  # Task BD
         "verdict": None,
     }
     if gate["status"] == "sufficient":
@@ -615,7 +742,8 @@ def trade_section(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
     return section
 
 
-def group_counts(samples: Sequence[dict[str, Any]], key: str) -> dict[str, Any]:
+def group_counts(samples: Sequence[dict[str, Any]], key: str, *, intervals: bool = False) -> dict[str, Any]:
+    """Counts (and a Brier when judged) per group; with ``intervals`` (Task BD) also group_intervals or None."""
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for sample in samples:
         value = sample.get(key)
@@ -631,6 +759,8 @@ def group_counts(samples: Sequence[dict[str, Any]], key: str) -> dict[str, Any]:
         if rows and "q" in rows[0]:
             out[name]["brier_market"] = brier(_pairs(rows, "q")) if judged else None
             out[name]["realized_usd"] = sum(r["realized_usd"] for r in rows) if judged else None
+        if intervals:
+            out[name]["intervals"] = group_intervals(rows) if judged else None
     return out
 
 
@@ -644,7 +774,8 @@ def thresholds_used() -> dict[str, Any]:
             "bootstrap_resamples": CALIBRATION_BOOTSTRAP_RESAMPLES, "bootstrap_seed": CALIBRATION_BOOTSTRAP_SEED,
             "ci_level": CALIBRATION_CI_LEVEL, "logloss_clip": CALIBRATION_LOGLOSS_CLIP,
             "edge_tiers": list(CALIBRATION_EDGE_TIERS), "expiry_tiers_h": list(CALIBRATION_EXPIRY_TIERS_H),
-            "max_decisions_per_market": CALIBRATION_MAX_DECISIONS_PER_MARKET, "status": "M3 pending"}
+            "max_decisions_per_market": CALIBRATION_MAX_DECISIONS_PER_MARKET,
+            "max_cluster_share": CALIBRATION_MAX_CLUSTER_SHARE, "status": "M3 pending"}
 
 
 def build_report(forecast_rows: list[dict[str, Any]], resolution_rows: list[dict[str, Any]],
@@ -666,7 +797,7 @@ def build_report(forecast_rows: list[dict[str, Any]], resolution_rows: list[dict
             "dropped": sum(b_reasons.values()), "dropped_by_reason": dict(sorted(b_reasons.items())),
             "calibration_problems": dict(sorted(b_problems.items())),
             "metrics": forecast_section(b_rows),
-            "by_category": group_counts(b_rows, "category"),
+            "by_category": group_counts(b_rows, "category", intervals=True),
             "by_strategy": group_counts(b_rows, "strategy"),
             "by_model_version": group_counts(b_rows, "model_version"),
         },
@@ -674,12 +805,13 @@ def build_report(forecast_rows: list[dict[str, Any]], resolution_rows: list[dict
             "eligible": len(a_rows), "dropped": sum(b for b in a_reasons.values()),
             "dropped_by_reason": dict(sorted(a_reasons.items())),
             "calibration_problems": dict(sorted(a_problems.items())),
+            "price_sources": dict(sorted(Counter(s["price_source"] for s in a_rows).items())),  # Task BC
             "metrics": trade_section(a_rows),
-            "by_category": group_counts(a_rows, "category"),
+            "by_category": group_counts(a_rows, "category", intervals=True),
             "by_strategy": group_counts(a_rows, "strategy"),
             "by_model_version": group_counts(a_rows, "model_version"),
             "by_side": group_counts(a_rows, "side"),
-            "by_edge_tier": group_counts(a_rows, "edge_tier"),
+            "by_edge_tier": group_counts(a_rows, "edge_tier", intervals=True),
             "by_expiry_tier": group_counts(a_rows, "expiry_tier"),
             "by_price_band": group_counts(a_rows, "price_band"),
         },
@@ -705,6 +837,13 @@ def _fmt(value: object) -> str:
     return str(value)
 
 
+def _cluster_line(metrics: Mapping[str, Any]) -> str:
+    ec = metrics.get("event_cluster") or {}
+    return (f"- event cluster ({ec.get('cluster_key')}): largest {_fmt(ec.get('largest_cluster'))} holds "
+            f"{ec.get('largest_cluster_n')} of {ec.get('n')} ({_fmt(ec.get('largest_share'))}; limit "
+            f"{_fmt(ec.get('max_share'))}), {ec.get('n_clusters')} clusters: **{ec.get('flag')}**")
+
+
 def render_markdown(report: Mapping[str, Any]) -> str:
     f, t = report["forecasts"], report["trades"]
     fm, tm = f["metrics"], t["metrics"]
@@ -716,9 +855,10 @@ def render_markdown(report: Mapping[str, Any]) -> str:
              f"resolution days {fm['resolution_days']}",
              f"- dropped {f['dropped']}: {json.dumps(f['dropped_by_reason'], sort_keys=True)}",
              f"- Brier {_fmt(fm['brier'])} (CI {_fmt(fm.get('brier_ci'))}); log loss {_fmt(fm['log_loss'])}; "
-             f"ECE {_fmt(fm['reliability']['ece'])}",
+             f"ECE {_fmt(fm['reliability']['ece'])} (CI {_fmt(fm.get('ece_ci'))})",
              f"- calibration slope {_fmt(fm['calibration']['slope'])} (CI {_fmt(fm['calibration'].get('slope_ci'))}),"
-             f" intercept {_fmt(fm['calibration']['intercept'])}",
+             f" intercept {_fmt(fm['calibration']['intercept'])} (CI {_fmt(fm['calibration'].get('intercept_ci'))})",
+             _cluster_line(fm),
              f"- verdict: {json.dumps(fm['verdict'])}", "",
              f"Reliability ({fm['reliability']['kind']} bins):", "",
              "| range | n | mean p | hit rate | Wilson |", "|---|---|---|---|---|"]
@@ -729,6 +869,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
               f"- status: **{tm['status']}** ({'; '.join(tm['short_of']) or 'all minimums met'})",
               f"- eligible {t['eligible']} decisions; dropped {t['dropped']} fills: "
               f"{json.dumps(t['dropped_by_reason'], sort_keys=True)}",
+              f"- market probability q by source: {json.dumps(t.get('price_sources', {}), sort_keys=True)}",
               f"- Brier model {_fmt(tm['brier_model'])}, market {_fmt(tm['brier_market'])}, delta "
               f"{_fmt(tm['delta_brier'])} (CI {_fmt(tm.get('delta_brier_ci'))}), skill {_fmt(tm['brier_skill'])} "
               f"(CI {_fmt(tm.get('brier_skill_ci'))})",
@@ -736,6 +877,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
               f"- expected {_fmt(tm['expected_usd'])} USD, realized {_fmt(tm['realized_usd'])} USD, realization "
               f"{_fmt(tm['realization'])}; mean(R-E) {_fmt(tm['mean_r_minus_e'])} "
               f"(CI {_fmt(tm.get('mean_r_minus_e_ci'))})",
+              _cluster_line(tm),
               f"- verdict: {json.dumps(tm['verdict'])}", "", "## Groups (forecast sample)", ""]
     for key in ("by_category", "by_strategy", "by_model_version"):
         lines.append(f"- {key}: " + json.dumps(f[key], sort_keys=True))

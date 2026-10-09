@@ -1287,16 +1287,72 @@ or corrupt report, and `python -m pytest` and guard --require-git pass offline.
 - Docs: `docs/M3_CALIBRATION.md` Step 4. Letter note: PR #61 (pod-flash) titled itself "Task AZ" but added only
   a test file and no queue entry; AZ stays #60.
 
+## Task BC — Calibration at market_mid; both Kelly values; fill_context and no_book_context
+
+Status: done.
+
+Requested by Poly指挥 after Task BA (#62), done by grok-bot on dev@ff21802. BB (#66,
+src/reflector_proposals.py) reads report.json in parallel, so report changes only add keys.
+
+Finish when the trade sample scores the market at the decision-time mid, both Kelly values are on the fill
+and provably unread by RiskGate and sizing, fills without book context have their own drop reason stamped
+at fill time, and `python -m pytest` and guard --require-git pass offline.
+
+- `src/calibration.py`: q = the first fill's `market_mid` (`price_source=market_mid`). Design 3 allows
+  "mid if there is one, else `market_price`, with price_source noted"; that fallback is kept only for a fill
+  with no `market_mid` key (booked before Task BA). A recorded but unusable mid is never replaced: it is a
+  `fill_calibration_problems` drop (stored `missing_market_mid`), or `fill_market_mid_missing` if the stored
+  list hides it. `trades.price_sources` counts samples per source; samples carry `price_source`.
+- `risk_gate.Intent`: `kelly_frac_raw` (intent_builder `kelly_raw`, unscaled; `kelly_frac = kelly_fraction_used x
+  kelly_frac_raw`) and `fill_context` (`intent_builder` / `operator_cli` / `gate_check`, from
+  `calibration_ids.FILL_CONTEXTS`). Both on the fill; null + `missing_` / `invalid_` in `calibration_problems`.
+  RiskGate and sizing never read them (source scan, identical decisions and fill sizes; `tests/test_calibration_mid_kelly.py`).
+- Report: `fill_context` in `operator_cli` / `gate_check` -> `no_book_context` (checked first, market-field
+  problems not counted). A fill without the key (before BC) is judged as before; nothing is inferred from
+  missing fields. A stored null / unknown context is a data problem (`missing_` / `invalid_fill_context`).
+- `report.json` stays `schema_version` 1 and only gains keys. e2e golden (`--update-golden`): only
+  `fill_context` and `market_fields.kelly_frac_raw` on the three calibration fills.
+- Docs: `docs/M3_CALIBRATION.md` step 2c and the drop table. No new number, no decision, threshold or size
+  moved. config/risk.toml unchanged, `live_enabled` false.
+
+## Task BD — Calibration intervals per edge tier and category; intercept CI; event-cluster share
+
+Status: done.
+
+Requested by Poly指挥 after Task BC (#67), done by grok-bot on dev@cfefc52. Report changes are additive only
+(BB's src/reflector_proposals.py reads report.json); the six missing Reflector rules are a later task.
+
+Finish when judged by_category / by_edge_tier groups carry bootstrap intervals, a sufficient forecast section
+carries an intercept interval and verdict, both sections report the largest-cluster share flagged under the
+existing minimums, and `python -m pytest` and guard --require-git pass offline.
+
+- `src/calibration.py`: `group_counts(..., intervals=True)` on `forecasts.by_category`, `trades.by_category`,
+  `trades.by_edge_tier`: `intervals` = Brier, ECE, slope, intercept with market-clustered bootstrap intervals
+  (`CALIBRATION_BOOTSTRAP_*`, fixed seed); trades add `brier_market`, `delta_brier(_ci)`, `realization(_ci)`.
+  Groups below `CALIBRATION_GROUP_MIN_*` get `intervals: null`.
+- Sufficient B section: `calibration.intercept_ci`, `ece_ci`, verdict `calibration_intercept`
+  (`positive_bias` / `negative_bias` / `no_clear_bias` / `intercept_not_estimable`).
+- `event_cluster` on both sections: largest cluster share; `insufficient` below the section minimums, else
+  `concentrated` above `CALIBRATION_MAX_CLUSTER_SHARE` (0.30, design 3, new M3-pending number in
+  src/thresholds.py and docs/THRESHOLDS.md only), else `ok`. No event id is recorded, so the cluster is the
+  market (condition_id): a lower bound on event concentration. Reported only.
+- Tests: `tests/test_calibration_intervals.py`; two exact-shape assertions in tests/test_calibration.py widened
+  for the added keys. Docs: `docs/M3_CALIBRATION.md` (Task BD subsection, Step 4 not-implemented list).
+- No decision, threshold, size or proposal moved. config/risk.toml unchanged, `live_enabled` false.
+
 ## Latest
 
-- 2026-10-09: Task BB: `python -m src.reflector_proposals` turns a calibration report.json into structured,
-  tightening-only proposals (jsonl + md + bus, `exchange_action: none`, cap 3/UTC day, never applied); none from an
-  `insufficient` section; loosening needs KEY; missing/corrupt report = exit 3/4, nothing written.
-- 2026-10-09: Task BA: paper fills record `market_mid`, `best_bid`, `best_ask`, `hours_to_expiry_at_entry`,
-  `kelly_fraction_used` (shadow, recorded only); null + `calibration_problems` when not computable; RiskGate
-  never reads them. `python -m src.ws_recorder --raw-books DIR` uses the m1_run raw writer and caps.
-- Task AZ (merged #60): offline calibration report `python -m src.calibration`. Task AY (merged #59): opt-in raw
-  book snapshots and `python -m src.ws_hash_check`.
+- 2026-10-09: Task BD: calibration report intervals per category and edge tier (Brier, ECE, slope, intercept;
+  trades also delta Brier and realization), intercept CI + verdict, `event_cluster` share flagged against
+  `CALIBRATION_MAX_CLUSTER_SHARE` (M3 pending). Report only; additive keys.
+- Task BC (merged #67): calibration q = `market_mid` (pre-BA fills fall back to `market_price`, labelled);
+  `kelly_frac_raw` recorded next to `kelly_fraction_used`; `fill_context` stamped at fill time and the report
+  drops operator CLI / gate-check fills as `no_book_context`. Recorded only; RiskGate and size never read them.
+- Task BB (merged #66): `python -m src.reflector_proposals` turns a calibration report.json into structured,
+  tightening-only proposals (never applied; loosening needs KEY). BC only adds report keys.
+- Task BA (merged #62): fill market context and `ws_recorder --raw-books`. Task AZ (merged #60): offline
+  calibration report.
 - pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
-- Open: switch the calibration baseline to `market_mid` after AZ and BA merge; run M1 with `--raw-books`
-  before deciding on hash enforcement; Operator choice on netting realized gains (AR). Queue empty after BA.
+- Open: run M1 with `--raw-books` before deciding on hash enforcement; Operator choice on netting realized
+  gains (AR); record an event id on forecasts / fills so `event_cluster` groups markets of one event; the six
+  missing Reflector rules. Queue empty after BD.

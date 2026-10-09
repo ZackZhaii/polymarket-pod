@@ -643,7 +643,11 @@ def test_a_loosened_risk_gate_rule_fails_e2e(repo):
     edit(repo / "src" / "risk_gate.py", 'reasons.append("edge_below_min")', "pass")
     code, lines, out = run(repo)
     assert code == 1, out
-    failed_only(lines, "e2e")
+    # Task BC: the fill the loosened gate lets through is one intent_builder would not build, so it has no
+    # kelly_frac_raw and fails the run's calibration invariant too (seen by every check that runs it).
+    failed_only(lines, "e2e", "halt", "heartbeat")
+    for check in ("e2e", "halt", "heartbeat"):
+        assert "foxtrot-thin-edge" in lines[check][1], (check, lines[check])
 
 
 def test_a_src_regression_that_fetches_quietly_fails_e2e(repo):

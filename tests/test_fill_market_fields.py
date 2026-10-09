@@ -28,14 +28,15 @@ def _fields(**kw):
 
 
 def test_the_field_list():
-    assert FIELDS == ("market_mid", "best_bid", "best_ask", "hours_to_expiry_at_entry", "kelly_fraction_used")
+    assert FIELDS == ("market_mid", "best_bid", "best_ask", "hours_to_expiry_at_entry", "kelly_fraction_used",
+                      "kelly_frac_raw")  # Task BC added kelly_frac_raw
 
 
 def test_all_fields_from_the_intent():
     fields, problems = _fields(best_bid=0.38, best_ask=0.4, end_date="2026-10-10T18:30:00Z", kelly_fraction_used=0.15)
     assert problems == []
     assert fields == {"market_mid": 0.39, "best_bid": 0.38, "best_ask": 0.4, "hours_to_expiry_at_entry": 30.5,
-                      "kelly_fraction_used": 0.15}
+                      "kelly_fraction_used": 0.15, "kelly_frac_raw": 0.1}
 
 
 def test_hours_can_be_negative_when_already_past():
@@ -98,12 +99,12 @@ def test_a_fill_carries_the_fields(paths):
 
 def test_a_fill_without_market_context_is_booked_and_flagged(paths):
     result = paper_ledger.commit_if_allowed(_ok_intent(best_bid=None, best_ask=float("nan"), kelly_fraction_used=None,
-                                                       end_date="tomorrow"), load_risk())
+                                                       kelly_frac_raw=None, end_date="tomorrow"), load_risk())
     assert result["allow"] is True  # never a veto
     fill = read_jsonl(paths["tmp"] / "paper.jsonl")[0]
     assert all(fill[k] is None for k in FIELDS)
     assert {"missing_best_bid", "invalid_best_ask", "missing_market_mid", "invalid_hours_to_expiry_at_entry",
-            "missing_kelly_fraction_used"} <= set(fill["calibration_problems"])
+            "missing_kelly_fraction_used", "missing_kelly_frac_raw"} <= set(fill["calibration_problems"])
 
 
 def test_the_intent_builder_path_records_the_books_top_and_shadow_kelly(paths):
