@@ -172,6 +172,20 @@ The resume is written to the bus first (`type: resume`, `from: Operator`, `to: S
 `approved_by`); if that fails nothing is released. A market resume never lifts a global halt, and a global resume
 does not lift a market halt. Bots never run `resume`. No exchange action anywhere.
 
+## Resolutions snapshot (Task AN)
+
+M3 calibration step 1. Design: `docs/M3_CALIBRATION.md`. Read-only; no bus, no order, no key.
+
+```bash
+python -m src.resolutions
+```
+
+Walks Gamma `/markets/keyset?closed=true`. A row lands in gitignored `data/resolutions.jsonl` only after the
+market has been closed 48 h (`closedTime`, `RESOLUTION_HOLD_HOURS`) with a unique 1.0/0.0 winner and every
+required field present. Missing fields skip that row. Incomplete paging writes nothing (exit 3). Paper-pin
+drift writes nothing (exit 4). Calibration consumers must filter `uma_checked=true`.
+
+
 ## Git
 
 `git status` does not list `.env`. Ignored paths include `.env`, `data/`, and `logs/`.

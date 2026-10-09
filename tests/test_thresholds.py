@@ -64,6 +64,8 @@ EXPECTED = {
     "DATA_API_TRADES_MIN_SHARES": 0.01,
     "DATA_API_MAX_LAG_S": 120.0,
     "DATA_API_IDENTITY_TOL_USDC": 1e-6,
+    # Task AN: M3 settlement snapshot hold (not coupled to ENDGAME_WINDOW_HOURS).
+    "RESOLUTION_HOLD_HOURS": 48.0,
 }
 
 # Old import paths that callers and tests use; each must stay the very same object.
@@ -94,6 +96,7 @@ REEXPORTS = {
     "sports_devig.ASSUMED_SLIPPAGE": "SPORTS_DEVIG_ASSUMED_SLIPPAGE",
     "paper_ledger.OPEN_EPS": "LEDGER_OPEN_EPS",
     "reflector.MAX_PER_UTC_DAY": "REFLECTOR_MAX_PER_UTC_DAY",
+    "resolutions.RESOLUTION_HOLD_HOURS": "RESOLUTION_HOLD_HOURS",
 }
 
 M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
@@ -259,6 +262,7 @@ def test_relations_hold():
         ("M1_REST_MATCH_WINDOW_S = 30.0", "M1_REST_MATCH_WINDOW_S = 0.0"),
         ("M1_MIN_REST_MATCHED = 50", "M1_MIN_REST_MATCHED = 1000"),
         ("M1_REST_EVERY_S = 600.0", "M1_REST_EVERY_S = 7200.0"),
+        ("RESOLUTION_HOLD_HOURS = 48.0", "RESOLUTION_HOLD_HOURS = 0.0"),
     ],
 )
 def test_an_inconsistent_edit_fails_at_import(line, replacement):

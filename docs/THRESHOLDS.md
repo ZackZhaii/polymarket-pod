@@ -54,6 +54,7 @@ proposals waiting for the user's decision at M2. Task AC moved no value and chan
 | `DATA_API_TRADES_MIN_SHARES` | `0.01` | shares | Data API v2 `/v2/trades` smallest served fill (`filter_amount` default; 0 means the same). A ledger fill below it cannot be verified: `ledger_fill_below_data_api_trade_floor` (fails). Contract fact, not a choice. | `src/thresholds.py` (used by `src/reconcile.py`) | Task AK, docs.polymarket.com Data API v2 openapi | yes |
 | `DATA_API_MAX_LAG_S` | `120.0` | s | Reconciler reads `/v2/status` first each round; snapshot `age_seconds` + `serving.lag_seconds` above this (or either missing/null, or the chain not polygon/137) fails closed (`status_lag_too_large`, exit 3). | `src/thresholds.py` (used by `src/reconcile.py`) | Task AK, Poly研究 research_dataapi_ws_m2.md | yes |
 | `DATA_API_IDENTITY_TOL_USDC` | `1e-06` | USDC | Each `/v2/positions` row must satisfy the documented identities (`current_value = current_size * current_price`, `unrealized_pnl = current_value - entry_cost_usdc`, `total_pnl = realized_pnl + unrealized_pnl`, `total_cost_usdc = entry_cost_usdc + entry_fees_usdc`) within this, or it is malformed (exit 3). Live rows on 2026-10-09 were within 1.2e-10. | `src/thresholds.py` (used by `src/reconcile.py`) | Task AK, Poly研究 research_dataapi_ws_m2.md | yes |
+| `RESOLUTION_HOLD_HOURS` | `48.0` | h | A closed market is snapshotted only after it has been closed this long (`closedTime`). Exactly 48 h passes. Same number as `ENDGAME_WINDOW_HOURS` by coincidence; they are not coupled. | `src/thresholds.py`; re-exported as `resolutions.RESOLUTION_HOLD_HOURS` | Task AN | no |
 
 Relations checked when `src/thresholds.py` is imported (an explicit `RuntimeError`, not `assert`):
 `SENTINEL_STALE_S == MAX_BOOK_AGE_S`, `PAPER_CYCLE_STALE_AFTER_S == MAX_BOOK_AGE_S`,
@@ -66,7 +67,8 @@ Relations checked when `src/thresholds.py` is imported (an explicit `RuntimeErro
 both M1 rates in `[0, 1)`, `0 < M1_REST_MATCH_WINDOW_S <= WS_ROW_REFRESH_S`, and a full run can collect enough REST
 samples: `M1_MIN_RUN_S / M1_REST_EVERY_S * M1_REST_ASSETS >= M1_MIN_REST_MATCHED`; reconcile (Task AK):
 `0 < RECONCILE_SHARES_TOL < DATA_API_TRADES_MIN_SHARES <= DATA_API_POSITIONS_DUST_SHARES` and
-`LEDGER_OPEN_EPS <= RECONCILE_SHARES_TOL`, `DATA_API_MAX_LAG_S > 0`, `DATA_API_IDENTITY_TOL_USDC > 0`.
+`LEDGER_OPEN_EPS <= RECONCILE_SHARES_TOL`, `DATA_API_MAX_LAG_S > 0`, `DATA_API_IDENTITY_TOL_USDC > 0`,
+`RESOLUTION_HOLD_HOURS > 0` (not equal to `ENDGAME_WINDOW_HOURS`; the shared 48 is coincidence).
 `src/sentinel.py` keeps its own `SENTINEL_STALE_S != MAX_BOOK_AGE_S` guard as well.
 
 ## Operational limits (stay in their modules)

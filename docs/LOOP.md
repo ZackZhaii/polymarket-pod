@@ -837,10 +837,34 @@ is a global halt, only an Operator resume releases one, the e2e gate and guard p
 - No new threshold (no M2 addition), no URL, risk.toml unchanged. Docs: PROTOCOL.md, COORDINATION (Operator bus
   exception, #26), PHASE0_RUN "Halts and resume".
 
+## Task AN — M3 calibration step 1: read-only settlement snapshot (docs/M3_CALIBRATION.md, src/resolutions.py)
+
+Status: done.
+
+Requested by Poly指挥 (M3 calibration prerequisite step 1); done by grok-build-local. The Poly指挥 design
+draft was not in the OpenClaw workspace; `docs/M3_CALIBRATION.md` records the dispatch. Letter AL is merged
+(PR #40). Letter AM is a local in-progress worktree, so this PR uses AN.
+
+Finish when closed Gamma markets are snapshotted only after a 48 h hold, required fields fail closed, offline
+tests pass, and `config/risk.toml` is unchanged.
+
+- `src/resolutions.py` walks public Gamma `/markets/keyset?closed=true&order=closedTime` through
+  `scanner.fetch_all_markets(..., base_url=)` (no new host). `closedTime` must be a zoned ISO time
+  (`expiry_rule.parse_end_date`); `endDate` is never the close clock. Write `data/resolutions.jsonl` (gitignored)
+  only when `now - closedTime >= RESOLUTION_HOLD_HOURS` (48 h, boundary passes) and every required field is
+  present: `condition_id`, unique 1.0/0.0 `outcome_prices_final`, version-aware `winning_token_id`, `closed_ts`,
+  `snapshot_ts`, `status`, `uma_checked`. Missing `umaResolutionStatus` skips the row. `uma_checked` is true only
+  for exact `resolved`; a unique winner with another UMA status is written as `status=closed`.
+- Incomplete paging writes nothing (exit 3). Paper-pin drift writes nothing (exit 4) and does not fetch. A
+  complete empty universe is exit 0. Dedup by `condition_id`. No bus, no fill, no order.
+- `RESOLUTION_HOLD_HOURS = 48.0` in `src/thresholds.py` (re-exported; not coupled to `ENDGAME_WINDOW_HOURS`;
+  not M2 pending). Tests: `tests/test_resolutions.py`. Docs: `docs/M3_CALIBRATION.md`, `docs/PHASE0_RUN.md`.
+
 ## Latest
 
-- 2026-10-09: Task AL done by grok-bot (requested by Poly指挥, Poly哨兵 design gaps 1/3/7/8/10, backlog #26). Halts are persisted (`src/halt_store.py`) and obeyed.
-- RiskGate, Maker and paper_cycle veto a halted market or everything under a global halt; a bad halt file or `logs/HALT` is global; `invalid_risk_state` and Executor ledger halts are global.
-- `resume` bus type only from Operator (approved_by + halt_ref); a market resume cannot lift a global halt; release only via `python -m src.halt_store resume`. Markets without a book row are stale.
-- e2e golden `halt_consumer` + guard check `halt`; `python -m pytest` passed offline (1771 passed; on Windows 1767 passed, 4 symlink tests skipped); guard --require-git 9/9 PASS. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty (AK merged in #39 and merged into this branch). AL adds no M2 number; AK's five stay pending. Heartbeat (gap 2) is a later task.
+- 2026-10-09: Task AN done by grok-build-local (requested by Poly指挥). M3 calibration step 1: read-only settlement snapshot.
+- `src/resolutions.py` walks Gamma `/markets/keyset?closed=true`, holds 48 h after `closedTime`, writes `data/resolutions.jsonl` with condition_id, winning_token_id, outcome_prices_final, closed_ts, snapshot_ts, status, uma_checked. Missing fields skip the row.
+- Incomplete paging writes nothing (exit 3); pin drift writes nothing (exit 4). No bus, no order, no new URL host. Design: `docs/M3_CALIBRATION.md`.
+- `python -m pytest` passed offline. `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. Letter AN (AL merged in #40; AM is a local in-progress worktree). `RESOLUTION_HOLD_HOURS=48` is not M2 pending.
+

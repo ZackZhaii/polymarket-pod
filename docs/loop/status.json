@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T06:57:34Z",
+  "ts": "2026-10-09T12:00:00Z",
   "live_enabled": false,
-  "last_done": "AL",
+  "last_done": "AN",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AL (halt consumer: src/halt_store.py persists Sentinel/Executor halts per market or globally; RiskGate, the Maker and paper_cycle veto the halted scope; a bad halt file or logs/HALT is a global halt; invalid_risk_state and Executor ledger halts escalate to global; halt record first, atomic quote cancel, logs/HALT on any failure; resume bus type only from Operator with approved_by and halt_ref, a market resume cannot lift a global halt, release only by python -m src.halt_store resume; markets without a book row are stale; e2e halt scenarios and guard check halt; backlog #26) done by grok-bot. Task letters after Z are AA, AB, AC, AD, AE, AF, AG, AH, AI, AJ, AK, AL. AL adds no M2 number. AK (Data API v2 reconciliation, backlog #25) done by grok-bot and merged into dev in #39. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S and the M1 criteria M1_MIN_RUN_S, M1_MIN_COVERAGE, M1_MAX_RECONNECTS, M1_MAX_GAP_RESYNCS_PER_ASSET, M1_REST_MATCH_WINDOW_S, M1_MIN_REST_MATCHED, M1_MAX_TOP_MISMATCH_RATE, M1_MAX_REST_UNMATCHED_RATE, and AK's RECONCILE_SHARES_TOL, DATA_API_POSITIONS_DUST_SHARES, DATA_API_TRADES_MIN_SHARES, DATA_API_MAX_LAG_S, DATA_API_IDENTITY_TOL_USDC. No open todo. No live gate."
+  "note": "AN (M3 calibration step 1: read-only src/resolutions.py on Gamma /markets/keyset?closed=true, 48 h closedTime hold, fail-closed fields, data/resolutions.jsonl; docs/M3_CALIBRATION.md) done by grok-build-local. Task letters after Z are AA, AB, AC, AD, AE, AF, AG, AH, AI, AJ, AK, AL, AN (AM is a local in-progress worktree). AL merged in #40. M2 pending unchanged. RESOLUTION_HOLD_HOURS=48 is not M2 pending. No open todo. No live gate."
 }
