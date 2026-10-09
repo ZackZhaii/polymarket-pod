@@ -22,6 +22,7 @@ Event matrix (design table; ``alert`` = one line in logs/alerts.jsonl plus a Sen
 ==================  =========================================================================
 global halt         ws_recorder / m1_run exit 4 or crash; endgame_scan exit 4; loop_claim exit 2;
                     scanner / ws_recorder / m1_run exit 6 and paper_cycle exit 1 (pin drift, Task AS);
+                    resolutions exit 6 (pin drift) and 5 (bad snapshot clock) (Task AV);
                     ws_recorder / m1_run heartbeat stale (HEARTBEAT_RECORDER_TIMEOUT_S);
                     halt_consumer heartbeat stale (HEARTBEAT_CONSUMER_TIMEOUT_S);
                     paper_cycle heartbeat stale for HALT_FACTOR x its timeout;
@@ -31,7 +32,7 @@ global halt         ws_recorder / m1_run exit 4 or crash; endgame_scan exit 4; l
 market halt         one asset with RECORDER_GAP_RESYNC_HALT_COUNT gap resyncs in
                     RECORDER_ESCALATION_WINDOW_S (its market; also an alert)
 alert               scanner exit 1 / 2; scanner exit 3 SCANNER_INCOMPLETE_CONSECUTIVE times in a
-                    row; scanner / endgame_scan / loop_claim start with no finish after
+                    row; scanner / endgame_scan / loop_claim / resolutions start with no finish after
                     SCANNER_HANG_S; no successful scan for SCANNER_MAX_SUCCESS_AGE_S; m1_run exit
                     1 / 2 / 3; m1_rest heartbeat stale (HEARTBEAT_REST_TIMEOUT_S) or non-zero exit;
                     paper_cycle heartbeat stale (HEARTBEAT_PAPER_CYCLE_TIMEOUT_S) or crash;
@@ -116,6 +117,7 @@ PROC_SPECS: dict[str, ProcSpec] = {
     "scanner": ProcSpec(SCANNER_HANG_S, ALERT, clock="started_at"),
     "endgame_scan": ProcSpec(SCANNER_HANG_S, ALERT, clock="started_at"),
     "loop_claim": ProcSpec(SCANNER_HANG_S, ALERT, clock="started_at"),
+    "resolutions": ProcSpec(SCANNER_HANG_S, ALERT, clock="started_at"),  # Task AV
     "paper_cycle": ProcSpec(HEARTBEAT_PAPER_CYCLE_TIMEOUT_S, ALERT,
                             halt_after_s=HEARTBEAT_PAPER_CYCLE_TIMEOUT_S * HEARTBEAT_PAPER_CYCLE_HALT_FACTOR),
     "halt_consumer": ProcSpec(HEARTBEAT_CONSUMER_TIMEOUT_S, GLOBAL),
@@ -130,6 +132,10 @@ EXIT_EVENTS: dict[tuple[str, int], str] = {
     ("loop_claim", 2): GLOBAL,
     # Task AS (gaps 4, 5): refused to start / stopped on risk.toml pin drift (docs/EXIT_CODES.md).
     ("scanner", 6): GLOBAL, ("ws_recorder", 6): GLOBAL, ("m1_run", 6): GLOBAL, ("paper_cycle", 1): GLOBAL,
+    # Task AV: resolutions' old exit 4 split. 6 = pin drift (as scanner); 5 = the snapshot clock is not a
+    # zoned timestamp. No design row for the clock; the stricter action (a broken clock, like a heartbeat
+    # with a bad time, is a global halt).
+    ("resolutions", 5): GLOBAL, ("resolutions", 6): GLOBAL,
 }
 CRASH_IS_GLOBAL = frozenset({"ws_recorder", "m1_run", "halt_consumer"})
 

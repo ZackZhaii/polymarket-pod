@@ -144,13 +144,16 @@ For every entry point:
 
 ## `src/resolutions.py`
 
-`python -m src.resolutions`: M3 resolution snapshot (Task AN). No heartbeat.
+`python -m src.resolutions`: M3 resolution snapshot (Task AN). Start/finish heartbeat (Task AV).
+
+Task AV split the old exit 4 (`EXIT_PIN`, which meant pin drift or a bad snapshot clock); 4 is retired.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
 | 0 | `EXIT_OK` | snapshot written | - |
-| 3 | `EXIT_INCOMPLETE` | Gamma paging incomplete: nothing written | - |
-| 4 | `EXIT_PIN` | refused: paper pins drifted (since Task AS also the risk file sha / any key, global halt recorded) or the snapshot clock is not a zoned timestamp; nothing written | - |
+| 3 | `EXIT_INCOMPLETE` | Gamma paging incomplete: nothing written | alert |
+| 5 | `EXIT_BAD_CLOCK` | refused: the snapshot clock is not a zoned ISO timestamp; nothing fetched or written | global halt |
+| 6 | `EXIT_PIN_DRIFT` | refused to start: paper pins drifted (config/risk.toml file sha / any key, global halt recorded, or the in-memory podlib PINS); nothing fetched or written | global halt |
 
 ## `src/scanner.py`
 
