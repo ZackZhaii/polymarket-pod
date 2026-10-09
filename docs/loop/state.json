@@ -420,6 +420,15 @@
       "note": "Requested by Poly指挥 after AW (#51): the hash could not be validated because M1 kept no levels. Done by grok-bot. Default behaviour unchanged (flag off); with the flag a run uses up to 256 MiB more disk.",
       "done_at": "2026-10-09T12:45:25Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AZ",
+      "status": "done",
+      "title": "Offline tests for the intent_builder fail-closed branches no test asserted (invalid_outcome_index, invalid_book_levels, zero_notional, kelly_non_positive) and their boundary values",
+      "finish": "tests/test_intent_builder_gaps.py (new; tests only, no src/ change). Gap: the reason codes invalid_outcome_index, invalid_book_levels, zero_notional and kelly_non_positive are in intent_builder.REASON_ORDER and are appended by the builder, but no test in tests/ asserted any of them. Covered: an outcome index that is not 0 or 1 (2, 3, -1, True, False, None, 1.0, \"1\") is vetoed and never read as outcome 0 (both edges stay -1), in build_order_intent and in a blend member; a usable book with a non-ascending ask ladder, a level at 1.0 or a level with no size is invalid_book_levels and never insufficient_depth, and a books.jsonl row whose top of book is incomplete cannot be walked; a level outside (0 < price < 1, size > 0) (NaN, inf, 0, negative, string, bool, NaN size) and a non-positive or non-finite walk budget (0, -1, NaN, ±inf, True, \"10\", None) can never fill; a drifted max_order_pct of 0 reports zero_notional and sizes nothing (shares/size_usd absent from detail), the pinned 1% clip does not; a shadow Kelly whose all-in cost is unusable reports kelly_non_positive with kelly_size_pct = kelly_size_usd = 0 and keeps the reported size at the 1% clip; a probability interval touching 0 or 1 is model_prob_out_of_range; a blend member with an unsupported source (\"\", maker, blend, Scanner, endgame) is unsupported_signal_source. 10 tests / 52 parametrised cases, all offline (pure functions, no clock read, no file write, no network, no order). No bug found: every branch already failed closed. No new number, no behaviour change, config/risk.toml unchanged, live_enabled false. Environment note: with pytest's --basetemp inside the worktree, tests/test_guard.py::test_exit_codes_for_usage_and_no_root and tests/test_m1_run.py::test_git_state_reads_a_real_repo_or_says_unknown fail because git resolves a tmp dir inside the worktree to this repo; neither test reads tests/, and the whole suite (2763 collected) is green with a basetemp outside the worktree.",
+      "note": "Test-gap fill by PolyPod-flash-tests (deepseek-flash); tests only, no behaviour change.",
+      "done_at": "2026-10-09T13:20:00Z",
+      "surface": "grok-bot"
     }
   ]
 }
