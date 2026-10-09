@@ -348,6 +348,15 @@
       "note": "Requested by Poly指挥 (ruling on Poly哨兵's sentinel design; queue: heartbeat after AK/AL/AO); done by grok-bot. AQ (private-key scan, #44) ran in parallel and was merged into this branch before the PR. Behaviour changes: once the resident Sentinel has run, stopping it halts every consumer until an Operator resume; a Reconciler failure is now a global halt; a dead process's stale heartbeat re-halts after each resume until it is restarted or the Operator removes its heartbeat file and marker. No halt_consumer process exists yet (its spec is checked only if it beats). Later: resume precondition signal, WS hash/tick resync, the Sentinel tick running the secret scan.",
       "done_at": "2026-10-09T08:31:11Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AR",
+      "status": "done",
+      "title": "daily_loss counts realized losses: RiskGate's max_daily_loss compares today's (UTC) booked fees plus gross realized losses with the cap, tightening only (backlog #4, SPEC_signal_to_intent inconsistency 12)",
+      "finish": "src/daily_loss.py replays the counted ledger rows per leg (market + token_id) at average cost in ledger order; a closing fill's realized loss belongs to the UTC day of its ts; daily_loss_usd = today's fees + today's gross realized losses (gains reported, never offset); a missing notional is valued at the worst price; a counted row with an unparseable ts, a bad side or a non-finite / negative shares, notional or fee fails closed (invalid_risk_state, global halt). paper_ledger.load_state uses it and also returns daily_fees_usd, daily_realized_loss_usd, daily_realized_gain_usd. e2e gate cases (golden daily_loss, only via --update-golden). No new threshold; max_daily_loss_pct and config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (backlog #4); done by grok-bot. Policy left to the Operator: netting realized gains against losses (not done: counting losses only is the tighter default). Newly fail-closed: counted rows with an unparseable ts, a side other than buy/sell, or negative shares / notional / fee (they used to be ignored or, for a negative fee, lowered the sum).",
+      "done_at": "2026-10-09T09:00:57Z",
+      "surface": "grok-bot"
     }
   ]
 }

@@ -110,8 +110,8 @@ def test_endgame_emits_a_signal_only(run):
 def test_every_intent_starts_from_a_newsforecaster_signal(run):
     forecasts = [r for r in run["detail"]["bus"] if r["from"] == "NewsForecaster"]
     # 7 intents, the replay commit, two corrupted-ledger commits, two Task AL halt-consumer commits,
-    # four Task AP heartbeat-halt commits (all vetoed)
-    assert len(forecasts) == 16
+    # four Task AP heartbeat-halt commits (all vetoed), six Task AR daily-loss cases (one each)
+    assert len(forecasts) == 22
     assert all(r["to"] == "RiskGate" and r["payload"]["order"] is False for r in forecasts)
 
 
@@ -552,3 +552,27 @@ def test_the_start_ledger_is_a_valid_ledger():
     read = ledger_store.parse_ledger((FIXTURES / "ledger_start.jsonl").read_bytes().replace(b"\r\n", b"\n"))
     assert read.problems == [] and ledger_store.verify(read) == []
     assert read.ids == ["e2e-start-0001", "e2e-start-0002", "e2e-start-0003"]
+
+
+# ---------------------------------------------------------------- Task AR: daily loss
+
+def test_daily_loss_cases_by_meaning(run):
+    section = run["actual"]["daily_loss"]
+    assert set(section) == {"a_loss_closed_today", "b_loss_closed_yesterday", "c_gain_does_not_offset",
+                            "d_below_cap", "e_fees_plus_loss", "f_unparseable_ts"}
+    for name in ("a_loss_closed_today", "c_gain_does_not_offset", "e_fees_plus_loss"):
+        case = section[name]
+        assert (case["allow"], case["reasons"], case["booked_rows"], case["halted"]) == (
+            False, ["max_daily_loss"], 0, False), name
+    assert section["a_loss_closed_today"]["state"]["daily_realized_loss_usd"] == 31.0
+    assert section["b_loss_closed_yesterday"]["state"]["daily_loss_usd"] == 0.0
+    assert section["c_gain_does_not_offset"]["state"]["daily_realized_gain_usd"] == 40.0
+    assert section["c_gain_does_not_offset"]["state"]["daily_loss_usd"] == 31.0
+    assert section["e_fees_plus_loss"]["state"]["daily_fees_usd"] == 0.2
+    for name in ("b_loss_closed_yesterday", "d_below_cap"):
+        assert (section[name]["allow"], section[name]["reasons"]) == (True, []), name
+    f = section["f_unparseable_ts"]
+    assert (f["allow"], f["reasons"], f["halted"], f["ledger_unchanged"]) == (False, ["invalid_risk_state"], True, True)
+    assert f["state"]["daily_loss_usd"] is None
+    assert [h["scope"] for h in f["global_halts"]] == ["global"]
+    assert not [p for p in run["problems"] if p.startswith("daily_loss")]
