@@ -28,6 +28,7 @@ SENTINEL_STATE_PATH = LOG_DIR / "sentinel_stale.json"
 
 # Local paper bankroll. Not a wallet. Sizing never exceeds the 1% clip.
 from src.thresholds import PAPER_EQUITY_USD  # noqa: E402 - Task AC: value in src/thresholds.py
+from src.secret_scan import check_message as _secret_check  # noqa: E402 - Task AQ: bus secret filter
 BUS_TYPES = frozenset({"signal", "veto", "fill", "proposal", "halt", "resume"})
 # Task AL: ``resume`` lifts one halt. Only the Operator (the human, via ``python -m src.halt_store
 # resume``) may send it, and "Operator" may send nothing else: it is not a bus role otherwise.
@@ -167,6 +168,9 @@ def bus(
         "market": market,
         "payload": payload,
     }
+    # Task AQ (Sentinel design gap 9): a message holding a private key, mnemonic or credential value
+    # is never written; a global halt is recorded and SecretRefused raised (nothing echoed).
+    _secret_check(message)
     append_jsonl(path or BUS_PATH, message)
     return message
 

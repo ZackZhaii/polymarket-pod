@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T07:41:29Z",
+  "ts": "2026-10-09T08:16:45Z",
   "live_enabled": false,
-  "last_done": "AO",
+  "last_done": "AQ",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AO (signal -> OrderIntent: pure, tightening-only src/intent_builder.py; edge bit-for-bit RiskGate's; Kelly shadow; e2e shadow gate) done by grok-bot on #43; merged origin/dev which now includes AN (#42 M3 settlement snapshot at f467f1b), AM (#41 CI + docs/DECISIONS.md), AK (#39), AL (#40). Task letters after Z are AA..AL, AM, AN, AO. RESOLUTION_HOLD_HOURS=48 is not M2 pending. M2 pending includes AK reconcile tolerances and AO's INTENT_ASSUMED_SLIPPAGE, INTENT_TTL_S, MAX_SIGNAL_AGE_*_S, MAX_SOURCE_LOGIT_GAP. No open todo. No live gate."
+  "note": "AQ (secret-string scan, Sentinel design gap 9: src/secret_scan.py key-name context / PEM private key / 12+ BIP39 words, never a bare 0x+64hex; podlib.bus() refuses a message with a hit and records a global halt; python -m src.secret_scan scans logs/ and halts globally on a hit or unreadable file; guard check 10 secret_scan over tracked files and logs/ with a canary self-test; only file:line, rule, length and a sha256 prefix are ever reported) done by grok-bot. AP is reserved for the parallel heartbeat task. Task letters after Z are AA..AO, AP (heartbeat), AQ. M2 pending adds SECRET_VALUE_MIN_LEN, MNEMONIC_MIN_WORDS, SECRET_HASH_PREFIX_CHARS to the AK reconcile tolerances, AO's INTENT_ASSUMED_SLIPPAGE, INTENT_TTL_S, MAX_SIGNAL_AGE_*_S, MAX_SOURCE_LOGIT_GAP and the earlier list. No open todo. No live gate."
 }
