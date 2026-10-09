@@ -278,6 +278,7 @@ class Outcome:
     rows: list[dict[str, Any]] = field(default_factory=list)
     resyncs: list[tuple[str, str]] = field(default_factory=list)
     counts: Counter = field(default_factory=Counter)
+    raw_books: list[dict[str, Any]] = field(default_factory=list)  # Task AY: book frames as received
 
 
 class _Reject(Exception):
@@ -316,6 +317,7 @@ class BookCore:
     def __init__(self, assets: Iterable[str], meta: dict[str, dict[str, Any]] | None = None) -> None:
         self.books = {asset: AssetBook(asset) for asset in assets}
         self.meta = meta or {}
+        self.capture_raw = False  # Task AY: keep every subscribed asset's book frame (Outcome.raw_books)
 
     # -- state ---------------------------------------------------------------------------------
 
@@ -447,6 +449,8 @@ class BookCore:
         book = self._subscribed(message, out)
         if book is None:
             return
+        if self.capture_raw:  # before any check: a rejected snapshot is evidence for the hash too
+            out.raw_books.append(message)
         try:
             stamp = _exchange_time(message.get("timestamp"))
             if stamp is None:
@@ -1003,6 +1007,7 @@ class Recorder:
         stop: Callable[[], bool] | None = None,
         on_event: Callable[[dict[str, Any]], None] | None = None,
         heartbeat: Any = None,
+        raw_books: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         """``stop`` (Task AI): polled at least every WS_STOP_POLL_S; once true the run ends like a deadline
         (graceful shutdown). ``on_event`` (Task AI) receives one dict per connect, disconnect, backoff,
@@ -1010,7 +1015,10 @@ class Recorder:
         recorder behaves exactly as in Task AG.
         ``heartbeat`` (Task AP): a src.heartbeat.Heartbeat; beaten at least every
         HEARTBEAT_RECORDER_EVERY_S from the main loop, also while backing off (state ``paused``), with
-        the gap-13 escalation counts in its progress (written at once when a count is reached)."""
+        the gap-13 escalation counts in its progress (written at once when a count is reached).
+        ``raw_books`` (Task AY, opt-in): receives ``{"ts", "asset_id", "frame"}`` for every ``book`` frame of a
+        subscribed asset, the parsed frame as received (all levels, the hash, min_order_size / tick_size when
+        sent), whether or not it was applied. Nothing about rows, resyncs or freshness changes."""
         check_market_url(url)
         runtime = _number(max_runtime_s)
         if runtime is None or runtime <= 0:
@@ -1030,6 +1038,8 @@ class Recorder:
         self.meta = dict(meta or {})
         self.heartbeat = heartbeat
         self.escalation = Escalation(monotonic=self.monotonic)
+        self.raw_books = raw_books
+        self.core.capture_raw = raw_books is not None
 
     def _stopped(self) -> bool:
         return self.stop is not None and bool(self.stop())
@@ -1052,6 +1062,9 @@ class Recorder:
             self.heartbeat.beat(state, self.progress(), force=force)
 
     def _write(self, out: Outcome, before: set[str] | None = None) -> None:
+        if self.raw_books is not None:
+            for frame in out.raw_books:
+                self.raw_books({"ts": self.now(), "asset_id": frame.get("asset_id"), "frame": frame})
         for row in out.rows:
             self.sink.write(row)
             self.report.rows += 1

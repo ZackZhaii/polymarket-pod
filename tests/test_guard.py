@@ -824,7 +824,7 @@ def test_a_missing_word_list_fails_secret_scan(repo):
 def test_the_exit_code_registry_passes_on_the_real_repo():
     result = results(ROOT)["exit_codes"]
     assert result.status == guard.PASS, result.reason
-    assert "19 entry points" in result.reason  # Task AZ: + src/calibration.py
+    assert "20 entry points" in result.reason  # Task AY: src/ws_hash_check.py; Task AZ: src/calibration.py
 
 
 def test_an_undocumented_exit_code_fails_only_that_check(repo):

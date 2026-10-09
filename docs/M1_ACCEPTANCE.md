@@ -41,6 +41,14 @@ the log and pid files sit next to it, not inside. Defaults are `--top 5` markets
 the assets instead of taking the top of the latest scan, use `--assets TOKEN [TOKEN ...]`
 (metadata still comes from `data/markets.jsonl`).
 
+Optional (Task AY): `--raw-books` also saves every `book` frame of a recorded asset, as received (all
+levels, the hash, `min_order_size` / `tick_size` when sent), to `raw_books/raw_books-NNNNNN.jsonl`, for
+validating the snapshot hash offline with `python -m src.ws_hash_check <run dir>` (read-only; exit 0 only
+when every saved frame matched). Off by default. Capped at `WS_RAW_BOOK_FILE_MAX_BYTES` (16 MiB) per file
+and `WS_RAW_BOOK_RUN_MAX_BYTES` (256 MiB) per run; past the run cap frames are dropped and counted
+(manifest `raw_books`, one `raw_books_capped` event) and the recording goes on. The acceptance report
+ignores this directory.
+
 While it runs:
 
 ```bash

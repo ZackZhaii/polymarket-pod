@@ -202,6 +202,17 @@ Task AV split the old exit 4 (`EXIT_PIN`, which meant pin drift or a bad snapsho
 | 2 | `EXIT_USAGE` | usage error | - |
 | 3 | `EXIT_RAISED` | --once raised a halt or an alert | - |
 
+## `src/ws_hash_check.py`
+
+`python -m src.ws_hash_check <dir>`: offline, read-only recomputation of the WS snapshot hash over raw frames saved
+by `src.m1_run --raw-books` (Task AY). No heartbeat, no network, writes nothing.
+
+| Code | Name | Meaning | Sentinel |
+|---|---|---|---|
+| 0 | `EXIT_ALL_MATCH` | at least one frame checked and every frame matched | - |
+| 1 | `EXIT_NOT_VALIDATED` | no frame, or not every frame matched (mismatch, incomplete, absent, uncomputable or unreadable) | - |
+| 2 | `EXIT_USAGE` | usage error (bad arguments, no such path, a file that cannot be read) | - |
+
 ## `src/ws_recorder.py`
 
 `python -m src.ws_recorder`: WS market-channel book recorder. Heartbeat every 10 s.
