@@ -1,5 +1,8 @@
 """Sentinel stub. Emits halt only and cancels local paper quotes. No CLOB call.
 
+Task AL: every halt is persisted first (src/halt_store.py) and read by RiskGate, the Maker and
+paper_cycle until the Operator resumes it; see halt() for the write order and fallback.
+
 Task Z (COORDINATION backlog #9): StaleWatch counts consecutive stale or failed book checks per
 market and escalates with a paper ``halt`` once SENTINEL_STALE_CONSECUTIVE (2) are in a row.
 A fresh check resets the streak. Missing, unparseable, non-finite or future book timestamps,
@@ -48,27 +51,76 @@ def halt(
     market: str = "",
     bus_path: Path | None = None,
     quotes_path: Path | None = None,
+    scope: str | None = None,
+    source: str = "Sentinel",
+    to: str = "Executor",
+    extra: dict | None = None,
+    emit=None,
 ) -> dict:
+    """Halt ``market`` (or everything when ``market`` is empty or ``scope="global"``). Never raises for I/O.
+
+    Task AL (Sentinel design gap 8), in this order:
+    1. the halt record goes to logs/halt_state.json first (halt_store.record_halt), so RiskGate, the
+       Maker and paper_cycle block the scope even if a later step fails;
+    2. open paper quotes in scope are cancelled with an atomic rewrite (temp file + os.replace);
+    3. the ``halt`` bus line is written.
+    If step 1 could not use the state file, or step 2 or 3 fails, logs/HALT is written (a global
+    halt, fail closed) and the error is reported in the returned message instead of being raised
+    into paper_cycle. The halt is released only by an Operator resume (src/halt_store.py).
+    ``emit`` replaces podlib.bus for the bus line (the caller's own bus writer, same arguments).
+    """
+    from src import halt_store  # local: halt_store imports podlib only; keeps this module light
+
     cleaned = " ".join(reason.split())
     if not cleaned:
         raise ValueError("halt reason required")
+    market = str(market or "")
+    if scope is None:
+        scope = halt_store.SCOPE_MARKET if market else halt_store.SCOPE_GLOBAL
     ts = utc_now()
-    cancelled = cancel_open_quotes(quotes_path or QUOTES_PATH, ts, market)
-    return bus(
-        "Sentinel",
-        "Executor",
-        "halt",
-        market,
-        {
-            "reason": cleaned,
-            "paper_quotes_cancelled": cancelled,
-            "exchange_action": "none",
-        },
-        path=bus_path,
-    )
+    record = halt_store.record_halt(scope=scope, market=market if scope == halt_store.SCOPE_MARKET else "",
+                                    reason=cleaned, source=source, ts=ts)
+    failures: list[str] = []
+    if record.get("persisted") != halt_store.PERSISTED_STATE:
+        failures.append(f"halt_record_{record.get('persisted')}")
+    try:
+        cancelled = cancel_open_quotes(quotes_path or QUOTES_PATH, ts,
+                                       market if scope == halt_store.SCOPE_MARKET else "")
+    except Exception as exc:  # noqa: BLE001 - reported and escalated below, never raised into the caller
+        cancelled = 0
+        failures.append(f"cancel_failed:{type(exc).__name__}")
+    payload = {
+        "reason": cleaned,
+        "scope": scope,
+        "halt_id": record.get("id"),
+        "paper_quotes_cancelled": cancelled,
+        "exchange_action": "none",
+    }
+    if extra:
+        payload.update({k: v for k, v in extra.items() if k not in payload})
+    try:
+        writer = emit if emit is not None else bus
+        message = writer(source, to, "halt", market, payload, path=bus_path)
+        if not isinstance(message, dict):
+            message = {"ts": ts, "from": source, "to": to, "type": "halt", "market": market, "payload": payload}
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"bus_write_failed:{type(exc).__name__}")
+        message = {"ts": ts, "from": source, "to": to, "type": "halt", "market": market, "payload": payload}
+    if failures:
+        halt_store.write_fallback(
+            f"{ts} halt id={record.get('id')} scope={scope} market={market or '-'} source={source} "
+            f"reason={cleaned} failures={','.join(failures)}"
+        )
+        message = dict(message, failures=failures)
+    return message
 
 
 def cancel_open_quotes(path: Path, ts: str, market: str = "") -> int:
+    """Cancel open paper quotes (all, or one market's). Task AL: atomic rewrite, never a torn file.
+
+    The Maker appends quotes; it checks the halt before and after its append (src/maker.py), so a
+    quote racing this rewrite is cancelled by the Maker itself. Raises OSError if the rewrite fails.
+    """
     rows = read_jsonl(path)
     cancelled = 0
     for row in rows:
@@ -83,7 +135,22 @@ def cancel_open_quotes(path: Path, ts: str, market: str = "") -> int:
     if cancelled:
         path.parent.mkdir(parents=True, exist_ok=True)
         body = "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows)
-        path.write_text(body, encoding="utf-8")
+        tmp_name = None
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=path.name + ".",
+                                             suffix=".tmp", delete=False) as handle:
+                tmp_name = handle.name
+                handle.write(body)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_name, path)
+            tmp_name = None
+        finally:
+            if tmp_name is not None:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
     return cancelled
 
 

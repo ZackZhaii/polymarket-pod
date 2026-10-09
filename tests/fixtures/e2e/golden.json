@@ -148,18 +148,25 @@
     "counts": {
       "ArbBinary>RiskGate:signal": 2,
       "BookWatcher>RiskGate:signal": 14,
-      "BookWatcher>Sentinel:signal": 2,
+      "BookWatcher>Sentinel:signal": 3,
       "Endgame>RiskGate:signal": 1,
       "Executor>Sentinel:fill": 3,
       "Executor>Sentinel:halt": 1,
-      "NewsForecaster>RiskGate:signal": 10,
+      "NewsForecaster>RiskGate:signal": 12,
+      "Operator>Sentinel:resume": 2,
       "RiskGate>Executor:signal": 4,
-      "RiskGate>Executor:veto": 6,
+      "RiskGate>Executor:veto": 8,
       "Scanner>BookWatcher:signal": 7,
-      "Sentinel>Executor:halt": 1
+      "Sentinel>Executor:halt": 2
     },
     "fills": 3,
     "halts": [
+      {
+        "from": "Sentinel",
+        "market": "e2e-alpha",
+        "reason": "invalid_risk_state",
+        "to": "Executor"
+      },
       {
         "from": "Executor",
         "market": "e2e-alpha",
@@ -183,10 +190,24 @@
     "booked_rows": 0,
     "edge": 0.055,
     "fee_usd": 0.0,
-    "halted": false,
+    "global_halts": [
+      {
+        "market": "",
+        "reason": "invalid_risk_state",
+        "scope": "global",
+        "source": "Sentinel"
+      }
+    ],
+    "halt_reason": "invalid_risk_state",
+    "halted": true,
     "label": "alpha-allow",
+    "ledger_problems": [
+      "unterminated_last_row",
+      "malformed_row:4"
+    ],
     "ledger_unchanged": true,
     "market": "e2e-alpha",
+    "open_quotes_after": 0,
     "reasons": [
       "invalid_risk_state"
     ],
@@ -198,6 +219,14 @@
     "booked_rows": 0,
     "edge": 0.055,
     "fee_usd": 0.0,
+    "global_halts": [
+      {
+        "market": "",
+        "reason": "ledger_integrity",
+        "scope": "global",
+        "source": "Executor"
+      }
+    ],
     "halt_reason": "ledger_integrity",
     "halted": true,
     "label": "alpha-allow",
@@ -214,6 +243,7 @@
   "cycle_1": {
     "fills": 0,
     "gaps": 1,
+    "halted_markets": [],
     "ok": true,
     "sentinel_checked": 7,
     "sentinel_halts": [],
@@ -227,6 +257,7 @@
   "cycle_2": {
     "fills": 0,
     "gaps": 1,
+    "halted_markets": [],
     "ok": true,
     "sentinel_checked": 7,
     "sentinel_halts": [
@@ -454,9 +485,131 @@
       }
     ]
   },
+  "halt_consumer": {
+    "a_halt_blocks_later_intents": {
+      "active": [
+        {
+          "market": "e2e-charlie",
+          "reason": "stale_book_consecutive: 2 consecutive stale or failed book checks (last: stale_book)",
+          "scope": "market",
+          "source": "Sentinel"
+        }
+      ],
+      "commit": {
+        "allow": false,
+        "booked_rows": 0,
+        "edge": 0.085,
+        "fee_usd": 0.0,
+        "halted": false,
+        "label": "charlie-stale",
+        "market": "e2e-charlie",
+        "reasons": [
+          "halt_market",
+          "stale_book",
+          "max_open_positions"
+        ],
+        "side": "buy",
+        "token_id": "73001"
+      },
+      "maker_quotes_written": 0,
+      "maker_refused": true,
+      "other_market_reasons": []
+    },
+    "b_corrupt_halt_file_blocks_globally": {
+      "commit": {
+        "allow": false,
+        "booked_rows": 0,
+        "edge": 0.0727,
+        "fee_usd": 0.2,
+        "halted": false,
+        "label": "bravo-allow",
+        "market": "e2e-bravo",
+        "reasons": [
+          "halt_state_corrupt"
+        ],
+        "side": "buy",
+        "token_id": "72001"
+      },
+      "corrupt_file_kept": true,
+      "cycle_gaps": 0,
+      "cycle_halted_markets": [
+        "e2e-alpha",
+        "e2e-bravo",
+        "e2e-delta",
+        "e2e-echo",
+        "e2e-foxtrot",
+        "e2e-golf"
+      ],
+      "fallback_written": false,
+      "ledger_unchanged": true
+    },
+    "c_d_resume_rules": {
+      "active_after_global_resume": [],
+      "active_after_rejected_resumes": [
+        {
+          "market": "",
+          "reason": "e2e drill: global halt",
+          "scope": "global",
+          "source": "Sentinel"
+        },
+        {
+          "market": "e2e-bravo",
+          "reason": "e2e drill: market halt",
+          "scope": "market",
+          "source": "Sentinel"
+        }
+      ],
+      "after_market_resume": {
+        "active": [
+          {
+            "market": "",
+            "reason": "e2e drill: global halt",
+            "scope": "global",
+            "source": "Sentinel"
+          }
+        ],
+        "other_market_reasons": [
+          "halt_global"
+        ]
+      },
+      "attempts": [
+        {
+          "label": "market_resume_of_global",
+          "reason": "market_resume_cannot_lift_global",
+          "released": false
+        },
+        {
+          "label": "sentinel_resume",
+          "reason": "resume_not_operator",
+          "released": false
+        },
+        {
+          "label": "executor_resume_of_market",
+          "reason": "resume_not_operator",
+          "released": false
+        },
+        {
+          "label": "operator_without_approval",
+          "reason": "missing_approved_by",
+          "released": false
+        },
+        {
+          "label": "operator_market_resume",
+          "reason": null,
+          "released": true
+        },
+        {
+          "label": "operator_global_resume",
+          "reason": null,
+          "released": true
+        }
+      ],
+      "bus_refused_non_operator_resume": true
+    }
+  },
   "invariants": {
     "booked_fill_ids": 3,
-    "live_checks": 13,
+    "live_checks": 16,
     "live_enabled": [
       "False"
     ],

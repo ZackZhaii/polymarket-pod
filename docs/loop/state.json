@@ -285,6 +285,15 @@
       "note": "by Poly指挥; done by grok-bot. Not connected in src yet (the gate glues or stops): no module turns a NewsForecaster signal into an Intent (build_intent in the harness; fee_rate and slippage are fixture inputs), Endgame signals carry no model probability, nothing consumes a Sentinel or Executor halt. The guard runs the gate in-process (stdlib + src, ~0.1 s) instead of spawning pytest, so it also works in the M1 venv without pytest.",
       "done_at": "2026-10-08T22:51:21Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AL",
+      "status": "done",
+      "title": "Halt consumer: persisted Sentinel/Executor halts (src/halt_store.py) that RiskGate, the Maker and paper_cycle obey per market or globally, fail closed on a bad halt file; Operator-only resume bus type; invalid_risk_state and Executor ledger halts escalate to a global halt; atomic halt write order with logs/HALT fallback; markets without a book row are stale; e2e halt scenarios and guard check halt (Sentinel design gaps 1, 3, 7, 8, 10; backlog #26)",
+      "finish": "src/halt_store.py persists every halt atomically in logs/halt_state.json (scope market or global) and RiskGate.evaluate, maker.quote and paper_cycle.run veto everything in an active halt's scope; an unreadable, corrupt, malformed or lost halt file, logs/HALT or a failed check is a global halt. sentinel.halt writes the halt record first, then cancels paper quotes with an atomic rewrite, then writes the bus; any failure writes logs/HALT and nothing is raised into paper_cycle; the Maker re-checks after its append and cancels a racing quote. invalid_risk_state (paper_ledger) and the Executor's ledger_integrity / ledger_write_failed halts are global halts. podlib.BUS_TYPES gains resume, only from=Operator to=Sentinel with approved_by and halt_ref; Operator may send nothing else; a market resume cannot lift a global halt; python -m src.halt_store resume (Operator command line, logged on the bus before release) is the only release, never automatic. paper_cycle counts a leg or market with no book row as stale (missing_book). tests/fixtures/e2e golden gains halt_consumer (halt blocks later intents and the Maker, corrupt halt file blocks globally, market resume cannot lift global, non-Operator resume rejected); scripts/guard.py check halt; golden only via --update-golden. PROTOCOL.md, COORDINATION (Operator bus exception, backlog #26), PHASE0_RUN, LOOP updated. No new threshold; config/risk.toml unchanged; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (ruling on Poly哨兵's halt/heartbeat design review of dev@f760e51); done by grok-bot. Heartbeat (gap 2), exit-code table (gap 4), runtime pin checks (gap 5/6), bus sensitive-string filter (gap 9), M1 books path (gap 11), scheduler (gap 12), recorder escalation (gap 13) and the all-stale global escalation (gap 14) are later tasks. Behaviour now stricter: a halt (including a StaleWatch market halt and a torn-ledger invalid_risk_state) stays until the Operator resumes it.",
+      "done_at": "2026-10-09T06:57:34Z",
+      "surface": "grok-bot"
     }
   ]
 }

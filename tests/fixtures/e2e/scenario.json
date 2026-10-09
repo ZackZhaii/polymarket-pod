@@ -17,5 +17,16 @@
  "corrupt_ledger": {
   "torn_tail": "{\"fill_id\":\"e2e-torn-write\",\"ts\":\"2026-09-01T12:00:0",
   "commit": "alpha-allow"
+ },
+ "halt": {
+  "blocked_market": "e2e-charlie",
+  "blocked_commit": "charlie-stale",
+  "maker_token": "e2e-maker-probe",
+  "other_market": "e2e-bravo",
+  "corrupt_halt_text": "{\"version\": 1, \"halts\": [",
+  "corrupt_commit": "bravo-allow",
+  "global_reason": "e2e drill: global halt",
+  "market_reason": "e2e drill: market halt",
+  "approved_by": "e2e-operator"
  }
 }

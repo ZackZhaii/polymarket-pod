@@ -11,6 +11,9 @@ One run of the real pipeline on fixed, sanitised recordings in tests/fixtures/e2
     paper_ledger.commit_if_allowed  -> RiskGate (fees.py, MIN_EDGE, staleness, wash, non_finite, caps)
         -> simulated paper fill -> ledger_store.book -> ledger_store.verify (conservation)
     paper_cycle.run   -> StaleWatch check 2 -> Sentinel halt after two consecutive stale checks
+    Task AL halt consumer: the persisted halt blocks later intents and the Maker; a corrupt halt
+    state file is a global halt (RiskGate and paper_cycle); a market resume cannot lift a global
+    halt; a non-Operator resume is rejected (src/halt_store.py)
 
 Nothing in src/ is replaced. Only the clock (a frozen ``datetime`` in podlib, book_staleness and
 wash_detect, which also freezes every ``utc_now``) and I/O paths (bus, ledger, quotes, markets,
@@ -53,8 +56,8 @@ PINNED_RISK_SHA256 = "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32
 FLOAT_DIGITS = 8  # golden rounding (formatting only, not a threshold)
 NEW_FILL_ID = re.compile(r"[0-9a-f]{32}")
 PATH_NAMES = ("BUS_PATH", "PAPER_PATH", "QUOTES_PATH", "MARKETS_PATH", "BOOKS_PATH", "SENTINEL_STATE_PATH",
-              "SESSIONS_PATH")
-BUS_KINDS = frozenset({"signal", "veto", "fill", "halt"})
+              "SESSIONS_PATH", "HALT_STATE_PATH", "HALT_FALLBACK_PATH")
+BUS_KINDS = frozenset({"signal", "veto", "fill", "halt", "resume"})
 
 
 class NetworkTouched(RuntimeError):
@@ -116,8 +119,8 @@ def _patched(patches: list[tuple[object, str, object]]) -> Iterator[None]:
 
 
 def _modules() -> dict[str, Any]:
-    from src import (book, book_staleness, endgame, endgame_scan, forecaster, ledger_store, paper_cycle,
-                     paper_ledger, podlib, risk_gate, scanner, sentinel, wash_detect)
+    from src import (book, book_staleness, endgame, endgame_scan, forecaster, halt_store, ledger_store, maker,
+                     paper_cycle, paper_ledger, podlib, risk_gate, scanner, sentinel, wash_detect)
     return {name: module for name, module in locals().items()}
 
 
@@ -149,8 +152,10 @@ def offline_sandbox(work: Path, clock: Clock) -> Iterator[dict[str, Any]]:
     unused = work / "default_paths_must_stay_empty"
     unused.mkdir(parents=True, exist_ok=True)
     real_defaults = {name: Path(getattr(podlib, name)) for name in PATH_NAMES if hasattr(podlib, name)}
-    paths = {"bus": work / "bus.jsonl", "paper": work / "paper.jsonl", "quotes": work / "quotes.jsonl"}
-    explicit = {"BUS_PATH": paths["bus"], "PAPER_PATH": paths["paper"], "QUOTES_PATH": paths["quotes"]}
+    paths = {"bus": work / "bus.jsonl", "paper": work / "paper.jsonl", "quotes": work / "quotes.jsonl",
+             "halt": work / "halt" / "halt_state.json", "halt_file": work / "halt" / "HALT"}
+    explicit = {"BUS_PATH": paths["bus"], "PAPER_PATH": paths["paper"], "QUOTES_PATH": paths["quotes"],
+                "HALT_STATE_PATH": paths["halt"], "HALT_FALLBACK_PATH": paths["halt_file"]}
     patches: list[tuple[object, str, object]] = []
     for module in mods.values():
         for name in PATH_NAMES:
@@ -171,6 +176,33 @@ def offline_sandbox(work: Path, clock: Clock) -> Iterator[dict[str, Any]]:
     with _patched(patches):
         yield {**paths, "attempts": attempts, "unused": unused, "real_defaults": real_defaults,
                "defaults_before": before}
+
+
+@contextmanager
+def halt_scope(folder: Path, quotes_start: bytes) -> Iterator[dict[str, Path]]:
+    """Task AL: run one scenario against its own halt state, logs/HALT and paper quotes in ``folder``,
+    so a global halt it raises (or a corrupt halt file it plants) never leaks into another scenario."""
+    mods = _modules()
+    folder.mkdir(parents=True, exist_ok=True)
+    quotes = folder / "quotes.jsonl"
+    quotes.write_bytes(quotes_start)
+    paths = {"halt": folder / "halt_state.json", "halt_file": folder / "HALT", "quotes": quotes}
+    with _patched([(mods["halt_store"], "HALT_STATE_PATH", paths["halt"]),
+                   (mods["halt_store"], "HALT_FALLBACK_PATH", paths["halt_file"]),
+                   (mods["paper_ledger"], "QUOTES_PATH", quotes),
+                   (mods["sentinel"], "QUOTES_PATH", quotes)]):
+        yield paths
+
+
+def _halt_view(halt_store, paths: dict[str, Path] | None = None) -> list[dict[str, Any]]:
+    """Active halts without their hashed ids (golden stays readable): scope, market, reason, source."""
+    kwargs = {} if paths is None else {"path": paths["halt"], "fallback": paths["halt_file"]}
+    return [{k: h.get(k) for k in ("scope", "market", "reason", "source")} for h in halt_store.active_halts(**kwargs)]
+
+
+def _reasons_kinds(reasons: list[str]) -> list[str]:
+    """halt_market:H0001-abc -> halt_market (ids are hashes of the frozen clock; golden keeps the kind)."""
+    return [r.split(":", 1)[0] if r.startswith(("halt_market:", "halt_global:")) else r for r in reasons]
 
 
 class ConcurrentWriterPath(type(Path())):
@@ -322,7 +354,7 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
     mods = _modules()
     podlib, scanner, book, paper_cycle = mods["podlib"], mods["scanner"], mods["book"], mods["paper_cycle"]
     endgame_scan, forecaster, paper_ledger = mods["endgame_scan"], mods["forecaster"], mods["paper_ledger"]
-    ledger_store = mods["ledger_store"]
+    ledger_store, halt_store, maker = mods["ledger_store"], mods["halt_store"], mods["maker"]
 
     scenario = load_json(fixtures / "scenario.json")
     raw_markets = load_json(fixtures / "gamma_markets.json")
@@ -423,12 +455,19 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
         torn_path = work / "corrupt_at_start" / "paper.jsonl"
         torn_path.parent.mkdir()
         torn_path.write_bytes(ledger_start + tail)
-        torn = commit(corrupt["commit"], torn_path)
+        # Task AL gap 7: both corrupt-ledger outcomes are global halts, each in its own halt folder.
+        with halt_scope(torn_path.parent, quotes_start) as torn_scope:
+            torn = commit(corrupt["commit"], torn_path)
+            torn["global_halts"] = _halt_view(halt_store)
+            torn["open_quotes_after"] = sum(1 for q in podlib.read_jsonl(torn_scope["quotes"])
+                                            if q.get("status") == "open")
         torn_unchanged = torn_path.read_bytes() == ledger_start + tail
         mid_path = ConcurrentWriterPath(work / "corrupt_mid_write" / "paper.jsonl").setup(tail)
         mid_path.parent.mkdir()
         Path(mid_path).write_bytes(ledger_start)
-        mid = commit(corrupt["commit"], mid_path)
+        with halt_scope(Path(mid_path).parent, quotes_start):
+            mid = commit(corrupt["commit"], mid_path)
+            mid["global_halts"] = _halt_view(halt_store)
         mid_bytes = Path(mid_path).read_bytes()
         paper_ledger.PAPER_PATH = paper_path
 
@@ -438,6 +477,12 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
                                   now=clock.stamp(), cfg=risk_cfg(), sentinel_state_path=state_path,
                                   quotes_path=quotes_path)
         quotes_after = podlib.read_jsonl(quotes_path)
+
+        # 10. Task AL: halt consumer scenarios (scenario.json "halt")
+        halt_plan = scenario["halt"]
+        halts_section = run_halt_scenarios(halt_plan, work, commit, paper_ledger, paper_cycle, halt_store, maker,
+                                           podlib, ledger_start, quotes_start, markets_path, books_path, bus_path,
+                                           state_path, clock, risk_cfg, problems)
         bus_rows = podlib.read_jsonl(bus_path)
         attempts = list(box["attempts"])
         unused_files = sorted(p.name for p in box["unused"].rglob("*") if p.is_file())
@@ -514,6 +559,7 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
         "corrupt_at_start": {**torn, "ledger_unchanged": torn_unchanged},
         "corrupt_mid_write": {**mid, "ledger_is_start_plus_tear": mid_bytes == ledger_start + tail},
         "cycle_2": _cycle(cycle_2),
+        "halt_consumer": halts_section,
         "quotes_after": [{k: q.get(k) for k in ("market", "token_id", "side", "price", "status", "cancelled_by",
                                                 "cancelled_ts")} for q in quotes_after],
         "bus": {"counts": counts, "fills": len(fills),
@@ -527,6 +573,101 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
     detail = {"bus": bus_rows, "booked_ids": booked_ids, "main_ledger": main_ledger, "after_replay": after_replay,
               "quotes": quotes_after, "attempts": attempts}
     return {"actual": norm(actual), "problems": problems, "detail": detail}
+
+
+def run_halt_scenarios(plan: dict[str, Any], work: Path, commit, paper_ledger, paper_cycle, halt_store, maker,
+                       podlib, ledger_start: bytes, quotes_start: bytes, markets_path: Path, books_path: Path,
+                       bus_path: Path, state_path: Path, clock: Clock, risk_cfg, problems: list[str]) -> dict[str, Any]:
+    """Task AL (Sentinel design gaps 1, 3, 7): the four halt-consumer scenarios of the hard gate."""
+    out: dict[str, Any] = {}
+    approved = plan["approved_by"]
+
+    # (a) the StaleWatch halt from cycle 2 blocks later intents and the Maker on that market only
+    market = plan["blocked_market"]
+    active = halt_store.active_halts()
+    market_halt = next((h for h in active if h["scope"] == "market" and h["market"] == market), None)
+    if market_halt is None:
+        problems.append(f"halt (a): no persisted market halt for {market}")
+    ledger_before = paper_ledger.PAPER_PATH.read_bytes()
+    blocked = commit(plan["blocked_commit"], paper_ledger.PAPER_PATH)
+    blocked["reasons"] = _reasons_kinds(blocked["reasons"])
+    try:
+        maker.quote(market=market, token_id=plan["maker_token"], side="buy", price=0.40, size=5,
+                    bus_path=bus_path, quotes_path=work / "maker_probe_quotes.jsonl")
+        maker_refused = False
+    except maker.HaltActive:
+        maker_refused = True
+    if paper_ledger.PAPER_PATH.read_bytes() != ledger_before:
+        problems.append("halt (a): a halted intent changed the ledger")
+    out["a_halt_blocks_later_intents"] = {
+        "active": _halt_view(halt_store), "commit": blocked, "maker_refused": maker_refused,
+        "maker_quotes_written": len(podlib.read_jsonl(work / "maker_probe_quotes.jsonl")),
+        "other_market_reasons": halt_store.halt_problems(plan["other_market"]),
+    }
+
+    # (b) a corrupt halt state file is a global halt: RiskGate and paper_cycle block every market
+    folder = work / "halt_corrupt"
+    with halt_scope(folder, quotes_start) as scope:
+        scope["halt"].write_text(plan["corrupt_halt_text"], encoding="utf-8")
+        ledger = folder / "paper.jsonl"
+        ledger.write_bytes(ledger_start)
+        corrupt_commit = commit(plan["corrupt_commit"], ledger)
+        state_copy = folder / "sentinel_stale.json"
+        if state_path.exists():
+            state_copy.write_bytes(state_path.read_bytes())
+            Path(str(state_copy) + ".seen").write_text("1\n", encoding="utf-8")
+        cycle = paper_cycle.run(markets_path=markets_path, books_path=books_path, bus_path=bus_path,
+                                now=clock.stamp(), cfg=risk_cfg(), sentinel_state_path=state_copy,
+                                quotes_path=scope["quotes"])
+        out["b_corrupt_halt_file_blocks_globally"] = {
+            "commit": corrupt_commit, "ledger_unchanged": ledger.read_bytes() == ledger_start,
+            "cycle_gaps": cycle.get("gaps"), "cycle_halted_markets": cycle.get("halted_markets"),
+            "corrupt_file_kept": scope["halt"].read_text(encoding="utf-8") == plan["corrupt_halt_text"],
+            "fallback_written": scope["halt_file"].exists(),
+        }
+    paper_ledger.PAPER_PATH = work / "paper.jsonl"
+
+    # (c) a market resume cannot lift a global halt; (d) a non-Operator resume is rejected
+    with halt_scope(work / "halt_resume", quotes_start) as scope:
+        glob = halt_store.record_halt(scope="global", reason=plan["global_reason"], source="Sentinel")
+        local = halt_store.record_halt(scope="market", market=plan["other_market"], reason=plan["market_reason"],
+                                       source="Sentinel")
+        attempts: list[dict[str, Any]] = []
+
+        def attempt(label: str, **kwargs: Any) -> None:
+            args = {"approved_by": approved, "root_cause": "e2e drill", "postmortem": "e2e drill",
+                    "bus_path": bus_path, **kwargs}
+            try:
+                halt_store.resume(**args)
+                attempts.append({"label": label, "released": True, "reason": None})
+            except halt_store.ResumeRejected as exc:
+                attempts.append({"label": label, "released": False, "reason": exc.reason})
+            except RuntimeError:  # the bus's own resume rule refused it (defence in depth)
+                attempts.append({"label": label, "released": False, "reason": "bus_refused"})
+
+        attempt("market_resume_of_global", from_role="Operator", scope="market", halt_id=glob["id"])
+        attempt("sentinel_resume", from_role="Sentinel", scope="global", halt_id=glob["id"])
+        attempt("executor_resume_of_market", from_role="Executor", scope="market", halt_id=local["id"])
+        attempt("operator_without_approval", from_role="Operator", scope="market", halt_id=local["id"],
+                approved_by="")
+        try:
+            podlib.bus("Sentinel", "Sentinel", "resume", "", {"scope": "global", "halt_ref": {"id": glob["id"]},
+                                                              "approved_by": approved})
+            bus_refused = False
+        except RuntimeError:
+            bus_refused = True
+        after_rejects = _halt_view(halt_store)
+        attempt("operator_market_resume", from_role="Operator", scope="market", halt_id=local["id"],
+                market=plan["other_market"])
+        after_market = {"active": _halt_view(halt_store),
+                        "other_market_reasons": _reasons_kinds(halt_store.halt_problems(plan["other_market"]))}
+        attempt("operator_global_resume", from_role="Operator", scope="global", halt_id=glob["id"])
+        out["c_d_resume_rules"] = {
+            "attempts": attempts, "bus_refused_non_operator_resume": bus_refused,
+            "active_after_rejected_resumes": after_rejects, "after_market_resume": after_market,
+            "active_after_global_resume": _halt_view(halt_store),
+        }
+    return out
 
 
 def _ledger_view_bytes(data: bytes) -> list[str]:
@@ -545,6 +686,7 @@ def _cycle(result: dict[str, Any]) -> dict[str, Any]:
             "fills": result.get("fills"),
             "stale_markets": sorted(s["market"] for s in result.get("skips") or [] if s.get("kind") == "stale_market"),
             "sentinel_checked": sentinel.get("checked"), "sentinel_halts": sentinel.get("halts"),
+            "halted_markets": result.get("halted_markets"),
             "state_problem": sentinel.get("state_problem"), "write_problem": sentinel.get("write_problem")}
 
 
@@ -631,6 +773,79 @@ def gate(root: Path | None = None) -> tuple[list[str], str]:
     summary = (f"{sum(1 for d in decisions if d['allow'])} allow / {sum(1 for d in decisions if not d['allow'])} veto, "
                f"cash {actual['ledger_after_intents']['cash_usd']}, sentinel halts {actual['cycle_2']['sentinel_halts']}, "
                f"network 0")
+    return problems, summary
+
+
+HALT_EXPECTED_ATTEMPTS = {
+    "market_resume_of_global": (False, "market_resume_cannot_lift_global"),
+    "sentinel_resume": (False, "resume_not_operator"),
+    "executor_resume_of_market": (False, "resume_not_operator"),
+    "operator_without_approval": (False, "missing_approved_by"),
+    "operator_market_resume": (True, None),
+    "operator_global_resume": (True, None),
+}
+
+
+def halt_semantic_problems(actual: dict[str, Any]) -> list[str]:
+    """Task AL: the halt-consumer outcomes, checked by meaning (not only against golden.json)."""
+    out: list[str] = []
+    section = actual.get("halt_consumer")
+    if not isinstance(section, dict):
+        return ["halt_consumer section missing from the run"]
+    a = section.get("a_halt_blocks_later_intents") or {}
+    commit = a.get("commit") or {}
+    if commit.get("allow") is not False or "halt_market" not in (commit.get("reasons") or []):
+        out.append("(a) an intent on a halted market was not vetoed by the halt")
+    if commit.get("booked_rows") != 0:
+        out.append("(a) a halted intent booked a row")
+    if a.get("maker_refused") is not True or a.get("maker_quotes_written") != 0:
+        out.append("(a) the Maker quoted a halted market")
+    if a.get("other_market_reasons") != []:
+        out.append("(a) a market halt blocked another market")
+    b = section.get("b_corrupt_halt_file_blocks_globally") or {}
+    if (b.get("commit") or {}).get("reasons") != ["halt_state_corrupt"] or (b.get("commit") or {}).get("allow"):
+        out.append("(b) a corrupt halt file did not veto as a global halt")
+    if b.get("cycle_gaps") != 0 or not b.get("cycle_halted_markets"):
+        out.append("(b) paper_cycle emitted a gap signal under a corrupt halt file")
+    if b.get("ledger_unchanged") is not True or b.get("corrupt_file_kept") is not True:
+        out.append("(b) the ledger or the corrupt halt file was changed")
+    c = section.get("c_d_resume_rules") or {}
+    got = {item.get("label"): (item.get("released"), item.get("reason")) for item in c.get("attempts") or []}
+    for label, expected in HALT_EXPECTED_ATTEMPTS.items():
+        if got.get(label) != expected:
+            out.append(f"(c/d) resume {label}: {got.get(label)} != {expected}")
+    if c.get("bus_refused_non_operator_resume") is not True:
+        out.append("(d) the bus accepted a non-Operator resume")
+    if len(c.get("active_after_rejected_resumes") or []) != 2:
+        out.append("(c/d) a rejected resume released a halt")
+    if (c.get("after_market_resume") or {}).get("other_market_reasons") != ["halt_global"]:
+        out.append("(c) a market resume lifted (or hid) the global halt")
+    for name in ("corrupt_at_start", "corrupt_mid_write"):
+        halts = (actual.get(name) or {}).get("global_halts") or []
+        if not any(h.get("scope") == "global" for h in halts):
+            out.append(f"(gap 7) {name} did not leave a global halt")
+    return out
+
+
+def halt_gate(root: Path | None = None) -> tuple[list[str], str]:
+    """Guard check 8 (Task AL): the halt scenarios of the offline run, by meaning and against golden.json."""
+    root = root or ROOT
+    fixtures = fixtures_dir(root)
+    missing = [name for name in (*INPUT_FILES, GOLDEN_NAME) if not (fixtures / name).is_file()]
+    if missing:
+        return [f"missing fixture {FIXTURES_REL.as_posix()}/{name}" for name in missing], ""
+    if "halt" not in load_json(fixtures / "scenario.json"):
+        return ["scenario.json has no halt plan"], ""
+    golden = load_json(fixtures / GOLDEN_NAME)
+    result = run_once(fixtures, root)
+    actual = result["actual"]
+    problems = list(result["problems"]) + halt_semantic_problems(actual)
+    for key in ("halt_consumer", "corrupt_at_start", "corrupt_mid_write"):
+        problems += golden_problems(actual.get(key), golden.get(key), f"$.{key}")
+    attempts = (actual.get("halt_consumer") or {}).get("c_d_resume_rules", {}).get("attempts") or []
+    summary = (f"halt blocks intents and Maker, corrupt halt file = global halt, "
+               f"{sum(1 for a in attempts if not a['released'])} resumes rejected / "
+               f"{sum(1 for a in attempts if a['released'])} Operator resumes")
     return problems, summary
 
 

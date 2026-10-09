@@ -109,7 +109,8 @@ def test_endgame_emits_a_signal_only(run):
 
 def test_every_intent_starts_from_a_newsforecaster_signal(run):
     forecasts = [r for r in run["detail"]["bus"] if r["from"] == "NewsForecaster"]
-    assert len(forecasts) == 10  # 7 intents, the replay commit, two corrupted-ledger commits
+    # 7 intents, the replay commit, two corrupted-ledger commits, two Task AL halt-consumer commits
+    assert len(forecasts) == 12
     assert all(r["to"] == "RiskGate" and r["payload"]["order"] is False for r in forecasts)
 
 
@@ -186,6 +187,11 @@ def test_corrupted_ledger_before_the_call_vetoes_and_books_nothing(run):
     torn = run["actual"]["corrupt_at_start"]
     assert (torn["allow"], torn["reasons"], torn["booked_rows"]) == (False, ["invalid_risk_state"], 0)
     assert torn["ledger_unchanged"] is True
+    # Task AL gap 7: invalid_risk_state is now a persisted global halt that cancels every open quote.
+    assert torn["halted"] is True and torn["halt_reason"] == "invalid_risk_state"
+    assert torn["global_halts"] == [{"market": "", "reason": "invalid_risk_state", "scope": "global",
+                                     "source": "Sentinel"}]
+    assert torn["open_quotes_after"] == 0
 
 
 def test_corrupted_ledger_during_the_call_halts_and_books_nothing(run):
@@ -195,19 +201,63 @@ def test_corrupted_ledger_during_the_call_halts_and_books_nothing(run):
     assert mid["ledger_is_start_plus_tear"] is True
     halts = [r for r in bus_rows(run, "halt") if r["from"] == "Executor"]
     assert len(halts) == 1 and halts[0]["payload"]["exchange_action"] == "none"
+    # Task AL gap 7: the Executor's ledger halt is a persisted global halt too.
+    assert halts[0]["payload"]["scope"] == "global"
+    assert mid["global_halts"] == [{"market": "", "reason": "ledger_integrity", "scope": "global",
+                                    "source": "Executor"}]
 
 
 def test_two_consecutive_stale_checks_halt_through_sentinel(run):
     first, second = run["actual"]["cycle_1"], run["actual"]["cycle_2"]
     assert first["stale_markets"] == second["stale_markets"] == ["e2e-charlie"]
     assert first["sentinel_halts"] == [] and second["sentinel_halts"] == ["e2e-charlie"]
-    halts = [r for r in bus_rows(run, "halt") if r["from"] == "Sentinel"]
+    halts = [r for r in bus_rows(run, "halt") if r["from"] == "Sentinel" and r["payload"]["scope"] == "market"]
     assert [(h["market"], h["payload"]["paper_quotes_cancelled"], h["payload"]["exchange_action"]) for h in halts] \
         == [("e2e-charlie", 1, "none")]
     quotes = {q["market"]: q for q in run["actual"]["quotes_after"]}
     assert quotes["e2e-charlie"]["status"] == "cancelled" and quotes["e2e-charlie"]["cancelled_by"] == "Sentinel"
     assert quotes["e2e-charlie"]["cancelled_ts"] == run["actual"]["clock"]["second_check"]
     assert quotes["e2e-foxtrot"]["status"] == "open"  # a halt cancels only the halted market's quotes
+
+
+# ---------------------------------------------------------------- Task AL: halt consumer
+
+def test_halt_blocks_later_intents_and_the_maker(run):
+    a = run["actual"]["halt_consumer"]["a_halt_blocks_later_intents"]
+    assert a["active"] == [{"market": "e2e-charlie", "scope": "market", "source": "Sentinel",
+                            "reason": "stale_book_consecutive: 2 consecutive stale or failed book checks "
+                                      "(last: stale_book)"}]
+    assert a["commit"]["allow"] is False and a["commit"]["booked_rows"] == 0
+    assert a["commit"]["reasons"][0] == "halt_market"
+    assert a["maker_refused"] is True and a["maker_quotes_written"] == 0
+    assert a["other_market_reasons"] == []  # a market halt never blocks another market
+
+
+def test_corrupt_halt_file_blocks_every_market(run):
+    b = run["actual"]["halt_consumer"]["b_corrupt_halt_file_blocks_globally"]
+    # bravo-allow was allowed on the same ledger start; the corrupt halt file alone now vetoes it
+    assert decision(run, "bravo-allow")["allow"] is True
+    assert (b["commit"]["allow"], b["commit"]["reasons"], b["commit"]["booked_rows"]) == \
+        (False, ["halt_state_corrupt"], 0)
+    assert b["ledger_unchanged"] is True and b["corrupt_file_kept"] is True
+    assert b["cycle_gaps"] == 0 and "e2e-alpha" in b["cycle_halted_markets"]
+
+
+def test_market_resume_cannot_lift_a_global_halt_and_only_the_operator_resumes(run):
+    c = run["actual"]["halt_consumer"]["c_d_resume_rules"]
+    by = {a["label"]: (a["released"], a["reason"]) for a in c["attempts"]}
+    assert by["market_resume_of_global"] == (False, "market_resume_cannot_lift_global")
+    assert by["sentinel_resume"] == (False, "resume_not_operator")
+    assert by["executor_resume_of_market"] == (False, "resume_not_operator")
+    assert by["operator_without_approval"] == (False, "missing_approved_by")
+    assert c["bus_refused_non_operator_resume"] is True
+    assert len(c["active_after_rejected_resumes"]) == 2  # nothing was released by a rejected resume
+    assert by["operator_market_resume"] == (True, None)
+    assert c["after_market_resume"]["other_market_reasons"] == ["halt_global"]  # global still blocks it
+    assert by["operator_global_resume"] == (True, None) and c["active_after_global_resume"] == []
+    resumes = bus_rows(run, "resume")
+    assert len(resumes) == 2 and all(r["from"] == "Operator" and r["payload"]["approved_by"] == "e2e-operator"
+                                     and r["payload"]["halt_ref"]["id"] for r in resumes)
 
 
 # ---------------------------------------------------------------- invariants
@@ -224,7 +274,9 @@ def test_conservation_holds_and_fill_ids_are_unique(run):
 
 def test_no_exchange_action_anywhere(run):
     rows = run["detail"]["bus"]
-    assert {r["type"] for r in rows} <= {"signal", "veto", "fill", "halt"}
+    assert {r["type"] for r in rows} <= {"signal", "veto", "fill", "halt", "resume"}
+    assert all(r["from"] == "Operator" and r["to"] == "Sentinel" for r in rows if r["type"] == "resume")
+    assert all(r["type"] == "resume" for r in rows if r["from"] == "Operator")  # Operator sends nothing else
     assert all((r["payload"] or {}).get("exchange_action", "none") == "none" for r in rows)
     assert all((r["payload"] or {}).get("order", False) is False for r in rows)
     fills = [r for r in rows if r["type"] == "fill"]

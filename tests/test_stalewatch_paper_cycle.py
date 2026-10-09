@@ -28,8 +28,9 @@ def paths(tmp_path):
     _write(paths["markets"], [
         {"ts": "2026-10-09T00:00:00Z", "id": "fresh", "token_ids": ["f1", "f2"]},
         {"ts": "2026-10-09T00:00:00Z", "id": "stale", "token_ids": ["s1", "s2"]},
-        {"ts": "2026-10-09T00:00:00Z", "id": "unbooked", "token_ids": ["u1", "u2"]},
     ])
+    # Task AL gap 10: a market with no book row is now a stale check (test_markets_without_any_book_*
+    # adds "unbooked" to markets.jsonl itself); its paper quote stays here as a bystander.
     for market, token in (("fresh", "f1"), ("stale", "s1"), ("unbooked", "u1")):
         maker.quote(market=market, token_id=token, side="buy", price=0.40, size=5,
                     bus_path=paths["bus"], quotes_path=paths["quotes"])
@@ -115,12 +116,30 @@ def test_a_fresh_book_resets_the_streak(paths):
     assert json.loads(paths["state"].read_text(encoding="utf-8"))["streaks"] == {"stale": 1}
 
 
-def test_markets_without_any_book_are_not_checked(paths):
+def test_markets_without_any_book_are_stale_and_halt(paths):
+    """Task AL gap 10 (was: not checked). No book row = a stale check; two in a row halt that market."""
+    with paths["markets"].open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"ts": "2026-10-09T00:00:00Z", "id": "unbooked", "token_ids": ["u1", "u2"]}) + "\n")
     _books(paths, "2026-10-09T00:09:50Z")
-    _run(paths, NOW1)
-    _run(paths, NOW1)
-    assert "unbooked" not in json.loads(paths["state"].read_text(encoding="utf-8"))["streaks"]
-    assert _quotes(paths)["unbooked"] == "open"
+    first = _run(paths, NOW1)
+    assert first["sentinel"]["checked"] == 3 and first["sentinel"]["halts"] == []
+    assert "unbooked" in {s["market"] for s in first["skips"] if s.get("kind") == "stale_market"}
+    assert json.loads(paths["state"].read_text(encoding="utf-8"))["streaks"]["unbooked"] == 1
+    _books(paths, "2026-10-09T00:10:50Z", recorded="2026-10-09T00:10:55Z")
+    second = _run(paths, NOW2)
+    assert second["sentinel"]["halts"] == ["stale", "unbooked"]
+    assert _quotes(paths)["unbooked"] == "cancelled"
+
+
+def test_a_market_with_one_unbooked_leg_is_stale(paths):
+    """Task AL gap 10: a missing leg no longer drops out quietly; the market gets no gap signal."""
+    rows = [{"ts": "2026-10-09T00:09:00Z", "book_ts": "2026-10-09T00:09:50Z", "market_id": "fresh",
+             "token_id": "f1", "best_ask": 0.40, "best_ask_size": 10}]
+    _write(paths["books"], rows)
+    result = _run(paths, NOW1)
+    fresh = [s for s in result["skips"] if s.get("market") == "fresh" and s.get("kind") == "stale_market"]
+    assert fresh and fresh[0]["stale_reasons"] == [paper_cycle.MISSING_BOOK]
+    assert result["gaps"] == 0
 
 
 @pytest.mark.parametrize(
@@ -193,8 +212,13 @@ def test_write_failure_counts_as_stale_and_leaves_the_old_file(paths, monkeypatc
     _run(paths, NOW1)
     before = paths["state"].read_bytes()
 
+    real_replace = os.replace
+
     def broken_replace(src, dst):
-        raise OSError("disk full")
+        # Only the StaleWatch state write fails (Task AL: halt records and quote cancels use os.replace too).
+        if os.fspath(dst) == os.fspath(paths["state"]):
+            raise OSError("disk full")
+        return real_replace(src, dst)
 
     monkeypatch.setattr(sentinel.os, "replace", broken_replace)
     _books(paths, "2026-10-09T00:10:50Z", recorded="2026-10-09T00:10:55Z")
@@ -212,6 +236,8 @@ def test_save_is_atomic_and_leaves_no_temp_files(paths, monkeypatch):
     real_replace = os.replace
 
     def spy(src, dst):
+        if os.fspath(dst) != os.fspath(paths["state"]):
+            return real_replace(src, dst)  # Task AL: halt state / quote rewrites are not this test's subject
         calls.append((os.path.dirname(src), os.fspath(dst)))
         assert json.loads(open(src, encoding="utf-8").read())["consecutive"] == 2
         return real_replace(src, dst)
@@ -244,7 +270,8 @@ def test_missing_or_future_book_ts_count_as_stale(paths):
     ]
     _write(paths["books"], rows)
     assert _run(paths, NOW1)["sentinel"]["halts"] == []
-    assert _run(paths, NOW2)["sentinel"]["halts"] == ["stale"]
+    # "fresh" has no book rows in this test: Task AL gap 10 makes it stale (missing_book) too.
+    assert _run(paths, NOW2)["sentinel"]["halts"] == ["fresh", "stale"]
 
 
 def test_pin_drift_returns_before_touching_state(paths):

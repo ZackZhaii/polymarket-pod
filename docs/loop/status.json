@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T22:51:21Z",
+  "ts": "2026-10-09T06:57:34Z",
   "live_enabled": false,
-  "last_done": "AJ",
+  "last_done": "AL",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AJ (end-to-end offline hard gate: scripts/e2e_offline.py runs the real scanner -> /book recorder -> paper cycle and Sentinel -> Endgame/NewsForecaster signals -> RiskGate -> paper fill -> ledger_store -> conservation -> Sentinel halt path on fixed sanitised recordings in tests/fixtures/e2e/ with only clock and I/O paths replaced and network tripwires, compared exactly with golden.json; guard check e2e (8 checks); golden changes only with pytest --update-golden; backlog #24) done by grok-bot. Task letters after Z are AA, AB, AC, AD, AE, AF, AG, AH, AI, AJ. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S and the M1 criteria M1_MIN_RUN_S, M1_MIN_COVERAGE, M1_MAX_RECONNECTS, M1_MAX_GAP_RESYNCS_PER_ASSET, M1_REST_MATCH_WINDOW_S, M1_MIN_REST_MATCHED, M1_MAX_TOP_MISMATCH_RATE, M1_MAX_REST_UNMATCHED_RATE. No open todo. No live gate."
+  "note": "AL (halt consumer: src/halt_store.py persists Sentinel/Executor halts per market or globally; RiskGate, the Maker and paper_cycle veto the halted scope; a bad halt file or logs/HALT is a global halt; invalid_risk_state and Executor ledger halts escalate to global; halt record first, atomic quote cancel, logs/HALT on any failure; resume bus type only from Operator with approved_by and halt_ref, a market resume cannot lift a global halt, release only by python -m src.halt_store resume; markets without a book row are stale; e2e halt scenarios and guard check halt; backlog #26) done by grok-bot. Task letters after Z are AA, AB, AC, AD, AE, AF, AG, AH, AI, AJ, AK, AL. M2 pending (unchanged, AL adds none): MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S and the M1 criteria M1_MIN_RUN_S, M1_MIN_COVERAGE, M1_MAX_RECONNECTS, M1_MAX_GAP_RESYNCS_PER_ASSET, M1_REST_MATCH_WINDOW_S, M1_MIN_REST_MATCHED, M1_MAX_TOP_MISMATCH_RATE, M1_MAX_REST_UNMATCHED_RATE. No open todo. No live gate."
 }

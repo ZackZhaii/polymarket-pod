@@ -13,8 +13,8 @@ It prints one line per check, ``PASS <check>: <reason>`` or ``FAIL <check>: <rea
     1  at least one check failed
     2  usage error, or no repo root (a folder holding src/ and config/) at or above the start path
 
-Checks (nothing in the repo is written, nothing is fetched, no network; check 6 keeps its scratch
-files in a temp folder outside the repo and removes it):
+Checks (nothing in the repo is written, nothing is fetched, no network; checks 6 and 7 keep their
+scratch files in a temp folder outside the repo and remove it):
 
 1. risk_sha_worktree / risk_sha_head: sha256 of config/risk.toml equals PINNED_RISK_SHA256, for
    the working-tree file (CRLF normalised to LF, as git stores it with autocrlf) and for the
@@ -44,6 +44,11 @@ files in a temp folder outside the repo and removes it):
    tripwires, compared exactly with golden.json. Its scratch files live in a throwaway temp folder
    outside the repo that is removed afterwards; golden.json is never written here (only
    ``python -m pytest tests/test_e2e_offline.py --update-golden`` writes it). About 0.1 s, no pytest.
+7. halt (Task AL): the halt consumer on the same offline run (e2e_offline.halt_gate): a persisted
+   halt vetoes later intents and the Maker on its market only; a corrupt halt state file is a
+   global halt for RiskGate and paper_cycle; a market resume cannot lift a global halt; a resume
+   not from Operator (or without approved_by) is rejected by halt_store and by the bus; both
+   corrupt-ledger cases leave a global halt. Checked by meaning and against golden.json.
 """
 from __future__ import annotations
 
@@ -677,6 +682,21 @@ def check_e2e(root: Path) -> Result:
     return Result(name, PASS, f"offline pipeline matches tests/fixtures/e2e/golden.json: {summary}")
 
 
+# ---------------------------------------------------------------- 7. halt (Task AL)
+
+def check_halt(root: Path) -> Result:
+    name = "halt"
+    if not (root / E2E_HARNESS_REL).is_file():
+        return Result(name, FAIL, f"{E2E_HARNESS_REL} is missing")
+    harness = _load_e2e(root)
+    if not hasattr(harness, "halt_gate"):
+        return Result(name, FAIL, f"{E2E_HARNESS_REL} has no halt_gate (Task AL)")
+    problems, summary = harness.halt_gate(root)
+    if problems:
+        return Result(name, FAIL, _summary(problems))
+    return Result(name, PASS, summary)
+
+
 def run_checks(root: Path, require_git: bool = False) -> list[Result]:
     checks = [
         lambda: check_risk_sha_worktree(root),
@@ -687,10 +707,11 @@ def run_checks(root: Path, require_git: bool = False) -> list[Result]:
         lambda: check_url_allowlist(root),
         lambda: check_thresholds_doc(root),
         lambda: check_e2e(root),
+        lambda: check_halt(root),
     ]
     results = []
     names = ["risk_sha_worktree", "risk_sha_head", "live_enabled", "banned_dependencies", "banned_imports",
-             "url_allowlist", "thresholds_doc", "e2e"]
+             "url_allowlist", "thresholds_doc", "e2e", "halt"]
     for name, check in zip(names, checks):
         try:
             results.append(check())
@@ -707,7 +728,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="guard.py",
         description="M0 guard: offline, read-only safety checks (risk.toml pin, live_enabled, banned "
-                    "packages and imports, URL allowlist, THRESHOLDS.md, the end-to-end offline gate).",
+                    "packages and imports, URL allowlist, THRESHOLDS.md, the end-to-end offline gate, the halt consumer).",
         epilog="Exit codes: 0 all checks pass (risk_sha_head may SKIP without git); 1 a check failed; "
                "2 usage error or no repo root found.",
     )

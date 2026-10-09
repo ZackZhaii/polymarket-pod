@@ -16,7 +16,7 @@ from scripts import guard
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / "scripts" / "guard.py"
 CHECKS = ["risk_sha_worktree", "risk_sha_head", "live_enabled", "banned_dependencies", "banned_imports",
-          "url_allowlist", "thresholds_doc", "e2e"]
+          "url_allowlist", "thresholds_doc", "e2e", "halt"]
 PINNED = "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04"
 _IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc")
 
@@ -138,7 +138,7 @@ def test_worktree_risk_change_fails(repo):
     assert found["risk_sha_worktree"].status == "FAIL" and PINNED in found["risk_sha_worktree"].reason
     code, lines, _ = run(repo)
     assert code == 1
-    failed_only(lines, "risk_sha_worktree", "e2e")  # the e2e gate pins risk.toml too (Task AJ)
+    failed_only(lines, "risk_sha_worktree", "e2e", "halt")  # the e2e and halt gates pin risk.toml too
 
 
 def test_worktree_threshold_change_fails(repo):
@@ -614,7 +614,7 @@ def test_a_missing_harness_or_fixture_fails_e2e(repo, rel):
     assert results(repo)["e2e"].status == "FAIL"
     code, lines, out = run(repo)
     assert code == 1, out
-    failed_only(lines, "e2e")
+    failed_only(lines, "e2e", "halt")  # Task AL: the halt check runs the same harness and fixtures
 
 
 def test_a_loosened_risk_gate_rule_fails_e2e(repo):
@@ -634,8 +634,62 @@ def test_a_src_regression_that_fetches_quietly_fails_e2e(repo):
                                          "    except Exception:\n        pass\n" + marker), encoding="utf-8")
     code, lines, out = run(repo)
     assert code == 1, out
-    failed_only(lines, "e2e")
-    assert "network touched" in lines["e2e"][1]
+    failed_only(lines, "e2e", "halt")
+    assert "network touched" in lines["e2e"][1] and "network touched" in lines["halt"][1]
+
+
+# ---------------------------------------------------------------- 7. halt (Task AL)
+
+def test_the_halt_check_passes_on_the_real_repo():
+    found = results(ROOT)["halt"]
+    assert found.status == "PASS" and "corrupt halt file = global halt" in found.reason, found
+
+
+def test_a_risk_gate_that_ignores_halts_fails_halt_and_e2e(repo):
+    edit(repo / "src" / "risk_gate.py",
+         "reasons.extend(halt_store.halt_problems(intent.market, halt_path, halt_fallback_path))", "pass")
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "e2e", "halt")
+    assert "(a)" in lines["halt"][1] or "(b)" in lines["halt"][1]
+
+
+def test_a_market_resume_that_lifts_a_global_halt_fails_halt(repo):
+    edit(repo / "src" / "halt_store.py",
+         '        if found["scope"] == SCOPE_GLOBAL and scope != SCOPE_GLOBAL:\n'
+         '            raise ResumeRejected("market_resume_cannot_lift_global", halt_id)\n'
+         '        if found["scope"] != scope:\n',
+         '        if found["scope"] != scope and found["scope"] != SCOPE_GLOBAL:\n')
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "e2e", "halt")
+    assert "market_resume_of_global" in lines["halt"][1]
+
+
+def test_a_bus_that_accepts_any_resume_fails_halt(repo):
+    edit(repo / "src" / "podlib.py",
+         '    if kind == "resume" or frm == RESUME_FROM:\n        _check_resume(frm, to, kind, payload)\n', "")
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "e2e", "halt")
+    assert "(d) the bus accepted a non-Operator resume" in lines["halt"][1]
+
+
+def test_a_halt_golden_edit_fails_e2e_and_halt(repo):
+    path = repo / "tests" / "fixtures" / "e2e" / "golden.json"
+    edit(path, '"market_resume_cannot_lift_global"', '"released"')
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "e2e", "halt")
+
+
+def test_a_harness_without_halt_gate_fails_halt(repo):
+    path = repo / "scripts" / "e2e_offline.py"
+    path.write_text(path.read_text(encoding="utf-8").replace("def halt_gate(", "def _old_halt_gate("),
+                    encoding="utf-8")
+    code, lines, out = run(repo)
+    assert code == 1, out
+    failed_only(lines, "halt")
 
 
 def test_the_e2e_check_loads_the_checked_repos_own_harness(repo):
