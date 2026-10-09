@@ -1127,25 +1127,48 @@ and `python -m pytest` and guard --require-git pass offline.
 - Tests: `tests/test_resolutions.py`, `tests/test_pins.py`, `tests/test_sentinel_tick.py`, `tests/test_exit_codes.py`.
 - No new number. config/risk.toml unchanged, `live_enabled` false.
 
+## Task AW — WS recorder resync hardening (market channel)
+
+Status: done.
+
+Requested by Poly指挥 from the WS part of Poly研究's `research_dataapi_ws_m2.md`, done by grok-bot on dev@23625ae
+(dev@316d4e1, AV #50, merged in).
+
+Finish when the recorder re-snapshots on a tick change, reconnects when PONGs stop, fails closed on unknown events for
+its assets, records a snapshot-hash check, and `python -m pytest` and guard --require-git pass offline.
+
+- `tick_size_change`: a valid change (old tick = the tick held, new tick valid) now resyncs the asset
+  (`tick_size_change`: price-less invalidation row, unsubscribe/subscribe for a fresh snapshot); no price on the
+  new tick is trusted before that snapshot. Not a gap: it is not counted toward the Task AP gap-resync escalation.
+  Invalid or mismatched ticks keep their reasons (`invalid_tick_size`, `tick_size_mismatch`), which are gaps.
+- PONG: a PING still unanswered `WS_PONG_TIMEOUT_S` (30 s, new, M2 pending) after it was sent disconnects
+  (`pong_timeout`); every asset resyncs (`disconnect_pong_timeout`) and the reconnect counts toward the
+  reconnect escalation. PINGs keep going every 10 s; a later PING does not restart the wait.
+- Unknown `event_type`: fail closed. One naming a subscribed asset (`asset_id`, `assets_ids`,
+  `price_changes[].asset_id`) or its market resyncs those assets (`unknown_event`, a gap); one naming nothing
+  resyncs every asset; one naming only other assets/markets is counted (`ignored_event:<kind>`) and ignored.
+  Churn risk: a new server event type for our assets will resync them on every occurrence.
+- Snapshot hash: `book_hash_check()` = SHA-1 hex of compact JSON (market, asset_id, timestamp, hash="", bids, asks,
+  min_order_size, tick_size, neg_risk, last_trade_price, in that order). The algorithm is not officially
+  published (Poly研究: older clients / Nautilus). Per Poly指挥's ruling it is recorded, not enforced
+  (`BOOK_HASH_ENFORCED = False`): each row carries `book_hash_check` (match / mismatch / incomplete / absent /
+  uncomputable) and the run counts `hash_check:*`. The M1 recording (m1-20261008T2259Z) keeps only the top of book,
+  so 0 snapshots could be checked; its WS book frames also never carried `min_order_size`, so on today's frames the
+  check reads `incomplete`. Supplemental: 10/10 live REST `/book` bodies matched the field order above (0/10 with
+  neg_risk before tick_size). The enforced path (any result but `match` resyncs, `book_hash_mismatch`, a gap) is
+  tested but off.
+- No new URL, dependency or outgoing frame. `WS_PONG_TIMEOUT_S` in `src/thresholds.py` (relation
+  `0 < WS_PING_INTERVAL_S < WS_PONG_TIMEOUT_S`) and `docs/THRESHOLDS.md`.
+- Tests (`tests/test_ws_recorder.py`, offline, synthetic frames; the fake connection answers PING unless told not
+  to; `tests/test_m1_run.py` fake answers PING). config/risk.toml unchanged, `live_enabled` false.
+
 ## Latest
 
-- 2026-10-09: Task AV: resolutions exit 4 split: pin drift 6, bad snapshot clock 5, both global halts; resolutions
-  now beats start/finish and is in the Sentinel's PROC_SPECS (exit 3 = alert). No new number.
-- 2026-10-09: Merge origin/dev (AR #46 daily_loss, AT #47 one ASSUMED_SLIPPAGE) into Task AS; AR, AT and AS all kept.
-- Task AS: `docs/EXIT_CODES.md` registry of all 18 entry points, kept in sync by tests and guard check 12 `exit_codes`.
-- Task AS: `src/pins.py` checks config/risk.toml (sha + all 9 keys) at start and while running; drift = refuse + global halt.
-- Exit changes: loop_claim usage 5 (was 2), paper_cycle 1 = global halt, new exit 6 for scanner/book/ws_recorder/m1_run.
-- pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`. M2 pending adds `PIN_RECHECK_S = 60`.
-- 2026-10-09: Task AT: one `ASSUMED_SLIPPAGE = 0.005` in `src/thresholds.py`; SportsDevig/intent names are aliases,
-  paper_ledger literals gone, drift fails at import. ROLES.md: RiskGate has no Kelly sizing (shadow only).
-- 2026-10-09: Task AR: `max_daily_loss` now counts today's (UTC) fees plus gross realized losses (`src/daily_loss.py`).
-- Gains never offset; corrupt counted ledger rows = `invalid_risk_state` = global halt. e2e golden `daily_loss`.
-- Task AP (merged #45) and AQ (merged #44) are on dev: guard checks 10 `secret_scan`, 11 `heartbeat`.
-- pytest + guard (11 checks) pass. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
-- No new number from AR. Open Operator choice: netting realized gains. Queue empty after AR.
-- 2026-10-09: Merge origin/dev (AS #48 exit codes / pins) into Task AU; AS and AU both kept (COORDINATION AS #31, AU #32).
-- Task AU: RiskGate vetoes `assumed_slippage < ASSUMED_SLIPPAGE` (`slippage_below_floor`); the paper_ledger CLI refuses it.
-- Task AS (merged #48): `docs/EXIT_CODES.md` registry (guard check 12 `exit_codes`); `src/pins.py` risk.toml pins at runtime.
-- Task AT (merged #47): one `ASSUMED_SLIPPAGE = 0.005`. Task AR (merged #46): `max_daily_loss` counts realized losses.
+- 2026-10-09: Task AW: WS recorder: a tick change re-snapshots the asset; no PONG within 30 s (`WS_PONG_TIMEOUT_S`,
+  M2 pending) reconnects; an unknown event for a subscribed asset resyncs it; the snapshot hash is computed and
+  recorded per row (`book_hash_check`) but not enforced (0 real WS snapshots could be validated).
+- Task AV (merged #50): resolutions exit 4 split (pin drift 6, bad snapshot clock 5). Task AU (merged #49):
+  RiskGate slippage floor. AS, AT, AR, AP, AQ on dev.
 - pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
-- No new number from AU. Open Operator choice: netting realized gains (AR). Queue empty after AU.
+- Open: validate the hash on raw WS snapshots in a later run; Operator choice on netting realized gains (AR).
+  Queue empty after AW.

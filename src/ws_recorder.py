@@ -23,8 +23,15 @@ Sources (checked 2026-10-09):
 
 What the protocol gives for integrity, and what this recorder does with it:
 - There is no sequence number, so a dropped frame cannot be seen directly. ``book.hash`` hashes
-  the book, but its algorithm is not documented, so it is recorded (``book_hash``) and never
-  verified; ``price_change[].hash`` is an order hash, not a book hash.
+  the book, but its algorithm is not officially published; ``price_change[].hash`` is an order hash,
+  not a book hash. Task AW: the algorithm Poly研究 found in older clients / Nautilus (set ``hash`` to
+  "", serialise market, asset_id, timestamp, hash, bids, asks, min_order_size, tick_size, neg_risk,
+  last_trade_price in that order as compact JSON, SHA-1 hex) is computed for every snapshot and the
+  result recorded (row ``book_hash_check``: match / mismatch / incomplete / absent / uncomputable,
+  and counts ``hash_check:*``). It is NOT enforced (BOOK_HASH_ENFORCED = False, Poly指挥 ruling): it
+  could not be validated on WS snapshots, because the M1 recording keeps only the top of book and
+  the hash, not the levels it was computed over. With BOOK_HASH_ENFORCED = True anything but
+  ``match`` resyncs the asset (``book_hash_mismatch``, a gap resync).
 - Gaps and inconsistencies are therefore detected from what the stream does carry, and each one
   puts the asset into resync: an exchange timestamp older than the last applied one
   (``timestamp_regression``); a delta that removes a level the local book does not have
@@ -32,7 +39,10 @@ What the protocol gives for integrity, and what this recorder does with it:
   (``crossed_book``); the ``best_bid``/``best_ask`` a price_change reports disagreeing with the
   local book (``top_of_book_mismatch``, checked when the local side is non-empty); a ``market``
   that differs from the snapshot's (``market_mismatch``); a tick_size_change whose old tick is
-  not the tick we hold (``tick_size_mismatch``); a non-finite or out-of-range price, size, tick
+  not the tick we hold (``tick_size_mismatch``); Task AW: any valid tick_size_change too
+  (``tick_size_change``: the book is re-snapshotted before a price on the new tick is trusted; not a
+  gap, so it is not counted toward the gap-resync escalation); an event type this recorder does not
+  handle that names a subscribed asset or its market, or names nothing (``unknown_event``); a non-finite or out-of-range price, size, tick
   or timestamp, a bad side, a duplicate level or a malformed message (``invalid_*``,
   ``malformed_message``). A frame that is not JSON resyncs every asset (``undecodable_message``).
 - Resync = if the asset was live, write one price-less invalidation row at once (see Rows below),
@@ -42,6 +52,9 @@ What the protocol gives for integrity, and what this recorder does with it:
   none arrives within WS_RESYNC_TIMEOUT_S it reconnects. Any disconnect resyncs every asset.
   Reconnects back off exponentially: WS_BACKOFF_BASE_S * 2**attempt, capped at WS_BACKOFF_CAP_S,
   reset after a connection on which every asset was live.
+- Task AW: a PING still unanswered by a PONG after WS_PONG_TIMEOUT_S means the connection is dead:
+  the recorder disconnects (``pong_timeout``, every asset resyncs) and reconnects; it counts toward
+  the Task AP reconnect escalation like any other disconnect.
 
 Safety rails (Poly指挥 ruling: websockets is not a trading dependency if all hold):
 - check_market_url: an allowlist enforced before connecting (Recorder and the adapter): scheme
@@ -85,6 +98,7 @@ that src/sentinel_tick.py escalates on. Nothing here changes what a row says or 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -111,6 +125,7 @@ from src.thresholds import (  # noqa: E402
     WS_BACKOFF_BASE_S,
     WS_BACKOFF_CAP_S,
     WS_PING_INTERVAL_S,
+    WS_PONG_TIMEOUT_S,
     WS_RESYNC_TIMEOUT_S,
     WS_ROW_REFRESH_S,
     WS_STOP_POLL_S,
@@ -126,6 +141,12 @@ PONG = "PONG"
 AWAITING = "awaiting_snapshot"
 LIVE = "live"
 SIDES = ("BUY", "SELL")
+# Task AW: the snapshot hash is recorded, not enforced, until it is validated on real WS snapshots.
+BOOK_HASH_ENFORCED = False
+BOOK_HASH_FIELDS = ("market", "asset_id", "timestamp", "hash", "bids", "asks", "min_order_size", "tick_size",
+                    "neg_risk", "last_trade_price")
+# Resync reasons that are not gaps in the stream (not counted toward the gap-resync escalation).
+NOT_A_GAP = frozenset({"tick_size_change"})
 
 EXIT_OK = 0
 EXIT_NO_ROWS = 1
@@ -193,6 +214,25 @@ def _exchange_time(raw: object) -> tuple[int, str] | None:
     return millis, iso
 
 
+def book_hash_check(message: dict[str, Any]) -> str:
+    """Task AW: the snapshot hash by the unofficial algorithm (see the module docstring).
+
+    "match" / "mismatch", "absent" (no hash string), "incomplete" (a hashed field is missing from the
+    frame, so the server's input cannot be rebuilt) or "uncomputable" (not serialisable).
+    """
+    claimed = message.get("hash")
+    if not isinstance(claimed, str) or not claimed:
+        return "absent"
+    if any(name not in message for name in BOOK_HASH_FIELDS):
+        return "incomplete"
+    body = {name: "" if name == "hash" else message[name] for name in BOOK_HASH_FIELDS}
+    try:
+        text = json.dumps(body, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError):
+        return "uncomputable"
+    return "match" if hashlib.sha1(text.encode("utf-8")).hexdigest() == claimed else "mismatch"
+
+
 # --- core -------------------------------------------------------------------------------------
 
 
@@ -206,6 +246,7 @@ class AssetBook:
     last_ms: int | None = None
     last_iso: str | None = None
     book_hash: str | None = None
+    hash_check: str | None = None
     tick_size: float | None = None
     min_order_size: float | None = None
     last_top: tuple | None = None
@@ -224,6 +265,7 @@ class AssetBook:
         self.last_ms = None
         self.last_iso = None
         self.book_hash = None
+        self.hash_check = None
         self.tick_size = None
         self.min_order_size = None
         self.last_top = None
@@ -336,7 +378,7 @@ class BookCore:
         elif kind == "last_trade_price":
             self._on_last_trade(message, ts, mono, out)
         elif isinstance(kind, str) and kind:
-            out.counts[f"ignored_event:{kind}"] += 1
+            self._on_unknown(message, kind, ts, mono, out)
         else:
             for asset in self._attributable(message):
                 self._resync(asset, "malformed_message", ts, mono, out)
@@ -353,6 +395,38 @@ class BookCore:
             if matched:
                 return matched
         return list(self.books)
+
+    def _on_unknown(self, message: dict[str, Any], kind: str, ts: str, mono: float | None, out: Outcome) -> None:
+        """Task AW: an event type this recorder does not handle. Fail closed: it resyncs every subscribed
+        asset it names (asset_id, assets_ids, price_changes[].asset_id) or whose market it names; one that
+        names nothing resyncs every asset; one that names only other assets/markets is ignored."""
+        out.counts[f"unknown_event:{kind}"] += 1
+        named: set[str] = set()
+        identified = False
+        asset = message.get("asset_id")
+        if isinstance(asset, str) and asset:
+            identified = True
+            named.add(asset)
+        for key in ("assets_ids", "price_changes"):
+            items = message.get(key)
+            if isinstance(items, list):
+                for item in items:
+                    value = item.get("asset_id") if isinstance(item, dict) else item
+                    if isinstance(value, str) and value:
+                        identified = True
+                        named.add(value)
+        market = message.get("market")
+        if isinstance(market, str) and market:
+            identified = True
+        targets = [name for name, book in self.books.items()
+                   if name in named or (isinstance(market, str) and market and book.market == market)]
+        if not identified:
+            targets = list(self.books)
+        if not targets:
+            out.counts[f"ignored_event:{kind}"] += 1
+            return
+        for name in targets:
+            self._resync(name, "unknown_event", ts, mono, out)
 
     def _subscribed(self, message: dict[str, Any], out: Outcome) -> AssetBook | None:
         asset = message.get("asset_id")
@@ -401,6 +475,10 @@ class BookCore:
                 min_size = _size(message.get("min_order_size"), allow_zero=True)
                 if min_size is None:
                     raise _Reject("invalid_size")
+            hash_check = book_hash_check(message)
+            out.counts[f"hash_check:{hash_check}"] += 1
+            if BOOK_HASH_ENFORCED and hash_check != "match":
+                raise _Reject("book_hash_mismatch")
         except _Reject as reject:
             self._resync(asset, reject.reason, ts, mono, out)
             return
@@ -409,6 +487,7 @@ class BookCore:
         book.bids, book.asks = bids, asks
         book.last_ms, book.last_iso = stamp
         book.book_hash = book_hash
+        book.hash_check = hash_check
         book.tick_size = tick
         book.min_order_size = min_size
         book.awaiting_since = None
@@ -512,10 +591,10 @@ class BookCore:
         except _Reject as reject:
             self._resync(book.asset_id, reject.reason, ts, mono, out)
             return
-        book.tick_size = new_tick
-        book.last_ms, book.last_iso = stamp
-        out.counts["tick_size_applied"] += 1
-        self._emit(book, ts, "tick_size_change", out)
+        # Task AW: a valid tick change still re-snapshots the asset (Nautilus resync rule): prices on the
+        # new tick are only trusted from a fresh book snapshot, so the asset invalidates and resubscribes.
+        out.counts["tick_size_resnapshot"] += 1
+        self._resync(book.asset_id, "tick_size_change", ts, mono, out)
 
     def _on_last_trade(self, message: dict[str, Any], ts: str, mono: float | None, out: Outcome) -> None:
         """A trade does not change the aggregated book; it is only validated (bad values resync)."""
@@ -587,6 +666,7 @@ class BookCore:
             "ws_event": event,
             "ws_state": LIVE,
             "book_hash": book.book_hash,
+            "book_hash_check": book.hash_check,
         })
         out.rows.append(row)
 
@@ -978,7 +1058,7 @@ class Recorder:
         self.report.counts.update(out.counts)
         escalate = False
         for asset, reason in out.resyncs:
-            if not reason.startswith("disconnect_"):
+            if not reason.startswith("disconnect_") and reason not in NOT_A_GAP:
                 escalate = self.escalation.gap_resync(asset) or escalate
         if escalate:
             self._beat(force=True)
@@ -1062,6 +1142,7 @@ class Recorder:
             return "closed", healthy
         self.core.start_waiting(self.monotonic())
         next_ping = self.monotonic() + WS_PING_INTERVAL_S
+        pong_due: float | None = None  # Task AW: first unanswered PING's send time + WS_PONG_TIMEOUT_S
         while True:
             current = self.monotonic()
             if current >= deadline:
@@ -1070,10 +1151,14 @@ class Recorder:
                 return "stopped", healthy
             self._beat()
             try:
+                if pong_due is not None and current >= pong_due:
+                    return "pong_timeout", healthy
                 if current >= next_ping:
                     self._send(connection, PING)
                     self.report.pings += 1
                     next_ping = current + WS_PING_INTERVAL_S
+                    if pong_due is None:
+                        pong_due = current + WS_PONG_TIMEOUT_S
                 oldest = self.core.oldest_awaiting_since()
                 if oldest is not None and current - oldest >= WS_RESYNC_TIMEOUT_S:
                     return "resync_timeout", healthy
@@ -1084,11 +1169,15 @@ class Recorder:
                     waits.append(HEARTBEAT_RECORDER_EVERY_S)
                 if oldest is not None:
                     waits.append(oldest + WS_RESYNC_TIMEOUT_S - current)
+                if pong_due is not None:
+                    waits.append(pong_due - current)
                 text = connection.recv(max(0.0, min(waits)))
                 if text is None:
                     continue
                 before = set(self.core.awaiting())
                 out = self.core.handle_text(text, self.now(), self.monotonic())
+                if out.counts["pong"]:
+                    pong_due = None
                 self._write(out, before)
                 fresh = [asset for asset, _ in out.resyncs if asset not in before]
                 fresh = list(dict.fromkeys(fresh))
