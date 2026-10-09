@@ -1217,13 +1217,40 @@ disk use, and an offline tool can say whether the AW algorithm matches them; `py
 - Tests: `tests/test_ws_raw_snapshots.py` (synthetic frames, sockets patched to fail; secret scan clean on the raw
   files). No new URL, dependency or outgoing frame. config/risk.toml unchanged, `live_enabled` false.
 
+## Task BA — Market context on paper fills; ws_recorder --raw-books
+
+Status: done.
+
+Requested by Poly指挥 (rest of m3_calibration_design.md 1.5 after Task AX), done by grok-bot on dev@39aebfa.
+AZ (#60, src/calibration.py) runs in parallel; this task does not touch src/calibration.py.
+
+Finish when every paper fill records its market context at commit without inventing a value, RiskGate
+provably reads none of it, the standalone recorder can save raw book frames like m1_run, and
+`python -m pytest` and guard --require-git pass offline.
+
+- `risk_gate.Intent`: `best_bid`, `best_ask`, `kelly_fraction_used` (None default). RiskGate never reads
+  them (source check and identical decisions for any values, `tests/test_fill_market_fields.py`).
+- Sources: `intent_builder.to_risk_intent` passes the chosen token's BookSnapshot `best_bid` / `best_ask` and
+  the shadow Kelly multiplier it used (`kelly_fraction`, risk.toml 0.15); the e2e harness intent passes the
+  same from its /book row and risk.toml; the paper_ledger no-edge check passes its book row's top.
+- `paper_ledger.market_fields` (fill, at commit): `best_bid` / `best_ask` finite in (0, 1);
+  `market_mid` = (bid + ask) / 2 when both usable and bid <= ask; `hours_to_expiry_at_entry` = end_date −
+  fill ts (hours, may be negative); `kelly_fraction_used` in (0, 1]. Otherwise None and `missing_<field>` /
+  `invalid_<field>` (crossed book: `invalid_market_mid`) in the stored `calibration_problems`. The join check
+  `fill_problems` is unchanged. Consequence: the AZ report drops fills whose stored problems are non-empty.
+- e2e golden (`--update-golden`): only the new `market_fields` of the three calibration fills.
+- `RotatingJsonl` / `RawBookSink` moved to `src/ws_recorder.py` (m1_run re-exports them).
+  `python -m src.ws_recorder ... --raw-books DIR` (off by default; DIR new or empty, else exit 2) writes
+  `DIR/raw_books-NNNNNN.jsonl` with the same writer and caps (16 MiB per file, 256 MiB per run).
+- Docs: `docs/M3_CALIBRATION.md` Step 2b, `docs/EXIT_CODES.md`, `docs/THRESHOLDS.md` wording.
+- No new number, no decision, threshold or size moved. config/risk.toml unchanged, `live_enabled` false.
+
 ## Latest
 
-- 2026-10-09: Task AY: `m1_run --raw-books` (opt-in) keeps full book frames in `raw_books/` (16 MiB per file,
-  256 MiB per run, M2 pending); `python -m src.ws_hash_check <run dir>` checks the AW hash on them, read-only.
-  `BOOK_HASH_ENFORCED` stays False.
-- Task AX (merged #58): M3 step 2 identity fields and the sealed forecast log. Task AW (merged #51): WS resync
-  hardening (tick re-snapshot, 30 s PONG timeout, unknown events fail closed, hash recorded).
+- 2026-10-09: Task BA: paper fills record `market_mid`, `best_bid`, `best_ask`, `hours_to_expiry_at_entry`,
+  `kelly_fraction_used` (shadow, recorded only); null + `calibration_problems` when not computable; RiskGate
+  never reads them. `python -m src.ws_recorder --raw-books DIR` uses the m1_run raw writer and caps.
+- Task AY (merged #59): opt-in raw book snapshots and `python -m src.ws_hash_check`. AZ (#60) open.
 - pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
-- Open: run M1 with `--raw-books` and `ws_hash_check` before deciding on hash enforcement; Operator choice on
-  netting realized gains (AR). Queue empty after AY.
+- Open: switch the calibration baseline to `market_mid` after AZ and BA merge; run M1 with `--raw-books`
+  before deciding on hash enforcement; Operator choice on netting realized gains (AR). Queue empty after BA.
