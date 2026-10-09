@@ -1127,8 +1127,36 @@ and `python -m pytest` and guard --require-git pass offline.
 - Tests: `tests/test_resolutions.py`, `tests/test_pins.py`, `tests/test_sentinel_tick.py`, `tests/test_exit_codes.py`.
 - No new number. config/risk.toml unchanged, `live_enabled` false.
 
+## Task AX — M3 calibration step 2: identity fields and the sealed forecast log
+
+Status: done.
+
+Requested by Poly指挥 (Poly反思's M3 calibration design section 1.5, prerequisite 2; the NewsForecaster
+payload per the signal->intent ruling), done by grok-bot on dev@316d4e1.
+
+Finish when every forecast is sealed in `logs/forecasts.jsonl` before its signal, scanner rows, the signal,
+the intent and every paper fill carry the identity the forecast -> fill -> resolution join needs, a fill that
+cannot join says why (never an invented id), no RiskGate decision moves, and `python -m pytest`, the e2e gate
+and guard --require-git pass offline.
+
+- `src/calibration_ids.py` (stdlib): `forecast_id` (`fc_` + sha256 of the forecast's content), `decision_id`
+  (`dc_` + sha256 of strategy, market, token, forecast_id; None when a part is missing), row schemas,
+  `fill_problems` / `forecast_problems`, `append_forecast` (one O_APPEND write + fsync, idempotent, refuses a
+  torn tail, wrong keys or nan).
+- `src/forecaster.py`: seals the row first (no signal if it cannot); payload adds `forecast_id`,
+  `forecast_ts`, `model_version` and, when given, `outcome_index`, `outcome`, `token_id`, `condition_id`,
+  `p_low`, `p_high`. `MODEL_VERSION = "news-forecaster-stub/1"`.
+- `src/scanner.py`: rows add `category`, `tags` (keyset URL `include_tag=true`); neither filters.
+- `src/risk_gate.py` `Intent`, `src/intent_builder.py` (`ProbabilitySignal`, `MarketContext.gamma_category` /
+  `tags`, `OrderIntent`, `to_risk_intent`), `src/paper_ledger.py` fills: identity fields plus
+  `calibration_problems`. RiskGate never reads them (test).
+- e2e gate: new golden section `calibration_ids` (written with --update-golden; no existing value moved).
+- Docs: `docs/M3_CALIBRATION.md` Step 2. No new number; `config/strategies.toml` not created.
+
 ## Latest
 
+- 2026-10-09: Task AX: M3 step 2 identity fields on forecasts, scanner rows and fills; `logs/forecasts.jsonl`
+  sealed before every NewsForecaster signal; unjoinable fills flagged in `calibration_problems`. No number moved.
 - 2026-10-09: Task AV: resolutions exit 4 split: pin drift 6, bad snapshot clock 5, both global halts; resolutions
   now beats start/finish and is in the Sentinel's PROC_SPECS (exit 3 = alert). No new number.
 - 2026-10-09: Merge origin/dev (AR #46 daily_loss, AT #47 one ASSUMED_SLIPPAGE) into Task AS; AR, AT and AS all kept.

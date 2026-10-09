@@ -51,6 +51,9 @@ GAMMA = (
 GAMMA_KEYSET = (
     "https://gamma-api.polymarket.com/markets/keyset"
     "?closed=false&active=true&order=volume24hr&ascending=false"
+    # Task AX (M3 step 2): Gamma adds each market's tags only with include_tag=true. Same host and
+    # path; read-only. The tags are stored (row "tags"), never used to filter or rank.
+    "&include_tag=true"
 )
 PAGE_LIMIT = 100
 MAX_MARKETS = 50000
@@ -60,6 +63,7 @@ MAX_PAGES = 1000
 BUS_TOP_N = 50
 
 # Long-tail band. Optional risk.toml overrides: scanner_min_price, scanner_max_price.
+from src.calibration_ids import scanner_category, scanner_tags  # noqa: E402 - Task AX
 from src.thresholds import SCANNER_MAX_PRICE as MAX_PRICE  # noqa: E402 - Task AC
 from src.thresholds import SCANNER_MIN_PRICE as MIN_PRICE  # noqa: E402 - Task AC
 
@@ -385,6 +389,9 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
         "accepting_orders": None if accepting is None else bool(accepting),
         "fees_enabled": bool(market.get("feesEnabled")),
         "closed": bool(market.get("closed")),
+        # Task AX (M3 step 2): grouping labels for calibration. Gamma's own values or None/[]; not guessed.
+        "category": scanner_category(market),
+        "tags": scanner_tags(market),
         "source": "gamma_public",
     }
 

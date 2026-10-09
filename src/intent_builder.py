@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from src import fees
+from src.calibration_ids import make_decision_id
 from src.book_staleness import book_age_problem, parse_book_ts
 from src.expiry_rule import expiry_problem, parse_end_date
 from src.podlib import pin_problems
@@ -124,6 +125,10 @@ class ProbabilitySignal:
     token_id: str | None = None
     signal_ts: str | float | None = None
     note: str = ""
+    # Task AX (M3 step 2): the sealed forecast behind a NewsForecaster signal (None for legacy rows).
+    forecast_id: str | None = None
+    forecast_ts: str | None = None
+    model_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -153,6 +158,10 @@ class MarketContext:
     closed: bool
     category: str | None = None
     resolution_flag: str | None = None  # "ambiguous" -> ambiguous_resolution
+    # Task AX (M3 step 2): Gamma's own labels from the scanner row, for calibration grouping only.
+    # Never read by any check (category_banned reads ``category``, which only the caller sets).
+    gamma_category: str | None = None
+    tags: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -232,6 +241,14 @@ class OrderIntent:
     paper: bool = True
     note: str = ""
     counterparty: None = None
+    # Task AX (M3 step 2): calibration identity, copied onto the risk Intent and the paper fill.
+    decision_id: str | None = None
+    forecast_id: str | None = None
+    forecast_ts: str | None = None
+    model_version: str | None = None
+    category: str | None = None
+    tags: tuple[str, ...] | None = None
+    end_date: str | None = None
 
 
 @dataclass(frozen=True)
@@ -768,6 +785,10 @@ def build_order_intent(signal: ProbabilitySignal | None, market: MarketContext, 
         kelly_size_pct=size.kelly_size_pct, kelly_size_usd=size.kelly_size_usd, size_pct=size.size_pct,
         reasons=tuple(marks), created_at=_iso(now), expires_at=_iso(expires), book_ts=book.book_ts,
         signal_ts=signal.signal_ts, paper=True, note=signal.note, counterparty=None,
+        decision_id=make_decision_id(strategy, market.market_id, pick["token"], signal.forecast_id),
+        forecast_id=signal.forecast_id, forecast_ts=signal.forecast_ts, model_version=signal.model_version,
+        category=market.category if market.category is not None else market.gamma_category, tags=market.tags,
+        end_date=market.end_date or None,
     )
     return IntentResult(intent, (), None, detail)
 
@@ -790,6 +811,16 @@ def to_risk_intent(oi: OrderIntent) -> Intent:
         note=oi.note,
         book_ts=oi.book_ts,
         counterparty=None,
+        decision_id=oi.decision_id,
+        forecast_id=oi.forecast_id,
+        forecast_ts=oi.forecast_ts,
+        condition_id=oi.condition_id or None,
+        outcome_index=oi.outcome_index,
+        outcome=oi.outcome or None,
+        category=oi.category,
+        tags=oi.tags,
+        end_date=oi.end_date,
+        model_version=oi.model_version,
     )
 
 
@@ -812,7 +843,11 @@ def signal_from_bus(row: Mapping[str, object]) -> ProbabilitySignal | None:
     payload = row.get("payload") if isinstance(row.get("payload"), Mapping) else {}
     frm = row.get("from")
     common = {"signal_id": str(payload.get("forecast_id") or signal_id_for(row)), "market_id": str(row.get("market") or ""),
-              "signal_ts": row.get("ts"), "note": str(payload.get("note") or "")}
+              "signal_ts": row.get("ts"), "note": str(payload.get("note") or ""),
+              # Task AX: carried, never synthesised (signal_id above may be a hash; forecast_id is not)
+              "forecast_id": _id_or_none(payload.get("forecast_id")),
+              "forecast_ts": _id_or_none(payload.get("forecast_ts")),
+              "model_version": _id_or_none(payload.get("model_version"))}
     index = payload.get("outcome_index", 0)
     token = payload.get("token_id")
     token = str(token) if token not in (None, "") else None
@@ -826,6 +861,10 @@ def signal_from_bus(row: Mapping[str, object]) -> ProbabilitySignal | None:
     if frm == "Endgame":
         return ProbabilitySignal(source="endgame", outcome_index=index, p=None, token_id=token, **common)  # type: ignore[arg-type]
     return None
+
+
+def _id_or_none(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def book_snapshot_from_row(row: Mapping[str, object]) -> BookSnapshot:
@@ -850,4 +889,12 @@ def market_context_from_row(row: Mapping[str, object], *, fee_rate: float | None
                          outcomes=tuple(str(o) for o in (row.get("outcomes") or ())),  # type: ignore[union-attr]
                          end_date=row.get("end_date") or "", liquidity_usd=row.get("liquidity_usd"),  # type: ignore[arg-type]
                          fee_rate=fee_rate, accepting_orders=row.get("accepting_orders"),  # type: ignore[arg-type]
-                         closed=row.get("closed") is not False, category=category, resolution_flag=resolution_flag)
+                         closed=row.get("closed") is not False, category=category, resolution_flag=resolution_flag,
+                         gamma_category=_id_or_none(row.get("category")), tags=_tags(row.get("tags")))
+
+
+def _tags(value: object) -> tuple[str, ...] | None:
+    """Scanner row tags (Task AX): a list of strings -> tuple; anything else (missing) -> None."""
+    if not isinstance(value, (list, tuple)):
+        return None
+    return tuple(str(item) for item in value if isinstance(item, str) and item)

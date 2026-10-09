@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T10:39:01Z",
+  "ts": "2026-10-09T12:21:43Z",
   "live_enabled": false,
-  "last_done": "AV",
+  "last_done": "AX",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AV (resolutions exit 4 split: pin drift 6, bad snapshot clock 5, both global halts; resolutions start/finish heartbeat, Sentinel PROC_SPECS + EXIT_EVENTS, docs/EXIT_CODES.md) done by grok-bot. No new number. AU (#49, RiskGate slippage floor) merged into this branch from dev. No open todo. No live gate."
+  "note": "AX (M3 step 2 identity fields: forecast_id/decision_id/condition_id/outcome_index/token_id/category/tags/end_date/model_version on forecasts, scanner rows and fills; sealed logs/forecasts.jsonl before every NewsForecaster signal; unjoinable fills flagged in calibration_problems) done by grok-bot. No new number, no decision moved. AW (#51) in flight. No open todo. No live gate."
 }

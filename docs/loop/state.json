@@ -393,6 +393,15 @@
       "note": "Requested by Poly指挥 (follow-up left open by AS); done by grok-bot. Behaviour changes: resolutions pin drift exits 6 (was 4); a bad snapshot clock exits 5 (was 4) and is a global halt once the Sentinel reads the new heartbeat; resolutions exit 3 is now an alert (it had no heartbeat before). AU (RiskGate slippage floor, #49) runs in parallel.",
       "done_at": "2026-10-09T10:39:01Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AX",
+      "status": "done",
+      "title": "M3 calibration step 2 (prerequisite): identity fields on forecasts, scanner rows and paper fills, plus the sealed forecast log logs/forecasts.jsonl, so forecasts and fills can be joined to data/resolutions.jsonl",
+      "finish": "src/calibration_ids.py (stdlib): forecast_id = fc_ + sha256 of the forecast's content (minted once by forecaster.emit_probability), decision_id = dc_ + sha256(strategy, market, token_id, forecast_id) (derived, None when any part is missing), FORECAST_ROW_FIELDS, fill_problems / forecast_problems, append_forecast (one O_APPEND write + fsync; refuses wrong keys, nan/inf, a torn tail; idempotent by forecast_id). forecaster.emit_probability seals the row in logs/forecasts.jsonl before the bus signal (no signal if that fails); payload adds forecast_id, forecast_ts, model_version and, when given, outcome_index, outcome, token_id, condition_id, p_low, p_high. Scanner rows add category and tags (keyset URL include_tag=true; never filter). risk_gate.Intent, intent_builder ProbabilitySignal / MarketContext (gamma_category, tags) / OrderIntent / to_risk_intent carry the identity; paper_ledger fills add decision_id, forecast_id, forecast_ts, condition_id, outcome_index, outcome, category, tags, end_date, model_version and calibration_problems (missing join ids flagged, fill still booked; never invented). e2e gate: new golden section calibration_ids only (every signal sealed, every fill joins its forecast). docs/M3_CALIBRATION.md Step 2. No new number, config/strategies.toml not created, config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (Poly反思's M3 calibration design 1.5, prerequisite 2; signal->intent ruling for the NewsForecaster payload); done by grok-bot. No RiskGate decision, threshold, size or existing golden value moved. Not yet: market_mid / best_bid / best_ask, hours_to_expiry_at_entry, kelly_fraction_used on fills; the join and Brier report (step 3). AW (#51) ran in parallel.",
+      "done_at": "2026-10-09T12:21:43Z",
+      "surface": "grok-bot"
     }
   ]
 }

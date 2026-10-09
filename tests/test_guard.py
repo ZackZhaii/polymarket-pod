@@ -649,7 +649,7 @@ def test_a_loosened_risk_gate_rule_fails_e2e(repo):
 def test_a_src_regression_that_fetches_quietly_fails_e2e(repo):
     path = repo / "src" / "forecaster.py"
     text = path.read_text(encoding="utf-8")
-    marker = "    if not 0.0 < model_prob < 1.0:\n"
+    marker = '    p = _prob("model_prob", model_prob)\n'  # Task AX: forecaster validates through _prob
     assert text.count(marker) == 1
     path.write_text(text.replace(marker, "    try:\n        from src.podlib import public_get\n"
                                          "        public_get('https://clob.polymarket.com/book?token_id=1')\n"

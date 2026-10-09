@@ -36,6 +36,7 @@ from src.podlib import (  # noqa: E402
     read_jsonl,
     utc_now,
 )
+from src import calibration_ids  # noqa: E402 - Task AX (M3 step 2)
 from src.book_staleness import latest_by_time, parse_book_ts  # noqa: E402
 from src.fees import booked_fee_usd, ledger_fee  # noqa: E402 - Task AE: one fee module
 from src import ledger_store  # noqa: E402 - Task AF: ledger integrity
@@ -215,6 +216,10 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
         "risk_decision": "allow",
         "note": f"{DIRECTIONAL} {intent.note}".strip(),
     }
+    # Task AX (M3 step 2): identity fields, then the join check. A fill that cannot be joined is still
+    # booked (RiskGate already decided; nothing here changes that) but says why in calibration_problems.
+    fill.update(identity_fields(intent))
+    fill["calibration_problems"] = calibration_ids.fill_problems(fill)
     try:
         fill = ledger_store.book(PAPER_PATH, fill)
     except LedgerIntegrityError as exc:
@@ -241,8 +246,32 @@ def _emit(*args: Any, **kwargs: Any) -> Any:
     return bus(*args, **kwargs)
 
 
+def identity_fields(intent: Intent) -> dict[str, Any]:
+    """Task AX: the calibration identity of a fill (calibration_ids.FILL_ID_FIELDS), from the intent.
+
+    decision_id is the intent's own when given (it must then match the derivation, or the fill is
+    flagged decision_id_mismatch); otherwise derived from (strategy, market, token_id, forecast_id),
+    or None when any part is missing. Nothing is invented.
+    """
+    decision_id = intent.decision_id or calibration_ids.make_decision_id(
+        intent.strategy, intent.market, intent.token_id, intent.forecast_id)
+    return {
+        "decision_id": decision_id,
+        "forecast_id": intent.forecast_id,
+        "forecast_ts": intent.forecast_ts,
+        "condition_id": intent.condition_id,
+        "outcome_index": intent.outcome_index,
+        "outcome": intent.outcome,
+        "category": intent.category,
+        "tags": None if intent.tags is None else list(intent.tags),
+        "end_date": intent.end_date,
+        "model_version": intent.model_version,
+    }
+
+
 def _decision_payload(intent: Intent, decision: Decision) -> dict[str, Any]:
     return {
+        "forecast_id": intent.forecast_id,  # Task AX: joins a veto or allow back to its sealed forecast
         "strategy": intent.strategy,
         "model_prob": intent.model_prob,
         "market_price": intent.market_price,

@@ -1,9 +1,10 @@
 """Shared test isolation: no test may touch the real logs/ Sentinel state, paper quotes (Task AA), halt state (Task AL)
-or heartbeats, alerts and the Sentinel tick state (Task AP)."""
+or heartbeats, alerts and the Sentinel tick state (Task AP), or sealed forecasts (Task AX)."""
 from __future__ import annotations
 
 import pytest
 
+import src.forecaster as forecaster
 import src.halt_store as halt_store
 import src.heartbeat as heartbeat
 import src.paper_cycle as paper_cycle
@@ -24,6 +25,8 @@ def _isolate_sentinel_state(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(heartbeat, "HEARTBEAT_DIR", base / "heartbeat")
     monkeypatch.setattr(sentinel_tick, "ALERTS_PATH", base / "alerts.jsonl")
     monkeypatch.setattr(sentinel_tick, "TICK_STATE_PATH", base / "sentinel_tick.json")
+    # Task AX: sealed forecasts (logs/forecasts.jsonl) stay in the test's folder too.
+    monkeypatch.setattr(forecaster, "FORECASTS_PATH", base / "forecasts.jsonl")
 
 
 def pytest_addoption(parser):
