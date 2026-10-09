@@ -56,6 +56,24 @@ The 2026-10-08 run itself used the earlier single-page sample (`active_sample=20
 
 SHA256 before and after the run: `0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04`.
 
+### What `max_daily_loss` counts (Task AR)
+
+RiskGate vetoes `max_daily_loss` when `daily_loss_usd / PAPER_EQUITY_USD >= max_daily_loss_pct`.
+`daily_loss_usd` (`src/daily_loss.py`, read by `paper_ledger.load_state`) is today's booked fees plus
+today's **gross realized losses** of the paper ledger. Before Task AR it was the fees only.
+
+- Realized P&L is replayed per leg (market + token_id) over the rows that count toward risk, in
+  ledger order, at average cost. A sell that closes a long realizes proceeds minus average cost; a
+  buy that closes a short realizes average proceeds minus cost. Fees are counted once, separately.
+- Realized gains are reported (`daily_realized_gain_usd`) but never offset a loss or the fees.
+- Day boundary: the UTC calendar day of the clock (00:00:00Z inclusive to the next 00:00:00Z).
+  A loss belongs to the UTC day of the closing fill's `ts`, whenever the position was opened. A row
+  whose `ts` starts with today's date, or whose UTC date is today or later, counts toward today.
+- A counted row with a missing or unparseable `ts`, a side that is not buy/sell, or shares, notional
+  or fee that is not a finite number >= 0 makes the state invalid: RiskGate vetoes
+  `invalid_risk_state` and the paper ledger raises a global halt.
+- `load_state` also returns `daily_fees_usd`, `daily_realized_loss_usd` and `daily_realized_gain_usd`.
+
 ## Guard (M0)
 
 Run the local guard before and after any change, from any folder inside the repo. It is offline, read-only and

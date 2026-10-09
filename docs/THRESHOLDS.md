@@ -130,7 +130,7 @@ is copied into `src/thresholds.py`. `mode`, `live_enabled`, `require_human_gate`
 | `mode` | `"paper"` | — | Phase 0 runs paper only. Pinned. | `risk.toml: mode` | config/risk.toml | file-governed |
 | `live_enabled` | `false` | — | No live trading. Pinned. | `risk.toml: live_enabled` | config/risk.toml | file-governed |
 | `max_order_pct` | `0.01` | fraction of equity | Order size cap (1% clip). Pinned. | `risk.toml: max_order_pct` | config/risk.toml | file-governed |
-| `max_daily_loss_pct` | `0.03` | fraction of equity | Daily loss cap; reaching it vetoes. Pinned. | `risk.toml: max_daily_loss_pct` | config/risk.toml | file-governed |
+| `max_daily_loss_pct` | `0.03` | fraction of equity | Daily loss cap; reaching it vetoes. Pinned. Since Task AR the daily loss is today's (UTC) booked fees plus gross realized losses; gains never offset (`src/daily_loss.py`). | `risk.toml: max_daily_loss_pct` | config/risk.toml | file-governed |
 | `max_open_positions` | `5` | legs | Open legs (market + token) cap. | `risk.toml: max_open_positions` | config/risk.toml | file-governed |
 | `min_liquidity_usd` | `10000` | USD | Scanner and RiskGate liquidity floor (and the Gamma pre-filter). | `risk.toml: min_liquidity_usd` | config/risk.toml | file-governed |
 | `max_spread` | `0.04` | price | Scanner and RiskGate spread ceiling. | `risk.toml: max_spread` | config/risk.toml | file-governed |

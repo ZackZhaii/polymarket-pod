@@ -995,11 +995,41 @@ Finish when every loop writes a heartbeat at the design cadence, a resident Sent
 - Later: resume precondition signal, WS hash/tick resync, the Sentinel tick running AQ's secret scan; no halt_consumer process yet.
 
 
+## Task AR — daily_loss counts realized losses (backlog #4, tightening only)
+
+Status: done.
+
+Requested by Poly指挥 (backlog #4; SPEC_signal_to_intent inconsistency 12: `daily_loss_usd` summed only fees, so
+`max_daily_loss` was a daily fee cap), done by grok-bot on dev@9ec24df.
+
+Finish when RiskGate's `max_daily_loss` check counts today's realized losses as well as today's fees, nothing it
+counted before drops out, the day boundary is explicit and corrupt ledger data fails closed.
+
+- `src/daily_loss.py` (pure): `daily_loss_usd = today's booked fees + today's gross realized losses`. Realized P&L is
+  replayed per leg (market + token_id, `ledger_store.leg_key`) over the rows that count toward risk
+  (`ledger_store.counts`), in ledger order, at average cost: a sell closing a long realizes proceeds minus average
+  cost, a buy closing a short average proceeds minus cost, a remainder opens the other side. Fees stay out of P&L
+  (counted once). A missing notional (legacy rows) is valued at the worst price (buy 1 USD/share, sell 0).
+- Gains are reported (`daily_realized_gain_usd`) but never offset a loss or the fees; netting is left to the Operator.
+- Day boundary: the UTC calendar day of `utc_now()` (the existing convention). A loss belongs to the UTC day of the
+  closing fill's `ts`. A row counts toward today when its `ts` starts with today's date (old rule) or its UTC date is
+  today or later.
+- Fail closed: a counted row with a missing/unparseable `ts`, a side other than buy/sell, or shares / notional / fee
+  not finite and >= 0 gives `daily_loss_problems` + `ledger_problems`, `daily_loss_usd = None`, RiskGate
+  `invalid_risk_state` and the Task AL global halt.
+- `paper_ledger.load_state` also returns `daily_fees_usd`, `daily_realized_loss_usd`, `daily_realized_gain_usd`.
+- e2e: golden `daily_loss` cases a-f (loss closed at 00:00:00Z today vetoes, the same loss closed 23:59:59Z
+  yesterday allows, a gain does not offset, 29 USD allows, fees + loss over the cap veto, unparseable ts = global
+  halt); golden only via `--update-golden`. Tests: `tests/test_daily_loss.py`, `tests/test_e2e_offline.py`,
+  `tests/test_ledger_integrity.py` (legacy_mixed now also counts its 0.05 USD realized loss).
+- No new number. `max_daily_loss_pct` and config/risk.toml unchanged, `live_enabled` false.
+
 ## Task AS — Exit-code registry and runtime pin checks (Poly哨兵 design gaps 4, 5, 6)
 
 Status: done.
 
-Requested by Poly指挥 (queue after AP: EXIT_CODES / pins), done by grok-bot on dev@9ec24df. AR (#46) runs in parallel.
+Requested by Poly指挥 (queue after AP: EXIT_CODES / pins), done by grok-bot on dev@9ec24df;
+merged origin/dev with AR (#46, daily_loss) before the PR.
 
 Finish when every entry point's exit codes are in one registry kept in sync with the code by a test and a guard
 check, the long-running and data-writing processes check config/risk.toml (sha + every key) at start and while
@@ -1029,8 +1059,8 @@ running and refuse + halt globally on drift, and `python -m pytest` and guard --
 
 ## Latest
 
+- 2026-10-09: Merge origin/dev (AR #46, daily_loss counts realized losses) into Task AS; AR and AS both kept.
 - Task AS: `docs/EXIT_CODES.md` registry of all 18 entry points, kept in sync by tests and guard check 12 `exit_codes`.
 - Task AS: `src/pins.py` checks config/risk.toml (sha + all 9 keys) at start and while running; drift = refuse + global halt.
 - Exit changes: loop_claim usage 5 (was 2), paper_cycle 1 = global halt, new exit 6 for scanner/book/ws_recorder/m1_run.
-- pytest + guard (12 checks) pass. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
-- M2 pending adds `PIN_RECHECK_S = 60`. AR (#46) in parallel; no other open todo.
+- pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`. M2 pending adds `PIN_RECHECK_S = 60`.

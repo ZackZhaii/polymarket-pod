@@ -27,15 +27,20 @@ from src.thresholds import LEDGER_OPEN_EPS, PAPER_EQUITY_USD
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ledger"
 FIXTURE_NOW = "2026-10-08T12:00:00Z"
 
+# Task AR (backlog #4): daily_loss_usd now adds today's gross realized loss to the fees. In
+# legacy_mixed.jsonl m1/yes buys 24.69135802 shares for 10.0 USD and sells 10 of them for 4.0 USD:
+# realized loss = average cost of 10 shares - 4.0. Every other value is unchanged.
+LEGACY_MIXED_LOSS = 0.37000000000000005 + (10.0 * 10.0 / 24.69135802 - 4.0)
+
 # (fixture, market, token, open_positions, leg_already_open, exposure_usd, leg_exposure_usd,
 #  daily_loss_usd, len(recent_fills)) from the pre-AF load_state, utc_now = FIXTURE_NOW.
 EXPECTED_LEGACY = [
-    ('legacy_mixed.jsonl', 'm1', 'yes', 6, True, 35.928825621684325, 5.928825621684326, 0.37000000000000005, 9),
-    ('legacy_mixed.jsonl', 'm1', 'no', 6, True, 35.928825621684325, 10.0, 0.37000000000000005, 9),
-    ('legacy_mixed.jsonl', 'm2', '', 6, True, 35.928825621684325, 5.0, 0.37000000000000005, 9),
-    ('legacy_mixed.jsonl', 'm3', 't', 6, True, 35.928825621684325, 5.0, 0.37000000000000005, 9),
-    ('legacy_mixed.jsonl', 'm5', 't', 6, True, 35.928825621684325, 2.0, 0.37000000000000005, 9),
-    ('legacy_mixed.jsonl', 'zz', '', 6, False, 35.928825621684325, 0.0, 0.37000000000000005, 9),
+    ('legacy_mixed.jsonl', 'm1', 'yes', 6, True, 35.928825621684325, 5.928825621684326, LEGACY_MIXED_LOSS, 9),
+    ('legacy_mixed.jsonl', 'm1', 'no', 6, True, 35.928825621684325, 10.0, LEGACY_MIXED_LOSS, 9),
+    ('legacy_mixed.jsonl', 'm2', '', 6, True, 35.928825621684325, 5.0, LEGACY_MIXED_LOSS, 9),
+    ('legacy_mixed.jsonl', 'm3', 't', 6, True, 35.928825621684325, 5.0, LEGACY_MIXED_LOSS, 9),
+    ('legacy_mixed.jsonl', 'm5', 't', 6, True, 35.928825621684325, 2.0, LEGACY_MIXED_LOSS, 9),
+    ('legacy_mixed.jsonl', 'zz', '', 6, False, 35.928825621684325, 0.0, LEGACY_MIXED_LOSS, 9),
     ('legacy_commit_rows.jsonl', 'm6', 'tok6', 0, False, 0.0, 0.0, 0.40253165, 3),
     ('legacy_commit_rows.jsonl', 'phase0-self-check:hypothetical-allow', '', 0, False, 0.0, 0.0, 0.40253165, 3),
 ]

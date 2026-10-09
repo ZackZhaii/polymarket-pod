@@ -40,5 +40,172 @@
   "storm_reconnects": 4,
   "all_stale_after_s": 600,
   "approved_by": "e2e-operator"
+ },
+ "daily_loss": {
+  "commit": "bravo-allow",
+  "cases": [
+   {
+    "name": "a_loss_closed_today",
+    "expect": "veto",
+    "fills": [
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T00:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.29,
+      "fee_rate": 0.0
+     }
+    ]
+   },
+   {
+    "name": "b_loss_closed_yesterday",
+    "expect": "allow",
+    "fills": [
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-08-31T23:59:59Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.29,
+      "fee_rate": 0.0
+     }
+    ]
+   },
+   {
+    "name": "c_gain_does_not_offset",
+    "expect": "veto",
+    "fills": [
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T06:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.29,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-b",
+      "token_id": "e2e-dl-b-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.2,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T08:00:00Z",
+      "market": "e2e-dl-b",
+      "token_id": "e2e-dl-b-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     }
+    ]
+   },
+   {
+    "name": "d_below_cap",
+    "expect": "allow",
+    "fills": [
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T06:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.31,
+      "fee_rate": 0.0
+     }
+    ]
+   },
+   {
+    "name": "e_fees_plus_loss",
+    "expect": "veto",
+    "fills": [
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T06:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.301,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T07:00:00Z",
+      "market": "e2e-dl-c",
+      "token_id": "e2e-dl-c-yes",
+      "side": "buy",
+      "shares": 20,
+      "price": 0.5,
+      "fee_rate": 0.02
+     }
+    ]
+   },
+   {
+    "name": "f_unparseable_ts",
+    "expect": "halt",
+    "fills": [
+     {
+      "ts": "not-a-timestamp",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 10,
+      "price": 0.5,
+      "fee_rate": 0.0
+     }
+    ]
+   }
+  ]
  }
 }

@@ -25,6 +25,9 @@ One run of the real pipeline on fixed, sanitised recordings in tests/fixtures/e2
     is a global halt; a stale-book market halt resumed by the Operator while the book is still
     stale is halted again on the next check; a failing Reconciler run lands in the halt store;
     paper_cycle reads an M1 recording directory (gap 11)
+    Task AR daily loss (golden key ``daily_loss``): today's (UTC) realized loss plus fees vetoes
+    max_daily_loss, a loss closed before 00:00:00Z does not count, a gain does not offset, and a
+    counted ledger row with an unparseable ts is invalid_risk_state and a global halt
 
 Nothing in src/ is replaced. Only the clock (a frozen ``datetime`` in podlib, book_staleness and
 wash_detect, which also freezes every ``utc_now``) and I/O paths (bus, ledger, quotes, markets,
@@ -567,6 +570,17 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
                                                     halt_store, podlib, ledger_start, quotes_start, markets_path,
                                                     books_path, work / "heartbeat_bus.jsonl", state_path, clock,
                                                     risk_cfg, problems)  # own bus: the main bus counts stay as before
+        # 12. Task AR: max_daily_loss counts today's realized losses (scenario.json "daily_loss")
+
+        def intent_for(label: str):
+            forecast = forecasts[label]
+            signal = forecaster.emit_probability(market=forecast["market"], model_prob=forecast["model_prob"],
+                                                 note=forecast.get("note", ""), bus_path=bus_path)
+            return build_intent(forecast, signal, markets[forecast["market"]], books)
+
+        daily_loss_section = run_daily_loss_scenarios(scenario["daily_loss"], work, commit, intent_for, paper_ledger,
+                                                      ledger_store, halt_store, ledger_start, quotes_start, risk_cfg,
+                                                      problems)
         bus_rows = podlib.read_jsonl(bus_path)
         attempts = list(box["attempts"])
         unused_files = sorted(p.name for p in box["unused"].rglob("*") if p.is_file())
@@ -645,6 +659,7 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
         "cycle_2": _cycle(cycle_2),
         "halt_consumer": halts_section,
         "sentinel_heartbeat": heartbeat_section,
+        "daily_loss": daily_loss_section,
         "quotes_after": [{k: q.get(k) for k in ("market", "token_id", "side", "price", "status", "cancelled_by",
                                                 "cancelled_ts")} for q in quotes_after],
         "bus": {"counts": counts, "fills": len(fills),
@@ -941,6 +956,88 @@ def run_heartbeat_scenarios(plan: dict[str, Any], work: Path, commit, paper_ledg
 def heartbeat_stamp(moment: datetime) -> str:
     from src import heartbeat
     return heartbeat.utc_stamp(moment)
+
+
+DAILY_LOSS_STATE_KEYS = ("daily_fees_usd", "daily_realized_loss_usd", "daily_realized_gain_usd", "daily_loss_usd",
+                         "ledger_problems")
+
+
+def run_daily_loss_scenarios(plan: dict[str, Any], work: Path, commit, intent_for, paper_ledger, ledger_store,
+                             halt_store, ledger_start: bytes, quotes_start: bytes, risk_cfg,
+                             problems: list[str]) -> dict[str, Any]:
+    """Task AR (backlog #4): each case seeds its own ledger (the start rows plus scripted closed fills,
+    booked through ledger_store.book) in its own halt folder, then asks RiskGate about one intent.
+
+    "veto" and "halt" cases go through paper_ledger.commit_if_allowed (nothing may be booked);
+    "allow" cases only call RiskGate's evaluate on the same load_state, so no fill reaches the main bus
+    and the booked-ids invariants of the run stay as before.
+    """
+    from src.fees import booked_fee_usd, ledger_fee
+    out: dict[str, Any] = {}
+    for case in plan["cases"]:
+        name = case["name"]
+        folder = work / "daily_loss" / name
+        with halt_scope(folder, quotes_start):
+            ledger = folder / "paper.jsonl"
+            ledger.write_bytes(ledger_start)
+            for index, fill in enumerate(case["fills"], start=1):
+                notional = round(fill["shares"] * fill["price"], 8)
+                fee = ledger_fee(fill["fee_rate"], fill["price"], fill["price"], notional, fill["shares"])
+                ledger_store.book(ledger, {
+                    "fill_id": f"e2e-dl-{name.split('_', 1)[0]}-{index:02d}", "ts": fill["ts"],
+                    "strategy": "e2e-daily-loss", "market": fill["market"], "token_id": fill["token_id"],
+                    "side": fill["side"], "market_price": fill["price"], "effective_price": fill["price"],
+                    "fee_rate": fill["fee_rate"], "fee_usd": booked_fee_usd(fee), "notional_usd": notional,
+                    "shares": fill["shares"], "hypothetical": False, "counts_toward_risk": True,
+                    "risk_decision": "allow", "note": "e2e daily-loss fixture fill"})
+            seeded = ledger.read_bytes()
+            result: dict[str, Any] = {"expect": case["expect"]}
+            if case["expect"] == "allow":
+                intent = intent_for(plan["commit"])
+                paper_ledger.PAPER_PATH = ledger
+                state = paper_ledger.load_state(intent.market, intent.token_id)
+                decision = paper_ledger.evaluate(intent, risk_cfg(), state)
+                result.update({"via": "evaluate", "allow": decision.allow, "reasons": list(decision.reasons)})
+            else:
+                row = commit(plan["commit"], ledger)
+                result.update({"via": "commit_if_allowed", "allow": row["allow"],
+                               "reasons": _reasons_kinds(row["reasons"]), "halted": row["halted"],
+                               "booked_rows": row["booked_rows"]})
+                state = paper_ledger.load_state(row["market"], row["token_id"])  # read-only: the state it saw
+            result["state"] = {key: state.get(key) for key in DAILY_LOSS_STATE_KEYS}
+            result["global_halts"] = _halt_view(halt_store)
+            result["ledger_unchanged"] = ledger.read_bytes() == seeded
+        paper_ledger.PAPER_PATH = work / "paper.jsonl"
+        problems.extend(f"daily_loss {name}: {p}" for p in _daily_loss_case_problems(result))
+        out[name] = result
+    return out
+
+
+def _daily_loss_case_problems(result: dict[str, Any]) -> list[str]:
+    """The outcome each daily-loss case must have, by meaning (golden.json pins the numbers)."""
+    out = []
+    state, expect, reasons = result["state"], result["expect"], result["reasons"]
+    if expect == "halt":
+        if result.get("allow") is not False or "invalid_risk_state" not in reasons or result.get("halted") is not True:
+            out.append("corrupt ledger data did not veto as invalid_risk_state with a halt")
+        if not any(h.get("scope") == "global" for h in result["global_halts"]):
+            out.append("corrupt ledger data did not leave a global halt")
+        if state.get("daily_loss_usd") is not None or not state.get("ledger_problems"):
+            out.append("corrupt ledger data still produced a daily_loss_usd")
+    else:
+        total = state.get("daily_loss_usd")
+        parts = (state.get("daily_fees_usd") or 0.0) + (state.get("daily_realized_loss_usd") or 0.0)
+        if not isinstance(total, float) or total < parts - 1e-9:
+            out.append(f"daily_loss_usd {total!r} is below fees + realized losses {parts!r}")
+        if expect == "veto" and (result.get("allow") is not False or "max_daily_loss" not in reasons):
+            out.append("today's realized loss did not veto max_daily_loss")
+        if expect == "allow" and (result.get("allow") is not True or reasons):
+            out.append(f"expected an allow, got {reasons}")
+        if result["global_halts"]:
+            out.append("a daily-loss case left a halt")
+    if result.get("booked_rows", 0) != 0 or result["ledger_unchanged"] is not True:
+        out.append("the case's ledger was written")
+    return out
 
 
 def _ledger_view_bytes(data: bytes) -> list[str]:

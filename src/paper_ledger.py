@@ -47,6 +47,7 @@ from src.ledger_store import (  # noqa: E402,F401 - Task AF: moved here, re-expo
 )
 from src.ledger_store import counts as _counts  # noqa: E402 - Task AF: moved, same rule
 from src.risk_gate import Decision, Intent, evaluate  # noqa: E402
+from src.daily_loss import daily_loss  # noqa: E402 - Task AR: fees + realized losses
 
 DIRECTIONAL = "Single-leg fill is directional exposure, not risk-free arbitrage."
 
@@ -116,18 +117,31 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
             "own_quotes": read_jsonl(QUOTES_PATH),
         }
     legs = leg_positions(rows)
-    daily_fees = 0.0
-    today = utc_now()[:10]
-    for row in rows:
-        if _counts(row) and str(row.get("ts") or "").startswith(today):
-            daily_fees += float(row.get("fee_usd") or 0.0)
+    # Task AR (backlog #4): today's booked fees plus today's gross realized losses (UTC day).
+    day = daily_loss(rows, utc_now()[:10], ledger.ids)
+    if day.problems:
+        return {
+            "open_positions": None,
+            "leg_already_open": False,
+            "exposure_usd": None,
+            "leg_exposure_usd": None,
+            "daily_loss_usd": None,
+            "daily_loss_problems": day.problems,
+            "ledger_problems": list(day.problems),
+            "duplicate_fill_rows": ledger.duplicates_ignored,
+            "recent_fills": rows,
+            "own_quotes": read_jsonl(QUOTES_PATH),
+        }
     own = legs.get(leg_key(market, token_id))
     return {
         "open_positions": sum(1 for leg in legs.values() if abs(leg["shares"]) > OPEN_EPS),
         "leg_already_open": own is not None and abs(own["shares"]) > OPEN_EPS,
         "exposure_usd": sum(leg["exposure_usd"] for leg in legs.values()),
         "leg_exposure_usd": 0.0 if own is None else own["exposure_usd"],
-        "daily_loss_usd": daily_fees,
+        "daily_loss_usd": day.total_usd,
+        "daily_fees_usd": day.fees_usd,
+        "daily_realized_loss_usd": day.realized_loss_usd,
+        "daily_realized_gain_usd": day.realized_gain_usd,
         "ledger_problems": [],
         "duplicate_fill_rows": ledger.duplicates_ignored,
         "recent_fills": rows,
