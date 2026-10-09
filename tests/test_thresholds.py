@@ -34,6 +34,8 @@ EXPECTED = {
     "ENDGAME_PRICE_MAX": 0.99,
     "ENDGAME_WINDOW_HOURS": 48.0,
     "SPORTS_DEVIG_ASSUMED_SLIPPAGE": 0.005,
+    # Task AT: the one assumed slippage; SPORTS_DEVIG_/INTENT_ASSUMED_SLIPPAGE are aliases of it.
+    "ASSUMED_SLIPPAGE": 0.005,
     "LEDGER_OPEN_EPS": 1e-9,
     "REFLECTOR_MAX_PER_UTC_DAY": 3,
     # Task AG: new WebSocket recorder timing (not moved from anywhere; first values).
@@ -124,6 +126,7 @@ REEXPORTS = {
     "endgame.PRICE_MAX": "ENDGAME_PRICE_MAX",
     "endgame.WINDOW_HOURS": "ENDGAME_WINDOW_HOURS",
     "sports_devig.ASSUMED_SLIPPAGE": "SPORTS_DEVIG_ASSUMED_SLIPPAGE",
+    "paper_ledger.ASSUMED_SLIPPAGE": "ASSUMED_SLIPPAGE",
     "paper_ledger.OPEN_EPS": "LEDGER_OPEN_EPS",
     "reflector.MAX_PER_UTC_DAY": "REFLECTOR_MAX_PER_UTC_DAY",
     "resolutions.RESOLUTION_HOLD_HOURS": "RESOLUTION_HOLD_HOURS",
@@ -140,6 +143,8 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               # Task AO: signal -> OrderIntent.
               "INTENT_ASSUMED_SLIPPAGE", "INTENT_TTL_S", "MAX_SIGNAL_AGE_NEWS_S", "MAX_SIGNAL_AGE_SPORTS_DEVIG_S",
               "MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S", "MAX_SOURCE_LOGIT_GAP",
+              # Task AT: the one assumed slippage (INTENT_ASSUMED_SLIPPAGE is its alias).
+              "ASSUMED_SLIPPAGE",
               # Task AQ: secret scan.
               "SECRET_VALUE_MIN_LEN", "MNEMONIC_MIN_WORDS", "SECRET_HASH_PREFIX_CHARS",
               # Task AP: heartbeats, the resident Sentinel and its escalations.
@@ -307,7 +312,10 @@ def test_relations_hold():
         ("INTENT_TTL_S = 60.0", "INTENT_TTL_S = 300.0"),
         ("INTENT_TTL_S = 60.0", "INTENT_TTL_S = 0.0"),
         ("INTENT_SHARE_STEP = 0.01", "INTENT_SHARE_STEP = 0.0"),
-        ("INTENT_ASSUMED_SLIPPAGE = 0.005", "INTENT_ASSUMED_SLIPPAGE = -0.005"),
+        ("ASSUMED_SLIPPAGE = 0.005", "ASSUMED_SLIPPAGE = -0.005"),
+        ("ASSUMED_SLIPPAGE = 0.005", "ASSUMED_SLIPPAGE = 1.0"),
+        ("INTENT_ASSUMED_SLIPPAGE = ASSUMED_SLIPPAGE", "INTENT_ASSUMED_SLIPPAGE = 0.004"),
+        ("SPORTS_DEVIG_ASSUMED_SLIPPAGE = ASSUMED_SLIPPAGE", "SPORTS_DEVIG_ASSUMED_SLIPPAGE = 0.004"),
         ("MAX_SIGNAL_AGE_NEWS_S = 3600.0", "MAX_SIGNAL_AGE_NEWS_S = 0.0"),
         ("MAX_SOURCE_LOGIT_GAP = 1.0", "MAX_SOURCE_LOGIT_GAP = 0.0"),
         ("RESOLUTION_HOLD_HOURS = 48.0", "RESOLUTION_HOLD_HOURS = 0.0"),

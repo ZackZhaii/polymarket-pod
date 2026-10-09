@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T09:00:57Z",
+  "ts": "2026-10-09T09:29:18Z",
   "live_enabled": false,
-  "last_done": "AR",
+  "last_done": "AT",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AR (daily_loss counts realized losses: today's UTC fees + gross realized losses, gains never offset, corrupt counted rows fail closed as invalid_risk_state = global halt; backlog #4, SPEC_signal_to_intent inconsistency 12) done by grok-bot. No new threshold, max_daily_loss_pct unchanged. Operator policy open: netting realized gains (not done). No open todo. No live gate."
+  "note": "AT (one ASSUMED_SLIPPAGE = 0.005 in src/thresholds.py, SPORTS_DEVIG_/INTENT_ASSUMED_SLIPPAGE aliases, paper_ledger literals removed, drift fails at import; ROLES.md RiskGate row has no Kelly sizing, Kelly shadow-only) done by grok-bot. No number moved. AS (EXIT_CODES + runtime pins) in flight. No live gate."
 }

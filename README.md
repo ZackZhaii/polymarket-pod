@@ -52,7 +52,7 @@ python src/paper_ledger.py \
   --fee-rate 0
 ```
 
-Edge for a buy is `model_prob - (market_price + assumed_slippage) - fee_rate * market_price`. Non-positive edge is vetoed. Order notional is `1000 * max_order_pct` and is clipped at 1%. `kelly_fraction` is not used to increase size.
+Edge for a buy is `model_prob - (market_price + assumed_slippage) - fee_rate * max(market_price, effective_price)` (`src/fees.py`). Non-positive edge is vetoed, and an edge below `MIN_EDGE` (0.02) too. The `--slippage` default is `ASSUMED_SLIPPAGE` (0.005, `src/thresholds.py`). Order notional is `1000 * max_order_pct` and is clipped at 1%. `kelly_fraction` is never used for size (only shadow-reported by `src/intent_builder.py`).
 
 ## Confirm live trading is off
 
