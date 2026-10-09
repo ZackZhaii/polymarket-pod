@@ -1217,48 +1217,33 @@ disk use, and an offline tool can say whether the AW algorithm matches them; `py
 - Tests: `tests/test_ws_raw_snapshots.py` (synthetic frames, sockets patched to fail; secret scan clean on the raw
   files). No new URL, dependency or outgoing frame. config/risk.toml unchanged, `live_enabled` false.
 
-## Task AZ — tests for the intent_builder fail-closed branches no test asserted
+## Task AZ — M3 calibration step 3: offline calibration report (src/calibration.py)
 
 Status: done.
 
-Self-picked test-gap fill by PolyPod-flash-tests (deepseek-flash); tests only, no behaviour change, no
-`src/` edit and no new number. `config/risk.toml` is unchanged. There is no claimable issue, so this task
-only fills test gaps on `dev`.
+Requested by Poly指挥 (Poly反思's M3 calibration design sections 1-3 and 6, step 3), done by grok-bot on
+dev@d2af163. AY (#59) ran in parallel; merged in from dev (dev@39aebfa).
 
-Finish when every reason code the builder appends has a test that can only reject, and `python -m pytest`
-passes offline.
+Finish when forecasts and fills join the settlement snapshot offline, the design's metrics are reported, every
+dropped row is counted by reason (never imputed), corrupt input exits with an error and writes nothing, the
+minimums say `insufficient` instead of a verdict, and `python -m pytest` and guard --require-git pass offline.
 
-- Gap (found by walking `intent_builder.REASON_ORDER` against `tests/`): `invalid_outcome_index`,
-  `invalid_book_levels`, `zero_notional` and `kelly_non_positive` are appended by
-  `build_order_intent` / `kelly_size` but no test file mentioned any of them.
-- `tests/test_intent_builder_gaps.py` (new, 10 tests / 52 parametrised cases, offline and pure):
-  an outcome index that is not 0 or 1 (`2`, `3`, `-1`, `True`, `False`, `None`, `1.0`, `"1"`) vetoes with
-  `invalid_outcome_index` and is never read as outcome 0 (both `edge_yes` and `edge_no` stay `-1.0`), in
-  `build_order_intent` and for a `combine_probability` member; a usable book with a non-ascending ask
-  ladder, a level at 1.0 or a level with no size is `invalid_book_levels`, never `insufficient_depth`; a
-  `books.jsonl` row whose top of book is incomplete cannot be walked; a level outside
-  `(0 < price < 1, size > 0)` (NaN, ±inf, 0, negative, string, bool, NaN size) and a non-positive or
-  non-finite walk budget (`0`, `-1`, NaN, ±inf, `True`, `"10"`, `None`) can never fill; a drifted
-  `max_order_pct` of 0 reports `zero_notional` and sizes nothing while the pinned 1% clip does not; a
-  shadow Kelly with an unusable all-in cost reports `kelly_non_positive` with a zero Kelly size and the
-  reported size still the 1% clip; a probability interval touching 0 or 1 is `model_prob_out_of_range`;
-  a blend member with an unsupported source is `unsupported_signal_source`.
-- Every branch already failed closed: no bug, no veto, exit code, threshold or golden value moved.
-  `python -m pytest` is fully green (2763 collected, exit 0) when pytest's `--basetemp` sits **outside**
-  the worktree. With the in-repo `--basetemp=.pytest-tmp` the only two failures are
-  `tests/test_guard.py::test_exit_codes_for_usage_and_no_root` and
-  `tests/test_m1_run.py::test_git_state_reads_a_real_repo_or_says_unknown`: both ask git whether a tmp
-  dir is a repository, and a tmp dir inside the worktree resolves to it. Neither test reads `tests/`;
-  both pass with an outside basetemp (verified). `python scripts/guard.py --require-git` passes (12
-  checks, 0 failed); `live_enabled` stays false.
+- `src/calibration.py`: `python -m src.calibration` writes `reports/calibration/<UTC date>/` (report.json,
+  report.md, samples.jsonl). B (forecasts) and A (trades by decision_id) samples; Brier, log loss,
+  reliability + Wilson, ECE, slope / intercept, market-clustered bootstrap intervals; Brier vs market,
+  skill, E / R / realization; groups by category, strategy, model_version (and side, edge tier, expiry tier,
+  price band for A).
+- Exit codes 0 / 2 / 3 corrupt input / 4 ledger fails verify / 5 write failed in `docs/EXIT_CODES.md`
+  (20 entry points with AY's ws_hash_check; no heartbeat, Sentinel `-`).
+- New numbers (M3 pending): `CALIBRATION_*` in `src/thresholds.py` and `docs/THRESHOLDS.md`.
+- Docs: `docs/M3_CALIBRATION.md` Step 3. `reports/calibration/` git-ignored. No e2e/guard change (the e2e
+  fixtures have no resolutions to join).
 
 ## Latest
 
-- 2026-10-09: Task AZ (tests only, no behaviour change): `tests/test_intent_builder_gaps.py` covers the four
-  `intent_builder` fail-closed codes no test asserted (`invalid_outcome_index`, `invalid_book_levels`,
-  `zero_notional`, `kelly_non_positive`) plus their boundaries (an outcome index outside 0/1, a bad ask
-  ladder, an incomplete book row, a non-positive walk budget, a zero clip, an interval at 0/1, a blend source).
-  10 tests / 52 cases; offline, no `src/` change, risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+- 2026-10-09: Task AZ: offline M3 calibration report `python -m src.calibration` (Brier, reliability, ECE,
+  slope, vs-market, edge realization; drops counted by reason; corrupt input = exit 3, bad ledger = exit 4;
+  `insufficient` below the M3-pending `CALIBRATION_*` minimums). No trading change.
 - 2026-10-09: Task AY: `m1_run --raw-books` (opt-in) keeps full book frames in `raw_books/` (16 MiB per file,
   256 MiB per run, M2 pending); `python -m src.ws_hash_check <run dir>` checks the AW hash on them, read-only.
   `BOOK_HASH_ENFORCED` stays False.

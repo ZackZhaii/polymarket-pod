@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T12:45:25Z",
+  "ts": "2026-10-09T14:00:00Z",
   "live_enabled": false,
-  "last_done": "AY",
+  "last_done": "AZ",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AY (opt-in raw book snapshots: m1_run --raw-books -> raw_books/raw_books-NNNNNN.jsonl, 16 MiB per file / 256 MiB per run, M2 pending; offline read-only python -m src.ws_hash_check) done by grok-bot. BOOK_HASH_ENFORCED stays False. AX (#58) merged into this branch from dev. No open todo. No live gate."
+  "note": "AZ (M3 step 3: offline calibration report python -m src.calibration; drops counted by reason, corrupt input exit 3, ledger exit 4, 'insufficient' below the M3-pending CALIBRATION_* minimums) done by grok-bot. AY (#59, raw WS book snapshots + ws_hash_check) merged into this branch from dev. No open todo. No live gate."
 }
