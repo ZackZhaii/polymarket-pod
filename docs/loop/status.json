@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T14:35:19Z",
+  "ts": "2026-10-09T15:48:52Z",
   "live_enabled": false,
-  "last_done": "BC",
+  "last_done": "BD",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "BC (calibration q = market_mid with price_source, pre-BA fills only fall back to market_price; kelly_frac_raw recorded next to kelly_fraction_used; fill_context stamped at fill time and no_book_context drop reason) done by grok-bot. No new number. BB (#66, Reflector proposals) merged into this branch from dev; report.json changes additive only. No open todo. No live gate."
+  "note": "BD (calibration report: intervals per category and edge tier, intercept CI + verdict, event_cluster share flagged against CALIBRATION_MAX_CLUSTER_SHARE 0.30, M3 pending) done by grok-bot. Report only, keys added. No open todo. No live gate."
 }

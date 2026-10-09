@@ -246,6 +246,9 @@ CALIBRATION_BIN_EDGES = (0.0, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 1.0)
 # the first fill [24, 72) [72, 336) [336, ...). Grouping labels only; nothing is filtered by them.
 CALIBRATION_EDGE_TIERS = (0.02, 0.04, 0.08)
 CALIBRATION_EXPIRY_TIERS_H = (24.0, 72.0, 336.0)
+# Task BD (design 3, "the largest event cluster holds at most 30% of the evidence"): the report flags a sufficient
+# section "concentrated" when its largest cluster holds more than this share of the samples. Reported only.
+CALIBRATION_MAX_CLUSTER_SHARE = 0.30
 
 # --- M3 Reflector proposal rules (Task BB, Poly反思's M3 calibration design section 4) -------------------
 # M3 pending (the user decides at M3). Tightening triggers read from report.json intervals only; the daily cap is
@@ -391,6 +394,9 @@ def consistency_problems() -> list[str]:
         if (not isinstance(tiers, tuple) or not tiers or tiers[0] <= 0
                 or any(not a < b for a, b in zip(tiers, tiers[1:]))):
             problems.append(f"{name} must be positive and rise strictly")
+    if (isinstance(CALIBRATION_MAX_CLUSTER_SHARE, bool) or not isinstance(CALIBRATION_MAX_CLUSTER_SHARE, (int, float))
+            or not 0 < CALIBRATION_MAX_CLUSTER_SHARE <= 1):
+        problems.append("CALIBRATION_MAX_CLUSTER_SHARE must be in (0, 1]")
     # Task BB: M3 Reflector proposal rules.
     if not 0 < REFLECTOR_DISABLE_SLOPE_MAX < REFLECTOR_TIGHTEN_SLOPE_MAX <= 1:
         problems.append("need 0 < REFLECTOR_DISABLE_SLOPE_MAX < REFLECTOR_TIGHTEN_SLOPE_MAX <= 1")
