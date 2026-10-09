@@ -195,3 +195,54 @@ def test_hash_check_usage_errors(argv):
 def test_hash_check_never_enables_enforcement():
     source = (h.ROOT / "src" / "ws_hash_check.py").read_text(encoding="utf-8")
     assert "BOOK_HASH_ENFORCED =" not in source and "open(path, \"rb\")" in source
+
+
+# --- Task BA: python -m src.ws_recorder --raw-books DIR --------------------------------------------------
+
+from tests.test_ws_recorder import _cli  # noqa: E402
+
+
+def test_ws_recorder_cli_saves_no_raw_books_by_default(tmp_path, monkeypatch, capsys):
+    code, _ = _cli(tmp_path, ["--assets", A, "--max-runtime", "5"], [[_hashed_book()]], monkeypatch)
+    assert code == w.EXIT_OK and "raw_books" not in capsys.readouterr().out
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["books.jsonl", "markets.jsonl"]
+
+
+def test_ws_recorder_cli_saves_raw_books_with_the_m1_writer(tmp_path, monkeypatch, capsys):
+    raw = tmp_path / "raw"
+    deep = _book(B, bids=tuple((f"0.{40 - i}", "5") for i in range(6)))
+    code, _ = _cli(tmp_path, ["--assets", f"{A},{B}", "--max-runtime", "5", "--raw-books", str(raw)],
+                   [[_hashed_book(), deep, _pc(_ch())]], monkeypatch)
+    assert code == w.EXIT_OK
+    assert "raw_books dir=" in capsys.readouterr().out
+    files = sorted(raw.glob("raw_books-*.jsonl"))
+    assert [p.name for p in files] == ["raw_books-000001.jsonl"]
+    rows = [json.loads(x) for x in files[0].read_bytes().splitlines()]
+    assert [row["asset_id"] for row in rows] == [A, B] and len(rows[1]["frame"]["bids"]) == 6
+    assert h.check_files(files)["counts"]["match"] == 1
+    assert w.RawBookSink is r.RawBookSink and w.RotatingJsonl is r.RotatingJsonl  # one writer, re-exported
+
+
+def test_ws_recorder_cli_uses_the_same_caps(tmp_path, monkeypatch):
+    made = []
+    real = w.RawBookSink
+
+    def spy(*args, **kwargs):
+        sink = real(*args, **kwargs)
+        made.append(sink)
+        return sink
+    monkeypatch.setattr(w, "RawBookSink", spy)
+    code, _ = _cli(tmp_path, ["--assets", A, "--max-runtime", "5", "--raw-books", str(tmp_path / "raw")],
+                   [[_hashed_book()]], monkeypatch)
+    assert code == w.EXIT_OK and len(made) == 1
+    assert made[0].files.max_bytes == WS_RAW_BOOK_FILE_MAX_BYTES and made[0].run_max_bytes == WS_RAW_BOOK_RUN_MAX_BYTES
+
+
+def test_ws_recorder_cli_refuses_a_used_raw_books_dir(tmp_path, monkeypatch):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "raw_books-000001.jsonl").write_text("{}\n", encoding="utf-8")
+    code, transport = _cli(tmp_path, ["--assets", A, "--max-runtime", "5", "--raw-books", str(raw)],
+                           [[_hashed_book()]], monkeypatch)
+    assert code == w.EXIT_USAGE and transport.urls == []
+    assert (raw / "raw_books-000001.jsonl").read_text(encoding="utf-8") == "{}\n"

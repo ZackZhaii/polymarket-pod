@@ -84,7 +84,10 @@ inside ``WebsocketsTransport.connect`` only (``pip install -r requirements-ws.tx
 the tests never need it.
 
 CLI: ``python -m src.ws_recorder --assets TOKEN [TOKEN ...] --max-runtime SECONDS
-[--out data/books.jsonl] [--markets data/markets.jsonl]``. Exit codes: 0 ran until
+[--out data/books.jsonl] [--markets data/markets.jsonl] [--raw-books DIR]``. ``--raw-books``
+(Task BA, off by default) saves every raw book frame to DIR/raw_books-NNNNNN.jsonl with the same capped
+writer as ``src.m1_run --raw-books`` (RawBookSink: WS_RAW_BOOK_FILE_MAX_BYTES per file,
+WS_RAW_BOOK_RUN_MAX_BYTES per run, drops counted); DIR must be new or empty. Exit codes: 0 ran until
 --max-runtime and wrote at least one book row; 1 wrote no book row (no usable snapshot);
 2 usage error; 3 the optional ``websockets`` package is not installed; 4 writing the output file
 failed (the recorder stops instead of reconnecting); 6 config/risk.toml off its pins at start or
@@ -103,6 +106,7 @@ import json
 import math
 import os
 import sys
+import threading
 import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
@@ -119,6 +123,7 @@ from src.book_staleness import INVALID_BOOK_TS, latest_by_time  # noqa: E402
 from src.podlib import BOOKS_PATH, MARKETS_PATH, read_jsonl, utc_now  # noqa: E402
 from src.thresholds import (  # noqa: E402
     HEARTBEAT_RECORDER_EVERY_S,
+    M1_ROTATE_S,
     RECORDER_ESCALATION_WINDOW_S,
     RECORDER_GAP_RESYNC_HALT_COUNT,
     RECORDER_RECONNECT_ALERT_COUNT,
@@ -126,6 +131,8 @@ from src.thresholds import (  # noqa: E402
     WS_BACKOFF_CAP_S,
     WS_PING_INTERVAL_S,
     WS_PONG_TIMEOUT_S,
+    WS_RAW_BOOK_FILE_MAX_BYTES,
+    WS_RAW_BOOK_RUN_MAX_BYTES,
     WS_RESYNC_TIMEOUT_S,
     WS_ROW_REFRESH_S,
     WS_STOP_POLL_S,
@@ -768,6 +775,105 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[written:]
 
 
+RAW_BOOKS = "raw_books"  # Task AY: opt-in stream (m1_run --raw-books, ws_recorder --raw-books DIR)
+
+
+# --- rotating JSONL (Task AI, moved here from src.m1_run by Task BA; m1_run re-exports) ----------------------------------------------------------------------------
+
+
+def _line_bytes(row: dict[str, Any]) -> int:
+    return len(json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) + 1
+
+
+class RotatingJsonl:
+    """Append-only JSONL in ``folder/prefix-NNNNNN.jsonl``; a new file before ``max_bytes`` would be
+    passed or once the current file has been open ``max_age_s`` (monotonic). Thread-safe."""
+
+    def __init__(self, folder: Path, prefix: str, max_bytes: int, max_age_s: float,
+                 monotonic: Callable[[], float] = time.monotonic) -> None:
+        if not (isinstance(max_bytes, int) and max_bytes >= 1) or not max_age_s > 0:
+            raise ValueError("rotation limits must be > 0")
+        self.folder = Path(folder)
+        self.prefix = prefix
+        self.max_bytes = max_bytes
+        self.max_age_s = float(max_age_s)
+        self.monotonic = monotonic
+        self.files: list[str] = []
+        self.rows = 0
+        self._current: JsonlAppender | None = None
+        self._size = 0
+        self._opened = 0.0
+        self._lock = threading.Lock()
+
+    def _rotate(self) -> None:
+        if self._current is not None:
+            self._current.close()
+        name = f"{self.prefix}-{len(self.files) + 1:06d}.jsonl"
+        self.files.append(f"{self.folder.name}/{name}")
+        self._current = JsonlAppender(self.folder / name)
+        self._size = 0
+        self._opened = self.monotonic()
+
+    def write(self, row: dict[str, Any]) -> None:
+        size = _line_bytes(row)  # also refuses NaN before anything is written
+        with self._lock:
+            if (self._current is None or (self._size and self._size + size > self.max_bytes)
+                    or self.monotonic() - self._opened >= self.max_age_s):
+                self._rotate()
+            self._current.write(row)
+            self._size += size
+            self.rows += 1
+
+    def close(self) -> None:
+        with self._lock:
+            if self._current is not None:
+                self._current.close()
+                self._current = None
+
+
+class RawBookSink:
+    """Task AY: capped raw book frames in ``raw_books/raw_books-NNNNNN.jsonl`` (whole-line appends).
+
+    No file passes ``file_max_bytes``; the run stops saving once ``run_max_bytes`` would be passed. A frame
+    that is not strict JSON, or alone bigger than a file, is dropped. Drops are counted, never raised."""
+
+    def __init__(self, folder: Path, file_max_bytes: int, run_max_bytes: int, max_age_s: float,
+                 monotonic: Callable[[], float] = time.monotonic,
+                 on_event: Callable[[dict[str, Any]], None] | None = None,
+                 now: Callable[[], str] = utc_now) -> None:
+        if not (isinstance(run_max_bytes, int) and 0 < file_max_bytes <= run_max_bytes):
+            raise ValueError("raw book caps must satisfy 0 < file cap <= run cap")
+        self.files = RotatingJsonl(folder, RAW_BOOKS, file_max_bytes, max_age_s, monotonic)
+        self.run_max_bytes = run_max_bytes
+        self.on_event = on_event
+        self.now = now
+        self.bytes = 0
+        self.saved = 0
+        self.dropped: Counter = Counter()
+
+    def write(self, row: dict[str, Any]) -> None:
+        try:
+            size = _line_bytes(row)
+        except (TypeError, ValueError):
+            self.dropped["unserialisable"] += 1
+            return
+        if size > self.files.max_bytes:
+            self.dropped["too_large"] += 1
+            return
+        if self.bytes + size > self.run_max_bytes:
+            if not self.dropped["run_cap"] and self.on_event is not None:
+                self.on_event({"ts": self.now(), "event": "raw_books_capped", "bytes": self.bytes,
+                               "saved": self.saved, "run_max_bytes": self.run_max_bytes})
+            self.dropped["run_cap"] += 1
+            return
+        self.files.write(row)
+        self.bytes += size
+        self.saved += 1
+
+    def close(self) -> None:
+        self.files.close()
+
+
 # --- transport --------------------------------------------------------------------------------
 
 
@@ -1221,6 +1327,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", type=Path, default=BOOKS_PATH, help="JSONL book rows (default data/books.jsonl).")
     parser.add_argument("--markets", type=Path, default=MARKETS_PATH,
                         help="Scanner markets.jsonl used to map tokens to market ids (read-only).")
+    parser.add_argument("--raw-books", type=Path, default=None, metavar="DIR",
+                        help="Task BA (off by default): also save every raw book frame to DIR/raw_books-NNNNNN.jsonl "
+                             "(a new or empty directory) for python -m src.ws_hash_check; "
+                             f"{WS_RAW_BOOK_FILE_MAX_BYTES // 1048576} MiB per file, "
+                             f"{WS_RAW_BOOK_RUN_MAX_BYTES // 1048576} MiB per run, as m1_run --raw-books.")
     return parser
 
 
@@ -1256,6 +1367,11 @@ def _main(argv: list[str] | None, *, transport: Transport | None, heartbeat: Any
     except ValueError as exc:
         print(f"usage error: {exc}", file=sys.stderr)
         return EXIT_USAGE
+    raw_dir: Path | None = args.raw_books
+    if raw_dir is not None and raw_dir.exists() and (not raw_dir.is_dir() or any(raw_dir.iterdir())):
+        # A fresh directory per run, so the per-file and per-run caps hold (no appending to an old file).
+        print(f"usage error: --raw-books {raw_dir} exists and is not an empty directory", file=sys.stderr)
+        return EXIT_USAGE
     from src.pins import PinWatch, refuse_start  # Task AS (gap 5): runtime pin checks
 
     if refuse_start("ws_recorder"):
@@ -1263,8 +1379,12 @@ def _main(argv: list[str] | None, *, transport: Transport | None, heartbeat: Any
     watch = PinWatch("ws_recorder")
     meta = asset_meta(read_jsonl(args.markets))
     sink = JsonlAppender(args.out)
+    # Task BA: the same capped writer as m1_run --raw-books (RawBookSink), into its own directory.
+    raw_sink = (RawBookSink(raw_dir, WS_RAW_BOOK_FILE_MAX_BYTES, WS_RAW_BOOK_RUN_MAX_BYTES, M1_ROTATE_S)
+                if raw_dir is not None else None)
     recorder = Recorder(assets, transport=transport or WebsocketsTransport(), sink=sink,
-                        max_runtime_s=runtime, meta=meta, heartbeat=heartbeat, stop=watch.drifted)
+                        max_runtime_s=runtime, meta=meta, heartbeat=heartbeat, stop=watch.drifted,
+                        raw_books=raw_sink.write if raw_sink is not None else None)
     try:
         report = recorder.run()
     except TransportUnavailable as exc:
@@ -1274,10 +1394,11 @@ def _main(argv: list[str] | None, *, transport: Transport | None, heartbeat: Any
         print(f"ws_recorder: writing {args.out} failed: {exc}", file=sys.stderr)
         return EXIT_WRITE_FAILED
     finally:
-        try:
-            sink.close()
-        except OSError:
-            pass
+        for closing in [sink, *([raw_sink] if raw_sink is not None else [])]:
+            try:
+                closing.close()
+            except OSError:
+                pass
     resyncs = {key.split(":", 1)[1]: value for key, value in sorted(report.counts.items()) if key.startswith("resync:")}
     print(
         f"ws_recorder rows={report.rows} snapshots={report.counts['snapshot_applied']} "
@@ -1286,6 +1407,9 @@ def _main(argv: list[str] | None, *, transport: Transport | None, heartbeat: Any
         f"resyncs={resyncs} pings={report.pings} unmapped_assets={len(report.unmapped_assets)} orders=none"
     )
     print(f"wrote={args.out}")
+    if raw_sink is not None:
+        print(f"raw_books dir={raw_dir} files={len(raw_sink.files.files)} saved={raw_sink.saved} "
+              f"bytes={raw_sink.bytes} dropped={dict(raw_sink.dropped)}")
     if watch.problems:
         return EXIT_PIN_DRIFT
     if report.counts["snapshot_applied"] < 1:

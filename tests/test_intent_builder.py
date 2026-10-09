@@ -127,7 +127,10 @@ def test_to_risk_intent_matches_the_harness_shape():
         "decision_id": None, "forecast_id": None, "forecast_ts": None, "condition_id": oi.condition_id,
         "outcome_index": 0, "outcome": oi.outcome, "category": None, "tags": None, "end_date": oi.end_date,
         "model_version": None,
+        # Task BA: the chosen token's top of book and the shadow Kelly multiplier, recorded on the fill only.
+        "best_bid": 0.39, "best_ask": 0.41, "kelly_fraction_used": 0.15,
     }
+    assert intent.kelly_fraction_used == oi.kelly_fraction and intent.best_ask == oi.best_ask
 
 
 def test_intent_builder_slippage_meets_the_riskgate_floor(tmp_path):

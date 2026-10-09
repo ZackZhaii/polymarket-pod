@@ -207,7 +207,7 @@ by `src.m1_run --raw-books` (Task AY). No heartbeat, no network, writes nothing.
 |---|---|---|---|
 | 0 | `EXIT_OK` | ran to --max-runtime with at least one book snapshot | - |
 | 1 | `EXIT_NO_ROWS` | no book snapshot recorded | alert |
-| 2 | `EXIT_USAGE` | usage error | alert |
+| 2 | `EXIT_USAGE` | usage error (also a `--raw-books` DIR that is not new or empty, Task BA) | alert |
 | 3 | `EXIT_NO_WEBSOCKETS` | the optional websockets package is missing | alert |
 | 4 | `EXIT_WRITE_FAILED` | writing the output file failed | global halt |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins at start or while running (PIN_RECHECK_S); global halt recorded | global halt |
