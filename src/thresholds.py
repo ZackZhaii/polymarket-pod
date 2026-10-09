@@ -77,6 +77,10 @@ WS_BACKOFF_CAP_S = 60.0
 WS_RESYNC_TIMEOUT_S = 30.0
 # Application heartbeat: send the text frame PING this often (docs.polymarket.com market channel).
 WS_PING_INTERVAL_S = 10.0
+# Task AW: no PONG within this long after a PING = the connection is dead; the recorder reconnects
+# (counted toward the Task AP reconnect escalation). 30 s per Poly研究's notes on the market channel.
+# M2 pending.
+WS_PONG_TIMEOUT_S = 30.0
 # Staleness-relevant: a live book whose top of book does not change still gets a new row once the
 # EXCHANGE time of the latest applied event is this far past the last written row, so a deep but
 # quiet-top book does not look stale while its deltas keep arriving. Rows can only lag reality by
@@ -237,6 +241,8 @@ def consistency_problems() -> list[str]:
         problems.append("WebSocket timing must satisfy 0 < WS_PING_INTERVAL_S < WS_RESYNC_TIMEOUT_S")
     if not 0.0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S:
         problems.append("WS_ROW_REFRESH_S must satisfy 0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S")
+    if not 0.0 < WS_PING_INTERVAL_S < WS_PONG_TIMEOUT_S:
+        problems.append("WS_PONG_TIMEOUT_S must satisfy 0 < WS_PING_INTERVAL_S < WS_PONG_TIMEOUT_S")
     if not 0.0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S:
         problems.append("WS_STOP_POLL_S must satisfy 0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S")
     for name, value in (("M1_TOP_MARKETS", M1_TOP_MARKETS), ("M1_ROTATE_BYTES", M1_ROTATE_BYTES),
