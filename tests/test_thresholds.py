@@ -101,6 +101,20 @@ EXPECTED = {
     "ALL_STALE_CONSECUTIVE_CYCLES": 2,
     # Task AS: runtime pin re-check (M2 pending).
     "PIN_RECHECK_S": 60.0,
+    # Task AZ: M3 calibration report (M3 pending).
+    "CALIBRATION_MIN_SAMPLES": 30,
+    "CALIBRATION_MIN_MARKETS": 20,
+    "CALIBRATION_MIN_RESOLUTION_DAYS": 5,
+    "CALIBRATION_GROUP_MIN_SAMPLES": 10,
+    "CALIBRATION_GROUP_MIN_MARKETS": 5,
+    "CALIBRATION_FIXED_BINS_MIN_SAMPLES": 100,
+    "CALIBRATION_EQUAL_FREQ_BINS": 5,
+    "CALIBRATION_EQUAL_FREQ_MIN_PER_BIN": 6,
+    "CALIBRATION_MAX_DECISIONS_PER_MARKET": 2,
+    "CALIBRATION_BOOTSTRAP_RESAMPLES": 2000,
+    "CALIBRATION_BOOTSTRAP_SEED": 20261009,
+    "CALIBRATION_CI_LEVEL": 0.95,
+    "CALIBRATION_LOGLOSS_CLIP": 0.01,
 }
 
 # Old import paths that callers and tests use; each must stay the very same object.
@@ -161,7 +175,13 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "SENTINEL_HEARTBEAT_TIMEOUT_S", "RECORDER_ESCALATION_WINDOW_S", "RECORDER_RECONNECT_ALERT_COUNT",
               "RECORDER_GAP_RESYNC_HALT_COUNT", "ALL_STALE_CONSECUTIVE_CYCLES",
               # Task AS: runtime pin re-check.
-              "PIN_RECHECK_S"}
+              "PIN_RECHECK_S",
+              # Task AZ: M3 calibration minimums and report settings (M3 pending).
+              "CALIBRATION_MIN_SAMPLES", "CALIBRATION_MIN_MARKETS", "CALIBRATION_MIN_RESOLUTION_DAYS",
+              "CALIBRATION_GROUP_MIN_SAMPLES", "CALIBRATION_GROUP_MIN_MARKETS", "CALIBRATION_FIXED_BINS_MIN_SAMPLES",
+              "CALIBRATION_EQUAL_FREQ_BINS", "CALIBRATION_EQUAL_FREQ_MIN_PER_BIN", "CALIBRATION_BOOTSTRAP_RESAMPLES",
+              "CALIBRATION_MAX_DECISIONS_PER_MARKET",
+              "CALIBRATION_BOOTSTRAP_SEED", "CALIBRATION_CI_LEVEL", "CALIBRATION_LOGLOSS_CLIP"}
 HEADER = ["Name", "Value", "Unit", "Meaning", "Where", "Source", "M2 pending"]
 
 
@@ -334,6 +354,22 @@ def test_relations_hold():
         ("MNEMONIC_MIN_WORDS = 12", "MNEMONIC_MIN_WORDS = 24"),
         ("SECRET_HASH_PREFIX_CHARS = 8", "SECRET_HASH_PREFIX_CHARS = 64"),
         ("SECRET_HASH_PREFIX_CHARS = 8", "SECRET_HASH_PREFIX_CHARS = 0"),
+        # Task AZ: M3 calibration.
+        ("CALIBRATION_GROUP_MIN_MARKETS = 5", "CALIBRATION_GROUP_MIN_MARKETS = 50"),
+        ("CALIBRATION_GROUP_MIN_MARKETS = 5", "CALIBRATION_GROUP_MIN_MARKETS = 0"),
+        ("CALIBRATION_EQUAL_FREQ_BINS = 5", "CALIBRATION_EQUAL_FREQ_BINS = 2.5"),
+        ("CALIBRATION_EQUAL_FREQ_MIN_PER_BIN = 6", "CALIBRATION_EQUAL_FREQ_MIN_PER_BIN = True"),
+        ("CALIBRATION_BIN_EDGES = (0.0, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 1.0)",
+         "CALIBRATION_BIN_EDGES = (0.0, 0.5, 0.4, 1.0)"),
+        ("CALIBRATION_BIN_EDGES = (0.0, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 1.0)",
+         "CALIBRATION_BIN_EDGES = (0.1, 0.5, 1.0)"),
+        ("CALIBRATION_CI_LEVEL = 0.95  # bootstrap percentile intervals and Wilson intervals",
+         "CALIBRATION_CI_LEVEL = 1.0"),
+        ("CALIBRATION_LOGLOSS_CLIP = 0.01  # p clipped to [clip, 1 - clip] for log loss and the logit",
+         "CALIBRATION_LOGLOSS_CLIP = 0.0"),
+        ("CALIBRATION_MIN_SAMPLES = 30  # eligible samples for an overall verdict", "CALIBRATION_MIN_SAMPLES = 8"),
+        ("CALIBRATION_EDGE_TIERS = (0.02, 0.04, 0.08)", "CALIBRATION_EDGE_TIERS = (0.04, 0.02)"),
+        ("CALIBRATION_EXPIRY_TIERS_H = (24.0, 72.0, 336.0)", "CALIBRATION_EXPIRY_TIERS_H = ()"),
     ],
 )
 def test_an_inconsistent_edit_fails_at_import(line, replacement):

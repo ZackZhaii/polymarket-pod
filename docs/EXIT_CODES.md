@@ -34,6 +34,20 @@ For every entry point:
 | 2 | `EXIT_NO_MARKETS` | no markets in data/markets.jsonl (run the scanner first) | - |
 | 6 | `EXIT_PIN_DRIFT` | refused to start: config/risk.toml off its pins (Task AS); global halt recorded, nothing fetched | - |
 
+## `src/calibration.py`
+
+`python -m src.calibration`: offline M3 calibration report (Task AZ). Reads logs/forecasts.jsonl,
+data/resolutions.jsonl and logs/paper.jsonl; writes reports/calibration/<UTC date>/ (report.json, report.md,
+samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
+
+| Code | Name | Meaning | Sentinel |
+|---|---|---|---|
+| 0 | `EXIT_OK` | report written; each section says `sufficient` or `insufficient` (insufficient is not an error) | - |
+| 2 | `EXIT_USAGE` | usage error (bad flag, `--now` not a zoned ISO time) | - |
+| 3 | `EXIT_CORRUPT_INPUT` | forecasts or resolutions file corrupt (torn last line, bad JSON, wrong keys or types, a forecast_id repeated with different content); no report written | - |
+| 4 | `EXIT_LEDGER_INVALID` | logs/paper.jsonl unreadable or fails `ledger_store.verify`; no report written | - |
+| 5 | `EXIT_WRITE_FAILED` | the report files could not be written (report.json is written last, so a partial set has none) | - |
+
 ## `src/endgame_scan.py`
 
 `python -m src.endgame_scan`: Endgame candidates (signals only). Start/finish heartbeat.

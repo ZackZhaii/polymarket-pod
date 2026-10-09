@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T12:21:43Z",
+  "ts": "2026-10-09T14:00:00Z",
   "live_enabled": false,
-  "last_done": "AX",
+  "last_done": "AZ",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AX (M3 step 2 identity fields: forecast_id/decision_id/condition_id/outcome_index/token_id/category/tags/end_date/model_version on forecasts, scanner rows and fills; sealed logs/forecasts.jsonl before every NewsForecaster signal; unjoinable fills flagged in calibration_problems) done by grok-bot. No new number, no decision moved. AW (#51, WS resync hardening) merged into this branch from dev. No open todo. No live gate."
+  "note": "AZ (M3 step 3: offline calibration report python -m src.calibration; drops counted by reason, corrupt input exit 3, ledger exit 4, 'insufficient' below the M3-pending CALIBRATION_* minimums) done by grok-bot. AY (#59) open in parallel. No open todo. No live gate."
 }

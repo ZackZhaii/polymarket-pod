@@ -173,7 +173,88 @@ repairs or guesses an id. Older fills have no such fields and count as not joina
 Not added yet (design 1.5, later step): `market_mid` / `best_bid` / `best_ask` on the fill,
 `hours_to_expiry_at_entry`, `kelly_fraction_used`. No new number.
 
+## Step 3: the offline calibration report (Task AZ)
+
+Design: Poly反思's M3 calibration design, sections 1-3 and 6. Code: `src/calibration.py` (pure
+`build_report`, plus a CLI). Read-only on its inputs, no network, no bus message, no halt, no proposal
+(step 4), no threshold or trading change; `config/strategies.toml` is not created.
+
+```
+python -m src.calibration [--forecasts logs/forecasts.jsonl] [--resolutions data/resolutions.jsonl]
+                          [--ledger logs/paper.jsonl] [--out-dir reports/calibration] [--now <zoned ISO>]
+```
+
+Writes `reports/calibration/<UTC date>/samples.jsonl`, `report.md` and, last, `report.json` (an older
+`report.json` is removed first, so a failed rewrite never leaves one beside partial files). The folder is
+git-ignored. Exit codes: `docs/EXIT_CODES.md` (0 written, 2 usage, 3 corrupt input, 4 ledger fails verify,
+5 write failed; 3 and 4 write nothing).
+
+### Samples
+
+- **B, forecasts**: the first sealed forecast (by `ts`, then `forecast_id`) per `condition_id`; p =
+  `model_prob`, y = 1 when its token won.
+- **A, trades**: counted (`ledger_store.counts`), `risk_decision=allow` fills grouped by `decision_id`; at
+  most `CALIBRATION_MAX_DECISIONS_PER_MARKET` decisions per market. p = the first fill's `model_prob`, q =
+  its `market_price` (no mid on fills yet). Expected `E = sum(edge x shares)`; realized
+  `R = (bought - sold shares) x y + sell proceeds - buy cost` (fees included).
+
+A label is used only when the resolution row is `status=resolved`, `uma_checked=true`, its prices are one
+1.0 and the rest 0.0, and the forecast's `outcome_index` and `token_id` agree with it (the winning index
+and `winning_token_id` must point the same way).
+
+### Dropped and counted, never imputed
+
+Each reason is counted in `report.json` (`dropped_by_reason`) and every dropped row is in `samples.jsonl`
+with its reason.
+
+| Reason | Sample | When |
+|---|---|---|
+| `excluded_strategy` / `excluded_market` | A, B | phase0-gate-test, no-edge-check, wash-probe; `phase0-self-check*`, `e2e-*` |
+| `forecast_calibration_problems` | B | the stored list or a recomputed `forecast_problems` is non-empty (also counted per problem) |
+| `duplicate_market_forecast` | B | not the first forecast for its market |
+| `fill_missing_identity` | A | a fill booked before Task AX (no `calibration_problems`) |
+| `fill_calibration_problems` | A | stored or recomputed `fill_problems` non-empty (counted per problem) |
+| `decision_inconsistent` | A | fills of one decision_id disagree on forecast, token, condition or outcome |
+| `fill_forecast_not_found` / `fill_forecast_mismatch` | A | its forecast_id is not on file / points at another market |
+| `resolution_pending` | A, B | no resolution row for the condition |
+| `resolution_not_uma_resolved` | A, B | `status=closed` (UMA not confirmed) |
+| `resolution_ambiguous_status` | A, B | any other status |
+| `resolution_disputed` | A, B | two rows for one condition disagree |
+| `resolution_void` | A, B | prices are not exactly one 1.0 and the rest 0.0 |
+| `outcome_index_out_of_range` / `token_outcome_mismatch` | A, B | the outcome cannot be matched to the snapshot |
+| `re_entry_cap` | A | a third or later decision on one market |
+
+Corrupt input is an error exit, not a partial report: a torn last line, a blank line, non-UTF-8, bad JSON or
+NaN, a non-object, keys other than `FORECAST_ROW_FIELDS` / the resolutions schema, a wrong type, or a
+`forecast_id` repeated with different content (exit 3); a ledger that fails `ledger_store.verify` (exit 4).
+An absent file is empty input (recorded as `present: false`), and the section then says `insufficient`.
+
+### Metrics
+
+- B: Brier, log loss (p clipped to `CALIBRATION_LOGLOSS_CLIP`), base rate, reliability bins (fixed
+  `CALIBRATION_BIN_EDGES` from `CALIBRATION_FIXED_BINS_MIN_SAMPLES`, else `CALIBRATION_EQUAL_FREQ_BINS`
+  equal-frequency bins of at least `CALIBRATION_EQUAL_FREQ_MIN_PER_BIN`) with Wilson intervals, ECE,
+  logistic calibration slope / intercept (`y ~ a + b logit(p)`, Newton; `None` when not estimable).
+  Groups: category, strategy, model_version.
+- A: Brier of p and of q, delta and Brier skill, log loss of both, E, R, realization `sum R / sum E`,
+  mean(R - E), re-entries. Groups: category, strategy, model_version, side, edge tier
+  (`CALIBRATION_EDGE_TIERS`), hours to expiry at the first fill (`CALIBRATION_EXPIRY_TIERS_H`), price band.
+- Intervals: market-clustered bootstrap (`CALIBRATION_BOOTSTRAP_RESAMPLES`, seed
+  `CALIBRATION_BOOTSTRAP_SEED`, level `CALIBRATION_CI_LEVEL`) for Brier, slope, delta Brier, skill, R and
+  mean(R - E). The report lists how many groups it shows.
+
+### Minimums and verdicts (M3 pending)
+
+A section needs `CALIBRATION_MIN_SAMPLES` (30) samples from `CALIBRATION_MIN_MARKETS` (20) markets over
+`CALIBRATION_MIN_RESOLUTION_DAYS` (5) UTC days of `closed_ts`; a group needs `CALIBRATION_GROUP_MIN_SAMPLES`
+(10) from `CALIBRATION_GROUP_MIN_MARKETS` (5) markets. Below that the status is `insufficient`, the verdict
+is the string `insufficient`, no interval is computed and a group shows no Brier. Above it, verdicts read
+intervals only: B `calibration_slope` = `overconfident` (slope CI below 1), `underconfident` (above 1),
+`no_clear_miscalibration`, or `slope_not_estimable`; A `model_vs_market` = `worse_than_market` (delta Brier
+CI above 0), `better_than_market` (below 0), `inconclusive`, or `not_estimable`. These are observations, not
+proposals. Every report states "UMA dispute status not checked" and "Not a promise of profit".
+
 ## Out of scope here
 
-Brier, joining forecasts, Reflector proposals, bus fills, new URL hosts, any
+Reflector proposals (step 4), bus fills, new URL hosts, any
 `config/risk.toml` edit, live trading.

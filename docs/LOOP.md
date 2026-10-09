@@ -1188,8 +1188,33 @@ and guard --require-git pass offline.
 - e2e gate: new golden section `calibration_ids` (written with --update-golden; no existing value moved).
 - Docs: `docs/M3_CALIBRATION.md` Step 2. No new number; `config/strategies.toml` not created.
 
+## Task AZ — M3 calibration step 3: offline calibration report (src/calibration.py)
+
+Status: done.
+
+Requested by Poly指挥 (Poly反思's M3 calibration design sections 1-3 and 6, step 3), done by grok-bot on
+dev@d2af163. AY (#59) ran in parallel.
+
+Finish when forecasts and fills join the settlement snapshot offline, the design's metrics are reported, every
+dropped row is counted by reason (never imputed), corrupt input exits with an error and writes nothing, the
+minimums say `insufficient` instead of a verdict, and `python -m pytest` and guard --require-git pass offline.
+
+- `src/calibration.py`: `python -m src.calibration` writes `reports/calibration/<UTC date>/` (report.json,
+  report.md, samples.jsonl). B (forecasts) and A (trades by decision_id) samples; Brier, log loss,
+  reliability + Wilson, ECE, slope / intercept, market-clustered bootstrap intervals; Brier vs market,
+  skill, E / R / realization; groups by category, strategy, model_version (and side, edge tier, expiry tier,
+  price band for A).
+- Exit codes 0 / 2 / 3 corrupt input / 4 ledger fails verify / 5 write failed in `docs/EXIT_CODES.md`
+  (19 entry points; no heartbeat, Sentinel `-`).
+- New numbers (M3 pending): `CALIBRATION_*` in `src/thresholds.py` and `docs/THRESHOLDS.md`.
+- Docs: `docs/M3_CALIBRATION.md` Step 3. `reports/calibration/` git-ignored. No e2e/guard change (the e2e
+  fixtures have no resolutions to join).
+
 ## Latest
 
+- 2026-10-09: Task AZ: offline M3 calibration report `python -m src.calibration` (Brier, reliability, ECE,
+  slope, vs-market, edge realization; drops counted by reason; corrupt input = exit 3, bad ledger = exit 4;
+  `insufficient` below the M3-pending `CALIBRATION_*` minimums). No trading change.
 - 2026-10-09: Task AX: M3 step 2 identity fields on forecasts, scanner rows and fills; `logs/forecasts.jsonl`
   sealed before every NewsForecaster signal; unjoinable fills flagged in `calibration_problems`. No number moved.
 - 2026-10-09: Task AV: resolutions exit 4 split: pin drift 6, bad snapshot clock 5, both global halts; resolutions
