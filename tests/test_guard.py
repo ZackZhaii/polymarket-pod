@@ -392,7 +392,15 @@ BAD_CODE_URLS = [
     'URL = "https://docs.polymarket.com/quickstart"\n',
     'URL = "https://api.binance.com/api/v3/order"\n',
     'HOST = "relayer-v2.polymarket.com"\n',
-    'HOST = "data-api.polymarket.com"\n',
+    'HOST = "data-api-v1.polymarket.com"\n',
+    'URL = "https://data-api.polymarket.com/trades"\n',  # Task AK: v1 routes stay refused
+    'URL = "https://data-api.polymarket.com/closed-positions"\n',
+    'URL = "https://data-api.polymarket.com/v1/market-positions"\n',
+    'URL = "https://data-api.polymarket.com/v2/positions/combos"\n',
+    'URL = "https://data-api.polymarket.com/v2/activity"\n',
+    'URL = "https://data-api.polymarket.com/v2/value"\n',
+    'URL = "https://data-api.polymarket.com/v2"\n',
+    'URL = "http://data-api.polymarket.com/v2/positions"\n',
     'HOST = "api.binance.com"\n',
     'def url(host):\n    return f"https://{host}/markets"\n',
     'BASE = "https://" + "evil.example.com"\n',
@@ -434,6 +442,9 @@ GOOD_SOURCES = [
     '"""Refuses ws://, other hosts and the user channel (/ws/user)."""\n',
     'BANNED = ("/order", "/auth", "api-key")\n',
     'PATH = "data/books.jsonl"\n',
+    'URL = "https://data-api.polymarket.com/v2/positions?"\n',  # Task AK
+    'URL = "https://data-api.polymarket.com/v2/trades?" + "user=0x1&taker_only=false"\n',
+    'URL = "https://data-api.polymarket.com/v2/status"\n',
 ]
 
 
@@ -464,7 +475,9 @@ def test_the_allowlist_is_exactly_what_src_uses_today():
                     parts = guard.urlsplit(url)
                     used.add((parts.scheme, parts.hostname, parts.path))
     assert used == set(guard.ALLOWED_ENDPOINTS)
-    assert not any("data-api" in host for _, host, _ in guard.ALLOWED_ENDPOINTS)  # unused today, so not allowed
+    # Task AK: only the Reconciler's three Data API v2 reads; no v1 route, no other v2 route.
+    assert {path for _, host, path in guard.ALLOWED_ENDPOINTS if host == "data-api.polymarket.com"} == \
+        {"/v2/positions", "/v2/trades", "/v2/status"}
 
 
 # ---------------------------------------------------------------- 5. THRESHOLDS.md vs src/thresholds.py

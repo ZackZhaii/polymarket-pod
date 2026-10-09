@@ -287,6 +287,15 @@
       "surface": "grok-bot"
     },
     {
+      "id": "AK",
+      "status": "done",
+      "title": "Data API v2 reconciliation: read-only Reconciler (src/reconcile.py) on GET /v2/status (first, lag limit), GET /v2/positions and GET /v2/trades only, before Data API v1 retires on 2026-10-24; every missing or malformed field fails closed (backlog #25)",
+      "finish": "src/reconcile.py reads /v2/status first every round (age_seconds + serving.lag_seconds <= DATA_API_MAX_LAG_S, network polygon / chain_id 137, null fails), then walks /v2/positions (user, status=OPEN, filter_type=TOKENS, filter_amount=0.1) and /v2/trades (user, taker_only=false, start=1, same filters every page) by pagination.next_cursor until null, validates the {data, pagination} envelope (data null, has_more vs next_cursor, cursor loop, MAX_PAGES) and every used row field strictly (no coercion: strings, bools, null, NaN, inf are malformed), checks the four documented position identities within DATA_API_IDENTITY_TOL_USDC, dedupes exact trade repeats on transaction_hash + token_id + side, and compares per token the ledger_store replay (open shares, buy/sell shares) with current_size and BUY/SELL trade sizes within RECONCILE_SHARES_TOL. Sub-floor legs/fills (0.1 / 0.01 shares) are unverifiable and fail. Exit 0 / 1 mismatch / 2 usage / 3 Data API unusable / 4 ledger invalid; 1/3/4 write one Reconciler halt (exchange_action none). podlib.public_get and guard url_allowlist admit exactly the three v2 paths. Offline tests on sanitised recorded-shape fixtures with every network path raising. New M2-pending numbers RECONCILE_SHARES_TOL, DATA_API_POSITIONS_DUST_SHARES, DATA_API_TRADES_MIN_SHARES, DATA_API_MAX_LAG_S, DATA_API_IDENTITY_TOL_USDC; operational reconcile.PAGE_LIMIT / MAX_PAGES. docs/RECONCILE.md. config/risk.toml unchanged, live_enabled false.",
+      "note": "by Poly指挥 (queue item 4); done by grok-bot. Not on the paper pipeline or the e2e gate: in Phase 0 the ledger is paper, so against a real wallet it reports mismatches by design; it is the M2 tool. Doc ambiguities resolved fail-closed in docs/RECONCILE.md (filter_amount=0 vs the 0.1 dust floor; trades are fills only, so redeem/merge/split/transfer show as mismatches). Sources include Poly研究's research_dataapi_ws_m2.md (Data API part); its dedupe key is not unique per fill on live data, so only exact repeats are deduped.",
+      "done_at": "2026-10-09T06:45:35Z",
+      "surface": "grok-bot"
+    },
+    {
       "id": "AL",
       "status": "done",
       "title": "Halt consumer: persisted Sentinel/Executor halts (src/halt_store.py) that RiskGate, the Maker and paper_cycle obey per market or globally, fail closed on a bad halt file; Operator-only resume bus type; invalid_risk_state and Executor ledger halts escalate to a global halt; atomic halt write order with logs/HALT fallback; markets without a book row are stale; e2e halt scenarios and guard check halt (Sentinel design gaps 1, 3, 7, 8, 10; backlog #26)",

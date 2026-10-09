@@ -58,6 +58,12 @@ EXPECTED = {
     "M1_MIN_REST_MATCHED": 50,
     "M1_MAX_TOP_MISMATCH_RATE": 0.02,
     "M1_MAX_REST_UNMATCHED_RATE": 0.1,
+    # Task AK: Data API v2 reconciliation (tolerance M2 pending; the two floors are Data API contract facts).
+    "RECONCILE_SHARES_TOL": 1e-6,
+    "DATA_API_POSITIONS_DUST_SHARES": 0.1,
+    "DATA_API_TRADES_MIN_SHARES": 0.01,
+    "DATA_API_MAX_LAG_S": 120.0,
+    "DATA_API_IDENTITY_TOL_USDC": 1e-6,
 }
 
 # Old import paths that callers and tests use; each must stay the very same object.
@@ -94,7 +100,10 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "MIN_HOURS_TO_EXPIRY", "WS_ROW_REFRESH_S",
               # Task AI: the M1 acceptance criteria (conservative first values for the user at M2).
               "M1_MIN_RUN_S", "M1_MIN_COVERAGE", "M1_MAX_RECONNECTS", "M1_MAX_GAP_RESYNCS_PER_ASSET",
-              "M1_REST_MATCH_WINDOW_S", "M1_MIN_REST_MATCHED", "M1_MAX_TOP_MISMATCH_RATE", "M1_MAX_REST_UNMATCHED_RATE"}
+              "M1_REST_MATCH_WINDOW_S", "M1_MIN_REST_MATCHED", "M1_MAX_TOP_MISMATCH_RATE", "M1_MAX_REST_UNMATCHED_RATE",
+              # Task AK: Data API v2 reconciliation.
+              "RECONCILE_SHARES_TOL", "DATA_API_POSITIONS_DUST_SHARES", "DATA_API_TRADES_MIN_SHARES",
+              "DATA_API_MAX_LAG_S", "DATA_API_IDENTITY_TOL_USDC"}
 HEADER = ["Name", "Value", "Unit", "Meaning", "Where", "Source", "M2 pending"]
 
 

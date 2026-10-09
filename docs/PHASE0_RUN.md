@@ -76,7 +76,8 @@ It prints one `PASS`/`FAIL` line per check with the reason, then a summary line:
   order-capable package (`ORDER_CAPABLE` in `scripts/guard.py`, the single list) in `requirements*.txt` /
   `pyproject.toml`, or imported anywhere in `src/` or `scripts/`.
 - `url_allowlist`: every URL in `src/` code is an allowlisted public read-only endpoint (Gamma `/markets` and
-  `/markets/keyset`, CLOB `/book`, the WS market channel); order/auth paths, the user channel, ports, credentials in
+  `/markets/keyset`, CLOB `/book`, the WS market channel, and since Task AK only the Data API v2 `/v2/status`, `/v2/positions`
+  and `/v2/trades` reads of `src/reconcile.py`); the retired v1 Data API routes, other v2 routes, order/auth paths, the user channel, ports, credentials in
   the query and other hosts fail. Docstrings and comments may also link docs.polymarket.com and github.com.
 - `thresholds_doc`: `docs/THRESHOLDS.md` agrees with `src/thresholds.py` (Task AC table parser).
 - `e2e`: the end-to-end offline gate below (Task AJ). It loads the checked repo's own `scripts/e2e_offline.py`,
@@ -132,6 +133,21 @@ Golden updates are explicit: `python -m pytest tests/test_e2e_offline.py --updat
 `tests/fixtures/e2e/golden.json`, and that run fails on purpose. Review `git diff tests/fixtures/e2e/golden.json`
 and rerun without the flag. The flag is off by default (a test checks it); the guard, a plain pytest run and
 environment variables never write golden.
+
+## Reconciliation on Data API v2 (Task AK)
+
+Data API v1 is retired on 2026-10-24. `src/reconcile.py` is the read-only Reconciler on Data API v2 only; see
+`docs/RECONCILE.md` for the endpoints, the fields that fail closed and the doc ambiguities.
+
+```bash
+python -m src.reconcile --user 0x<public proxy wallet> [--ledger logs/paper.jsonl] [--json]
+```
+
+It reads `/v2/status` first every round and stops if the data lag exceeds `DATA_API_MAX_LAG_S`.
+Exit codes: 0 reconciled, 1 mismatch, 2 usage, 3 Data API unusable (fetch failed, too stale, malformed or missing
+field, broken position identity, incomplete walk), 4 ledger invalid. Every 1/3/4 writes one `halt` bus message from Reconciler
+(`exchange_action: none`). No key, no order, nothing written to the ledger. In Phase 0 the ledger is paper,
+so against a real wallet it reports mismatches by design; it is not on the paper pipeline or the e2e gate.
 
 ## Halts and resume (Task AL)
 

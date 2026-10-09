@@ -47,6 +47,13 @@ PINS = {
 
 GAMMA_PREFIX = "https://gamma-api.polymarket.com/markets"
 BOOK_PREFIX = "https://clob.polymarket.com/book?"
+# Task AK: the Data API v2 reads the Reconciler needs (plus DATA_API_STATUS_URL below) (v1 is retired 2026-10-24). Exact routes
+# with their "?" so /v2/positions/combos and every other v2 route stay refused.
+DATA_API_POSITIONS_PREFIX = "https://data-api.polymarket.com/v2/positions?"
+DATA_API_TRADES_PREFIX = "https://data-api.polymarket.com/v2/trades?"
+# Data freshness, read first on every reconciliation round. Exact URL (no query, no sub-path).
+DATA_API_STATUS_URL = "https://data-api.polymarket.com/v2/status"
+PUBLIC_PREFIXES = (GAMMA_PREFIX, BOOK_PREFIX, DATA_API_POSITIONS_PREFIX, DATA_API_TRADES_PREFIX)
 
 # public_get retries transient network/TLS failures (SSL EOF, resets, timeouts, 5xx).
 # Waits are PUBLIC_GET_BACKOFF_S * 2**n between attempts (0.5 s, 1 s). HTTP 4xx is never retried.
@@ -205,8 +212,8 @@ def public_get(
     Transient network/TLS errors and HTTP 5xx are retried with exponential backoff.
     HTTP 4xx and JSON errors are raised at once. If every attempt fails, raises PublicGetError.
     """
-    if not (url.startswith(GAMMA_PREFIX) or url.startswith(BOOK_PREFIX)):
-        raise RuntimeError("refusing URL outside public Gamma markets and CLOB /book")
+    if not (url.startswith(PUBLIC_PREFIXES) or url == DATA_API_STATUS_URL):
+        raise RuntimeError("refusing URL outside public Gamma markets, CLOB /book and Data API v2 positions/trades/status")
     lowered = url.lower()
     banned = ("/order", "/auth", "api-key", "secret", "passphrase", "signature", "withdraw")
     if any(token in lowered for token in banned):

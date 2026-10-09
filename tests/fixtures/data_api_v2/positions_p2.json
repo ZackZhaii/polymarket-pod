@@ -1,0 +1,48 @@
+{
+ "data": [
+  {
+   "proxy_wallet": "0x1111111111111111111111111111111111111111",
+   "token_id": "1000000000000000000000000000000000000000000000000000000000000000000000000000",
+   "condition_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "current_size": 6.0,
+   "avg_price": 0.4,
+   "entry_cost_usdc": 2.4,
+   "entry_fees_usdc": 0.0,
+   "total_cost_usdc": 2.4,
+   "current_price": 0.4,
+   "current_value": 2.4,
+   "total_size": 6.0,
+   "realized_pnl": 0.0,
+   "unrealized_pnl": 0.0,
+   "total_pnl": 0.0,
+   "percent_pnl": 0.0,
+   "percent_realized_pnl": 0.0,
+   "status": "OPEN",
+   "redeemable": false,
+   "mergeable": false,
+   "negative_risk": true,
+   "archived": false,
+   "title": "Synthetic market",
+   "slug": "synthetic",
+   "icon": "",
+   "event_id": "1",
+   "event_slug": "synthetic",
+   "outcome": "Yes",
+   "outcome_index": 0,
+   "opposite_outcome": "No",
+   "opposite_token_id": "3000000000000000000000000000000000000000000000000000000000000000000000000000",
+   "end_date": "2026-12-31",
+   "last_event_at": 1791000000,
+   "first_entry_at": 1791000000,
+   "name": "",
+   "profile_image": "",
+   "verified": false
+  }
+ ],
+ "pagination": {
+  "limit": 1,
+  "offset": 1,
+  "has_more": false,
+  "next_cursor": null
+ }
+}
