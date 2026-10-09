@@ -9,7 +9,7 @@ calibration intercept, and the event-cluster share.
   is sufficient; nothing when it is insufficient.
 - Both sections report ``event_cluster``: the largest cluster's share of the samples, flagged
   ``insufficient`` below the section minimums, else ``concentrated`` above CALIBRATION_MAX_CLUSTER_SHARE
-  (M3 pending), else ``ok``. No event id is recorded yet, so the cluster is the market (condition_id).
+  (M3 pending), else ``ok``. Task BF keys it by event_id, Task BG the bootstrap too.
 Offline, synthetic rows only.
 """
 from __future__ import annotations
@@ -22,7 +22,8 @@ from src import calibration as cal
 from src import thresholds as th
 from tests.test_calibration import build, fill, forecast, resolution, world
 
-INTERVAL_KEYS = {"brier", "brier_ci", "ece", "ece_ci", "slope", "slope_ci", "intercept", "intercept_ci"}
+INTERVAL_KEYS = {"brier", "brier_ci", "ece", "ece_ci", "slope", "slope_ci", "intercept", "intercept_ci",
+                 "bootstrap_cluster_key", "bootstrap_clusters"}  # Task BG: which clusters were resampled
 TRADE_INTERVAL_KEYS = INTERVAL_KEYS | {"brier_market", "delta_brier", "delta_brier_ci", "realization",
                                        "realization_ci"}
 

@@ -290,7 +290,7 @@ An absent file is empty input (recorded as `present: false`), and the section th
 - A: Brier of p and of q, delta and Brier skill, log loss of both, E, R, realization `sum R / sum E`,
   mean(R - E), re-entries. Groups: category, strategy, model_version, side, edge tier
   (`CALIBRATION_EDGE_TIERS`), hours to expiry at the first fill (`CALIBRATION_EXPIRY_TIERS_H`), price band.
-- Intervals: market-clustered bootstrap (`CALIBRATION_BOOTSTRAP_RESAMPLES`, seed
+- Intervals: clustered bootstrap (Task BG: by event, else market; `CALIBRATION_BOOTSTRAP_RESAMPLES`, seed
   `CALIBRATION_BOOTSTRAP_SEED`, level `CALIBRATION_CI_LEVEL`) for Brier, slope, delta Brier, skill, R and
   mean(R - E). The report lists how many groups it shows.
 
@@ -309,7 +309,7 @@ proposals. Every report states "UMA dispute status not checked" and "Not a promi
 
 - `forecasts.by_category`, `trades.by_category` and `trades.by_edge_tier`: every group gains `intervals`.
   A group at the group minimums gets `{brier, brier_ci, ece, ece_ci, slope, slope_ci, intercept,
-  intercept_ci}` (model p against y; same market-clustered bootstrap, seed and level as above); trade groups
+  intercept_ci}` (model p against y; same clustered bootstrap, seed and level as above); trade groups
   add `brier_market`, `delta_brier`, `delta_brier_ci` (model - market) and `realization`, `realization_ci`
   (sum R / sum E, None when sum E <= 0). A group below them gets `intervals: null`; nothing is computed from it.
   Other group keys (strategy, model_version, side, expiry tier, price band) are unchanged.
@@ -346,8 +346,21 @@ proposals. Every report states "UMA dispute status not checked" and "Not a promi
   (none has; also an empty section) or `mixed`; `event_id_samples` and `condition_id_fallback_samples` count
   them. With `condition_id` or `mixed`, markets of one event without an event id still count separately, so
   the share is a lower bound. Same flag rule and the same `CALIBRATION_MAX_CLUSTER_SHARE` (no new number).
-- The bootstrap intervals (Task BD) stay market-clustered (`condition_id`). The markdown cluster line names
-  the key and the fallback count. Reflector proposals (Task BE) carry `cluster_key` through unchanged.
+- The bootstrap intervals (Task BD) stayed market-clustered (`condition_id`) in BF; Task BG clusters them by
+  event (below). The markdown cluster line names the key and the fallback count. Reflector proposals (Task BE) carry `cluster_key` through unchanged.
+
+### Event-clustered bootstrap intervals (Task BG)
+
+- Every bootstrap interval (overall Brier, ECE, slope, intercept; trade delta Brier, skill, R, mean(R - E);
+  every judged group's `intervals`) resamples the same clusters as `event_cluster`: a sample's `event_id` when
+  usable, else its `condition_id`, per sample. Markets of one event are drawn together. An event id and a
+  condition id with the same text are different clusters. Fewer than two clusters: the interval is `null`.
+- `forecasts.metrics`, `trades.metrics` and every judged group's `intervals` gain `bootstrap_cluster_key`
+  (`event_id` / `condition_id` / `mixed`, BF's convention) and `bootstrap_clusters` (clusters resampled); the
+  markdown cluster line names both. Same seed, resample count and level; samples without an event id (rows
+  from before BF) give exactly the intervals they gave before. With `condition_id` or `mixed`, markets of one
+  event without an id are still drawn apart, so those intervals can be too narrow.
+- No new number; report.json schema_version 1, keys only added; Reflector (BE) reads the intervals unchanged.
 
 ## Step 4: structured Reflector proposals (Task BB)
 

@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T17:28:46Z",
+  "ts": "2026-10-09T18:21:32Z",
   "live_enabled": false,
-  "last_done": "BF",
+  "last_done": "BG",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "BF (Polymarket event id / slug on scanner rows, forecasts and fills; calibration event_cluster keyed by event_id with per-sample condition_id fallback, cluster_key event_id / condition_id / mixed) done by grok-bot. Recorded and reported only. Kelly two-batch and cumulative-loss rules still open. No open todo. No live gate."
+  "note": "BG (calibration bootstrap intervals resample by event_id, else condition_id per sample, the event_cluster key; bootstrap_cluster_key event_id / condition_id / mixed and bootstrap_clusters recorded) done by grok-bot. Reported only. Kelly two-batch and cumulative-loss rules still open. No open todo. No live gate."
 }

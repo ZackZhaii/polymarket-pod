@@ -30,7 +30,11 @@ a sample has one, else that sample's market (condition_id). ``event_cluster.clus
 event concentration) or ``mixed``; ``event_id_samples`` / ``condition_id_fallback_samples`` count them.
 A trade sample takes its first fill's event_id, else its joined forecast's; when both are usable and
 differ it falls back to condition_id. Missing or malformed event data never drops or corrupts a row.
-The bootstrap intervals stay market-clustered (condition_id).
+
+Task BG: the bootstrap intervals resample the same clusters (event_id, else condition_id per sample), so
+markets of one event are drawn together. ``bootstrap_cluster_key`` (event_id / condition_id / mixed) and
+``bootstrap_clusters`` on both sections and on every judged group's ``intervals`` say what was resampled.
+Same seed and resample count; samples without an event id resample exactly as before (one market each).
 
 Fail closed. Nothing is imputed: a row with calibration_problems, a missing join, a pending,
 UMA-unconfirmed, disputed, void or ambiguous resolution, or a token / outcome that disagrees with
@@ -110,6 +114,8 @@ NOTES = (
     "(condition_id); cluster_key says event_id, condition_id or mixed and condition_id_fallback_samples counts "
     "the fallbacks. Markets of one event without an event id count separately, so a condition_id or mixed share "
     "is a lower bound on event concentration. Reported only.",
+    "Bootstrap intervals resample the same clusters as event_cluster (event_id, else condition_id per sample; "
+    "bootstrap_cluster_key and bootstrap_clusters say which and how many). Fewer than two clusters: no interval.",
     "Group intervals (by_category, by_edge_tier) exist only for groups at the group minimums; read conclusions "
     "from intervals only and mind the number of groups.",
 )
@@ -362,12 +368,37 @@ def logistic_fit(pairs: Sequence[tuple[float, int]], iterations: int = 50) -> tu
     return None
 
 
-def cluster_bootstrap(samples: Sequence[Mapping[str, Any]], statistic, key: str = "condition_id"
+def _bootstrap_cluster(sample: Mapping[str, Any]) -> tuple[str, str]:
+    """Task BG: the cluster a sample is resampled with: ("event_id", id) or ("condition_id", id) (cluster_name).
+    The kind is part of the name, so an event id never merges with a condition id of the same text."""
+    name, is_event = cluster_name(sample)
+    return ("event_id" if is_event else "condition_id", name)
+
+
+def _key_of(n: int, by_event: int) -> str:
+    """Task BF / BG: ``event_id`` when every sample has one, ``condition_id`` when none has (or no samples),
+    else ``mixed``."""
+    return "event_id" if n and by_event == n else "condition_id" if by_event == 0 else "mixed"
+
+
+def bootstrap_clusters(samples: Sequence[Mapping[str, Any]]) -> tuple[str, int]:
+    """Task BG: (bootstrap_cluster_key, number of clusters cluster_bootstrap resamples) for ``samples``."""
+    names = {_bootstrap_cluster(s) for s in samples}
+    by_event = sum(1 for s in samples if cluster_name(s)[1])
+    return _key_of(len(samples), by_event), len(names)
+
+
+def cluster_bootstrap(samples: Sequence[Mapping[str, Any]], statistic, key: str | None = None
                       ) -> list[float] | None:
-    """Percentile interval of ``statistic`` over markets resampled with replacement (fixed seed)."""
-    clusters: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    """Percentile interval of ``statistic`` over clusters resampled with replacement (fixed seed).
+
+    Task BG: a cluster is the sample's event_id when usable, else its condition_id (the event_cluster rule),
+    so markets of one event are drawn together. ``key`` names a plain sample field to cluster by instead
+    (the market bootstrap before BG is ``key="condition_id"``); without event ids both give the same interval.
+    """
+    clusters: dict[Any, list[Mapping[str, Any]]] = defaultdict(list)
     for sample in samples:
-        clusters[sample[key]].append(sample)
+        clusters[_bootstrap_cluster(sample) if key is None else sample[key]].append(sample)
     names = sorted(clusters)
     if len(names) < 2:
         return None
@@ -434,13 +465,15 @@ def _realization(samples: Sequence[Mapping[str, Any]]) -> float | None:
 
 
 def group_intervals(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Task BD: point values and market-clustered bootstrap intervals for one judged group."""
+    """Task BD: point values and clustered bootstrap intervals for one judged group (Task BG: by event)."""
     fit = logistic_fit(_pairs(samples))
+    boot_key, boot_n = bootstrap_clusters(samples)
     out: dict[str, Any] = {
         "brier": brier(_pairs(samples)), "brier_ci": cluster_bootstrap(samples, lambda d: brier(_pairs(d))),
         "ece": _ece(samples), "ece_ci": cluster_bootstrap(samples, _ece),
         "slope": None if fit is None else fit[1], "slope_ci": cluster_bootstrap(samples, _slope),
         "intercept": None if fit is None else fit[0], "intercept_ci": cluster_bootstrap(samples, _intercept),
+        "bootstrap_cluster_key": boot_key, "bootstrap_clusters": boot_n,  # Task BG
     }
     if samples and "q" in samples[0]:
         out["brier_market"] = brier(_pairs(samples, "q"))
@@ -470,7 +503,7 @@ def cluster_share(samples: Sequence[Mapping[str, Any]], *, status: str) -> dict[
     by_event = sum(1 for _, is_event in names if is_event)
     counts = Counter(name for name, _ in names)
     n = len(samples)
-    key = "event_id" if n and by_event == n else "condition_id" if by_event == 0 else "mixed"
+    key = _key_of(n, by_event)
     largest = min(counts.items(), key=lambda item: (-item[1], item[0])) if counts else None
     share = largest[1] / n if largest else None
     if status != "sufficient":
@@ -698,6 +731,8 @@ def forecast_section(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "reliability": reliability(pairs),
         "calibration": {"intercept": None if fit is None else fit[0], "slope": None if fit is None else fit[1]},
         "event_cluster": cluster_share(samples, status=gate["status"]),  # Task BD
+        "bootstrap_cluster_key": bootstrap_clusters(samples)[0],  # Task BG
+        "bootstrap_clusters": bootstrap_clusters(samples)[1],
         "verdict": None,
     }
     if gate["status"] == "sufficient":
@@ -753,6 +788,8 @@ def trade_section(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "realization": realized / expected if expected > 0 else None,
         "re_entries": sum(1 for s in samples if s["re_entry"]),
         "event_cluster": cluster_share(samples, status=gate["status"]),  # Task BD
+        "bootstrap_cluster_key": bootstrap_clusters(samples)[0],  # Task BG
+        "bootstrap_clusters": bootstrap_clusters(samples)[1],
         "verdict": None,
     }
     if gate["status"] == "sufficient":
@@ -877,7 +914,9 @@ def _cluster_line(metrics: Mapping[str, Any]) -> str:
     return (f"- event cluster ({ec.get('cluster_key')}): largest {_fmt(ec.get('largest_cluster'))} holds "
             f"{ec.get('largest_cluster_n')} of {ec.get('n')} ({_fmt(ec.get('largest_share'))}; limit "
             f"{_fmt(ec.get('max_share'))}), {ec.get('n_clusters')} clusters: **{ec.get('flag')}**"
-            f"; {ec.get('condition_id_fallback_samples', '-')} samples fell back to condition_id (no event_id)")
+            f"; {ec.get('condition_id_fallback_samples', '-')} samples fell back to condition_id (no event_id)"
+            f"; bootstrap clustered by {metrics.get('bootstrap_cluster_key', 'condition_id')} "
+            f"({metrics.get('bootstrap_clusters', '-')} clusters)")  # Task BG
 
 
 def render_markdown(report: Mapping[str, Any]) -> str:
