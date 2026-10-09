@@ -1106,10 +1106,43 @@ Finish when no intent can assume less slippage than `ASSUMED_SLIPPAGE`, includin
   the builder's intent passes, CLI refuses 0 / 0.0049 / nan / -0.01 and accepts 0.005 / 0.01); golden only via
   `--update-golden`. Tests: `tests/test_slippage_floor.py`; `tests/test_fee_characterisation.py` (the recorded
   sell point with slippage 0.0 that allowed now vetoes, checked separately).
+## Task AV — Split resolutions exit 4 (pin drift vs. bad snapshot clock)
+
+Status: done.
+
+Requested by Poly指挥 (left open by Task AS), done by grok-bot on dev@690a63b.
+
+Finish when resolutions has one exit code per meaning, the Sentinel acts on both, the registry and the matrix agree,
+and `python -m pytest` and guard --require-git pass offline.
+
+- `src/resolutions.py`: `EXIT_PIN = 4` retired. Pin drift (risk file pins via `refuse_start`, global halt recorded,
+  or the in-memory `podlib.PINS`) is `EXIT_PIN_DRIFT = 6`, the code scanner / book / ws_recorder / m1_run use. A
+  snapshot clock that is not a zoned ISO timestamp is `EXIT_BAD_CLOCK = 5`. Neither fetches nor writes.
+- `__main__` runs through `heartbeat.run_main("resolutions", main)` (start/finish heartbeat, like scanner), so the
+  resident Sentinel sees its exit codes. `src/sentinel_tick.py`: `PROC_SPECS["resolutions"]` (`SCANNER_HANG_S`,
+  started_at clock, hang = alert); `EXIT_EVENTS` (resolutions, 6) and (resolutions, 5) = global halt. The design
+  has no row for the clock; the stricter action was chosen (as for `heartbeat_bad_time`).
+- `docs/EXIT_CODES.md`: resolutions section 0 / 3 alert / 5 global halt / 6 global halt. PHASE0_RUN and
+  COORDINATION #27 / #31 annotated.
+- Tests: `tests/test_resolutions.py`, `tests/test_pins.py`, `tests/test_sentinel_tick.py`, `tests/test_exit_codes.py`.
 - No new number. config/risk.toml unchanged, `live_enabled` false.
 
 ## Latest
 
+- 2026-10-09: Task AV: resolutions exit 4 split: pin drift 6, bad snapshot clock 5, both global halts; resolutions
+  now beats start/finish and is in the Sentinel's PROC_SPECS (exit 3 = alert). No new number.
+- 2026-10-09: Merge origin/dev (AR #46 daily_loss, AT #47 one ASSUMED_SLIPPAGE) into Task AS; AR, AT and AS all kept.
+- Task AS: `docs/EXIT_CODES.md` registry of all 18 entry points, kept in sync by tests and guard check 12 `exit_codes`.
+- Task AS: `src/pins.py` checks config/risk.toml (sha + all 9 keys) at start and while running; drift = refuse + global halt.
+- Exit changes: loop_claim usage 5 (was 2), paper_cycle 1 = global halt, new exit 6 for scanner/book/ws_recorder/m1_run.
+- pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`. M2 pending adds `PIN_RECHECK_S = 60`.
+- 2026-10-09: Task AT: one `ASSUMED_SLIPPAGE = 0.005` in `src/thresholds.py`; SportsDevig/intent names are aliases,
+  paper_ledger literals gone, drift fails at import. ROLES.md: RiskGate has no Kelly sizing (shadow only).
+- 2026-10-09: Task AR: `max_daily_loss` now counts today's (UTC) fees plus gross realized losses (`src/daily_loss.py`).
+- Gains never offset; corrupt counted ledger rows = `invalid_risk_state` = global halt. e2e golden `daily_loss`.
+- Task AP (merged #45) and AQ (merged #44) are on dev: guard checks 10 `secret_scan`, 11 `heartbeat`.
+- pytest + guard (11 checks) pass. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
+- No new number from AR. Open Operator choice: netting realized gains. Queue empty after AR.
 - 2026-10-09: Merge origin/dev (AS #48 exit codes / pins) into Task AU; AS and AU both kept (COORDINATION AS #31, AU #32).
 - Task AU: RiskGate vetoes `assumed_slippage < ASSUMED_SLIPPAGE` (`slippage_below_floor`); the paper_ledger CLI refuses it.
 - Task AS (merged #48): `docs/EXIT_CODES.md` registry (guard check 12 `exit_codes`); `src/pins.py` risk.toml pins at runtime.
