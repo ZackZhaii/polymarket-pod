@@ -837,6 +837,30 @@ is a global halt, only an Operator resume releases one, the e2e gate and guard p
 - No new threshold (no M2 addition), no URL, risk.toml unchanged. Docs: PROTOCOL.md, COORDINATION (Operator bus
   exception, #26), PHASE0_RUN "Halts and resume".
 
+## Task AM — GitHub Actions CI (guard --require-git + full pytest) and docs/DECISIONS.md
+
+Status: done.
+
+Assigned by Operator 2026-10-09, done by grok-build-local. Task AH added `scripts/guard.py` and left CI
+with the user. This task is that CI, plus a written record of the five roadmap decisions.
+
+Finish when `.github/workflows/ci.yml` runs `python scripts/guard.py --require-git` and full
+`python -m pytest` only on pull requests and on pushes to `dev` and `main`, actions are pinned to a
+full commit SHA, `permissions: contents: read`, no secrets are used, `docs/DECISIONS.md` records the
+five decisions, and `python -m pytest` passes with no network and no credentials.
+
+- Triggers: `pull_request` and `push` to `dev` and `main` only. No `workflow_dispatch`, no schedule.
+- `permissions: contents: read`. Checkout sets `persist-credentials: false`. No `secrets:` key.
+- Actions pinned: `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` (v7.0.1),
+  `actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97` (v7.0.0). Python 3.12; pytest from
+  `requirements-dev.txt`.
+- `docs/DECISIONS.md`: (1) Phase 0 paper only, (2) daily truth is `origin/dev`, (3) `risk.toml` pin,
+  (4) CI is KEY, (5) M2 thresholds stay code constants until the Operator decides.
+- Letter AM: AK landed as PR #39 and AL as PR #40 while this worktree was open. AN is the unpublished
+  local worktree `task-an/m3-resolution-snapshot`. AM is the next letter unused on `origin/dev`,
+  `origin/main`, unclosed PRs, and remaining local/remote branches.
+- Tests: `tests/test_ci_workflow.py`. Do not edit `config/risk.toml`.
+
 ## Task AN — M3 calibration step 1: read-only settlement snapshot (docs/M3_CALIBRATION.md, src/resolutions.py)
 
 Status: done.
@@ -862,9 +886,8 @@ tests pass, and `config/risk.toml` is unchanged.
 
 ## Latest
 
-- 2026-10-09: Task AN done by grok-build-local (requested by Poly指挥). M3 calibration step 1: read-only settlement snapshot.
-- `src/resolutions.py` walks Gamma `/markets/keyset?closed=true`, holds 48 h after `closedTime`, writes `data/resolutions.jsonl` with condition_id, winning_token_id, outcome_prices_final, closed_ts, snapshot_ts, status, uma_checked. Missing fields skip the row.
-- Incomplete paging writes nothing (exit 3); pin drift writes nothing (exit 4). No bus, no order, no new URL host. Design: `docs/M3_CALIBRATION.md`.
-- `python -m pytest` passed offline. `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. Letter AN (AL merged in #40; AM is a local in-progress worktree). `RESOLUTION_HOLD_HOURS=48` is not M2 pending.
-
+- 2026-10-09: Merge origin/dev into Task AN (#42). Both AM (CI + DECISIONS.md, #41) and AN (M3 settlement snapshot) kept.
+- Task AM: `.github/workflows/ci.yml` runs guard --require-git and full pytest on PRs/pushes to dev/main; docs/DECISIONS.md records five roadmap decisions.
+- Task AN: `src/resolutions.py` walks Gamma `/markets/keyset?closed=true`, 48 h `closedTime` hold, writes `data/resolutions.jsonl`; fail-closed fields; no bus/order/new host.
+- pytest + guard pass after merge. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty after AM+AN. `RESOLUTION_HOLD_HOURS=48` not M2 pending. Heartbeat (gap 2) later.

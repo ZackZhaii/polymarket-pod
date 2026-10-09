@@ -86,7 +86,8 @@ It prints one `PASS`/`FAIL` line per check with the reason, then a summary line:
 
 Exit codes: 0 every check passed (`risk_sha_head` may be `SKIP`), 1 a check failed, 2 usage error or no repo root.
 It writes nothing in the repo (the `e2e` check keeps its scratch files in a temp folder outside the repo and
-removes it) and adds no CI: running it in CI is the user's decision.
+removes it). Task AM runs the same command in GitHub Actions as `python scripts/guard.py --require-git`
+together with full pytest (`.github/workflows/ci.yml`; PRs and pushes to `dev`/`main` only).
 
 ## E2E offline gate (Task AJ)
 
