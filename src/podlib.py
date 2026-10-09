@@ -27,7 +27,11 @@ SENTINEL_STATE_PATH = LOG_DIR / "sentinel_stale.json"
 
 # Local paper bankroll. Not a wallet. Sizing never exceeds the 1% clip.
 from src.thresholds import PAPER_EQUITY_USD  # noqa: E402 - Task AC: value in src/thresholds.py
-BUS_TYPES = frozenset({"signal", "veto", "fill", "proposal", "halt"})
+BUS_TYPES = frozenset({"signal", "veto", "fill", "proposal", "halt", "resume"})
+# Task AL: ``resume`` lifts one halt. Only the Operator (the human, via ``python -m src.halt_store
+# resume``) may send it, and "Operator" may send nothing else: it is not a bus role otherwise.
+RESUME_FROM = "Operator"
+RESUME_SCOPES = frozenset({"global", "market"})
 # Bus role names follow docs/ROSTER.md. A legacy name is still accepted by bus() and written
 # as its ROSTER name; readers of older logs/bus.jsonl lines compare via canonical_role().
 ROLE_ALIASES = {"Forecaster": "NewsForecaster"}
@@ -152,6 +156,8 @@ def bus(
         raise RuntimeError("only Executor may emit fills")
     if kind == "fill" and payload.get("risk_decision") != "allow":
         raise RuntimeError("fill refused without RiskGate allow")
+    if kind == "resume" or frm == RESUME_FROM:
+        _check_resume(frm, to, kind, payload)
     message = {
         "ts": utc_now(),
         "from": frm,
@@ -162,6 +168,30 @@ def bus(
     }
     append_jsonl(path or BUS_PATH, message)
     return message
+
+
+def _check_resume(frm: str, to: str, kind: str, payload: dict[str, Any]) -> None:
+    """Task AL: a resume is from=Operator to=Sentinel, names one halt and who approved it."""
+    if kind != "resume":
+        raise RuntimeError("Operator is not a bus role except as the sender of resume")
+    if frm != RESUME_FROM:
+        raise RuntimeError("only Operator may emit resume")
+    if to != "Sentinel":
+        raise RuntimeError("resume goes to Sentinel")
+    if not isinstance(payload, dict):
+        raise RuntimeError("resume payload must be a dict")
+    approved = payload.get("approved_by")
+    if not isinstance(approved, str) or not approved.strip():
+        raise RuntimeError("resume needs approved_by")
+    if payload.get("scope") not in RESUME_SCOPES:
+        raise RuntimeError("resume scope must be global or market")
+    ref = payload.get("halt_ref")
+    if not isinstance(ref, dict) or not isinstance(ref.get("id"), str) or not ref.get("id"):
+        raise RuntimeError("resume needs halt_ref with an id")
+    if ref.get("scope") == "global" and payload.get("scope") != "global":
+        raise RuntimeError("a market resume cannot lift a global halt")
+    if payload.get("exchange_action", "none") != "none":
+        raise RuntimeError("resume carries no exchange action")
 
 
 def _retryable(exc: BaseException) -> bool:

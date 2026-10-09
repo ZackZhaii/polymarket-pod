@@ -801,10 +801,46 @@ only the exact v2 paths are allowlisted, and `python -m pytest` passes with no n
 - Not on the paper pipeline or the e2e gate (unchanged): the Phase 0 ledger is paper, so a real wallet mismatches by
   design. Ambiguities resolved fail-closed (docs/RECONCILE.md). No key, no order, config/risk.toml unchanged.
 
+## Task AL — Halt consumer: src/halt_store.py, resume bus type, global escalation, e2e halt scenarios, guard check halt (backlog #26)
+
+Status: done.
+
+Requested by Poly指挥 (ruling on Poly哨兵's halt/heartbeat design review of dev@f760e51), done by grok-bot. A halt
+was a bus line nobody read: RiskGate did not check it, the Maker could re-quote, there was no resume, and
+`invalid_risk_state` only vetoed (design gaps 1, 3, 7, 8, 10). Heartbeat (gap 2) is a later task.
+
+Finish when every halt is persisted and obeyed by RiskGate, the Maker and paper_cycle in its scope, a bad halt file
+is a global halt, only an Operator resume releases one, the e2e gate and guard prove it, and pytest passes offline.
+
+- `src/halt_store.py`: `logs/halt_state.json` (version 1, atomic temp + fsync + `os.replace`, `.seen` marker), records
+  `{id, scope market|global, market, reason, source, ts, active, resolved}`. `halt_problems(market)` never raises:
+  `halt_market:<id>`, `halt_global:<id>`, `halt_state_{missing,unreadable,corrupt,malformed}`, `halt_file`
+  (`logs/HALT` exists) or `halt_check_failed`. A bad state file is kept as evidence; new halts then go to `logs/HALT`.
+- Gap 1: `risk_gate.evaluate` adds the halt reasons first (veto); `maker.quote` raises `HaltActive` before and after
+  its append (a racing quote is cancelled by the Maker); `paper_cycle.run` skips gap signals of a halted market
+  (`halted_market`, `halted_markets`), every market under a global halt.
+- Gap 3: `podlib.BUS_TYPES` + `resume`; `bus()` accepts it only `from=Operator`, `to=Sentinel`, with `approved_by`,
+  `halt_ref.id`, scope global|market, no exchange action, and no market resume of a global `halt_ref`; Operator may
+  send nothing else. `halt_store.resume` / `python -m src.halt_store resume` checks Operator, approval, root cause,
+  postmortem, an active `halt_ref`, matching scope (market resume never lifts global; global resume never lifts a
+  market halt), logs the resume on the bus, then releases. `halt-file` / `halt-state-problem` move the evidence aside.
+- Gap 7: `paper_ledger.commit_if_allowed` turns `invalid_risk_state` into a global Sentinel halt (result `halted`);
+  the Executor's `ledger_integrity` / `ledger_write_failed` halts are global halts. Both stay until resumed.
+- Gap 8: `sentinel.halt` writes the halt record first, then cancels quotes with an atomic rewrite, then the bus;
+  a failed record, cancel or bus write writes `logs/HALT` and is reported in `failures`, never raised.
+- Gap 10: a leg or market without a book row is stale (`missing_book`) and counts for StaleWatch.
+- e2e (`halt_consumer` in golden; corrupt-ledger cases now carry `global_halts`): halt blocks later intents and the
+  Maker on its market only; corrupt halt file vetoes an otherwise allowed intent and all gap signals; market resume
+  of a global halt rejected and global still blocks after a market resume; Sentinel/Executor resume, Operator
+  without approval and a non-Operator resume bus line rejected. Guard check `halt` (9 lines) checks these by meaning
+  and against golden. Golden rewritten only with `--update-golden`. Tests: `tests/test_halt_consumer.py`.
+- No new threshold (no M2 addition), no URL, risk.toml unchanged. Docs: PROTOCOL.md, COORDINATION (Operator bus
+  exception, #26), PHASE0_RUN "Halts and resume".
+
 ## Latest
 
-- 2026-10-09: Task AK done by grok-bot (requested by Poly指挥, backlog #25). Read-only Reconciler on Data API v2 before v1 retires 2026-10-24.
-- `src/reconcile.py` reads `/v2/status` first (lag limit), then only `/v2/positions` and `/v2/trades` (cursor walk), compares per token with the ledger_store replay; exit 0/1/2/3/4, halt on 1/3/4.
-- Any missing, null or malformed field, broken position identity or too-large lag fails closed (exit 3); guard and `public_get` admit exactly the three v2 paths.
-- `python -m pytest` passed offline (1918 passed; on Windows 1914 passed, 4 symlink tests skipped). `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty. M2 pending adds RECONCILE_SHARES_TOL, DATA_API_POSITIONS_DUST_SHARES, DATA_API_TRADES_MIN_SHARES, DATA_API_MAX_LAG_S, DATA_API_IDENTITY_TOL_USDC.
+- 2026-10-09: Task AL done by grok-bot (requested by Poly指挥, Poly哨兵 design gaps 1/3/7/8/10, backlog #26). Halts are persisted (`src/halt_store.py`) and obeyed.
+- RiskGate, Maker and paper_cycle veto a halted market or everything under a global halt; a bad halt file or `logs/HALT` is global; `invalid_risk_state` and Executor ledger halts are global.
+- `resume` bus type only from Operator (approved_by + halt_ref); a market resume cannot lift a global halt; release only via `python -m src.halt_store resume`. Markets without a book row are stale.
+- e2e golden `halt_consumer` + guard check `halt`; `python -m pytest` passed offline (1771 passed; on Windows 1767 passed, 4 symlink tests skipped); guard --require-git 9/9 PASS. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty (AK merged in #39 and merged into this branch). AL adds no M2 number; AK's five stay pending. Heartbeat (gap 2) is a later task.

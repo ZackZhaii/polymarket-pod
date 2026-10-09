@@ -8,6 +8,9 @@ offset each other (backlog item 5, Task P).
 Task AF (backlog #20): the ledger is read strictly, fills carry ids and are deduped, writes are
 atomic and cash / positions are conservation-checked on every load and write (src/ledger_store.py).
 Any integrity problem is an invalid risk state and halts booking.
+Task AL (Sentinel design gap 7): invalid_risk_state and the Executor's ledger_integrity /
+ledger_write_failed halt are now persisted global halts (src/halt_store.py): every later intent
+vetoes until the Operator resumes it.
 """
 from __future__ import annotations
 
@@ -35,6 +38,7 @@ from src.podlib import (  # noqa: E402
 from src.book_staleness import latest_by_time, parse_book_ts  # noqa: E402
 from src.fees import booked_fee_usd, ledger_fee  # noqa: E402 - Task AE: one fee module
 from src import ledger_store  # noqa: E402 - Task AF: ledger integrity
+from src import sentinel  # noqa: E402 - Task AL: ledger halts and invalid_risk_state are global halts
 from src.ledger_store import (  # noqa: E402,F401 - Task AF: moved here, re-exported unchanged
     LEDGER_NUMBER_FIELDS,
     LedgerIntegrityError,
@@ -143,6 +147,17 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
     summary = _decision_payload(intent, decision)
     if not decision.allow:
         bus("RiskGate", "Executor", "veto", intent.market, summary)
+        if "invalid_risk_state" in decision.reasons:
+            # Task AL gap 7: an unusable ledger state is no longer a one-off veto but a global halt.
+            problems = [str(p) for p in state.get("ledger_problems") or []]
+            if state.get("non_finite_ledger_rows"):
+                problems.append(f"non_finite_ledger_rows={state.get('non_finite_ledger_rows')}")
+            sentinel.halt(reason="invalid_risk_state", market=intent.market, scope="global",
+                          quotes_path=QUOTES_PATH, emit=_emit,
+                          extra={"ledger_problems": problems, "strategy": intent.strategy,
+                                 "token_id": intent.token_id})
+            return {"allow": False, "decision": summary, "halted": True, "halt_reason": "invalid_risk_state",
+                    "ledger_problems": problems}
         return {"allow": False, "decision": summary}
 
     summary["decision"] = "allow"
@@ -195,13 +210,19 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def _halt(intent: Intent, summary: dict[str, Any], reason: str, problems: list[str]) -> dict[str, Any]:
-    """Task AF: no fill. Report a halt (paper only, no exchange action) and return allow False."""
-    payload = {"reason": reason, "ledger_problems": problems, "exchange_action": "none",
-               "strategy": intent.strategy, "token_id": intent.token_id}
-    bus("Executor", "Sentinel", "halt", intent.market, payload)
+    """Task AF: no fill. Report a halt (paper only, no exchange action) and return allow False.
+
+    Task AL gap 7: the halt is also persisted as a global halt (Sentinel's halt path, written first)."""
+    sentinel.halt(reason=reason, market=intent.market, scope="global", source="Executor", to="Sentinel",
+                  quotes_path=QUOTES_PATH, emit=_emit, extra={"ledger_problems": problems, "strategy": intent.strategy, "token_id": intent.token_id})
     decision = dict(summary, decision="halt")
     return {"allow": False, "halted": True, "halt_reason": reason, "ledger_problems": problems,
             "decision": decision}
+
+
+def _emit(*args: Any, **kwargs: Any) -> Any:
+    """This module's bus writer, looked up at call time (callers and tests may replace ``bus``)."""
+    return bus(*args, **kwargs)
 
 
 def _decision_payload(intent: Intent, decision: Decision) -> dict[str, Any]:

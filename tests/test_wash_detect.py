@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import src.halt_store as halt_store
+
 import src.maker as maker
 import src.paper_ledger as paper_ledger
 import src.sentinel as sentinel
@@ -278,7 +280,12 @@ def test_ledger_vetoes_buy_against_own_resting_sell_until_cancelled(paper):
     assert vetoed["allow"] is False
     assert CROSS_SIDE_SAME_LEG in vetoed["decision"]["reasons"]
     assert read_jsonl(paper["paper"]) == []
-    sentinel.halt(reason="task-s test", market=MARKET, bus_path=paper["bus"], quotes_path=paper["quotes"])
+    halt = sentinel.halt(reason="task-s test", market=MARKET, bus_path=paper["bus"], quotes_path=paper["quotes"])
+    # Task AL: the halt also blocks the market until the Operator resumes it.
+    still = paper_ledger.commit_if_allowed(_live_intent(), cfg)
+    assert still["allow"] is False and f"halt_market:{halt['payload']['halt_id']}" in still["decision"]["reasons"]
+    halt_store.resume(from_role="Operator", scope="market", halt_id=halt["payload"]["halt_id"],
+                      approved_by="test", root_cause="test", postmortem="test", bus_path=paper["bus"])
     allowed = paper_ledger.commit_if_allowed(_live_intent(), cfg)
     assert allowed["allow"] is True, allowed
     assert RISK_PATH.read_bytes() == before

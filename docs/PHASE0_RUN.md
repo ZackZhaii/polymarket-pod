@@ -119,8 +119,15 @@ and byte-identical, `live_enabled` false at every stage, no default `data/` or `
 Not connected in code yet (the gate builds or skips them, and says so): no src module turns a NewsForecaster
 signal into an Intent (`build_intent` in the harness does: model_prob from the signal, price/spread/book_ts from
 the book row, liquidity from the scanner row; fee_rate and slippage are fixture inputs); Endgame signals carry no
-model probability, so they stop at the signal; nothing consumes a Sentinel or Executor halt yet (later intents
-are not blocked by it).
+model probability, so they stop at the signal. (Task AL connected the halt consumer: see "Halts and resume".)
+
+Task AL halt scenarios (`halt_consumer` in golden, also guard check `halt`): (a) the Sentinel market halt from
+check 2 vetoes a later intent on that market (`halt_market`) and the Maker refuses to quote it, while another
+market is unaffected; (b) a corrupt halt state file vetoes an intent that is otherwise allowed
+(`halt_state_corrupt`) and paper_cycle emits no gap signal for any market; (c) a market resume of a global halt is
+rejected and, after a valid market resume, the global halt still blocks; (d) resumes from Sentinel or Executor, an
+Operator resume without `approved_by`, and a `resume` bus line not from Operator are all rejected. The two
+corrupt-ledger cases each leave a global halt (`invalid_risk_state`, `ledger_integrity`) in their own folder.
 
 Golden updates are explicit: `python -m pytest tests/test_e2e_offline.py --update-golden` rewrites
 `tests/fixtures/e2e/golden.json`, and that run fails on purpose. Review `git diff tests/fixtures/e2e/golden.json`
@@ -141,6 +148,29 @@ Exit codes: 0 reconciled, 1 mismatch, 2 usage, 3 Data API unusable (fetch failed
 field, broken position identity, incomplete walk), 4 ledger invalid. Every 1/3/4 writes one `halt` bus message from Reconciler
 (`exchange_action: none`). No key, no order, nothing written to the ledger. In Phase 0 the ledger is paper,
 so against a real wallet it reports mismatches by design; it is not on the paper pipeline or the e2e gate.
+
+## Halts and resume (Task AL)
+
+Every halt is persisted in `logs/halt_state.json` (atomic write) before quotes are cancelled and the bus line is
+written. RiskGate, the Maker and paper_cycle read it: a `market` halt blocks that market, a `global` halt every
+market. An unreadable, corrupt, malformed or lost halt file, `logs/HALT`, or a failed check is a global halt.
+`invalid_risk_state` and the Executor's `ledger_integrity` / `ledger_write_failed` halts are global. If the halt
+record or the bus write or the quote cancel fails, `logs/HALT` is written (global). Nothing lifts a halt on its own.
+
+Only the Operator (家伟) resumes, one halt at a time, after the checks in Poly哨兵's design (postmortem written,
+risk.toml sha and PINS unchanged, `python scripts/guard.py --require-git` exit 0, pytest green, fresh data):
+
+```
+python -m src.halt_store status                       # active halts; exit 3 when any is active
+python -m src.halt_store resume --scope market --halt-id H0001-... --market <id> \
+    --approved-by 家伟 --root-cause "..." --postmortem "PR #NN" --checks '{"guard": "exit 0"}'
+python -m src.halt_store resume --scope global --halt-id halt-file ...           # logs/HALT (renamed aside)
+python -m src.halt_store resume --scope global --halt-id halt-state-problem ...  # bad halt file (moved aside)
+```
+
+The resume is written to the bus first (`type: resume`, `from: Operator`, `to: Sentinel`, `halt_ref`,
+`approved_by`); if that fails nothing is released. A market resume never lifts a global halt, and a global resume
+does not lift a market halt. Bots never run `resume`. No exchange action anywhere.
 
 ## Git
 

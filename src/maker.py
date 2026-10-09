@@ -1,10 +1,25 @@
-"""Maker stub. Records a paper quote signal. Does not post or cancel on an exchange."""
+"""Maker stub. Records a paper quote signal. Does not post or cancel on an exchange.
+
+Task AL (Sentinel design gap 1): no quote while a halt covers the market (market or global
+scope, a bad halt state file or logs/HALT). The halt is checked again after the append; if one
+landed in between, the Maker cancels its own quote atomically and refuses, so a Sentinel cancel
+can never be undone by a racing quote.
+"""
 from __future__ import annotations
 
 import math
 from pathlib import Path
 
+from src import halt_store, sentinel
 from src.podlib import PAPER_EQUITY_USD, QUOTES_PATH, append_jsonl, bus, utc_now
+
+
+class HaltActive(RuntimeError):
+    """A halt covers this market; no paper quote."""
+
+    def __init__(self, market: str, reasons: list[str]) -> None:
+        self.reasons = reasons
+        super().__init__(f"halt active for {market!r}: {', '.join(reasons)}")
 
 
 def quote(
@@ -27,6 +42,9 @@ def quote(
         raise ValueError("price out of range")
     if size <= 0:
         raise ValueError("size must be positive")
+    halted = halt_store.halt_problems(market)
+    if halted:
+        raise HaltActive(market, halted)
     notional = price * size
     if notional > PAPER_EQUITY_USD * 0.01 + 1e-9:
         raise ValueError("quote exceeds 1% clip")
@@ -42,7 +60,16 @@ def quote(
         "venue": "paper",
         "exchange_action": "none",
     }
-    append_jsonl(quotes_path or QUOTES_PATH, row)
+    path = quotes_path or QUOTES_PATH
+    append_jsonl(path, row)
+    halted = halt_store.halt_problems(market)
+    if halted:
+        # A halt landed between the check and the append: cancel this market's open quotes again.
+        try:
+            sentinel.cancel_open_quotes(path, utc_now(), market)
+        except OSError:
+            halt_store.write_fallback(f"{utc_now()} maker could not cancel a racing quote market={market}")
+        raise HaltActive(market, halted)
     message = bus(
         "Maker",
         "RiskGate",

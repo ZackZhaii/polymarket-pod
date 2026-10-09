@@ -10,6 +10,10 @@ streaks persist in logs/sentinel_stale.json (SENTINEL_STATE_PATH, written atomic
 failed checks in a row halt that market's paper quotes. A missing (after a prior run), unreadable,
 corrupt or malformed state file, or a failed write, counts as one more stale check (fail closed).
 This only adds the alarm: the per-check stale signal and the skipped gap signal are unchanged.
+Task AL (Sentinel design gaps 1 and 10): a leg with no recorded book row (or a market with no
+tokens) is stale (missing_book), so a market without a book is checked by StaleWatch instead of
+skipped. A market covered by an active halt (src/halt_store.py: its own, a global one, a bad
+halt state file or logs/HALT) gets no gap signal; the skip is recorded as halted_market.
 No network, no orders, no paper fills, no edits to config/risk.toml.
 """
 from __future__ import annotations
@@ -22,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src import arb_binary, neg_risk, sentinel  # noqa: E402
+from src import arb_binary, halt_store, neg_risk, sentinel  # noqa: E402
 from src.book_staleness import (  # noqa: E402
     INVALID_BOOK_TS,
     INVALID_NOW,
@@ -46,6 +50,9 @@ from src.podlib import (  # noqa: E402
 
 # Same value as book_staleness.MAX_BOOK_AGE_S (RiskGate). Not a risk.toml key.
 from src.thresholds import PAPER_CYCLE_STALE_AFTER_S as STALE_AFTER_S  # noqa: E402 - Task AC
+
+# Task AL gap 10: a leg (or a market) with no recorded book row counts as a stale check.
+MISSING_BOOK = "missing_book"
 
 
 def run(
@@ -77,6 +84,7 @@ def run(
     )
     checked: list[str] = []
     halts: list[str] = []
+    halted_markets: list[str] = []
     gaps = 0
     stale = 0
     for market_id, market in markets.items():
@@ -88,6 +96,8 @@ def run(
         for token in tokens:
             book = books.get((market_id, token))
             if book is None:
+                stale_reasons.add(MISSING_BOOK)
+                sentinel_reasons.add(MISSING_BOOK)
                 continue
             problem = _row_book_problem(book, now_at, stale_after_s)
             if problem is not None:
@@ -101,11 +111,14 @@ def run(
                 asks.append(float(ask))
                 size = book.get("best_ask_size")
                 depths.append(float(size) if isinstance(size, (int, float)) else None)
-        if any(books.get((market_id, token)) is not None for token in tokens):
-            checked.append(market_id)
-            if state_problem is not None:
-                _sentinel_record(watch, market_id, state_problem, halts)
-            _sentinel_record(watch, market_id, min(sentinel_reasons) if sentinel_reasons else None, halts)
+        if not tokens:
+            stale_reasons.add(MISSING_BOOK)
+            sentinel_reasons.add(MISSING_BOOK)
+        # Task AL gap 10: every market is checked; a missing book is a stale check, never a skip.
+        checked.append(market_id)
+        if state_problem is not None:
+            _sentinel_record(watch, market_id, state_problem, halts)
+        _sentinel_record(watch, market_id, min(sentinel_reasons) if sentinel_reasons else None, halts)
         if stale_reasons:
             bus(
                 "BookWatcher",
@@ -127,6 +140,13 @@ def run(
             stale += 1
             # A stale market gets no gap/spread signal at all (Task T).
             continue
+        halted = halt_store.halt_problems(market_id)
+        if halted:
+            # Task AL gap 1: a halted market (or any market under a global halt) gets no gap signal.
+            skips.append({"market": market_id, "kind": "halted_market", "reason": "halt_active",
+                          "halt_reasons": halted})
+            halted_markets.append(market_id)
+            continue
         message = _gap_message(asks, market_id, depths, bus_path)
         if message is not None:
             if message["type"] != "signal":
@@ -147,6 +167,7 @@ def run(
         "fills": 0,
         "skipped": len(skips),
         "skips": skips,
+        "halted_markets": halted_markets,
         "sentinel": {
             "checked": len(checked),
             "state_problem": state_problem,

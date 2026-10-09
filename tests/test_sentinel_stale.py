@@ -226,4 +226,6 @@ def test_halt_and_cancel_are_unchanged_and_offline():
     source = inspect.getsource(sentinel)
     for banned in ("urlopen", "clob.polymarket", "py_clob_client", "requests", "public_get", "load_risk", "RISK_PATH"):
         assert banned not in source
-    assert list(inspect.signature(sentinel.halt).parameters) == ["reason", "market", "bus_path", "quotes_path"]
+    # Task AL added scope / source / to / extra / emit after the original four (all keyword-only).
+    assert list(inspect.signature(sentinel.halt).parameters) == [
+        "reason", "market", "bus_path", "quotes_path", "scope", "source", "to", "extra", "emit"]

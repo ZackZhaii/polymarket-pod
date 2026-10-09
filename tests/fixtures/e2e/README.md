@@ -5,7 +5,7 @@ Fixed, sanitised recordings for `tests/test_e2e_offline.py` and the guard's `e2e
 
 | File | What it is |
 |---|---|
-| `scenario.json` | The frozen clock (`now`), the second Sentinel check offset, the intent order, the duplicate-replay and corrupted-ledger plans. |
+| `scenario.json` | The frozen clock (`now`), the second Sentinel check offset, the intent order, the duplicate-replay and corrupted-ledger plans, and the Task AL `halt` plan (blocked market, corrupt halt file text, resume drill). |
 | `gamma_markets.json` | Raw Gamma `/markets` rows, the shape `scanner.scan` reads (v1 `clobTokenIds`). |
 | `clob_books.json` | Raw public CLOB `GET /book` bodies per token, fed to the real `book.record` through its getter hook. |
 | `forecasts.json` | NewsForecaster inputs (model_prob per market and outcome) plus the per-intent fee_rate and assumed_slippage. |

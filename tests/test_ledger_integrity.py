@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+import src.halt_store as halt_store
+
 from src import fees, ledger_store, paper_ledger
 from src.fees import booked_fee_usd, ledger_fee
 from src.ledger_store import FILL_ID_FIELD, LedgerIntegrityError, parse_ledger, verify
@@ -284,7 +286,13 @@ def test_crash_mid_write_leaves_the_old_ledger_intact(ledger, monkeypatch):
     assert result["allow"] is False and result["halt_reason"] == "ledger_write_failed"
     assert ledger.read_bytes() == before and _tmp_files(ledger) == []
     assert _state("other", "x")["ledger_problems"] == []
-    assert _commit(market="third")["allow"] is True  # recovers once the disk works
+    # Task AL gap 7: the ledger halt is a persisted global halt; a working disk does not lift it.
+    held = _commit(market="third")
+    assert held["allow"] is False and any(r.startswith("halt_global:") for r in held["decision"]["reasons"])
+    halt_id = halt_store.active_halts()[0]["id"]
+    halt_store.resume(from_role="Operator", scope="global", halt_id=halt_id, approved_by="test",
+                      root_cause="simulated crash", postmortem="test", bus_path=ledger.parent / "bus.jsonl")
+    assert _commit(market="third")["allow"] is True  # recovers after the Operator resume
 
 
 def test_interrupt_during_replace_propagates_and_keeps_the_old_ledger(ledger, monkeypatch):
@@ -311,11 +319,14 @@ def test_a_stale_temp_file_from_a_killed_process_is_ignored(ledger):
 def test_ledger_changed_during_write_is_not_clobbered(ledger, monkeypatch):
     assert _commit(market="first")["allow"] is True
     real_fsync = os.fsync
+    fired = []
 
     def fsync_then_other_writer(fd):
         real_fsync(fd)
-        with ledger.open("ab") as handle:
-            handle.write(b"x")
+        if not fired:  # once: the halt record written afterwards (Task AL) fsyncs too
+            fired.append(fd)
+            with ledger.open("ab") as handle:
+                handle.write(b"x")
 
     with monkeypatch.context() as patch:
         patch.setattr(ledger_store.os, "fsync", fsync_then_other_writer)

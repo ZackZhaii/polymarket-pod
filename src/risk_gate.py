@@ -8,6 +8,9 @@ included; a missing or invalid cap or state value vetoes. Open positions are leg
 Wash / self-trade: the strategy-name keyword ban stays, and src/wash_detect.py adds
 structured checks on top (opposite resting quote or recent opposite fill on the same leg,
 own counterparty). Either firing vetoes; missing or invalid history vetoes too.
+Task AL (Sentinel design gap 1): an active halt vetoes. A global halt vetoes every intent, a
+market halt every intent on that market; an unreadable, corrupt or lost halt state file, or
+logs/HALT, is a global halt (src/halt_store.py). Only an Operator resume lifts a halt.
 Does not place orders, sign messages, read secrets, or edit config/risk.toml.
 """
 from __future__ import annotations
@@ -16,6 +19,7 @@ import math
 from dataclasses import dataclass
 
 from src import fees  # Task AE: the one fee module (stress_fee / ledger_fee)
+from src import halt_store  # Task AL: the halt consumer (persisted Sentinel / Executor halts)
 from src.book_staleness import book_age_problem
 from src.podlib import PAPER_EQUITY_USD, pin_problems
 from src.thresholds import EDGE_TOLERANCE, MAX_BOOK_AGE_S, MIN_EDGE  # Task AC: values in src/thresholds.py
@@ -160,6 +164,8 @@ def evaluate(
     *,
     now: object = None,
     max_book_age_s: object = MAX_BOOK_AGE_S,
+    halt_path: object = None,
+    halt_fallback_path: object = None,
 ) -> Decision:
     """Return allow only when every Phase 0 check passes.
 
@@ -185,10 +191,16 @@ def evaluate(
     Edge must be at least MIN_EDGE (0.02, inclusive; code constant, Task X): 0 < edge < MIN_EDGE
     vetoes edge_below_min, edge <= 0 vetoes non_positive_edge.
 
+    Task AL: any active halt for intent.market (market or global scope, a bad halt state file or
+    logs/HALT) vetoes with its halt_* reason. halt_path / halt_fallback_path default to
+    src/halt_store.py's paths.
+
     Size is the 1% clip. kelly_fraction is not applied and cannot increase size.
     A single-leg fill is directional exposure, not risk-free arbitrage.
     """
     reasons: list[str] = []
+    # Task AL: halts first. halt_problems never raises; a broken check is halt_check_failed (veto).
+    reasons.extend(halt_store.halt_problems(intent.market, halt_path, halt_fallback_path))
     drifted = pin_problems(cfg)
     if drifted:
         reasons.append("phase0_pin:" + ";".join(drifted))
