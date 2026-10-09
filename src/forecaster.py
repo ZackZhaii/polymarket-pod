@@ -61,6 +61,8 @@ def emit_probability(
     model_version: str = MODEL_VERSION,
     strategy: str = STRATEGY,
     forecasts_path: Path | None = None,
+    event_id: object = None,
+    event_slug: object = None,
 ) -> dict:
     p = _prob("model_prob", model_prob)
     if (p_low is None) != (p_high is None):
@@ -108,6 +110,11 @@ def emit_probability(
         # Sealed here, before RiskGate / the intent builder reads any book for this forecast.
         "sealed_before_book_read": True,
         "calibration_problems": [],
+        # Task BF: the market's Polymarket event (scanner row event_id / event_slug), for calibration
+        # clustering only. Anything unusable is None (calibration_ids.event_value), never an error and
+        # never a calibration problem; not part of forecast_id and not sent to RiskGate.
+        "event_id": calibration_ids.event_value(event_id),
+        "event_slug": calibration_ids.event_value(event_slug),
     }
     row["calibration_problems"] = calibration_ids.forecast_problems(row)
     # Seal first. A ForecastLogError propagates and nothing reaches the bus.

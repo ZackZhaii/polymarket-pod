@@ -1368,9 +1368,69 @@ fields, gives nothing new for a report from before BD, and `python -m pytest` an
 - Tests: `tests/test_reflector_rules_be.py`. No decision, threshold, size or gate moved. config/risk.toml
   unchanged, `live_enabled` false.
 
+## Task BF — Event id on forecasts and fills; event_id as the calibration cluster key
+
+Status: done.
+
+Requested by Poly指挥 as the follow-up flagged in Task BD (#71), done by grok-bot on dev@f8bb307. Report only;
+the Reflector (BE) reads `event_cluster` unchanged.
+
+Finish when forecasts and fills record the Polymarket event (Gamma market `events`) without ever crashing on
+missing or malformed data, the calibration report clusters `event_cluster` by event_id with a per-sample
+condition_id fallback and says which key it used, rows from before BF stay valid, and `python -m pytest` and
+guard --require-git pass offline.
+
+- `src/calibration_ids.py`: `scanner_event(market)` -> `(event_id, event_slug)` from Gamma's `events` list (the
+  one id all usable entries name; none, malformed or conflicting -> `(None, None)`, never guessed);
+  `event_value` (non-blank string or int, else None). `FILL_EVENT_FIELDS` / `FORECAST_EVENT_FIELDS` =
+  `event_id`, `event_slug`, appended to `FORECAST_ROW_FIELDS`. Never a calibration problem, never a join field.
+- Recorded on: scanner rows (`data/markets.jsonl`), `MarketContext`, `OrderIntent`, `risk_gate.Intent` (RiskGate
+  never reads them: source scan + identical decisions), paper fills (`paper_ledger.event_fields`) and
+  `logs/forecasts.jsonl` rows (`emit_probability(event_id=, event_slug=)`; not part of `forecast_id`, not in the
+  signal payload). The e2e harness passes the scanner row's event through; the golden is unchanged.
+- `src/calibration.py`: a sample's cluster is its event_id, else its condition_id. A trade takes its first
+  fill's event_id, else the joined forecast's; both usable and different -> condition_id. `event_cluster` gains
+  `event_id_samples`, `condition_id_fallback_samples`; `cluster_key` = `event_id` / `condition_id` / `mixed`.
+  Forecast rows without the event keys (before BF) are read as before; a malformed event value falls back.
+  Bootstrap intervals stay market-clustered. No new number (`CALIBRATION_MAX_CLUSTER_SHARE` 0.30 as before).
+- Tests: `tests/test_event_id_clusters.py`; the test forecast helper and the harness-shape assertion gain the
+  two keys. Docs: `docs/M3_CALIBRATION.md` (Task BF subsection), `docs/THRESHOLDS.md` row note.
+- No decision, threshold, size, gate or proposal moved. config/risk.toml unchanged, `live_enabled` false.
+
+## Task BG — Calibration bootstrap intervals resample by event (the event_cluster key)
+
+Status: done.
+
+Requested by Poly指挥 as the open point Task BF (#74) left, done by grok-bot on dev@67ef100. Report only;
+the Reflector (BE) reads the intervals unchanged.
+
+Finish when every calibration bootstrap interval resamples the same clusters as `event_cluster` (event_id,
+else condition_id per sample), the report says which key it resampled by, samples without an event id give
+the intervals they gave before, the seed and resample count are unchanged, and `python -m pytest` and guard
+--require-git pass offline.
+
+- `src/calibration.py`: `cluster_bootstrap` clusters by `cluster_name` (BF): markets of one event are drawn
+  together; an event id and a condition id with the same text stay apart; `key=` keeps a plain-field bootstrap.
+  Applies to the overall Brier, ECE, slope, intercept, the trade delta Brier, skill, R and mean(R - E) and every
+  judged `by_category` / `by_edge_tier` group's intervals. Fewer than two clusters: no interval.
+- `forecasts.metrics`, `trades.metrics` and judged group `intervals` gain `bootstrap_cluster_key` (`event_id` /
+  `condition_id` / `mixed`) and `bootstrap_clusters`; the markdown cluster line and a report note name them.
+- Same `CALIBRATION_BOOTSTRAP_SEED` / `_RESAMPLES` / `CALIBRATION_CI_LEVEL`; no new number. report.json
+  schema_version 1, keys only added.
+- Tests: `tests/test_event_id_bootstrap.py` (one event drawn together, fallback, unusable ids, mixed, name
+  collision, determinism, pre-BF intervals unchanged); BF's "stay market-clustered" test now checks the event
+  bootstrap; the BD interval key set gains the two keys. Docs: `docs/M3_CALIBRATION.md` (Task BG subsection),
+  `docs/THRESHOLDS.md` row note.
+- No decision, threshold, size, gate or proposal moved. config/risk.toml unchanged, `live_enabled` false.
+
 ## Latest
 
-- 2026-10-10: Task BE: Reflector rules from BD's intervals: per-category delta Brier disable, per-edge-tier
+- 2026-10-10: Task BG: calibration bootstrap intervals resample by event_id, else condition_id per sample (the
+  `event_cluster` key); `bootstrap_cluster_key` / `bootstrap_clusters` recorded. Reported only.
+- Task BF (merged #74): Polymarket event id / slug (Gamma `events`) on scanner rows, forecasts and fills;
+  `event_cluster` clusters by event_id with per-sample condition_id fallback (`cluster_key` event_id /
+  condition_id / mixed, fallback count). Recorded and reported only.
+- Task BE (merged #73): Reflector rules from BD's intervals: per-category delta Brier disable, per-edge-tier
   realization MIN_EDGE tightening (`REFLECTOR_EDGE_TIER_REALIZATION_MAX`, M3 pending), intercept joins the
   MIN_EDGE + step proposal, `event_cluster` on proposal evidence. Proposals only; tightening only.
 - Task BD (merged #71): calibration report intervals per category and edge tier (Brier, ECE, slope, intercept;
@@ -1385,5 +1445,5 @@ fields, gives nothing new for a report from before BD, and `python -m pytest` an
   calibration report.
 - pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 - Open: run M1 with `--raw-books` before deciding on hash enforcement; Operator choice on netting realized
-  gains (AR); record an event id on forecasts / fills so `event_cluster` groups markets of one event; the
-  two-batch Kelly rule and cumulative-loss disable (need Poly反思's numbers). Queue empty after BE.
+  gains (AR); the two-batch Kelly rule and cumulative-loss disable (need Poly反思's numbers); verify live
+  Gamma `events` id / slug in an M1 run. Queue empty after BG.

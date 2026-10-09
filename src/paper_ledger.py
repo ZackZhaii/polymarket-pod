@@ -228,6 +228,9 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
     # report can tell a fill without book context from one with genuinely missing data.
     context, context_problems = fill_context(intent)
     fill["fill_context"] = context
+    # Task BF: the market's Polymarket event, for calibration clustering. None when unknown or unusable;
+    # never a calibration problem (the report falls back to condition_id).
+    fill.update(event_fields(intent))
     fill["calibration_problems"] = sorted(set(calibration_ids.fill_problems(fill)) | set(market_problems)
                                           | set(context_problems))
     try:
@@ -277,6 +280,13 @@ def identity_fields(intent: Intent) -> dict[str, Any]:
         "end_date": intent.end_date,
         "model_version": intent.model_version,
     }
+
+
+def event_fields(intent: Intent) -> dict[str, Any]:
+    """Task BF: calibration_ids.FILL_EVENT_FIELDS from the intent, each calibration_ids.event_value
+    (a non-blank string, or None). Never raises, never a problem, never read by RiskGate."""
+    return {"event_id": calibration_ids.event_value(getattr(intent, "event_id", None)),
+            "event_slug": calibration_ids.event_value(getattr(intent, "event_slug", None))}
 
 
 def _price(value: object) -> tuple[float | None, str | None]:

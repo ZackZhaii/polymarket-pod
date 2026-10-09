@@ -63,7 +63,7 @@ MAX_PAGES = 1000
 BUS_TOP_N = 50
 
 # Long-tail band. Optional risk.toml overrides: scanner_min_price, scanner_max_price.
-from src.calibration_ids import scanner_category, scanner_tags  # noqa: E402 - Task AX
+from src.calibration_ids import scanner_category, scanner_event, scanner_tags  # noqa: E402 - Task AX / BF
 from src.thresholds import SCANNER_MAX_PRICE as MAX_PRICE  # noqa: E402 - Task AC
 from src.thresholds import SCANNER_MIN_PRICE as MIN_PRICE  # noqa: E402 - Task AC
 
@@ -365,6 +365,7 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
         spread = best_ask - best_bid
     price, price_source = yes_price(market)
     accepting = market.get("acceptingOrders")
+    event_id, event_slug = scanner_event(market)  # Task BF
     return {
         "ts": ts,
         "id": str(market.get("id") or ""),
@@ -392,6 +393,9 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
         # Task AX (M3 step 2): grouping labels for calibration. Gamma's own values or None/[]; not guessed.
         "category": scanner_category(market),
         "tags": scanner_tags(market),
+        # Task BF: the market's Polymarket event (Gamma ``events``), for calibration clustering only.
+        "event_id": event_id,
+        "event_slug": event_slug,
         "source": "gamma_public",
     }
 

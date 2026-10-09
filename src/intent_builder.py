@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from src import fees
-from src.calibration_ids import make_decision_id
+from src.calibration_ids import event_value, make_decision_id
 from src.book_staleness import book_age_problem, parse_book_ts
 from src.expiry_rule import expiry_problem, parse_end_date
 from src.podlib import pin_problems
@@ -162,6 +162,9 @@ class MarketContext:
     # Never read by any check (category_banned reads ``category``, which only the caller sets).
     gamma_category: str | None = None
     tags: tuple[str, ...] | None = None
+    # Task BF: the market's Polymarket event from the scanner row; recorded on the fill only, never checked.
+    event_id: str | None = None
+    event_slug: str | None = None
 
 
 @dataclass(frozen=True)
@@ -249,6 +252,9 @@ class OrderIntent:
     category: str | None = None
     tags: tuple[str, ...] | None = None
     end_date: str | None = None
+    # Task BF: the market's Polymarket event (MarketContext), copied onto the risk Intent and the fill only.
+    event_id: str | None = None
+    event_slug: str | None = None
 
 
 @dataclass(frozen=True)
@@ -789,6 +795,7 @@ def build_order_intent(signal: ProbabilitySignal | None, market: MarketContext, 
         forecast_id=signal.forecast_id, forecast_ts=signal.forecast_ts, model_version=signal.model_version,
         category=market.category if market.category is not None else market.gamma_category, tags=market.tags,
         end_date=market.end_date or None,
+        event_id=market.event_id, event_slug=market.event_slug,  # Task BF: recorded only
     )
     return IntentResult(intent, (), None, detail)
 
@@ -826,6 +833,8 @@ def to_risk_intent(oi: OrderIntent) -> Intent:
         kelly_fraction_used=oi.kelly_fraction,  # shadow Kelly multiplier; RiskGate sizes with its 1% clip
         kelly_frac_raw=oi.kelly_raw,  # Task BC: this trade's raw (full) Kelly fraction; recorded only
         fill_context="intent_builder",  # Task BC: calibration_ids.FILL_CONTEXT_INTENT_BUILDER
+        event_id=oi.event_id,  # Task BF: recorded on the fill only; RiskGate never reads it
+        event_slug=oi.event_slug,
     )
 
 
@@ -895,7 +904,8 @@ def market_context_from_row(row: Mapping[str, object], *, fee_rate: float | None
                          end_date=row.get("end_date") or "", liquidity_usd=row.get("liquidity_usd"),  # type: ignore[arg-type]
                          fee_rate=fee_rate, accepting_orders=row.get("accepting_orders"),  # type: ignore[arg-type]
                          closed=row.get("closed") is not False, category=category, resolution_flag=resolution_flag,
-                         gamma_category=_id_or_none(row.get("category")), tags=_tags(row.get("tags")))
+                         gamma_category=_id_or_none(row.get("category")), tags=_tags(row.get("tags")),
+                         event_id=event_value(row.get("event_id")), event_slug=event_value(row.get("event_slug")))
 
 
 def _tags(value: object) -> tuple[str, ...] | None:
