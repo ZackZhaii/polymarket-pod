@@ -657,3 +657,40 @@ def test_an_event_write_failure_propagates_and_still_closes_the_connection():
 def test_the_risk_pin_is_the_guard_pin():
     from scripts import guard  # Task AH: the M0 guard owns the pin; M1 code keeps a checked copy (src never imports scripts)
     assert r.PINNED_RISK_SHA256 == guard.PINNED_RISK_SHA256
+
+
+# --- Task AS (gap 5): the runtime pin check -------------------------------------------------------
+
+
+def _drift_after(monkeypatch, tmp_path, clean_checks):
+    import src.podlib as podlib
+    from src import pins
+
+    calls = {"n": 0}
+
+    def checked(risk_path):
+        calls["n"] += 1
+        return [] if calls["n"] <= clean_checks else ["unknown_key:extra"]
+    monkeypatch.setattr(pins, "_checked", checked)
+    monkeypatch.setattr(podlib, "BUS_PATH", tmp_path / "bus.jsonl")
+    return calls
+
+
+def test_a_risk_drift_mid_run_stops_the_run_with_6(tmp_path, monkeypatch):
+    import src.halt_store as halt_store
+    from src.thresholds import PIN_RECHECK_S
+
+    calls = _drift_after(monkeypatch, tmp_path, 2)
+    code, out, _, _, clock = _main(tmp_path, [[_book()]], ["--assets", A, "--max-runtime", "600"])
+    assert code == r.EXIT_PIN_DRIFT == 6 and calls["n"] == 3
+    assert PIN_RECHECK_S <= clock.t < 600
+    manifest = _manifest(out)
+    assert manifest["status"] == "pin_drift" and manifest["exit_code"] == 6 and manifest["orders"] == "none"
+    assert len(_rows(out, "books")) == 1
+    assert [x["reason"] for x in halt_store.active_halts()] == ["risk_toml_pin_drift"]
+
+
+def test_a_risk_drift_at_start_creates_no_run_dir(tmp_path, monkeypatch):
+    _drift_after(monkeypatch, tmp_path, 0)
+    code, out, transport, calls, _ = _main(tmp_path, [[_book()]], ["--assets", A])
+    assert code == r.EXIT_PIN_DRIFT and not out.exists() and transport.urls == [] and calls == []

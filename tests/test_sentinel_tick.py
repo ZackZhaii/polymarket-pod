@@ -167,7 +167,10 @@ def test_scanner_success_age(env):
 @pytest.mark.parametrize("proc,code,halts,alert", [
     ("ws_recorder", 4, True, "exit_4"), ("m1_run", 4, True, "exit_4"), ("endgame_scan", 4, True, "exit_4"),
     ("loop_claim", 2, True, "exit_2"), ("scanner", 1, False, "exit_1"), ("m1_run", 3, False, "exit_3"),
-    ("ws_recorder", 2, False, "exit_2"), ("paper_cycle", 1, False, "exit_1"), ("loop_claim", 1, False, "exit_1"),
+    ("ws_recorder", 2, False, "exit_2"), ("loop_claim", 1, False, "exit_1"),
+    # Task AS (gaps 4 and 5): pin drift codes are global halts; loop_claim usage moved to 5 (an alert)
+    ("paper_cycle", 1, True, "exit_1"), ("scanner", 6, True, "exit_6"), ("ws_recorder", 6, True, "exit_6"),
+    ("m1_run", 6, True, "exit_6"), ("paper_cycle", 2, False, "exit_2"), ("loop_claim", 5, False, "exit_5"),
 ])
 def test_the_exit_matrix(env, proc, code, halts, alert):
     progress = {"last_success_ts": heartbeat.utc_stamp(NOW)} if proc == "scanner" else {}
@@ -251,6 +254,17 @@ def test_risk_toml_drift_halts(env, tmp_path):
     result = env(risk_path=bad)
     assert result["halts"] == ["global:*:risk_toml_pin_drift"] and result["alerts"] == ["risk_toml_pin_drift"]
     assert env(risk_path=tmp_path / "missing.toml")["halts"] == []  # already halted
+
+
+def test_an_unknown_risk_key_or_type_change_halts_too(env, tmp_path):
+    # Task AS (gap 6): every key of the file is pinned, its type too, and no key may be added
+    text = (Path(__file__).resolve().parents[1] / "config" / "risk.toml").read_text(encoding="utf-8")
+    bad = tmp_path / "risk.toml"
+    bad.write_text(text + "live_mode = 1\n", encoding="utf-8")
+    result = env(risk_path=bad)
+    assert result["halts"] == ["global:*:risk_toml_pin_drift"] and result["alerts"] == ["risk_toml_pin_drift"]
+    details = [json.loads(x)["payload"].get("detail", "") for x in env.bus.read_text(encoding="utf-8").splitlines()]
+    assert any("unknown_key:live_mode" in d for d in details)
 
 
 def test_an_invalid_ledger_halts(env, tmp_path):

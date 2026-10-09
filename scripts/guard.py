@@ -65,6 +65,10 @@ scratch files in a temp folder outside the repo and remove it):
    two cycles in a row is a global halt; a resumed stale-book halt is raised again at the next
    stale check; a failing Reconciler run is stored as a global halt; paper_cycle reads an M1
    recording directory. Checked by meaning and against golden.json.
+10. exit_codes (Task AS, Sentinel design gap 4): docs/EXIT_CODES.md lists every entry point under
+   src/ and scripts/ with exactly its EXIT_* codes (src/exit_codes.py reads the code with ast: no
+   literal exit code in main, no argparse exit outside the registry) and the Sentinel column agrees
+   with src/sentinel_tick.py EXIT_EVENTS.
 """
 from __future__ import annotations
 
@@ -785,6 +789,21 @@ def check_heartbeat(root: Path) -> Result:
     return Result(name, PASS, summary)
 
 
+# ---------------------------------------------------------------- 10. exit_codes (Task AS)
+
+def check_exit_codes(root: Path) -> Result:
+    name = "exit_codes"
+    if not (root / "src" / "exit_codes.py").is_file():
+        return Result(name, FAIL, "src/exit_codes.py is missing (Task AS)")
+    checker = _repo_module(root, "src.exit_codes")
+    problems = checker.registry_problems(root)
+    if problems:
+        return Result(name, FAIL, _summary(problems))
+    found = checker.summary(root)
+    return Result(name, PASS, f"docs/EXIT_CODES.md matches {found['entry_points']} entry points "
+                              f"({found['codes']} codes) and the Sentinel exit matrix")
+
+
 def run_checks(root: Path, require_git: bool = False) -> list[Result]:
     checks = [
         lambda: check_risk_sha_worktree(root),
@@ -798,10 +817,12 @@ def run_checks(root: Path, require_git: bool = False) -> list[Result]:
         lambda: check_halt(root),
         lambda: check_secret_scan(root),
         lambda: check_heartbeat(root),
+        lambda: check_exit_codes(root),
     ]
     results = []
     names = ["risk_sha_worktree", "risk_sha_head", "live_enabled", "banned_dependencies", "banned_imports",
-             "url_allowlist", "thresholds_doc", "e2e", "halt", "secret_scan", "heartbeat"]
+             "url_allowlist", "thresholds_doc", "e2e", "halt", "secret_scan", "heartbeat",
+             "exit_codes"]
     for name, check in zip(names, checks):
         try:
             results.append(check())
@@ -819,7 +840,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="guard.py",
         description="M0 guard: offline, read-only safety checks (risk.toml pin, live_enabled, banned "
                     "packages and imports, URL allowlist, THRESHOLDS.md, the end-to-end offline gate, the halt consumer, "
-                    "the secret-string scan of tracked files and logs/, heartbeats and the resident Sentinel).",
+                    "the secret-string scan of tracked files and logs/, heartbeats and the resident Sentinel, "
+                    "the exit-code registry).",
         epilog="Exit codes: 0 all checks pass (risk_sha_head may SKIP without git); 1 a check failed; "
                "2 usage error or no repo root found.",
     )

@@ -30,7 +30,9 @@ through src.ws_recorder and the public CLOB /book path through src.book.snapshot
 Exit codes: 0 ran to --max-runtime and recorded at least one snapshot; 1 no snapshot recorded;
 2 usage error (bad arguments, no usable assets, a non-empty --out); 3 the optional websockets
 package is missing; 4 writing an output file failed; 5 stopped by SIGINT/SIGTERM (the run dir is
-complete and can still be reported, but it is not a full 24 h run).
+complete and can still be reported, but it is not a full 24 h run); 6 config/risk.toml off its
+pins at start (no run dir) or while running (Task AS, src/pins.py; a global halt is recorded).
+Registry: docs/EXIT_CODES.md.
 """
 from __future__ import annotations
 
@@ -87,6 +89,7 @@ EXIT_USAGE = 2
 EXIT_NO_WEBSOCKETS = 3
 EXIT_WRITE_FAILED = 4
 EXIT_INTERRUPTED = 5
+EXIT_PIN_DRIFT = 6  # Task AS: config/risk.toml off its pins at start or while running (global halt recorded)
 
 
 def utc_now_ms() -> str:
@@ -329,7 +332,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m src.m1_run",
         description="M1 24-hour acceptance run: read-only WS book recording + REST /book samples (no orders).",
         epilog="Exit codes: 0 ran to --max-runtime with at least one snapshot; 1 no snapshot; 2 usage error; "
-               "3 websockets missing (pip install -r requirements-ws.txt); 4 write failed; 5 stopped by SIGINT/SIGTERM.",
+               "3 websockets missing (pip install -r requirements-ws.txt); 4 write failed; 5 stopped by SIGINT/SIGTERM; "
+               "6 config/risk.toml off its pins (global halt recorded). See docs/EXIT_CODES.md.",
     )
     parser.add_argument("--out", required=True, type=Path, help="new or empty run directory")
     parser.add_argument("--max-runtime", required=True, type=float, help="seconds (86400 for the 24 h acceptance run)")
@@ -412,9 +416,21 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
         print("m1_run: the optional websockets package is not installed: pip install -r requirements-ws.txt",
               file=sys.stderr)
         return EXIT_NO_WEBSOCKETS
+    from src.pins import PinWatch, refuse_start  # Task AS (gap 5): runtime pin checks
+
+    if refuse_start("m1_run"):
+        return EXIT_PIN_DRIFT  # before the run dir exists: nothing recorded
     now = now or utc_now_ms
     monotonic = monotonic or time.monotonic
     stop = stop_event or threading.Event()
+    watch = PinWatch("m1_run", monotonic=monotonic)
+
+    def should_stop() -> bool:
+        if watch.drifted():
+            stop.set()  # the REST sampler stops too
+            return True
+        return stop.is_set()
+
     run_dir.mkdir(parents=True, exist_ok=True)
     rotate_bytes = max(1, int(args.rotate_mb * 1048576))
     sinks = {name: RotatingJsonl(run_dir / name, name, rotate_bytes, args.rotate_s, monotonic) for name in STREAMS}
@@ -469,7 +485,7 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
     thread = threading.Thread(target=sampler.run, args=(stop,), name="m1-rest-sampler", daemon=True)
     recorder = Recorder(assets, transport=transport or WebsocketsTransport(), sink=sinks["books"],
                         max_runtime_s=args.max_runtime, meta=meta, monotonic=monotonic, sleep=sleep, now=now,
-                        stop=stop.is_set, on_event=events.write, heartbeat=heartbeat)
+                        stop=should_stop, on_event=events.write, heartbeat=heartbeat)
     start_mono = monotonic()
     code = EXIT_OK
     status = "completed"
@@ -497,6 +513,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
         if sampler.failure is not None and code == EXIT_OK:
             print(f"m1_run: REST sampler failed: {sampler.failure!r}", file=sys.stderr)
             code, status = EXIT_WRITE_FAILED, "failed"
+        if code == EXIT_OK and watch.problems:
+            code, status = EXIT_PIN_DRIFT, "pin_drift"
         if code == EXIT_OK and stopped_by_signal:
             code, status = EXIT_INTERRUPTED, "interrupted"
         if code == EXIT_OK and report.counts["snapshot_applied"] < 1:

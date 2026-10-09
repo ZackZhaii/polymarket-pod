@@ -77,6 +77,10 @@ def _count_day(text: str, day: str) -> int:
     return sum(1 for line in text.splitlines() if line.startswith(prefix))
 
 
+EXIT_OK = 0
+EXIT_REFUSED = 1  # the proposal was not accepted, or risk.toml changed during the run
+
+
 def main() -> int:
     before = RISK_PATH.read_bytes()
     result = propose(
@@ -86,12 +90,12 @@ def main() -> int:
     )
     if RISK_PATH.read_bytes() != before:
         print("risk.toml changed; refusing", file=sys.stderr)
-        return 1
+        return EXIT_REFUSED
     print(
         f"accepted={str(result['accepted']).lower()} reason={result['reason']} "
         "changes_risk_toml=false"
     )
-    return 0 if result["accepted"] else 1
+    return EXIT_OK if result["accepted"] else EXIT_REFUSED
 
 
 if __name__ == "__main__":

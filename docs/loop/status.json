@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T09:29:18Z",
+  "ts": "2026-10-09T09:34:19Z",
   "live_enabled": false,
-  "last_done": "AT",
+  "last_done": "AS",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AT (one ASSUMED_SLIPPAGE = 0.005 in src/thresholds.py, SPORTS_DEVIG_/INTENT_ASSUMED_SLIPPAGE aliases, paper_ledger literals removed, drift fails at import; ROLES.md RiskGate row has no Kelly sizing, Kelly shadow-only) done by grok-bot. No number moved. AS (EXIT_CODES + runtime pins) in flight. No live gate."
+  "note": "AS (exit-code registry docs/EXIT_CODES.md for all 18 entry points, kept in sync by tests/test_exit_codes.py and guard check 12 exit_codes; runtime pin checks src/pins.py: config/risk.toml sha256 + all 9 keys at start of scanner/book/ws_recorder/m1_run/endgame_scan/resolutions/loop_claim, before every paper_cycle cycle and every PIN_RECHECK_S in ws_recorder/m1_run; drift = refuse + one global halt) done by grok-bot. Behaviour changes: loop_claim usage exit 5 (was 2), paper_cycle exit 1 = global halt, new exit 6 for scanner/book/ws_recorder/m1_run. M2 pending adds PIN_RECHECK_S. AR (#46 daily_loss counts realized losses) and AT (#47 one ASSUMED_SLIPPAGE) merged into this branch from dev. No open todo. No live gate."
 }

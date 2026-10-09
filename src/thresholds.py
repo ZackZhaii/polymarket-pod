@@ -210,6 +210,12 @@ RECORDER_GAP_RESYNC_HALT_COUNT = 3
 ALL_STALE_CONSECUTIVE_CYCLES = 2
 
 
+# --- Runtime pin checks (Task AS, Poly哨兵 design gaps 5 and 6) -----------------------------
+# M2 pending. A running ws_recorder / m1_run (and paper_cycle --loop, every cycle) re-reads
+# config/risk.toml and checks every pinned key and its sha256 at least this often; drift stops the
+# run and records a global halt. Must not exceed SENTINEL_HEARTBEAT_TIMEOUT_S.
+PIN_RECHECK_S = 60.0
+
 def consistency_problems() -> list[str]:
     """Relations the values must keep. Import fails if any is broken (explicit, survives -O)."""
     problems = []
@@ -305,6 +311,10 @@ def consistency_problems() -> list[str]:
                                    ("SECRET_HASH_PREFIX_CHARS", SECRET_HASH_PREFIX_CHARS, 4, 12)):
         if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
             problems.append(f"{name} must be a whole number in [{low}, {high}]")
+    if isinstance(PIN_RECHECK_S, bool) or not isinstance(PIN_RECHECK_S, (int, float)) or not (
+        0.0 < PIN_RECHECK_S <= SENTINEL_HEARTBEAT_TIMEOUT_S
+    ):
+        problems.append("PIN_RECHECK_S must be in (0, SENTINEL_HEARTBEAT_TIMEOUT_S]")
     return problems
 
 

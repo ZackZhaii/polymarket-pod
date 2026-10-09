@@ -21,6 +21,7 @@ Event matrix (design table; ``alert`` = one line in logs/alerts.jsonl plus a Sen
 
 ==================  =========================================================================
 global halt         ws_recorder / m1_run exit 4 or crash; endgame_scan exit 4; loop_claim exit 2;
+                    scanner / ws_recorder / m1_run exit 6 and paper_cycle exit 1 (pin drift, Task AS);
                     ws_recorder / m1_run heartbeat stale (HEARTBEAT_RECORDER_TIMEOUT_S);
                     halt_consumer heartbeat stale (HEARTBEAT_CONSUMER_TIMEOUT_S);
                     paper_cycle heartbeat stale for HALT_FACTOR x its timeout;
@@ -47,10 +48,9 @@ logs/sentinel_tick.json remembers it; if that file is unreadable the tick alerts
 events again, fail closed). To retire a process for good, let it finish cleanly (a finished
 heartbeat is not checked for liveness) or, as the Operator, remove its heartbeat file and marker.
 
-Exit codes, by (module, code) (design gap 4: they collide across modules, so never read alone):
-scanner 0 ok / 1 too few markets / 2 none passed / 3 paging or network failed;
-ws_recorder 0 / 1 no rows / 2 usage / 3 no websockets / 4 write failed; m1_run the same plus
-5 interrupted; endgame_scan 4 pin drift; loop_claim 2 pin drift; reconcile 1 / 3 / 4 (its own halt).
+Exit codes, by (module, code) (design gap 4: they collide across modules, so never read alone).
+The registry is docs/EXIT_CODES.md (Task AS); tests/test_exit_codes.py and the guard check
+``exit_codes`` keep it, the code and EXIT_EVENTS below in agreement.
 """
 from __future__ import annotations
 
@@ -128,6 +128,8 @@ EXIT_EVENTS: dict[tuple[str, int], str] = {
     ("m1_run", 1): ALERT, ("m1_run", 2): ALERT, ("m1_run", 3): ALERT, ("m1_run", 4): GLOBAL, ("m1_run", 5): LOG,
     ("endgame_scan", 4): GLOBAL,
     ("loop_claim", 2): GLOBAL,
+    # Task AS (gaps 4, 5): refused to start / stopped on risk.toml pin drift (docs/EXIT_CODES.md).
+    ("scanner", 6): GLOBAL, ("ws_recorder", 6): GLOBAL, ("m1_run", 6): GLOBAL, ("paper_cycle", 1): GLOBAL,
 }
 CRASH_IS_GLOBAL = frozenset({"ws_recorder", "m1_run", "halt_consumer"})
 
@@ -250,6 +252,10 @@ class Tick:
             problems.append(f"require_human_gate={ident['require_human_gate']!r}")
         if ident["risk_sha256"] != PINNED_RISK_SHA256:
             problems.append("risk_sha256_not_pinned")
+        # Task AS (gap 6): every pinned key of the file, its types and no unknown key (src/pins.py).
+        from src.pins import risk_file_problems
+
+        problems += [p for p in risk_file_problems(risk_path) if p not in problems]
         if problems:
             detail = ", ".join(problems)
             self.halt("risk_toml_pin_drift", extra={"detail": detail, "severity": "sev1"})
