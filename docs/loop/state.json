@@ -303,6 +303,15 @@
       "note": "Requested by Poly指挥 (ruling on Poly哨兵's halt/heartbeat design review of dev@f760e51); done by grok-bot. Heartbeat (gap 2), exit-code table (gap 4), runtime pin checks (gap 5/6), bus sensitive-string filter (gap 9), M1 books path (gap 11), scheduler (gap 12), recorder escalation (gap 13) and the all-stale global escalation (gap 14) are later tasks. Behaviour now stricter: a halt (including a StaleWatch market halt and a torn-ledger invalid_risk_state) stays until the Operator resumes it.",
       "done_at": "2026-10-09T06:57:34Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AM",
+      "status": "done",
+      "title": "GitHub Actions CI: guard --require-git and full pytest on PRs and pushes to dev/main; docs/DECISIONS.md records the five roadmap decisions",
+      "finish": ".github/workflows/ci.yml runs python scripts/guard.py --require-git and full python -m pytest only on pull_request and push to dev/main. permissions: contents: read. persist-credentials: false. No secrets. actions/checkout pinned to 3d3c42e5aac5ba805825da76410c181273ba90b1 (v7.0.1) and actions/setup-python to 5fda3b95a4ea91299a34e894583c3862153e4b97 (v7.0.0). docs/DECISIONS.md records five Operator/Poly指挥 roadmap decisions (paper-only Phase 0; daily truth origin/dev; pinned risk.toml; CI is KEY; M2 thresholds stay code constants). tests/test_ci_workflow.py. pytest passes offline. config/risk.toml unchanged.",
+      "note": "Assigned by Operator 2026-10-09; done by grok-build-local. Task AH left CI with the user. AK landed as PR #39 and AL as PR #40 while this worktree was open. AN is the unpublished local worktree task-an/m3-resolution-snapshot. AM is the next letter unused on origin/dev, origin/main, unclosed PRs, and remaining local/remote branches.",
+      "done_at": "2026-10-09T07:00:39Z",
+      "surface": "grok-build-local"
     }
   ]
 }

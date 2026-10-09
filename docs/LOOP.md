@@ -837,10 +837,34 @@ is a global halt, only an Operator resume releases one, the e2e gate and guard p
 - No new threshold (no M2 addition), no URL, risk.toml unchanged. Docs: PROTOCOL.md, COORDINATION (Operator bus
   exception, #26), PHASE0_RUN "Halts and resume".
 
+## Task AM — GitHub Actions CI (guard --require-git + full pytest) and docs/DECISIONS.md
+
+Status: done.
+
+Assigned by Operator 2026-10-09, done by grok-build-local. Task AH added `scripts/guard.py` and left CI
+with the user. This task is that CI, plus a written record of the five roadmap decisions.
+
+Finish when `.github/workflows/ci.yml` runs `python scripts/guard.py --require-git` and full
+`python -m pytest` only on pull requests and on pushes to `dev` and `main`, actions are pinned to a
+full commit SHA, `permissions: contents: read`, no secrets are used, `docs/DECISIONS.md` records the
+five decisions, and `python -m pytest` passes with no network and no credentials.
+
+- Triggers: `pull_request` and `push` to `dev` and `main` only. No `workflow_dispatch`, no schedule.
+- `permissions: contents: read`. Checkout sets `persist-credentials: false`. No `secrets:` key.
+- Actions pinned: `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1` (v7.0.1),
+  `actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97` (v7.0.0). Python 3.12; pytest from
+  `requirements-dev.txt`.
+- `docs/DECISIONS.md`: (1) Phase 0 paper only, (2) daily truth is `origin/dev`, (3) `risk.toml` pin,
+  (4) CI is KEY, (5) M2 thresholds stay code constants until the Operator decides.
+- Letter AM: AK landed as PR #39 and AL as PR #40 while this worktree was open. AN is the unpublished
+  local worktree `task-an/m3-resolution-snapshot`. AM is the next letter unused on `origin/dev`,
+  `origin/main`, unclosed PRs, and remaining local/remote branches.
+- Tests: `tests/test_ci_workflow.py`. Do not edit `config/risk.toml`.
+
 ## Latest
 
-- 2026-10-09: Task AL done by grok-bot (requested by Poly指挥, Poly哨兵 design gaps 1/3/7/8/10, backlog #26). Halts are persisted (`src/halt_store.py`) and obeyed.
-- RiskGate, Maker and paper_cycle veto a halted market or everything under a global halt; a bad halt file or `logs/HALT` is global; `invalid_risk_state` and Executor ledger halts are global.
-- `resume` bus type only from Operator (approved_by + halt_ref); a market resume cannot lift a global halt; release only via `python -m src.halt_store resume`. Markets without a book row are stale.
-- e2e golden `halt_consumer` + guard check `halt`; `python -m pytest` passed offline (1771 passed; on Windows 1767 passed, 4 symlink tests skipped); guard --require-git 9/9 PASS. `config/risk.toml` unchanged (sha256 0aea23af…bc04), `live_enabled=false`.
-- Queue empty (AK merged in #39 and merged into this branch). AL adds no M2 number; AK's five stay pending. Heartbeat (gap 2) is a later task.
+- 2026-10-09: Task AM done by grok-build-local (assigned by Operator). GitHub Actions CI plus docs/DECISIONS.md.
+- `.github/workflows/ci.yml` runs only on PRs and pushes to `dev`/`main`: `python scripts/guard.py --require-git` then full pytest. `permissions: contents: read`. No secrets. Actions pinned to full commit SHAs.
+- `docs/DECISIONS.md` records five roadmap decisions: paper-only Phase 0; daily truth `origin/dev`; pinned `risk.toml`; CI is KEY; M2 thresholds stay code constants.
+- `python -m pytest` passed offline (1971 passed, 4 symlink tests skipped on Windows). Guard `--require-git` 9/9 PASS. `config/risk.toml` unchanged (committed sha256 0aea23af…bc04), `live_enabled=false`.
+- Queue empty. AK merged in #39, AL merged in #40. M2 pending: MAX_BOOK_AGE_S, MIN_EDGE, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, WS_ROW_REFRESH_S, the eight M1_* criteria, and AK's RECONCILE_SHARES_TOL, DATA_API_POSITIONS_DUST_SHARES, DATA_API_TRADES_MIN_SHARES, DATA_API_MAX_LAG_S, DATA_API_IDENTITY_TOL_USDC. Heartbeat (gap 2) is a later task.
