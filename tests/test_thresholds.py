@@ -117,6 +117,16 @@ EXPECTED = {
     "CALIBRATION_BOOTSTRAP_SEED": 20261009,
     "CALIBRATION_CI_LEVEL": 0.95,
     "CALIBRATION_LOGLOSS_CLIP": 0.01,
+    # Task BB: M3 Reflector proposal rules (M3 pending).
+    "REFLECTOR_DISABLE_REALIZATION_MAX": 0.25,
+    "REFLECTOR_DISABLE_SLOPE_MAX": 0.5,
+    "REFLECTOR_DISABLE_SLOPE_CI_HIGH_MAX": 0.8,
+    "REFLECTOR_TIGHTEN_SLOPE_MAX": 0.8,
+    "REFLECTOR_TIGHTEN_SLOPE_CI_HIGH_MAX": 1.0,
+    "REFLECTOR_ECE_MAX": 0.05,
+    "REFLECTOR_MIN_EDGE_STEP": 0.01,
+    "REFLECTOR_REJECT_COOLDOWN_DAYS": 7,
+    "REFLECTOR_REJECT_NEW_SAMPLES": 15,
 }
 
 # Old import paths that callers and tests use; each must stay the very same object.
@@ -185,7 +195,12 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "CALIBRATION_GROUP_MIN_SAMPLES", "CALIBRATION_GROUP_MIN_MARKETS", "CALIBRATION_FIXED_BINS_MIN_SAMPLES",
               "CALIBRATION_EQUAL_FREQ_BINS", "CALIBRATION_EQUAL_FREQ_MIN_PER_BIN", "CALIBRATION_BOOTSTRAP_RESAMPLES",
               "CALIBRATION_MAX_DECISIONS_PER_MARKET",
-              "CALIBRATION_BOOTSTRAP_SEED", "CALIBRATION_CI_LEVEL", "CALIBRATION_LOGLOSS_CLIP"}
+              "CALIBRATION_BOOTSTRAP_SEED", "CALIBRATION_CI_LEVEL", "CALIBRATION_LOGLOSS_CLIP",
+              # Task BB: M3 Reflector proposals; the daily cap is now M3 pending too.
+              "REFLECTOR_MAX_PER_UTC_DAY", "REFLECTOR_DISABLE_REALIZATION_MAX", "REFLECTOR_DISABLE_SLOPE_MAX",
+              "REFLECTOR_DISABLE_SLOPE_CI_HIGH_MAX", "REFLECTOR_TIGHTEN_SLOPE_MAX", "REFLECTOR_TIGHTEN_SLOPE_CI_HIGH_MAX",
+              "REFLECTOR_ECE_MAX", "REFLECTOR_MIN_EDGE_STEP", "REFLECTOR_REJECT_COOLDOWN_DAYS",
+              "REFLECTOR_REJECT_NEW_SAMPLES"}
 HEADER = ["Name", "Value", "Unit", "Meaning", "Where", "Source", "M2 pending"]
 
 
@@ -376,6 +391,16 @@ def test_relations_hold():
         ("CALIBRATION_MIN_SAMPLES = 30  # eligible samples for an overall verdict", "CALIBRATION_MIN_SAMPLES = 8"),
         ("CALIBRATION_EDGE_TIERS = (0.02, 0.04, 0.08)", "CALIBRATION_EDGE_TIERS = (0.04, 0.02)"),
         ("CALIBRATION_EXPIRY_TIERS_H = (24.0, 72.0, 336.0)", "CALIBRATION_EXPIRY_TIERS_H = ()"),
+        # Task BB: Reflector proposal rules.
+        ("REFLECTOR_MIN_EDGE_STEP = 0.01  # a MIN_EDGE tightening proposes MIN_EDGE + this",
+         "REFLECTOR_MIN_EDGE_STEP = -0.01"),
+        ("REFLECTOR_DISABLE_SLOPE_MAX = 0.5  # disable: calibration slope below this ...",
+         "REFLECTOR_DISABLE_SLOPE_MAX = 0.9"),
+        ("REFLECTOR_ECE_MAX = 0.05  # param_change: ECE above this and a judged bin outside its Wilson interval",
+         "REFLECTOR_ECE_MAX = 0.0"),
+        ("REFLECTOR_REJECT_COOLDOWN_DAYS = 7  # a rejected target is not proposed again for this many days ...",
+         "REFLECTOR_REJECT_COOLDOWN_DAYS = 0"),
+        ("REFLECTOR_MAX_PER_UTC_DAY = 3", "REFLECTOR_MAX_PER_UTC_DAY = 0"),
     ],
 )
 def test_an_inconsistent_edit_fails_at_import(line, replacement):

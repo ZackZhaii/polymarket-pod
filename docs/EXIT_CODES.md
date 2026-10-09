@@ -156,6 +156,22 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 | 0 | `EXIT_OK` | proposal accepted | - |
 | 1 | `EXIT_REFUSED` | not accepted, or risk.toml changed during the run | - |
 
+## `src/reflector_proposals.py`
+
+`python -m src.reflector_proposals`: M3 step 4 (Task BB). Reads one calibration `report.json` (default: the newest
+`reports/calibration/<UTC date>/report.json`) read-only and writes structured proposals to `playbook/proposals.jsonl`,
+`playbook/proposals.md` (via `reflector.propose`, same daily cap) and the bus (`proposal`, `exchange_action: none`).
+Proposals only: never applied, never writes config/, a .toml or src/thresholds.py. No heartbeat.
+
+| Code | Name | Meaning | Sentinel |
+|---|---|---|---|
+| 0 | `EXIT_OK` | ran; zero or more proposals written (zero = observations only, e.g. every section `insufficient`) | - |
+| 2 | `EXIT_USAGE` | usage error, or an output path in config/, a .toml or src/thresholds.py | - |
+| 3 | `EXIT_REPORT_MISSING` | no report.json found; no proposal written | - |
+| 4 | `EXIT_REPORT_CORRUPT` | report.json unreadable, not JSON, not `complete`, unknown schema_version, or a field the rules read has the wrong type; no proposal written | - |
+| 5 | `EXIT_PROPOSALS_CORRUPT` | playbook/proposals.jsonl torn or off its schema; no proposal written | - |
+| 6 | `EXIT_WRITE_FAILED` | writing a proposal failed, or config/risk.toml changed during the run | - |
+
 ## `src/resolutions.py`
 
 `python -m src.resolutions`: M3 resolution snapshot (Task AN). Start/finish heartbeat (Task AV).

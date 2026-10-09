@@ -1239,8 +1239,31 @@ minimums say `insufficient` instead of a verdict, and `python -m pytest` and gua
 - Docs: `docs/M3_CALIBRATION.md` Step 3. `reports/calibration/` git-ignored. No e2e/guard change (the e2e
   fixtures have no resolutions to join).
 
+## Task BB — M3 calibration step 4: structured Reflector proposals (src/reflector_proposals.py)
+
+Status: done.
+
+Requested by Poly指挥 (Poly反思's M3 calibration design sections 4 and 5, step 4), done by grok-bot on
+dev@e667e4a. BA (#62) ran in parallel.
+
+Finish when the Reflector turns a calibration report.json into structured, tightening-only proposals (jsonl, md,
+bus with `exchange_action: none`) within the daily cap, never applies one, never writes config/, a .toml or
+thresholds.py, proposes nothing from an `insufficient` section, marks loosening for KEY, fails closed on a missing
+or corrupt report, and `python -m pytest` and guard --require-git pass offline.
+
+- `src/reflector_proposals.py`: rules (disable, MIN_EDGE tightening, price-band tightening), `PROPOSAL_FIELDS`
+  schema, `validate`, rejected-target cooldown, CLI exit 0 / 2 / 3 missing / 4 corrupt report / 5 corrupt
+  proposals.jsonl / 6 write failed (`docs/EXIT_CODES.md`, 21 entry points).
+- `src/reflector.py`: `propose(payload=...)`, `exchange_action: none` on every proposal, `refused_path`.
+- New numbers (M3 pending): `REFLECTOR_*` rule thresholds; `REFLECTOR_MAX_PER_UTC_DAY` (3) now M3 pending.
+- Docs: `docs/M3_CALIBRATION.md` Step 4. Letter note: PR #61 (pod-flash) titled itself "Task AZ" but added only
+  a test file and no queue entry; AZ stays #60.
+
 ## Latest
 
+- 2026-10-09: Task BB: `python -m src.reflector_proposals` turns a calibration report.json into structured,
+  tightening-only proposals (jsonl + md + bus, `exchange_action: none`, cap 3/UTC day, never applied); none from an
+  `insufficient` section; loosening needs KEY; missing/corrupt report = exit 3/4, nothing written.
 - 2026-10-09: Task AZ: offline M3 calibration report `python -m src.calibration` (Brier, reliability, ECE,
   slope, vs-market, edge realization; drops counted by reason; corrupt input = exit 3, bad ledger = exit 4;
   `insufficient` below the M3-pending `CALIBRATION_*` minimums). No trading change.

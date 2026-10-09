@@ -254,7 +254,71 @@ intervals only: B `calibration_slope` = `overconfident` (slope CI below 1), `und
 CI above 0), `better_than_market` (below 0), `inconclusive`, or `not_estimable`. These are observations, not
 proposals. Every report states "UMA dispute status not checked" and "Not a promise of profit".
 
+## Step 4: structured Reflector proposals (Task BB)
+
+Design: Poly反思's M3 calibration design, sections 4 and 5. Code: `src/reflector_proposals.py`;
+`reflector.propose` gains an optional `payload` and every Reflector bus proposal now says
+`exchange_action: none`.
+
+```
+python -m src.reflector_proposals [--report reports/calibration/<date>/report.json] [--jsonl playbook/proposals.jsonl]
+                                  [--md playbook/proposals.md] [--bus logs/bus.jsonl] [--now <zoned ISO>]
+```
+
+The report is read-only input (default: the newest dated folder). Each proposal is one row in
+`playbook/proposals.jsonl`, one `## <UTC ts>` summary block in `playbook/proposals.md` (written by
+`reflector.propose`, so `REFLECTOR_MAX_PER_UTC_DAY` counts it) and one bus message
+`Reflector -> Operator`, type `proposal`, with `exchange_action: none` and the row under `proposal`.
+
+### Proposal schema (`PROPOSAL_FIELDS`, keys in this order)
+
+| Key | Rule |
+|---|---|
+| `schema_version` | `1` |
+| `proposal_id` | `<UTC date>-NN`, NN = the day's Reflector proposal count + 1 |
+| `created_at` | UTC `Z` |
+| `type` | `disable` or `param_change` |
+| `target` | `{strategy, key, file[, price_band]}`; `file` is `src/thresholds.py` or null (a disable names no file: no strategy switch exists and `config/strategies.toml` is not created) |
+| `current_value`, `proposed_value` | e.g. `0.02` -> `0.03`, `enabled` -> `disabled` |
+| `direction` | `tighten` / `loosen`, computed from the key (`MIN_EDGE`: higher is tighter; `enabled`: disabled is tighter; any other key counts as loosen) |
+| `loosens_risk_check` | true when `direction` is `loosen` |
+| `approval` | `{required: true, required_from: "KEY" if it loosens else "Operator", note}` |
+| `evidence` | `report` {path, sha256, generated_at}; `sections` (report refs, e.g. `forecasts.metrics.calibration.slope_ci`); `sample` {section, n, n_markets, resolution_days}; `metrics`; `data_versions` (input sha256s, bootstrap seed) |
+| `confidence` | `{ci_level, intervals}`: the intervals the rule read |
+| `rationale`, `expected_impact`, `risk`, `rollback` | text |
+| `scope` | `{env: paper, live_requires_human_approval: true}` |
+| `status` | `{state: proposed, approver: null, decided_at: null, applied_at: null}`; humans move it to approved / rejected / applied |
+| `exchange_action` | `none` |
+| `applied_by_code` | `false` |
+
+### Rules (tightening only; intervals must be wholly past the threshold)
+
+- `disable` (one strategy; the report has no per-strategy interval, so only when the section holds a single
+  strategy): trade Brier-skill interval below 0; or realized P&L interval below 0 with realization below
+  `REFLECTOR_DISABLE_REALIZATION_MAX`; or calibration slope below `REFLECTOR_DISABLE_SLOPE_MAX` with its
+  interval upper bound below `REFLECTOR_DISABLE_SLOPE_CI_HIGH_MAX`. One proposal per strategy, all reasons in it.
+- `param_change` MIN_EDGE -> MIN_EDGE + `REFLECTOR_MIN_EDGE_STEP`: slope in [`REFLECTOR_DISABLE_SLOPE_MAX`,
+  `REFLECTOR_TIGHTEN_SLOPE_MAX`) with interval upper bound below `REFLECTOR_TIGHTEN_SLOPE_CI_HIGH_MAX`; and,
+  for the worst price band, ECE above `REFLECTOR_ECE_MAX` with a judged bin outside its Wilson interval. Not
+  for a strategy being disabled the same day.
+- Not implemented (the report has no interval for them yet): per-edge-tier realization, per-category delta
+  Brier, intercept, the two-batch Kelly rule, the cumulative-loss disable, the event-cluster share.
+
+### Limits
+
+- A section with status `insufficient` gives no proposal (both insufficient = no write at all).
+- At most `REFLECTOR_MAX_PER_UTC_DAY` (3) Reflector proposals per UTC day (08:00 Beijing); disable first, the
+  rest are reported as deferred.
+- A target already `proposed`/`approved` is skipped; a `rejected` one waits `REFLECTOR_REJECT_COOLDOWN_DAYS`
+  unless its sample grew by `REFLECTOR_REJECT_NEW_SAMPLES`.
+- `validate` refuses a row that acts on an exchange, says it was applied by code, leaves paper scope, names a
+  file outside `src/thresholds.py`, or loosens without `required_from: KEY`.
+- No write to config/ (risk.toml, a strategy switch), any `.toml` or `src/thresholds.py`
+  (`reflector.refused_path`); nothing in the repo reads proposals.jsonl to apply it (tested).
+- Fail closed: missing report exit 3, corrupt / incomplete report exit 4, corrupt proposals.jsonl exit 5,
+  write failure exit 6; none of them writes a proposal (`docs/EXIT_CODES.md`).
+
 ## Out of scope here
 
-Reflector proposals (step 4), bus fills, new URL hosts, any
+Applying a proposal (always a human, in a separate task), bus fills, new URL hosts, any
 `config/risk.toml` edit, live trading.

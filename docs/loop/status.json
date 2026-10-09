@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T14:00:00Z",
+  "ts": "2026-10-09T15:00:00Z",
   "live_enabled": false,
-  "last_done": "AZ",
+  "last_done": "BB",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "AZ (M3 step 3: offline calibration report python -m src.calibration; drops counted by reason, corrupt input exit 3, ledger exit 4, 'insufficient' below the M3-pending CALIBRATION_* minimums) done by grok-bot. AY (#59, raw WS book snapshots + ws_hash_check) merged into this branch from dev. No open todo. No live gate."
+  "note": "BB (M3 step 4: structured Reflector proposals from the calibration report; tightening only, cap 3/UTC day, exchange_action none, never applied; missing/corrupt report = exit 3/4) done by grok-bot. BA (#62) open in parallel. No open todo. No live gate."
 }
