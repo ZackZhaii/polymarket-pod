@@ -166,6 +166,37 @@ def test_mnemonic_separators(sep):
     assert rules(sep.join(fake_phrase(12))) == ["bip39_mnemonic"]
 
 
+# Issue #65: the old candidate prefilter capped each gap at 6 non-letters and dropped phrases the
+# exact separator rule accepts (7 spaces, long tabs, long numbered gaps) -- raw text and the JSON
+# serialisation of it must both be detected.
+@pytest.mark.parametrize("sep", [
+    " " * 6, " " * 7, " " * 8, " " * 40,
+    "\t" * 7, "\t" * 15, " \t  \t ",
+    " 1. ", "\t2.\t", "   10.   ", " , 3, ", " | 5 | ",
+])
+def test_long_and_numbered_mnemonic_separators_are_found(sep):
+    words = fake_phrase(12)
+    text = sep.join(words)
+    found = secret_scan.scan_text(text, "t")
+    assert [f.rule for f in found] == ["bip39_mnemonic"]
+    assert found[0].length == 12
+    assert rules(json.dumps({"note": text})) == ["bip39_mnemonic"]
+    assert rules(json.dumps({"note": text}, ensure_ascii=False, separators=(",", ":"))) == ["bip39_mnemonic"]
+    assert_not_echoed(" ".join(words), found, found[0].line_text(), secret_scan.halt_reason(found, []))
+
+
+def test_eleven_words_with_long_separators_is_still_not_a_mnemonic():
+    words = fake_phrase(11)
+    for sep in (" " * 7, "\t" * 9, " 4. "):
+        assert rules(sep.join(words)) == []
+
+
+def test_plain_text_and_bare_hashes_with_long_gaps_stay_clean():
+    h = fake_hex_key()
+    assert rules("tx" + " " * 7 + h + " " * 9 + "filled") == []
+    assert rules((" " * 9).join(["note", "ok", "done", "yesterday"])) == []
+
+
 def test_numbered_and_capitalised_mnemonics_are_found():
     words = fake_phrase(12)
     assert rules(" ".join(f"{i}. {w}" for i, w in enumerate(words, 1))) == ["bip39_mnemonic"]
@@ -329,6 +360,23 @@ def test_bus_refuses_a_secret_writes_nothing_and_halts_globally(tmp_path):
     (record,) = halt_store.active_halts()
     assert record["scope"] == "global" and "key_context:private_key" in record["reason"]
     assert_not_echoed(key, halt_store.HALT_STATE_PATH.read_text(encoding="utf-8"))
+
+
+def test_bus_refuses_a_long_gap_mnemonic_writes_nothing_and_halts_globally(tmp_path, monkeypatch):
+    """Issue #65: a phrase the old prefilter missed must still be refused on the real bus path."""
+    words = fake_phrase(12)
+    text = (" " * 7).join(words)
+    written: list = []
+    monkeypatch.setattr(podlib, "append_jsonl", lambda *args, **kwargs: written.append((args, kwargs)))
+    with pytest.raises(secret_scan.SecretRefused) as caught:
+        podlib.bus("Quant", "RiskGate", "signal", "m", {"note": text}, path=tmp_path / "bus.jsonl")
+    assert written == []
+    assert not (tmp_path / "bus.jsonl").exists()
+    (record,) = halt_store.active_halts()
+    assert record["scope"] == "global" and record["source"] == "Sentinel"
+    assert "bip39_mnemonic" in record["reason"]
+    assert_not_echoed(" ".join(words), str(caught.value), record["reason"],
+                      halt_store.HALT_STATE_PATH.read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize("payload", [

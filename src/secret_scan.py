@@ -110,10 +110,6 @@ KEY_CONTEXT_RE = re.compile(
 )
 PEM_RE = re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----")
 _WORD_RE = re.compile(r"[A-Za-z]+")
-# Fast superset of a mnemonic run (BIP39 words are 3 to 8 letters); the exact check runs on each span.
-_MNEMONIC_CANDIDATE_RE = re.compile(
-    r"(?<![A-Za-z])(?:[A-Za-z]{3,8}[^A-Za-z]{1,6}){%d,}[A-Za-z]{3,8}(?![A-Za-z])" % (MNEMONIC_MIN_WORDS - 1)
-)
 _MNEMONIC_SEP_RE = re.compile(r"[\s,;|]*(?:\d{1,2}[.):]?)?[\s,;|]*")
 
 
@@ -183,6 +179,24 @@ def _secret_like(value: str) -> bool:
             and any(c.isdigit() for c in core))
 
 
+def _mnemonic_prefilter(text: str) -> bool:
+    """Cheap superset gate for the mnemonic rule (issue #65).
+
+    A run of MNEMONIC_MIN_WORDS BIP39 words holds at least that many letter tokens, so a text with
+    fewer letter tokens cannot hide one. Separator-agnostic by construction: only
+    ``_MNEMONIC_SEP_RE`` decides what joins words, so every separator form the exact rule allows is
+    covered (the old bounded candidate regex capped each gap at six non-letters and dropped phrases
+    the exact rule accepts: 7 spaces, long tabs, long numbered gaps). One linear pass over
+    ``_WORD_RE`` matches -- no regex backtracking, bounded or unbounded.
+    """
+    count = 0
+    for _ in _WORD_RE.finditer(text):
+        count += 1
+        if count >= MNEMONIC_MIN_WORDS:
+            return True
+    return False
+
+
 def _mnemonic_runs(text: str, words: frozenset[str]) -> Iterator[str]:
     """Each run of >= MNEMONIC_MIN_WORDS BIP39 words joined only by allowed separators (normalised)."""
     text = re.sub(r"\\[nrt]", "  ", text)  # JSON-escaped line breaks count as whitespace
@@ -218,12 +232,10 @@ def scan_text(text: str, location: str = "<text>", line: int = 0,
         if _secret_like(value):
             found.append(Finding(location, line, f"{RULE_KEY_CONTEXT}:{_key_label(match)}", len(value),
                                  value_digest(value)))
-    candidates = _MNEMONIC_CANDIDATE_RE.findall(re.sub(r"\\[nrt]", "  ", text))
-    if candidates:
+    if _mnemonic_prefilter(text):
         vocab = words if words is not None else bip39_words()
-        for span in candidates:
-            for phrase in _mnemonic_runs(span, vocab):
-                found.append(Finding(location, line, RULE_MNEMONIC, len(phrase.split()), value_digest(phrase)))
+        for phrase in _mnemonic_runs(text, vocab):
+            found.append(Finding(location, line, RULE_MNEMONIC, len(phrase.split()), value_digest(phrase)))
     return found
 
 
