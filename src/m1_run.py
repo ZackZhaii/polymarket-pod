@@ -2,7 +2,7 @@
 
     python -m src.m1_run --out runs/m1-YYYYMMDD --max-runtime 86400 [--top N] [--assets TOKEN ...]
         [--markets data/markets.jsonl] [--rest-every 600] [--rest-assets 4]
-        [--rotate-mb 64] [--rotate-s 3600]
+        [--rotate-mb 64] [--rotate-s 3600] [--raw-books]
 
 What it does (no orders, no auth, no keys; the only network reads are the public WS market channel
 through src.ws_recorder and the public CLOB /book path through src.book.snapshot):
@@ -18,6 +18,13 @@ through src.ws_recorder and the public CLOB /book path through src.book.snapshot
 - Every ``--rest-every`` seconds (and once at start) a background thread samples the first
   ``--rest-assets`` assets through ``book.snapshot`` (the existing public CLOB /book reader) into
   ``rest/rest-NNNNNN.jsonl`` for the WS-vs-REST comparison in src.m1_report.
+- ``--raw-books`` (Task AY, opt-in, default off so a run's disk use does not change): every ``book`` frame
+  of a subscribed asset, as received (all levels, the hash, min_order_size / tick_size when sent), goes
+  to ``raw_books/raw_books-NNNNNN.jsonl`` as ``{"ts", "asset_id", "frame"}``, for validating the snapshot
+  hash offline (``python -m src.ws_hash_check <run dir>``). A file never passes
+  WS_RAW_BOOK_FILE_MAX_BYTES (nor ``--rotate-mb``); after WS_RAW_BOOK_RUN_MAX_BYTES in the run further
+  frames are dropped and counted (one ``raw_books_capped`` event), and the recording itself goes on.
+  Frames that cannot be written as strict JSON (NaN) are dropped and counted. Nothing else changes.
 - Every JSONL file is append-only (src.ws_recorder.JsonlAppender: one write per line) and is
   rotated before it would pass ``--rotate-mb`` or once it has been open ``--rotate-s`` seconds.
 - SIGINT / SIGTERM end the run gracefully: the recorder notices within WS_STOP_POLL_S, the REST
@@ -66,6 +73,8 @@ from src.thresholds import (  # noqa: E402
     M1_ROTATE_BYTES,
     M1_ROTATE_S,
     M1_TOP_MARKETS,
+    WS_RAW_BOOK_FILE_MAX_BYTES,
+    WS_RAW_BOOK_RUN_MAX_BYTES,
     WS_STOP_POLL_S,
 )
 from src.ws_recorder import (  # noqa: E402
@@ -82,6 +91,7 @@ SCHEMA = "m1_run/1"
 PINNED_RISK_SHA256 = "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04"
 MANIFEST = "manifest.json"
 STREAMS = ("books", "events", "rest")
+RAW_BOOKS = "raw_books"  # Task AY: opt-in stream, not one of STREAMS (m1_report does not read it)
 
 EXIT_OK = 0
 EXIT_NO_ROWS = 1
@@ -203,6 +213,49 @@ class RotatingJsonl:
             if self._current is not None:
                 self._current.close()
                 self._current = None
+
+
+class RawBookSink:
+    """Task AY: capped raw book frames in ``raw_books/raw_books-NNNNNN.jsonl`` (whole-line appends).
+
+    No file passes ``file_max_bytes``; the run stops saving once ``run_max_bytes`` would be passed. A frame
+    that is not strict JSON, or alone bigger than a file, is dropped. Drops are counted, never raised."""
+
+    def __init__(self, folder: Path, file_max_bytes: int, run_max_bytes: int, max_age_s: float,
+                 monotonic: Callable[[], float] = time.monotonic,
+                 on_event: Callable[[dict[str, Any]], None] | None = None,
+                 now: Callable[[], str] = utc_now_ms) -> None:
+        if not (isinstance(run_max_bytes, int) and 0 < file_max_bytes <= run_max_bytes):
+            raise ValueError("raw book caps must satisfy 0 < file cap <= run cap")
+        self.files = RotatingJsonl(folder, RAW_BOOKS, file_max_bytes, max_age_s, monotonic)
+        self.run_max_bytes = run_max_bytes
+        self.on_event = on_event
+        self.now = now
+        self.bytes = 0
+        self.saved = 0
+        self.dropped: Counter = Counter()
+
+    def write(self, row: dict[str, Any]) -> None:
+        try:
+            size = _line_bytes(row)
+        except (TypeError, ValueError):
+            self.dropped["unserialisable"] += 1
+            return
+        if size > self.files.max_bytes:
+            self.dropped["too_large"] += 1
+            return
+        if self.bytes + size > self.run_max_bytes:
+            if not self.dropped["run_cap"] and self.on_event is not None:
+                self.on_event({"ts": self.now(), "event": "raw_books_capped", "bytes": self.bytes,
+                               "saved": self.saved, "run_max_bytes": self.run_max_bytes})
+            self.dropped["run_cap"] += 1
+            return
+        self.files.write(row)
+        self.bytes += size
+        self.saved += 1
+
+    def close(self) -> None:
+        self.files.close()
 
 
 # --- REST /book sampler ------------------------------------------------------------------------
@@ -344,6 +397,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rest-assets", type=int, default=M1_REST_ASSETS, help=f"assets per REST sample (default {M1_REST_ASSETS})")
     parser.add_argument("--rotate-mb", type=float, default=M1_ROTATE_BYTES / 1048576, help="rotate a file before it passes this many MiB (default 64)")
     parser.add_argument("--rotate-s", type=float, default=M1_ROTATE_S, help=f"rotate a file after this many seconds (default {M1_ROTATE_S:g})")
+    parser.add_argument("--raw-books", action="store_true",
+                        help="also save every raw book frame to raw_books/ for python -m src.ws_hash_check "
+                             f"(off by default; {WS_RAW_BOOK_FILE_MAX_BYTES // 1048576} MiB per file, "
+                             f"{WS_RAW_BOOK_RUN_MAX_BYTES // 1048576} MiB per run)")
     return parser
 
 
@@ -434,6 +491,9 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
     run_dir.mkdir(parents=True, exist_ok=True)
     rotate_bytes = max(1, int(args.rotate_mb * 1048576))
     sinks = {name: RotatingJsonl(run_dir / name, name, rotate_bytes, args.rotate_s, monotonic) for name in STREAMS}
+    raw_sink = (RawBookSink(run_dir / RAW_BOOKS, min(rotate_bytes, WS_RAW_BOOK_FILE_MAX_BYTES), WS_RAW_BOOK_RUN_MAX_BYTES,
+                            args.rotate_s, monotonic, on_event=sinks["events"].write, now=now)
+                if args.raw_books else None)
     rest_assets = assets[:args.rest_assets]
     manifest: dict[str, Any] = {
         "schema": SCHEMA,
@@ -449,7 +509,7 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
                       "explicit_assets": bool(args.assets), "markets": selection["markets"] if not args.assets else [],
                       "skipped": selection["skipped"]},
         "settings": {"rest_every_s": args.rest_every, "rest_assets": args.rest_assets,
-                     "rotate_bytes": rotate_bytes, "rotate_s": args.rotate_s},
+                     "rotate_bytes": rotate_bytes, "rotate_s": args.rotate_s, "raw_books": bool(args.raw_books)},
         "thresholds": _threshold_values(),
         "version": {"schema": SCHEMA, "python": platform.python_version(), "websockets": websockets_version()},
         "git": git(),
@@ -485,7 +545,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
     thread = threading.Thread(target=sampler.run, args=(stop,), name="m1-rest-sampler", daemon=True)
     recorder = Recorder(assets, transport=transport or WebsocketsTransport(), sink=sinks["books"],
                         max_runtime_s=args.max_runtime, meta=meta, monotonic=monotonic, sleep=sleep, now=now,
-                        stop=should_stop, on_event=events.write, heartbeat=heartbeat)
+                        stop=should_stop, on_event=events.write, heartbeat=heartbeat,
+                        raw_books=raw_sink.write if raw_sink is not None else None)
     start_mono = monotonic()
     code = EXIT_OK
     status = "completed"
@@ -524,7 +585,7 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
         except OSError:
             if code == EXIT_OK:
                 code, status = EXIT_WRITE_FAILED, "failed"
-        for sink in sinks.values():
+        for sink in [*sinks.values(), *([raw_sink] if raw_sink is not None else [])]:
             try:
                 sink.close()
             except OSError:
@@ -534,6 +595,9 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
             "ended_at": now(),
             "elapsed_s": round(monotonic() - start_mono, 3),
             "files": {name: sink.files for name, sink in sinks.items()},
+            **({"raw_books": {"files": raw_sink.files.files, "saved": raw_sink.saved, "bytes": raw_sink.bytes,
+                              "dropped": dict(raw_sink.dropped), "file_max_bytes": raw_sink.files.max_bytes,
+                              "run_max_bytes": raw_sink.run_max_bytes}} if raw_sink is not None else {}),
             "counts": {
                 "book_rows": report.rows, "events": events.rows, "rest_rows": sampler.rows,
                 "rest_samples": sampler.samples, "rest_errors": sampler.errors,
