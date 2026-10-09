@@ -375,6 +375,15 @@
       "note": "Requested by Poly指挥 (queue: heartbeat -> EXIT_CODES/pins); done by grok-bot from Poly哨兵's sentinel_design.md gaps 4-6. AR (#46, daily_loss) landed on dev first and was merged into this branch. Behaviour changes: loop_claim usage errors exit 5 (was argparse's 2 = EXIT_PIN, a global halt); paper_cycle exit 1 is now a Sentinel global halt (was an alert); new exit 6 for scanner, book, ws_recorder, m1_run; processes record the global halt themselves on drift. podlib.PINS stays at 5 keys (tests vary the in-memory config); the file pins are separate. Left: resolutions exit 4 still covers both pin drift and a bad snapshot clock (documented).",
       "done_at": "2026-10-09T09:34:19Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "AU",
+      "status": "done",
+      "title": "RiskGate slippage floor: veto any intent whose assumed_slippage is below ASSUMED_SLIPPAGE (Task AT's one slippage, 0.005, inclusive); missing / non-finite slippage vetoes; the paper_ledger CLI refuses --slippage below the floor",
+      "finish": "risk_gate.evaluate adds slippage_below_floor when a finite assumed_slippage < ASSUMED_SLIPPAGE (missing / non-number / non-finite already veto invalid_ / non_finite_assumed_slippage); paper_ledger --slippage uses slippage_arg (finite, >= ASSUMED_SLIPPAGE, else argparse error exit 2 before any read or write); the intent builder's INTENT_ASSUMED_SLIPPAGE intents still pass. e2e gate cases (golden slippage_floor, only via --update-golden); unit tests. No new number; config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Approved by Poly指挥 as tightening; done by grok-bot. Behaviour change: a recorded Task AE characterisation point (sell, slippage 0.0) that used to allow now vetoes; an Operator CLI intent with --slippage below 0.005 is refused. sports_devig's slippage argument only shapes its signal edge (RiskGate re-checks the intent).",
+      "done_at": "2026-10-09T10:06:10Z",
+      "surface": "grok-bot"
     }
   ]
 }

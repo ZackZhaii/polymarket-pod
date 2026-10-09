@@ -25,6 +25,10 @@ One run of the real pipeline on fixed, sanitised recordings in tests/fixtures/e2
     is a global halt; a stale-book market halt resumed by the Operator while the book is still
     stale is halted again on the next check; a failing Reconciler run lands in the halt store;
     paper_cycle reads an M1 recording directory (gap 11)
+    Task AU slippage floor (golden key ``slippage_floor``): an intent assuming less than
+    ASSUMED_SLIPPAGE (or a non-finite / missing slippage) vetoes; the floor itself passes, the
+    intent builder's INTENT_ASSUMED_SLIPPAGE intent passes, and the paper_ledger CLI refuses
+    --slippage below the floor
     Task AR daily loss (golden key ``daily_loss``): today's (UTC) realized loss plus fees vetoes
     max_daily_loss, a loss closed before 00:00:00Z does not count, a gain does not offset, and a
     counted ledger row with an unparseable ts is invalid_risk_state and a global halt
@@ -581,6 +585,10 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
         daily_loss_section = run_daily_loss_scenarios(scenario["daily_loss"], work, commit, intent_for, paper_ledger,
                                                       ledger_store, halt_store, ledger_start, quotes_start, risk_cfg,
                                                       problems)
+        # 13. Task AU: the RiskGate slippage floor (scenario.json "slippage_floor")
+        slippage_section = run_slippage_floor_scenarios(scenario["slippage_floor"], work, forecasts, forecaster,
+                                                        paper_ledger, halt_store, markets, books, bus_path,
+                                                        ledger_start, quotes_start, clock, risk_cfg, problems)
         bus_rows = podlib.read_jsonl(bus_path)
         attempts = list(box["attempts"])
         unused_files = sorted(p.name for p in box["unused"].rglob("*") if p.is_file())
@@ -660,6 +668,7 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
         "halt_consumer": halts_section,
         "sentinel_heartbeat": heartbeat_section,
         "daily_loss": daily_loss_section,
+        "slippage_floor": slippage_section,
         "quotes_after": [{k: q.get(k) for k in ("market", "token_id", "side", "price", "status", "cancelled_by",
                                                 "cancelled_ts")} for q in quotes_after],
         "bus": {"counts": counts, "fills": len(fills),
@@ -1010,6 +1019,82 @@ def run_daily_loss_scenarios(plan: dict[str, Any], work: Path, commit, intent_fo
         paper_ledger.PAPER_PATH = work / "paper.jsonl"
         problems.extend(f"daily_loss {name}: {p}" for p in _daily_loss_case_problems(result))
         out[name] = result
+    return out
+
+
+def run_slippage_floor_scenarios(plan: dict[str, Any], work: Path, forecasts: dict[str, Any], forecaster,
+                                 paper_ledger, halt_store, markets: dict[str, Any], books, bus_path: Path,
+                                 ledger_start: bytes, quotes_start: bytes, clock: Clock, risk_cfg,
+                                 problems: list[str]) -> dict[str, Any]:
+    """Task AU: one forecast (one bus signal) asked with several assumed slippages, in its own ledger and
+    halt folder. Vetoes go through paper_ledger.commit_if_allowed (nothing may be booked); allows only
+    call RiskGate's evaluate on the same load_state (no fill reaches the main bus). The intent builder's
+    intent for the same signal must pass the floor. The CLI parser must refuse --slippage below it."""
+    import contextlib
+    import io
+
+    from src import intent_builder
+    from src.thresholds import ASSUMED_SLIPPAGE
+    forecast = forecasts[plan["forecast"]]
+    market_row = markets[forecast["market"]]
+    signal = forecaster.emit_probability(market=forecast["market"], model_prob=forecast["model_prob"],
+                                         note=forecast.get("note", ""), bus_path=bus_path)
+    base = build_intent(forecast, signal, market_row, books)
+    out: dict[str, Any] = {"floor": ASSUMED_SLIPPAGE, "cases": {}}
+    folder = work / "slippage_floor"
+    with halt_scope(folder, quotes_start):
+        ledger = folder / "paper.jsonl"
+        ledger.write_bytes(ledger_start)
+        paper_ledger.PAPER_PATH = ledger
+        for case in plan["cases"]:
+            value = case["assumed_slippage"]
+            slippage = math.nan if value == "nan" else value
+            intent = dataclasses.replace(base, assumed_slippage=slippage)
+            if case["expect"] == "allow":
+                decision = paper_ledger.evaluate(intent, risk_cfg(), paper_ledger.load_state(intent.market,
+                                                                                            intent.token_id))
+                row = {"via": "evaluate", "allow": decision.allow, "reasons": list(decision.reasons)}
+            else:
+                result = paper_ledger.commit_if_allowed(intent, risk_cfg())
+                row = {"via": "commit_if_allowed", "allow": result.get("allow"),
+                       "reasons": list((result.get("decision") or {}).get("reasons") or []),
+                       "halted": bool(result.get("halted"))}
+            row.update({"assumed_slippage": value, "expect": case["expect"]})
+            out["cases"][case["name"]] = row
+            if case["expect"] == "allow" and (row["allow"] is not True or row["reasons"]):
+                problems.append(f"slippage_floor {case['name']}: expected an allow, got {row['reasons']}")
+            if case["expect"] == "veto" and (row["allow"] is not False or case["reason"] not in row["reasons"]
+                                            or row.get("halted")):
+                problems.append(f"slippage_floor {case['name']}: expected a {case['reason']} veto, got {row['reasons']}")
+        out["ledger_unchanged"] = ledger.read_bytes() == ledger_start
+        # the intent builder (INTENT_ASSUMED_SLIPPAGE) on the same signal passes the floor
+        built, view = shadow_intent(forecast, signal, market_row, books, risk_cfg(), clock.now)
+        builder = {"intent": built.intent is not None, "reasons": view["reasons"]}
+        if built.intent is not None:
+            risk_intent = intent_builder.to_risk_intent(built.intent)
+            decision = paper_ledger.evaluate(risk_intent, risk_cfg(), paper_ledger.load_state(risk_intent.market,
+                                                                                             risk_intent.token_id))
+            builder.update({"assumed_slippage": risk_intent.assumed_slippage, "allow": decision.allow,
+                            "reasons_riskgate": list(decision.reasons)})
+        out["intent_builder"] = builder
+        out["global_halts"] = _halt_view(halt_store)
+    paper_ledger.PAPER_PATH = work / "paper.jsonl"
+    if not out["ledger_unchanged"]:
+        problems.append("slippage_floor: a vetoed intent changed the ledger")
+    if builder.get("allow") is not True or builder.get("assumed_slippage") != ASSUMED_SLIPPAGE:
+        problems.append(f"slippage_floor: the intent builder's intent did not pass the floor: {builder}")
+    cli: dict[str, Any] = {}
+    for text in plan["cli_args"]:
+        with contextlib.redirect_stderr(io.StringIO()):
+            try:
+                paper_ledger.build_parser().parse_args(["--slippage", text])
+                cli[text] = "accepted"
+            except SystemExit as exc:
+                cli[text] = f"refused_exit_{exc.code}"
+        below = not (float(text) >= ASSUMED_SLIPPAGE)  # nan compares False: refused
+        if (cli[text] == "accepted") == below:
+            problems.append(f"slippage_floor: CLI --slippage {text} was {cli[text]}")
+    out["cli"] = cli
     return out
 
 

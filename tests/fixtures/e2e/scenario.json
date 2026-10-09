@@ -207,5 +207,54 @@
     ]
    }
   ]
+ },
+ "slippage_floor": {
+  "forecast": "bravo-allow",
+  "cases": [
+   {
+    "name": "a_zero",
+    "assumed_slippage": 0.0,
+    "expect": "veto",
+    "reason": "slippage_below_floor"
+   },
+   {
+    "name": "b_just_below",
+    "assumed_slippage": 0.0049,
+    "expect": "veto",
+    "reason": "slippage_below_floor"
+   },
+   {
+    "name": "c_at_floor",
+    "assumed_slippage": 0.005,
+    "expect": "allow",
+    "reason": null
+   },
+   {
+    "name": "d_above",
+    "assumed_slippage": 0.01,
+    "expect": "allow",
+    "reason": null
+   },
+   {
+    "name": "e_nan",
+    "assumed_slippage": "nan",
+    "expect": "veto",
+    "reason": "non_finite_assumed_slippage"
+   },
+   {
+    "name": "f_missing",
+    "assumed_slippage": null,
+    "expect": "veto",
+    "reason": "invalid_assumed_slippage"
+   }
+  ],
+  "cli_args": [
+   "0",
+   "0.0049",
+   "nan",
+   "-0.01",
+   "0.005",
+   "0.01"
+  ]
  }
 }

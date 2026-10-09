@@ -25,7 +25,7 @@ import src.fees as fees
 import src.paper_ledger as paper_ledger
 from src.podlib import load_risk, utc_now
 from src.risk_gate import Intent, evaluate
-from src.thresholds import EDGE_TOLERANCE, MIN_EDGE
+from src.thresholds import ASSUMED_SLIPPAGE, EDGE_TOLERANCE, MIN_EDGE
 
 NOW = "2026-10-08T08:00:00Z"
 NOW_DT = datetime(2026, 10, 8, 8, tzinfo=timezone.utc)
@@ -195,7 +195,10 @@ def test_grid_ledger_fee_never_below_the_old_ledger_fee():
                 assert new >= old, (side, m, s, f, notional, new, old)
 
 
-@pytest.mark.parametrize("point", [r for r in RECORDED if r[-1]], ids=lambda r: f"{r[0]}-{r[2]}-{r[4]}")
+# Task AU: a recorded allow that assumed less than ASSUMED_SLIPPAGE now vetoes (slippage_below_floor),
+# so it books nothing; it is checked separately below.
+@pytest.mark.parametrize("point", [r for r in RECORDED if r[-1] and r[3] >= ASSUMED_SLIPPAGE],
+                         ids=lambda r: f"{r[0]}-{r[2]}-{r[4]}")
 def test_ledger_never_books_less_than_before(tmp_path, monkeypatch, point):
     monkeypatch.setattr(paper_ledger, "PAPER_PATH", tmp_path / "paper.jsonl")
     monkeypatch.setattr(paper_ledger, "QUOTES_PATH", tmp_path / "quotes.jsonl")
@@ -208,3 +211,11 @@ def test_ledger_never_books_less_than_before(tmp_path, monkeypatch, point):
     assert result["allow"] is True
     assert result["fill"]["fee_usd"] >= old_booked_fee(fee_usd)
     assert paper_ledger.load_state("ae", "t")["daily_loss_usd"] >= old_booked_fee(fee_usd)
+
+
+@pytest.mark.parametrize("point", [r for r in RECORDED if r[-1] and r[3] < ASSUMED_SLIPPAGE],
+                         ids=lambda r: f"{r[0]}-{r[2]}-{r[3]}")
+def test_recorded_allows_below_the_slippage_floor_now_veto(point):
+    side, p, m, s, f, size, _edge, _fee_usd, _allow = point
+    decision = _evaluate(side, p, m, s, f, size)
+    assert decision.allow is False and decision.reasons == ["slippage_below_floor"]
