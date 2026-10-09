@@ -231,6 +231,16 @@ def test_paper_cycle_refuses_with_1(drift, monkeypatch):
     assert len(halts()) == 1
 
 
+def test_paper_ledger_refuses_with_1(drift, monkeypatch):
+    # Issue #63: the paper ledger CLI checks the whole risk file at start; EXIT_FAILED is its refusal code
+    from src import paper_ledger
+
+    monkeypatch.setattr(paper_ledger, "commit_if_allowed",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("booked a fill")))
+    assert paper_ledger.main([]) == paper_ledger.EXIT_FAILED == 1
+    assert len(halts()) == 1
+
+
 def test_ws_recorder_refuses_with_6(drift, tmp_path):
     from src import ws_recorder
 
