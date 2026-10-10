@@ -287,6 +287,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\m2_start.ps1 -Reason
 5. `python -m src.m2_runner --run-dir runs/m2 --max-runtime <seconds left>` once `src/m2_runner.py` exists (#119)
    and the Sentinel watches `m2_runner`. A checkout with the module but without that watch refuses to start anything.
 
+`runs/m2/current.json` is rewritten atomically (the heartbeat writer: temp file, fsync, `os.replace`) after every
+launch and every check. It holds `schema` (`m2_current/1`), `status` (`starting` / `started` / `failed`), `failure`,
+`updated_ts`, `run_dir` (null until the chain line is written), `m2_end`, `reason`, `git_sha`, `host`, and
+`processes[]`. Each process entry has `name`, `pid` (launched or kept), `started_ts`, `state` (`starting` / `ready` /
+`not_ready` / `kept`) and `heartbeat_pid`. Monitors such as the box patrol read it read-only. If the write fails, the
+order stops (exit 5), as it does for a failed chain append.
+
 While a later step waits, the Sentinel must stay fresh too. A process that fails its check is left running for
 the Operator to look at, and nothing after it starts (exit 5). The Sentinel watches that process like any other.
 Refused before anything starts (exit 3):
