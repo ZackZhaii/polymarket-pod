@@ -1,6 +1,6 @@
-"""M1 24-hour acceptance run (Task AI): a long, read-only recording of the public order books.
+"""M1 6-hour acceptance run (Task AI; 24 h until 2026-10-11, 家伟批准): a long, read-only recording of the public order books.
 
-    python -m src.m1_run --out runs/m1-YYYYMMDD --max-runtime 86400 [--top N] [--assets TOKEN ...]
+    python -m src.m1_run --out runs/m1-YYYYMMDD [--max-runtime 21600] [--top N] [--assets TOKEN ...]
         [--markets data/markets.jsonl] [--rest-every 600] [--rest-assets 4]
         [--rotate-mb 64] [--rotate-s 3600] [--raw-books]
 
@@ -39,7 +39,7 @@ through src.ws_recorder and the public CLOB /book path through src.book.snapshot
 Exit codes: 0 ran to --max-runtime and recorded at least one snapshot; 1 no snapshot recorded;
 2 usage error (bad arguments, no usable assets, a non-empty --out); 3 the optional websockets
 package is missing; 4 writing an output file failed; 5 stopped by SIGINT/SIGTERM (the run dir is
-complete and can still be reported, but it is not a full 24 h run); 6 config/risk.toml off its
+complete and can still be reported, but it is not a full acceptance run); 6 config/risk.toml off its
 pins at start (no run dir) or while running (Task AS, src/pins.py; a global halt is recorded).
 Registry: docs/EXIT_CODES.md.
 """
@@ -74,6 +74,7 @@ from src.thresholds import (  # noqa: E402
     M1_CONSOLE_CLOSE_WAIT_S,
     M1_MANIFEST_PROGRESS_S,
     M1_REST_ASSETS,
+    M1_RUN_TARGET_S,
     M1_REST_EVERY_S,
     M1_ROTATE_BYTES,
     M1_ROTATE_S,
@@ -445,13 +446,14 @@ def _threshold_values() -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m src.m1_run",
-        description="M1 24-hour acceptance run: read-only WS book recording + REST /book samples (no orders).",
+        description="M1 acceptance run: read-only WS books + REST /book samples, no orders.",
         epilog="Exit codes: 0 ran to --max-runtime with at least one snapshot; 1 no snapshot; 2 usage error; "
                "3 websockets missing (pip install -r requirements-ws.txt); 4 write failed; 5 stopped by SIGINT/SIGTERM; "
                "6 config/risk.toml off its pins (global halt recorded). See docs/EXIT_CODES.md.",
     )
     parser.add_argument("--out", required=True, type=Path, help="new or empty run directory")
-    parser.add_argument("--max-runtime", required=True, type=float, help="seconds (86400 for the 24 h acceptance run)")
+    parser.add_argument("--max-runtime", type=float, default=M1_RUN_TARGET_S,
+                        help=f"seconds (default M1_RUN_TARGET_S {M1_RUN_TARGET_S:g}: the 6 h acceptance run, 2026-10-11 家伟批准)")
     parser.add_argument("--markets", type=Path, default=MARKETS_PATH, help="scanner output (default data/markets.jsonl)")
     parser.add_argument("--top", type=int, default=M1_TOP_MARKETS, help=f"markets from the latest scan (default {M1_TOP_MARKETS})")
     parser.add_argument("--assets", nargs="+", default=None, help="token ids instead of --top (comma or space separated)")

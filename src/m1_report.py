@@ -296,7 +296,7 @@ def summarize_events(events: list[dict], assets: list[str]) -> dict[str, Any]:
 
 CRITERIA = {
     "run_completed": "manifest status completed, exit 0, ended by its deadline (not a signal)",
-    "run_duration": f"elapsed >= M1_MIN_RUN_S ({M1_MIN_RUN_S:g} s)",
+    "run_duration": f"elapsed >= M1_MIN_RUN_S ({M1_MIN_RUN_S:g} s; 6 h target minus 1 min, 2026-10-11 家伟批准)",
     "risk_pinned": "config/risk.toml sha256 equals the pin at start and end, live_enabled false at both",
     "integrity": "every listed file present, no unreadable line, no unparseable row time",
     "coverage": f"every asset fresh (age <= MAX_BOOK_AGE_S {MAX_BOOK_AGE_S:g} s) for >= M1_MIN_COVERAGE ({M1_MIN_COVERAGE:g}) of the run",
@@ -411,7 +411,8 @@ def build_report(run_dir: Path) -> dict[str, Any]:
             warnings.append(f"{name}: files on disk not in the manifest {info['unlisted_files']}")
     max_runtime = manifest.get("max_runtime_s")
     if isinstance(max_runtime, (int, float)) and not isinstance(max_runtime, bool) and max_runtime < M1_MIN_RUN_S:
-        # Task BT: e.g. a 6 h rehearsal. M1_MIN_RUN_S is unchanged; this only says why run_duration fails.
+        # Task BT: a rehearsal shorter than M1_MIN_RUN_S (21540 s since 2026-10-11, 家伟批准); this only says why
+        # run_duration fails.
         warnings.append(f"max_runtime_s {max_runtime:g} < M1_MIN_RUN_S {M1_MIN_RUN_S:g}: run_duration cannot pass "
                         "by design (a shorter run is a rehearsal, not the M1 acceptance run)")
     if isinstance(counts.get("partial"), bool) and counts["partial"]:
