@@ -1135,7 +1135,14 @@ def test_task_aw_the_pong_timeout_runs_from_the_first_unanswered_ping():
     assert report.disconnects == {"pong_timeout": 1}
 
 
-def test_task_aw_answered_pings_keep_the_connection():
+def _trade(asset=A, ts=T0, market=M):
+    """Task BI: a business frame that leaves the book alone (keeps the silence window open in tests)."""
+    return {"event_type": "last_trade_price", "asset_id": asset, "market": market, "price": "0.5", "size": "1",
+            "side": "BUY", "timestamp": str(ts)}
+
+
+def test_task_aw_answered_pings_keep_the_connection(monkeypatch):
+    monkeypatch.setattr(w, "WS_DATA_SILENCE_S", 1e9)  # Task BK: AW's PONG path alone (no market data here)
     report, *_ = _run([[_book()]], runtime=WS_PONG_TIMEOUT_S * 6)
     assert report.disconnects == {} and report.connects == 1 and report.pings >= 15
 

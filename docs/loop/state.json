@@ -510,6 +510,15 @@
       "note": "Requested by Poly指挥 (queue order 1) after Poly盘口's M1 analysis: 13 awake-but-dead stretches of 657-1,270 s in m1-20261008T2259Z (git f760e51, before AW #51). Done by grok-bot. Finding: on current dev AW's pong_timeout would already have ended each within ~40 s (first unanswered PING + 30 s); the watchdog is a backstop that does not depend on PING / PONG bookkeeping and fires first when the process was paused >= 60 s with the monotonic clock running.",
       "done_at": "2026-10-10T13:10:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "BK",
+      "status": "done",
+      "title": "WS recorder: market-data silence window (data_silent, WS_DATA_SILENCE_S=90; PONG does not count, Poly风控 F6)",
+      "finish": "src/ws_recorder.py keeps BI's any-frame window (silent, WS_SILENCE_TIMEOUT_S 60) and adds a second window timed only by market business frames (a JSON event object with a non-empty event_type: book, price_change, tick_size_change, last_trade_price or an unknown type; PONG, undecodable and malformed frames never count): none for WS_DATA_SILENCE_S disconnects with reason data_silent (event disconnected, every asset resyncs disconnect_data_silent), normal backoff, reconnect and full resync; counted in report.disconnects, the reconnect escalation and M1's reconnect cap (no exemption). New WS_DATA_SILENCE_S 90 (M2 pending), import-time check WS_SILENCE_TIMEOUT_S <= WS_DATA_SILENCE_S <= MAX_BOOK_AGE_S. Deadline checks use the same sum as the recv wait (float-safe; a fake-clock spin found here). No acceptance threshold changed. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 after #140 (BI) merged, from Poly风控 F6: a server that answers PONGs but sends no market data must be judged dead. Done by grok-bot.",
+      "done_at": "2026-10-10T13:47:00Z",
+      "surface": "grok-bot"
     }
   ]
 }

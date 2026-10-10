@@ -61,6 +61,10 @@ What the protocol gives for integrity, and what this recorder does with it:
   round trips are summarised in a ``ping_latency`` event every WS_LATENCY_SUMMARY_PINGS PINGs and at the
   end of each connection (pings, pongs, unanswered, unexpected_pongs, RTT p50 / p99 / max in ms, last PING
   and PONG times).
+- Task BK (Poly风控 F6): market-data silence. No business frame (a JSON event object with a non-empty
+  event_type: book, price_change, tick_size_change, last_trade_price, or an unknown type) for
+  WS_DATA_SILENCE_S closes the connection (``data_silent``, every asset resyncs) and reconnects, even while
+  PONGs keep the any-frame window (``silent``) open. PONG, undecodable and malformed frames never count.
 - Task BH: suspend / wake. Each pass of the session loop compares the wall-clock step (``wall``,
   time.time) with the monotonic step. When the wall clock moved ahead of the monotonic clock by more
   than WS_PING_INTERVAL_S (a host suspend: CLOCK_MONOTONIC does not run while suspended, the wall clock
@@ -144,6 +148,7 @@ from src.thresholds import (  # noqa: E402
     WS_BACKOFF_BASE_S,
     WS_BACKOFF_CAP_S,
     WS_PING_INTERVAL_S,
+    WS_DATA_SILENCE_S,
     WS_LATENCY_SUMMARY_PINGS,
     WS_PONG_TIMEOUT_S,
     WS_SILENCE_TIMEOUT_S,
@@ -302,6 +307,7 @@ class Outcome:
     resyncs: list[tuple[str, str]] = field(default_factory=list)
     counts: Counter = field(default_factory=Counter)
     raw_books: list[dict[str, Any]] = field(default_factory=list)  # Task AY: book frames as received
+    business: int = 0  # Task BK: event objects with a non-empty event_type in the frame (market traffic)
 
 
 class _Reject(Exception):
@@ -394,6 +400,8 @@ class BookCore:
                 self._resync(asset, "malformed_message", ts, mono, out)
             return out
         kind = message.get("event_type")
+        if isinstance(kind, str) and kind:
+            out.business += 1  # Task BK: market traffic restarts the data-silence window
         if kind == "book":
             self._on_book(message, ts, mono, out)
         elif kind == "price_change":
@@ -1351,6 +1359,7 @@ class Recorder:
         last_mono, last_wall = self.monotonic(), self.wall()  # Task BH: suspend / wake detection
         latency = self._latency = PingLatency()  # Task BI
         last_inbound = self.monotonic()  # Task BI: the subscribe frame opens the silence window
+        last_business = last_inbound  # Task BK: and the data-silence window
         while True:
             current = self.monotonic()
             wall_now = self.wall()
@@ -1367,8 +1376,10 @@ class Recorder:
             try:
                 if pong_due is not None and current >= pong_due:
                     return "pong_timeout", healthy
-                if current - last_inbound >= WS_SILENCE_TIMEOUT_S:
+                if current >= last_inbound + WS_SILENCE_TIMEOUT_S:  # same sum as the recv wait (float-safe)
                     return "silent", healthy  # Task BI: nothing at all arrived (no data, no PONG)
+                if current >= last_business + WS_DATA_SILENCE_S:  # same sum as the recv wait (float-safe)
+                    return "data_silent", healthy  # Task BK: PONGs maybe, but no market data
                 if current >= next_ping:
                     self._send(connection, PING)
                     self.report.pings += 1
@@ -1379,7 +1390,7 @@ class Recorder:
                     if pong_due is None:
                         pong_due = current + WS_PONG_TIMEOUT_S
                 oldest = self.core.oldest_awaiting_since()
-                if oldest is not None and current - oldest >= WS_RESYNC_TIMEOUT_S:
+                if oldest is not None and current >= oldest + WS_RESYNC_TIMEOUT_S:  # Task BK: same sum as the wait
                     return "resync_timeout", healthy
                 waits = [deadline - current, next_ping - current]
                 if self.stop is not None:
@@ -1391,12 +1402,15 @@ class Recorder:
                 if pong_due is not None:
                     waits.append(pong_due - current)
                 waits.append(last_inbound + WS_SILENCE_TIMEOUT_S - current)
+                waits.append(last_business + WS_DATA_SILENCE_S - current)
                 text = connection.recv(max(0.0, min(waits)))
                 if text is None:
                     continue
                 last_inbound = self.monotonic()  # Task BI: any inbound frame, data or PONG
                 before = set(self.core.awaiting())
                 out = self.core.handle_text(text, self.now(), last_inbound)
+                if out.business:
+                    last_business = last_inbound  # Task BK: only market events restart this window
                 if out.counts["pong"]:
                     pong_due = None
                     self.report.pongs += out.counts["pong"]

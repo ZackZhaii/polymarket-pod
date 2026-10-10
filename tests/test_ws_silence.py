@@ -1,4 +1,5 @@
 """Task BI: the inbound-silence watchdog (WS_SILENCE_TIMEOUT_S) and the PING / PONG latency summary.
+Task BK (Poly风控 F6): the market-data window (WS_DATA_SILENCE_S, ``data_silent``), which PONG never restarts.
 
 No inbound frame of any kind (book data or PONG) for WS_SILENCE_TIMEOUT_S closes the connection
 (``silent``), resyncs every asset and reconnects; any frame restarts the window. It is a backstop beside
@@ -15,9 +16,9 @@ import pytest
 
 from src import m1_report
 from src import ws_recorder as w
-from src.thresholds import (WS_LATENCY_SUMMARY_PINGS, WS_PING_INTERVAL_S, WS_PONG_TIMEOUT_S,
-                            WS_SILENCE_OBSERVED_HEALTHY_MAX_S, WS_SILENCE_TIMEOUT_S)
-from tests.test_ws_recorder import A, T0, ListSink, _book
+from src.thresholds import (MAX_BOOK_AGE_S, WS_DATA_SILENCE_S, WS_LATENCY_SUMMARY_PINGS, WS_PING_INTERVAL_S,
+                            WS_PONG_TIMEOUT_S, WS_SILENCE_OBSERVED_HEALTHY_MAX_S, WS_SILENCE_TIMEOUT_S)
+from tests.test_ws_recorder import A, T0, ListSink, _book, _trade
 
 
 class Clock:
@@ -109,7 +110,12 @@ def _books(offsets):
     return [(offset, _book(ts=T0 + int(offset * 1000) + 1)) for offset in offsets]
 
 
-NEXT = (_books([0.05]), 0.2, None)  # the replacement connection: live and answering
+def _trades(offsets):
+    return [(offset, _trade(ts=T0 + int(offset * 1000) + 1)) for offset in offsets]
+
+
+LIVE_DATA = [20.0 * k for k in range(1, 400)]  # Task BK: a live market, a trade every 20 s
+NEXT = (_books([0.05]) + _trades(LIVE_DATA), 0.2, None)  # the replacement connection: live and answering
 
 
 @pytest.fixture
@@ -142,10 +148,61 @@ def test_with_the_pong_deadline_a_dead_peer_is_still_replaced_within_the_silence
     assert detected == pytest.approx(WS_PING_INTERVAL_S + WS_PONG_TIMEOUT_S, abs=0.01)
 
 
-def test_pongs_alone_keep_the_connection(no_pong_deadline):
+def test_pongs_alone_keep_the_any_frame_window_open(no_pong_deadline, monkeypatch):
+    monkeypatch.setattr(w, "WS_DATA_SILENCE_S", 1e9)  # Task BK's data window tested below
     report, _, _, _ = _run([(_books([0.05]), 0.2, None)], runtime=600.0)
     assert report.disconnects == {} and report.connects == 1
     assert report.pings >= 59 and report.pongs == report.pings
+
+
+# --- Task BK: market-data silence (Poly风控 F6) ------------------------------------------------------
+
+
+def test_pongs_but_no_market_data_reconnect_as_data_silent_at_90_s():
+    """The server answers every PING (so neither pong_timeout nor the any-frame window fires) but sends no
+    market event after the first book: data_silent at WS_DATA_SILENCE_S, full resync, reconnect."""
+    report, transport, sink, events = _run([(_books([0.05]), 0.2, None), NEXT], runtime=300.0)
+    assert report.disconnects == {"data_silent": 1} and report.connects == 2
+    detected = transport.connect_times[1] - w.backoff_delay(0)
+    assert detected == pytest.approx(0.05 + WS_DATA_SILENCE_S, abs=0.01)
+    gone = next(e for e in events if e["event"] == "disconnected")
+    assert {k: v for k, v in gone.items() if k != "ts"} == {"event": "disconnected", "reason": "data_silent",
+                                                           "healthy": True}
+    summary = next(e for e in events if e["event"] == "ping_latency")
+    assert summary["pongs"] >= 8 and summary["unanswered"] <= 1  # PONGs kept coming the whole time
+    assert any(row.get("resync_reason") == "disconnect_data_silent" for row in sink.rows)
+    assert m1_report.summarize_events(events, [A])["disconnects"] == {"data_silent": 1}  # no cap exemption
+
+
+def test_market_events_restart_the_data_window():
+    offsets = [0.05 + 80.0 * k for k in range(8)]  # a trade every 80 s (< 90 s), PONGs as usual
+    report, _, _, _ = _run([(_books([0.05]) + _trades(offsets[1:]), 0.2, None)], runtime=offsets[-1] + 85.0)
+    assert report.disconnects == {}
+
+
+@pytest.mark.parametrize("kind", ["price_change", "tick_size_change", "last_trade_price", "book", "new_kind"])
+def test_every_event_type_counts_as_market_data(kind):
+    out = w.Outcome()
+    rec = w.Recorder([A], transport=None, sink=ListSink(), max_runtime_s=1.0)
+    rec.core.handle({"event_type": kind, "asset_id": A, "market": "0xcond"}, "2030-01-01T00:00:00Z", 0.0, out)
+    assert out.business == 1
+
+
+@pytest.mark.parametrize("text", ["PONG", " PONG\n", "not json", "[]", "{}", '{"event_type": ""}', "42"])
+def test_control_and_malformed_frames_do_not_count(text):
+    rec = w.Recorder([A], transport=None, sink=ListSink(), max_runtime_s=1.0)
+    assert rec.core.handle_text(text, "2030-01-01T00:00:00Z", 0.0).business == 0
+
+
+def test_the_observed_healthy_gap_never_trips_the_data_window():
+    gap = WS_SILENCE_OBSERVED_HEALTHY_MAX_S
+    offsets = [0.05 + gap * k for k in range(15)]
+    report, _, _, _ = _run([(_books(offsets), 0.2, None)], runtime=gap * 14)
+    assert report.disconnects == {}
+
+
+def test_data_window_relations():
+    assert WS_SILENCE_TIMEOUT_S <= WS_DATA_SILENCE_S <= MAX_BOOK_AGE_S
 
 
 def test_data_alone_keeps_the_connection(no_pong_deadline):
@@ -182,7 +239,7 @@ def test_silent_counts_as_a_reconnect_in_the_m1_report(no_pong_deadline):
 
 def test_the_periodic_latency_summary():
     runtime = WS_PING_INTERVAL_S * (WS_LATENCY_SUMMARY_PINGS + 0.5)
-    frames = _books([0.05]) + [(1.0, "PONG")]  # one PONG nobody asked for
+    frames = _books([0.05]) + _trades(LIVE_DATA) + [(1.0, "PONG")]  # one PONG nobody asked for
     report, _, _, events = _run([(frames, 0.25, None)], runtime=runtime)
     summaries = [e for e in events if e["event"] == "ping_latency"]
     periodic, end = summaries
