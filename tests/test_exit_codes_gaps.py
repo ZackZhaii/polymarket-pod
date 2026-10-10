@@ -216,3 +216,159 @@ def test_a_corrupt_sentinel_matrix_or_an_unregistered_processor_fails_closed(tmp
     problems = exit_codes.registry_problems(ghost)
     assert any("EXIT_EVENTS names ghost, which has no section in docs/EXIT_CODES.md" in p
                for p in problems)
+
+
+# --- the Sentinel column: what the registry may claim, and what it may not -------------------------
+
+SCRIPT_MODULE = '''EXIT_OK = 0
+
+
+def main():
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+UNWATCHING_SENTINEL = '''EXIT_EVENTS = {}
+
+PROC_SPECS = {
+    "tool": "python src/tool.py",
+}
+'''
+
+
+def script_repo(root: Path, sentinel_word: str) -> Path:
+    """One entry point under scripts/, where the Sentinel watches nothing (PROC_SPECS is keyed by src/)."""
+    write(root, "src/sentinel_tick.py", UNWATCHING_SENTINEL)
+    write(root, "scripts/tool.py", SCRIPT_MODULE)
+    write(root, "docs/EXIT_CODES.md",
+          "## `scripts/tool.py`\n"
+          "\n"
+          "| Code | Name | Meaning | Sentinel |\n"
+          "|---|---|---|---|\n"
+          f"| 0 | `EXIT_OK` | success | {sentinel_word} |\n")
+    return root
+
+
+def test_a_scripts_entry_point_can_only_be_documented_as_unwatched(tmp_path):
+    # the Sentinel's PROC_SPECS names src/ processors only, so "-" is the only honest column here
+    assert exit_codes.registry_problems(script_repo(tmp_path / "clean", "-")) == []
+    assert exit_codes.registry_problems(script_repo(tmp_path / "watched", "alert")) == [
+        "docs/EXIT_CODES.md: scripts/tool.py 0 (EXIT_OK): Sentinel column 'alert', sentinel_tick says '-'"]
+
+
+SCANNER_MODULE = '''EXIT_OK = 0
+EXIT_INCOMPLETE = 3
+
+
+def main():
+    return EXIT_INCOMPLETE
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+SCANNER_SENTINEL = '''GLOBAL = 0
+ALERT = 1
+
+EXIT_EVENTS = {
+    ("scanner", 3): ALERT,
+}
+
+PROC_SPECS = {
+    "scanner": "python src/scanner.py",
+}
+'''
+
+
+def scanner_repo(root: Path, sentinel_word: str) -> Path:
+    write(root, "src/sentinel_tick.py", SCANNER_SENTINEL)
+    write(root, "src/scanner.py", SCANNER_MODULE)
+    write(root, "docs/EXIT_CODES.md",
+          "## `src/scanner.py`\n"
+          "\n"
+          "| Code | Name | Meaning | Sentinel |\n"
+          "|---|---|---|---|\n"
+          "| 0 | `EXIT_OK` | ok | - |\n"
+          f"| 3 | `EXIT_INCOMPLETE` | no complete market | {sentinel_word} |\n")
+    return root
+
+
+def test_scanner_3_is_alert_x2_and_a_plain_alert_row_is_reported(tmp_path):
+    # the matrix says ALERT, but the Sentinel only alerts after N in a row: the registry must say so
+    assert exit_codes.expected_sentinel("scanner", 3, {("scanner", 3): "alert"}, {"scanner"}) == "alert x2"
+    assert exit_codes.expected_sentinel("scanner", 0, {("scanner", 3): "alert"}, {"scanner"}) == "-"
+    assert exit_codes.expected_sentinel("watched_but_absent", 4, {}, {"other"}) == "-"
+    assert exit_codes.registry_problems(scanner_repo(tmp_path / "clean", "alert x2")) == []
+    assert exit_codes.registry_problems(scanner_repo(tmp_path / "plain", "alert")) == [
+        "docs/EXIT_CODES.md: src/scanner.py 3 (EXIT_INCOMPLETE): Sentinel column 'alert', "
+        "sentinel_tick says 'alert x2'"]
+
+
+def test_an_event_word_outside_global_alert_log_fails_the_whole_matrix_closed(tmp_path):
+    # a word the Sentinel does not define must stop the check, not silently become "alert"
+    root = tmp_path / "repo"
+    write(root, "src/sentinel_tick.py",
+          MINIMAL_SENTINEL.replace("ALERT = 1", "ALERT = 1\nBANANA = 2").replace(
+              '("tool", 5): ALERT,', '("tool", 5): BANANA,'))
+    write(root, "src/tool.py", MINIMAL_MODULE)
+    write(root, "docs/EXIT_CODES.md", MINIMAL_REGISTRY)
+    assert exit_codes.registry_problems(root) == [
+        "src/sentinel_tick.py: EXIT_EVENTS / PROC_SPECS unreadable: KeyError: 'BANANA'"]
+
+
+def test_an_annotated_matrix_is_still_read_and_still_checked(tmp_path):
+    root = minimal_repo(tmp_path / "repo")
+    sentinel = root / "src" / "sentinel_tick.py"
+    sentinel.write_text(sentinel.read_text(encoding="utf-8").replace(
+        "EXIT_EVENTS = {", "EXIT_EVENTS: dict = {").replace("PROC_SPECS = {", "PROC_SPECS: dict = {"),
+        encoding="utf-8")
+    assert exit_codes.registry_problems(root) == []
+    registry = root / "docs" / "EXIT_CODES.md"
+    registry.write_text(registry.read_text(encoding="utf-8").replace(
+        "| 5 | `EXIT_USAGE` | bad usage | alert |", "| 5 | `EXIT_USAGE` | bad usage | log |"),
+        encoding="utf-8")
+    assert exit_codes.registry_problems(root) == [
+        "docs/EXIT_CODES.md: src/tool.py 5 (EXIT_USAGE): Sentinel column 'log', sentinel_tick says 'alert'"]
+
+
+# --- literal exit codes, in every spelling ---------------------------------------------------------
+
+def test_every_literal_exit_spelling_is_caught_and_a_named_code_is_not(tmp_path):
+    write(tmp_path, "src/ways.py",
+          "import os\n"
+          "import sys\n"
+          "\n"
+          "EXIT_OK = 0\n"
+          "EXIT_USAGE = 5\n"
+          "\n"
+          "\n"
+          "def main(argv=None):\n"
+          "    os._exit(2)\n"
+          "    raise SystemExit(3)\n"
+          "    quit(4)\n"
+          "    exit(5)\n"
+          "    sys.exit(EXIT_USAGE)\n"
+          "    return EXIT_OK\n")
+    assert exit_codes.code_problems(tmp_path, "src/ways.py") == [
+        "src/ways.py:9: literal exit code in os._exit(2)",
+        "src/ways.py:10: literal exit code in SystemExit(3)",
+        "src/ways.py:11: literal exit code in quit(4)",
+        "src/ways.py:12: literal exit code in exit(5)"]
+
+
+def test_a_negative_code_cannot_be_smuggled_into_the_registry(tmp_path):
+    root = minimal_repo(tmp_path / "repo")
+    registry = root / "docs" / "EXIT_CODES.md"
+    registry.write_text(registry.read_text(encoding="utf-8") +
+                        "| -1 | `EXIT_NEG` | never | alert |\n", encoding="utf-8")
+    # a documented row the module cannot back with an int constant is a problem, negative or not
+    assert exit_codes.registry_problems(root) == [
+        "docs/EXIT_CODES.md: src/tool.py EXIT_NEG is not an EXIT_* constant of the module"]
+    # and the module side cannot express one either: -1 is a UnaryOp, not an int constant
+    write(root, "src/neg.py", "EXIT_NEG = -1\nEXIT_ZERO = 0\n")
+    assert exit_codes.module_constants(root, "src/neg.py") == {"EXIT_ZERO": 0}
