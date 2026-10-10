@@ -221,7 +221,13 @@ does not lift a market halt. Bots never run `resume`. No exchange action anywher
 
 Each loop writes `logs/heartbeat/<proc>.json` (atomic; a `.seen` marker beside it): ws_recorder and m1_run every
 10 s (also while backing off), m1_rest after every REST sample, paper_cycle every cycle (`--every` <= 60 s),
-scanner / endgame_scan / loop_claim at start and finish, the Sentinel every tick. The resident Sentinel:
+scanner / endgame_scan / loop_claim at start and finish, the Sentinel every tick.
+
+**Start order: the resident Sentinel first** (issue #129). Until its first heartbeat exists, RiskGate, the Maker
+and paper_cycle are blocked by a global halt `sentinel_heartbeat_never_seen` (every intent vetoed, no quote, no gap
+signal). That halt is not stored: it needs no Operator resume and ends with the Sentinel's first fresh beat. There
+is no switch to skip it. `--once` writes no Sentinel heartbeat, so it does not count as a started Sentinel.
+The resident Sentinel:
 
 ```
 python -m src.sentinel_tick            # resident: a tick every 30 s (SENTINEL_TICK_S); never resumes anything
@@ -240,7 +246,8 @@ global halt. Alerts go to `logs/alerts.jsonl` plus a Sentinel->Operator bus `sig
 `docs/EXIT_CODES.md` (Task AS).
 
 Once the resident Sentinel has beaten, RiskGate, the Maker and paper_cycle treat its heartbeat older than 90 s,
-missing, corrupt or finished as a stored global halt (`sentinel_heartbeat_*`): stopping the Sentinel halts
+missing, corrupt or finished as a stored global halt (`sentinel_heartbeat_*`; before its first beat:
+`sentinel_heartbeat_never_seen`, not stored, see the start order above): stopping the Sentinel halts
 everything until the Operator resumes it after restarting the Sentinel. Halts are released only by the Operator
 resume above; a condition that still holds is halted again on the next tick or check. To retire a process for
 good, let it finish cleanly, or (Operator) remove its heartbeat file and `.seen` marker.

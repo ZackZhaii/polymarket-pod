@@ -305,7 +305,7 @@ def test_the_sentinel_writes_its_own_heartbeat_first(env):
 
 # ---------------------------------------------------------------- CLI
 
-def test_once_writes_no_sentinel_heartbeat(capsys):
+def test_once_writes_no_sentinel_heartbeat(capsys, no_sentinel):  # issue #129: start without the fixture beat
     assert st.main(["--once"]) in (st.EXIT_OK, st.EXIT_RAISED)
     assert not heartbeat.beat_path("sentinel").exists()
     assert not heartbeat.state_marker(heartbeat.beat_path("sentinel")).exists()
