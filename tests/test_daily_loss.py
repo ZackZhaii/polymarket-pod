@@ -6,6 +6,7 @@ ledger, a temp halt state and a stubbed bus, never the real logs/.
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -161,6 +162,106 @@ def test_corrupt_rows_that_do_not_count_are_ignored_as_before():
 def test_an_invalid_today_fails_closed():
     assert daily_loss([], "2026-13-40").problems == ["invalid_today"]
     assert daily_loss([], "").total_usd is None
+
+
+# --- boundary values and fail-closed shapes ---------------------------------------------------------
+
+@pytest.mark.parametrize("ts,counted", [
+    (datetime(2026, 9, 1, 12, tzinfo=timezone.utc), True),        # aware datetime: parsed, not a string
+    (datetime(2026, 8, 31, 12, tzinfo=timezone.utc), False),
+    (datetime(2026, 9, 1, 12, tzinfo=timezone.utc).timestamp(), True),   # epoch seconds, no date prefix
+    (datetime(2026, 8, 31, 12, tzinfo=timezone.utc).timestamp(), False),
+    (datetime(2026, 9, 1, 12), None),                             # naive: rejected, never guessed as UTC
+    (True, None),                                                 # bool is not an epoch (parse_book_ts refuses)
+    (math.nan, None), (math.inf, None),
+    (" 2026-09-01T12:00:00Z ", True),                             # surrounding space is stripped, not fatal
+])
+def test_usable_non_string_timestamps_and_the_ones_that_are_not(ts, counted):
+    assert counts_today(ts, TODAY) is counted
+
+
+def test_an_epoch_timestamp_books_the_close_on_its_own_utc_day():
+    rows = [fill("buy", 100, 0.6, "2026-08-30T00:00:00Z"),
+            fill("sell", 100, 0.29, datetime(2026, 9, 1, 12, tzinfo=timezone.utc).timestamp())]
+    day = run(rows)
+    assert (day.realized_loss_usd, day.closing_fills_today, day.problems) == (pytest.approx(31.0), 1, [])
+
+
+def test_a_row_bad_in_several_fields_names_them_all_and_injects_nothing():
+    good_buy = fill("buy", 20, 0.5, rate=0.02)
+    corrupt = fill("buy", 10, 0.5)
+    corrupt.update(side="hold", shares=math.nan, fee_usd=-1.0, notional_usd=math.inf, ts=None)
+    good_sell = fill("sell", 20, 0.3)
+    day = daily_loss([good_buy, corrupt, good_sell], TODAY, ids=["r1", "r2", "r3"])
+    assert day.problems == [f"daily_loss_invalid_{field}:r2"
+                            for field in ("side", "shares", "fee_usd", "notional_usd", "ts")]
+    assert day.total_usd is None
+    # the corrupt row is skipped whole: it neither pays its -1 fee, opens its leg, nor blocks row 3
+    assert day.fees_usd == pytest.approx(0.2)
+    assert day.realized_loss_usd == pytest.approx(4.0)  # 20 shares bought at 0.5, sold at 0.3
+    assert day.closing_fills_today == 1
+
+
+def test_a_fill_without_shares_or_with_zero_shares_is_valid_and_opens_nothing():
+    missing = fill("buy", 10, 0.5)
+    missing.pop("shares")
+    missing["fee_usd"] = 0.05
+    zero = fill("buy", 0.0, 0.5)
+    day = daily_loss([missing, zero, fill("sell", 100, 0.4), fill("buy", 100, 0.5)], TODAY)
+    assert day.problems == []
+    assert day.fees_usd == pytest.approx(0.05)  # a fee still counts, the absent position does not
+    assert day.closing_fills_today == 1         # only the short opened by the sell and closed by the buy
+    assert day.realized_loss_usd == pytest.approx(10.0)  # short 100 at 0.4, covered at 0.5
+
+
+def test_a_null_notional_is_the_legacy_row_not_a_corrupt_one():
+    buy = fill("buy", 100, 0.6, YESTERDAY)
+    buy["notional_usd"] = None  # JSON null, the same meaning the ledger gives a missing key
+    day = run([buy, fill("sell", 100, 0.6)])
+    assert day.problems == []
+    assert day.realized_loss_usd == pytest.approx(40.0)  # the buy is valued at the worst price, 1.0
+
+
+def test_a_close_within_the_open_epsilon_leaves_the_leg_flat():
+    rows = [fill("buy", 100, 0.6, YESTERDAY),
+            fill("sell", 100.0000000001, 0.7),   # rest 1e-10 <= LEDGER_OPEN_EPS: no dust position left
+            fill("buy", 100, 0.5)]                # opens a new long, it does not close a 1e-10 short
+    day = run(rows)
+    assert (day.realized_loss_usd, day.closing_fills_today, day.problems) == (0.0, 1, [])
+    assert day.realized_gain_usd == pytest.approx(10.0)
+    assert (day.fees_usd, day.total_usd) == (0.0, 0.0)
+
+
+def test_a_position_below_the_open_epsilon_is_flat_and_never_closes_anything():
+    rows = [fill("buy", 1e-10, 1.0, YESTERDAY),   # dust: held is reset to flat before the next fill is booked
+            fill("sell", 100, 0.5),               # so this opens a short instead of closing 1e-10 shares
+            fill("buy", 100, 0.6)]                # and only this buy-back closes (10 USD loss)
+    day = run(rows)
+    assert (day.realized_loss_usd, day.closing_fills_today, day.problems) == (pytest.approx(10.0), 1, [])
+
+
+def test_a_flip_opens_the_remainder_at_the_fill_price():
+    rows = [fill("buy", 100, 0.6, YESTERDAY),
+            fill("sell", 150, 0.7),    # closes 100 (gain 10), opens a short 50 whose basis is 35
+            fill("buy", 50, 0.9)]      # covering that short at 0.9 loses 10
+    day = run(rows)
+    assert (day.realized_loss_usd, day.realized_gain_usd) == (pytest.approx(10.0), pytest.approx(10.0))
+    assert day.total_usd == pytest.approx(10.0)
+    assert day.closing_fills_today == 2
+
+
+def test_an_unknown_leg_never_nets_with_a_named_token():
+    sell = fill("sell", 100, 0.29)
+    sell.pop("token_id")
+    day = run([fill("buy", 100, 0.6, YESTERDAY, token="t"), sell])
+    assert day.problems == []
+    assert (day.realized_loss_usd, day.closing_fills_today) == (0.0, 0)
+
+
+@pytest.mark.parametrize("today", ["2026-9-01", "2026-09-1", "20260901", "2026-09-01 ", "not-a-day", None, 20260901,
+                                   "2026-02-30"])  # ten characters, but not a day that exists
+def test_only_a_ten_character_utc_date_is_a_usable_today(today):
+    assert daily_loss([fill("buy", 10, 0.5)], today).problems == ["invalid_today"]
 
 
 # --- load_state / RiskGate / commit_if_allowed -----------------------------------------------------
