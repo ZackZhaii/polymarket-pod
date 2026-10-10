@@ -5,15 +5,27 @@ data/resolutions.jsonl only after it has been closed RESOLUTION_HOLD_HOURS (48 h
 and every required field is present. Missing or unusable fields skip that row
 (fail closed). Incomplete paging or paper-pin drift writes nothing. No bus
 message, no fill, no order, no risk.toml edit.
+
+issue #57 revises AN's first-write-wins for one case only: a condition_id whose stored row is the
+unconfirmed snapshot (uma_checked false) may be confirmed once, when this walk sees the same
+settlement as exactly resolved with the same winning token, final prices and closed_ts, and a
+snapshot clock that did not go backwards. The stored bytes are kept and the confirmation row is
+appended after them. Every other repeat appends nothing: a condition that already has a confirmed
+row, a repeated confirmation, a status regression, a repeat within one walk, and any disagreement
+about the winner, the final prices or the close time (the newest winner is never chosen). The
+stored history is read strictly (read_history): a row this module could not have written, a torn
+last line or bad JSON is exit 3 with nothing fetched or appended, never skipped by a lenient
+reader.
 """
 from __future__ import annotations
 
+import json
 import math
 import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -27,7 +39,6 @@ from src.podlib import (  # noqa: E402
     json_list,
     load_risk,
     pin_problems,
-    read_jsonl,
     utc_now,
 )
 from src.scanner import (  # noqa: E402
@@ -58,6 +69,12 @@ ROW_FIELDS = (
     "uma_checked",
 )
 UMA_RESOLVED = "resolved"
+STATUS_RESOLVED = "resolved"  # the only status a confirmation upgrade may append
+STATUS_CLOSED = "closed"  # unique 1/0 winner after the hold, UMA not yet exactly resolved
+
+
+class HistoryError(RuntimeError):
+    """data/resolutions.jsonl is not exactly what this module writes; nothing is fetched or appended."""
 
 
 def _nonempty_str(value: Any) -> str | None:
@@ -95,13 +112,107 @@ def unique_winner_index(prices: list[float]) -> int | None:
     return None
 
 
-def existing_condition_ids(path: Path) -> set[str]:
-    ids: set[str] = set()
-    for row in read_jsonl(path):
-        cid = row.get("condition_id")
-        if isinstance(cid, str) and cid:
-            ids.add(cid)
-    return ids
+def _reject_constant(value: str) -> None:
+    raise ValueError(f"{value} is not valid JSON")
+
+
+def _snapshot_problem(row: Any) -> str | None:
+    """Why one stored row is not a snapshot this module wrote, else None."""
+    if not isinstance(row, dict):
+        return "not a JSON object"
+    if set(row) != set(ROW_FIELDS):
+        return "keys differ from the snapshot schema"
+    for field in ("condition_id", "winning_token_id"):
+        value = row[field]
+        if not isinstance(value, str) or not value or value != value.strip():
+            return f"{field} is not a non-empty stripped string"
+    prices = row["outcome_prices_final"]
+    if not isinstance(prices, list) or not prices:
+        return "outcome_prices_final is not a non-empty list"
+    numbers: list[float] = []
+    for price in prices:
+        if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price):
+            return "outcome_prices_final holds a non-finite price"
+        numbers.append(float(price))
+    if unique_winner_index(numbers) is None:
+        return "outcome_prices_final has no unique 1.0/0.0 winner"
+    if parse_end_date(row["closed_ts"]) is None:
+        return "closed_ts is not a zoned ISO timestamp"
+    if parse_end_date(row["snapshot_ts"]) is None:
+        return "snapshot_ts is not a zoned ISO timestamp"
+    checked = row["uma_checked"]
+    if not isinstance(checked, bool):
+        return "uma_checked is not a JSON boolean"
+    if row["status"] != (STATUS_RESOLVED if checked else STATUS_CLOSED):
+        return "status and uma_checked disagree"
+    return None
+
+
+def read_history(path: Path) -> list[dict[str, Any]]:
+    """Read an existing data/resolutions.jsonl strictly, else raise HistoryError.
+
+    Every complete line must be a JSON object holding exactly ROW_FIELDS with the values
+    classify_market writes. read_jsonl would silently skip a line it cannot parse, and a lost row
+    is exactly what a later append would duplicate, so a torn last line (no closing newline), a
+    blank line, bad JSON, NaN/Infinity, a non-object, another key or a wrong value fails the run
+    (exit 3) with nothing appended. An absent file is an empty history.
+    """
+    if not path.exists():
+        return []
+    try:
+        text = path.read_bytes().decode("utf-8")
+    except OSError as exc:
+        raise HistoryError(f"unreadable ({type(exc).__name__})") from exc
+    except UnicodeDecodeError as exc:
+        raise HistoryError(f"not UTF-8 ({exc})") from exc
+    if not text:
+        return []
+    lines = text.split("\n")
+    if lines[-1] != "":
+        raise HistoryError(f"line {len(lines)}: no closing newline (torn write)")
+    lines.pop()
+    rows: list[dict[str, Any]] = []
+    for number, line in enumerate(lines, 1):
+        if not line.strip():
+            raise HistoryError(f"line {number}: blank line")
+        try:
+            row = json.loads(line, parse_constant=_reject_constant)
+        except ValueError as exc:
+            raise HistoryError(f"line {number}: not JSON ({exc})") from exc
+        problem = _snapshot_problem(row)
+        if problem is not None:
+            raise HistoryError(f"line {number}: {problem}")
+        rows.append(row)
+    return rows
+
+
+def content_conflict(prior: dict[str, Any], row: dict[str, Any]) -> str | None:
+    """Why two rows disagree about the settlement, else None (same winner, prices and close time)."""
+    if prior["winning_token_id"] != row["winning_token_id"]:
+        return "upgrade_winner_conflict"
+    if [float(price) for price in prior["outcome_prices_final"]] != [
+        float(price) for price in row["outcome_prices_final"]
+    ]:
+        return "upgrade_prices_conflict"
+    if parse_end_date(prior["closed_ts"]) != parse_end_date(row["closed_ts"]):
+        return "upgrade_closed_ts_conflict"
+    return None
+
+
+def upgrade_problem(prior: dict[str, Any], row: dict[str, Any]) -> str | None:
+    """Why this resolved row may not confirm the stored unconfirmed row, else None (append it).
+
+    The settlement content must be identical and the snapshot clock may not go backwards. The
+    newest winner is never chosen: any disagreement refuses the upgrade and is reported by name.
+    """
+    conflict = content_conflict(prior, row)
+    if conflict is not None:
+        return conflict
+    prior_ts = parse_end_date(prior["snapshot_ts"])
+    stamp = parse_end_date(row["snapshot_ts"])
+    if prior_ts is None or stamp is None or stamp < prior_ts:
+        return "upgrade_clock_regression"
+    return None
 
 
 def classify_market(
@@ -167,7 +278,7 @@ def classify_market(
         "outcome_prices_final": prices,
         "closed_ts": _iso_z(closed),
         "snapshot_ts": snapshot_ts,
-        "status": "resolved" if uma_checked else "closed",
+        "status": STATUS_RESOLVED if uma_checked else STATUS_CLOSED,
         "uma_checked": uma_checked,
     }
     return row, None
@@ -185,13 +296,27 @@ def snapshot(
     snapshot_ts: str,
     *,
     hold_hours: float = RESOLUTION_HOLD_HOURS,
-    known_ids: set[str] | None = None,
+    history: Sequence[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Classify fetched Gamma rows. Does not write. known_ids are existing condition_id values."""
-    seen = set(known_ids or ())
+    """Classify fetched Gamma rows. Does not write.
+
+    ``history`` are the stored rows (read_history, already validated). A condition_id already in
+    the history gets no new row, except one confirmation upgrade of the stored unconfirmed snapshot
+    (upgrade_problem). Every other repeat is counted under a named reason: ``already_confirmed``,
+    ``duplicate`` (unconfirmed again, or a repeat within this walk) or the ``upgrade_*`` conflict.
+    """
+    seen: set[str] = set()
+    stored_first: dict[str, dict[str, Any]] = {}
+    stored_confirmed: dict[str, dict[str, Any]] = {}
+    for stored in history or ():
+        cid = stored["condition_id"]
+        stored_first.setdefault(cid, stored)
+        if stored["uma_checked"] is True:
+            stored_confirmed.setdefault(cid, stored)
     rows: list[dict[str, Any]] = []
     first_reason: Counter[str] = Counter()
     any_reason: Counter[str] = Counter()
+    upgrades = 0
     scanned = 0
     for market in raw_markets:
         if not isinstance(market, dict):
@@ -209,10 +334,33 @@ def snapshot(
             any_reason["duplicate"] += 1
             continue
         seen.add(cid)
+        if cid not in stored_first:
+            rows.append(row)
+            continue
+        confirmed = stored_confirmed.get(cid)
+        if confirmed is not None:
+            # at most one confirmation per condition: a repeat, a regression or a disagreement
+            conflict = content_conflict(confirmed, row) if row["uma_checked"] is True else None
+            name = conflict or "already_confirmed"
+            first_reason[name] += 1
+            any_reason[name] += 1
+            continue
+        if row["uma_checked"] is not True:
+            # unconfirmed again: the stored first row stands (AN's first write wins)
+            first_reason["duplicate"] += 1
+            any_reason["duplicate"] += 1
+            continue
+        problem = upgrade_problem(stored_first[cid], row)
+        if problem is not None:
+            first_reason[problem] += 1
+            any_reason[problem] += 1
+            continue
         rows.append(row)
+        upgrades += 1
     return {
         "scanned": scanned,
         "eligible": len(rows),
+        "upgrades": upgrades,
         "rows": rows,
         "first_reason": dict(first_reason),
         "any_reason": dict(any_reason),
@@ -243,6 +391,14 @@ def main(
         print("resolutions refused: snapshot clock is not a zoned ISO timestamp", file=sys.stderr)
         return EXIT_BAD_CLOCK
     path = resolutions_path or RESOLUTIONS_PATH
+    try:
+        history = read_history(path)
+    except HistoryError as exc:
+        print(
+            f"resolutions failed: existing {path.name} history unusable ({exc}); nothing fetched or written",
+            file=sys.stderr,
+        )
+        return EXIT_INCOMPLETE
     raw, fetch = fetch_all_markets(
         getter,
         max_markets=max_markets,
@@ -254,7 +410,7 @@ def main(
         now_dt,
         stamp,
         hold_hours=hold_hours,
-        known_ids=existing_condition_ids(path),
+        history=history,
     )
     skipped = sum(result["first_reason"].values())
     print(
@@ -273,7 +429,7 @@ def main(
         )
         return EXIT_INCOMPLETE
     written = persist_resolutions(path, result["rows"]) if result["rows"] else 0
-    print(f"written={written} path={path} (read-only snapshot; no fills)")
+    print(f"written={written} upgrades={result['upgrades']} path={path} (read-only snapshot; no fills)")
     return EXIT_OK
 
 

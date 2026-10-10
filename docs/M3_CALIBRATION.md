@@ -30,9 +30,14 @@ python src/resolutions.py
   through `scanner.fetch_all_markets(..., base_url=...)`. Same host and path the
   scanner already uses; `closed=true` is a query flag, not a new endpoint.
 - No `liquidity_num_min` (settled books do not need live depth).
-- Paper pins are checked first. Drift → exit 4, no fetch, no write.
+- Paper pins are checked first. Drift → exit 6, no fetch, no write.
 - Incomplete paging (cap, cursor repeat, empty page, network error) → exit 3,
   **write nothing** (existing `data/resolutions.jsonl` is left unchanged).
+- The stored `data/resolutions.jsonl` is read strictly **before** the fetch. A torn last line (no
+  closing newline), a blank line, bad JSON or NaN/Infinity, a non-object, another key, or a value
+  this module could not have written → exit 3 (history unusable), **nothing fetched and nothing
+  appended**. `podlib.read_jsonl` is not used for this file: a line it silently skipped is exactly
+  the row a later append would duplicate.
 - A complete walk with zero eligible rows is exit 0 and writes nothing. There is no
   `MIN_SCANNED_MARKETS` floor: an empty closed universe is valid.
 - No bus message, no fill, no order.
@@ -60,22 +65,56 @@ unusable **skips that row** (fail closed). It does not fail the run.
 - `uma_checked` is true only when `umaResolutionStatus` is exactly `resolved`.
 - `status` is `resolved` when `uma_checked` is true, else `closed` (unique 1/0
   winner after 48 h, UMA not yet `resolved`).
-- Dedup by `condition_id` (existing file + the current walk). First write wins.
+- Dedup by `condition_id` (existing file + the current walk). For every condition the first
+  snapshot written stays the first row; the one allowed second row is the confirmation upgrade
+  below (issue #57). Any other repeat appends nothing.
 - `data/` is gitignored; the JSONL is not committed.
 
 Skip reasons (first match): `not_closed`, `missing_closed_ts`, `invalid_closed_ts`,
 `future_closed_ts`, `hold_pending`, `missing_condition_id`, `missing_uma_status`,
 `missing_outcome_prices`, `non_finite_outcome_prices`, `no_unique_winner`, the
 scanner token problems (`missing_version`, `unsupported_version`, …),
-`token_winner_mismatch`, `duplicate`.
+`token_winner_mismatch`, `duplicate`. A `condition_id` already in the file adds
+`already_confirmed` (the stored row is already confirmed), `duplicate` (an unconfirmed repeat, or a
+repeat inside one walk) or one of the `upgrade_*` reasons below.
 
 A 50/50 book, two `1.0`s, or any non-0/1 remainder is `no_unique_winner`.
+
+### Confirmation upgrade (issue #57)
+
+AN's first-write-wins is revised for exactly one case: a `condition_id` whose stored row is the
+**unconfirmed** snapshot (`uma_checked` false, `status` `closed`) is confirmed once when a later
+walk sees the same settlement as exactly `resolved`.
+
+- One row is appended (after the stored bytes, which are never rewritten) only when all of these
+  hold: `umaResolutionStatus` is exactly `resolved` (`uma_checked` true, `status` `resolved`); the
+  `winning_token_id`, the `outcome_prices_final` values and the `closed_ts` instant equal the
+  stored row's; both `snapshot_ts` values are zoned ISO timestamps; and the new `snapshot_ts` is not
+  before the stored one. The confirmation row repeats the stored settlement content and differs
+  only in `snapshot_ts`, `status` and `uma_checked`.
+- At most one confirmation per `condition_id`. Nothing is appended for a repeated confirmation, a
+  status regression (the stored row is confirmed and this walk does not confirm it), an
+  unconfirmed repeat, or a repeat inside one walk: the first row of a condition in one walk wins.
+- A disagreement about the settlement refuses the upgrade, is counted under its own reason and is
+  never merged — the newest winner is never chosen: `upgrade_winner_conflict` (another winning
+  token), `upgrade_prices_conflict` (other final prices), `upgrade_closed_ts_conflict` (another
+  close time), `upgrade_clock_regression` (a `snapshot_ts` before the stored one). The same names
+  report a disagreement with an already confirmed row.
+- Every reason is printed in the run's `skipped_first=` line; the run's last line reports
+  `written=` and `upgrades=`.
+- The consumer rule is unchanged: a join keeps only `uma_checked=true`, so the unconfirmed first row
+  is still never a label. Two rows for one condition are now expected after an upgrade; the step 3
+  reader (`src/calibration.py`) keeps the first row and counts rows of one condition that differ as
+  `resolution_disputed`. Making that reader prefer the confirmed row is a separate change, not part
+  of this item.
 
 ## Consumers
 
 Calibration joins (step 2+) must keep only `uma_checked=true`. This snapshot still
 writes `uma_checked=false` rows when a unique 1/0 winner exists after 48 h, so a
-later UMA resolution is not silently treated as a label.
+later UMA resolution is not silently treated as a label; since issue #57 that later
+resolution is appended as a second, confirmed row (`status=resolved`), never by
+rewriting the first one.
 
 `RESOLUTION_HOLD_HOURS = 48.0` lives in `src/thresholds.py`. It is not coupled to
 `ENDGAME_WINDOW_HOURS` (same number by coincidence). Not M2 pending: the dispatch
