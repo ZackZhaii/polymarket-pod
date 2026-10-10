@@ -178,11 +178,14 @@ Proposals only: never applied, never writes config/, a .toml or src/thresholds.p
 `python -m src.resolutions`: M3 resolution snapshot (Task AN). Start/finish heartbeat (Task AV).
 
 Task AV split the old exit 4 (`EXIT_PIN`, which meant pin drift or a bad snapshot clock); 4 is retired.
+issue #57: exit 3 also covers an unusable stored `data/resolutions.jsonl` (torn last line, blank line, bad
+JSON or NaN, a non-object, another key, or a row the writer could not have written), read strictly before
+the fetch; it keeps the Sentinel alert and appends nothing.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | snapshot written | - |
-| 3 | `EXIT_INCOMPLETE` | Gamma paging incomplete: nothing written | alert |
+| 0 | `EXIT_OK` | snapshot written (zero or more rows, including confirmation upgrades) | - |
+| 3 | `EXIT_INCOMPLETE` | Gamma paging incomplete, or the stored `data/resolutions.jsonl` history is unusable; nothing fetched or written | alert |
 | 5 | `EXIT_BAD_CLOCK` | refused: the snapshot clock is not a zoned ISO timestamp; nothing fetched or written | global halt |
 | 6 | `EXIT_PIN_DRIFT` | refused to start: paper pins drifted (config/risk.toml file sha / any key, global halt recorded, or the in-memory podlib PINS); nothing fetched or written | global halt |
 

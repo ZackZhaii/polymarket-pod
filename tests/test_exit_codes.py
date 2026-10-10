@@ -71,6 +71,16 @@ def test_resolutions_exit_4_is_split():
         "EXIT_OK": 0, "EXIT_INCOMPLETE": 3, "EXIT_BAD_CLOCK": 5, "EXIT_PIN_DRIFT": 6}
 
 
+def test_resolutions_exit_3_registers_the_history_failure():
+    # issue #57: exit 3 also covers an unusable stored data/resolutions.jsonl; it stays an alert
+    sections, problems = exit_codes.parse_registry((ROOT / exit_codes.REGISTRY_REL).read_text(encoding="utf-8"))
+    assert problems == []
+    rows = {code: (name, meaning, word) for code, name, meaning, word in sections["src/resolutions.py"]}
+    name, meaning, word = rows[3]
+    assert name == "EXIT_INCOMPLETE" and word == "alert"
+    assert "paging" in meaning and "history" in meaning
+
+
 def test_constants_resolve_through_imports():
     # m1_run imports its codes from ws_recorder
     consts = exit_codes.module_constants(ROOT, "src/m1_run.py")
