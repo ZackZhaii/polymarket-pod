@@ -106,6 +106,13 @@ WS_RAW_BOOK_RUN_MAX_BYTES = 256 * 1024 * 1024
 # quiet-top book does not look stale while its deltas keep arriving. Rows can only lag reality by
 # this much (never lead it); it must stay well below MAX_BOOK_AGE_S.
 WS_ROW_REFRESH_S = 30.0
+# Issue #182 (Task CC): the exchange splits one match into several price_change frames with the SAME timestamp
+# (resting remainder, then the consumed level's removal, then a book). A frame that leaves the book crossed or
+# off its own reported top opens a group that is held (never written) for at most this long (monotonic); it
+# must be made consistent by a same-ts frame or replaced by a book within it, else the asset resyncs as
+# before. Observed: the closing frame / book follows within 0-10 ms. Must stay well below WS_ROW_REFRESH_S
+# and MAX_BOOK_AGE_S (at most 1/10 of WS_ROW_REFRESH_S). M2 pending.
+WS_GROUP_FLUSH_S = 0.25
 # Task AI: with a stop callback (graceful shutdown), the recorder notices SIGINT/SIGTERM within this.
 WS_STOP_POLL_S = 1.0
 
@@ -331,6 +338,10 @@ def consistency_problems() -> list[str]:
         problems.append("WebSocket timing must satisfy 0 < WS_PING_INTERVAL_S < WS_RESYNC_TIMEOUT_S")
     if not 0.0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S:
         problems.append("WS_ROW_REFRESH_S must satisfy 0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S")
+    if not (isinstance(WS_GROUP_FLUSH_S, float) and 0.0 < WS_GROUP_FLUSH_S <= WS_ROW_REFRESH_S / 10.0
+            and WS_GROUP_FLUSH_S < WS_PING_INTERVAL_S and WS_ROW_REFRESH_S < MAX_BOOK_AGE_S):
+        problems.append("WS_GROUP_FLUSH_S must satisfy 0 < WS_GROUP_FLUSH_S <= WS_ROW_REFRESH_S / 10 "
+                        "(well below WS_ROW_REFRESH_S < MAX_BOOK_AGE_S) and < WS_PING_INTERVAL_S")
     if not (isinstance(WS_RAW_BOOK_FILE_MAX_BYTES, int) and isinstance(WS_RAW_BOOK_RUN_MAX_BYTES, int)
             and 0 < WS_RAW_BOOK_FILE_MAX_BYTES <= WS_RAW_BOOK_RUN_MAX_BYTES):
         problems.append("WS_RAW_BOOK_*_MAX_BYTES must be whole numbers with 0 < file cap <= run cap")
