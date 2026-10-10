@@ -133,7 +133,11 @@ def test_a_connection_that_goes_quiet_is_closed_as_silent_after_the_window(no_po
     detected = transport.connect_times[1] - w.backoff_delay(0)
     assert detected == pytest.approx(5.0 + WS_SILENCE_TIMEOUT_S, abs=0.01)
     gone = next(e for e in events if e["event"] == "disconnected")
-    assert {k: v for k, v in gone.items() if k != "ts"} == {"event": "disconnected", "reason": "silent", "healthy": True}
+    # Task BL: what the connection had seen (nothing for 60 s; the first unanswered PING went out at 10 s)
+    assert {k: v for k, v in gone.items() if k != "ts"} == {
+        "event": "disconnected", "reason": "silent", "healthy": True, "silence_s": 60.0, "data_silence_s": 60.0,
+        "last_inbound_ts": "2026-10-10T00:00:00.000Z+5.00", "last_data_ts": "2026-10-10T00:00:00.000Z+5.00",
+        "pong_wait_since_ts": "2026-10-10T00:00:00.000Z+10.00", "inbound_frames": 2, "data_frames": 2}
     assert [row["ws_state"] for row in sink.rows][-3:] == ["live", "resync", "live"]
     assert any(row.get("resync_reason") == "disconnect_silent" for row in sink.rows)
 
@@ -166,8 +170,11 @@ def test_pongs_but_no_market_data_reconnect_as_data_silent_at_90_s():
     detected = transport.connect_times[1] - w.backoff_delay(0)
     assert detected == pytest.approx(0.05 + WS_DATA_SILENCE_S, abs=0.01)
     gone = next(e for e in events if e["event"] == "disconnected")
-    assert {k: v for k, v in gone.items() if k != "ts"} == {"event": "disconnected", "reason": "data_silent",
-                                                           "healthy": True}
+    # Task BL: PONGs up to 80.2 s (the one for the PING at 90 s was still awaited), market data only at 0.05 s
+    assert {k: v for k, v in gone.items() if k != "ts"} == {
+        "event": "disconnected", "reason": "data_silent", "healthy": True, "silence_s": 9.85, "data_silence_s": 90.0,
+        "last_inbound_ts": "2026-10-10T00:00:00.000Z+80.20", "last_data_ts": "2026-10-10T00:00:00.000Z+0.05",
+        "pong_wait_since_ts": "2026-10-10T00:00:00.000Z+90.00", "inbound_frames": 9, "data_frames": 1}
     summary = next(e for e in events if e["event"] == "ping_latency")
     assert summary["pongs"] >= 8 and summary["unanswered"] <= 1  # PONGs kept coming the whole time
     assert any(row.get("resync_reason") == "disconnect_data_silent" for row in sink.rows)

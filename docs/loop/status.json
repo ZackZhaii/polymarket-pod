@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-10T13:47:00Z",
+  "ts": "2026-10-10T14:40:00Z",
   "live_enabled": false,
-  "last_done": "BK",
+  "last_done": "BL",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "BK (WS recorder market-data window data_silent at WS_DATA_SILENCE_S=90 s, PONG does not count; BI's any-frame silent at 60 s kept) done by grok-bot. Blocks the M1 rerun. Next by Poly指挥's order: issue #104 (BJ), then the M2 P0 issues. No live gate."
+  "note": "BL (WS recorder telemetry: PING / PONG events, inbound frame counts, disconnect detail, backoff clock jumps; logging only) done by grok-bot. Next by Poly指挥's order: the M2 P0 issues (#128, #125, #133, #130), then the fail-open issues. No live gate."
 }

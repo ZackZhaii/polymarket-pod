@@ -1498,8 +1498,29 @@ judged dead (Poly风控 F6). Done by grok-bot on dev@d5026a8.
 - Tests: `tests/test_ws_silence.py` (PONGs but no data -> data_silent at ~90 s; market events restart it; 38.7 s
   gaps never trip it; which frames count); live fakes in the clock-jump / recorder tests now send trades.
 
+## Task BL — WS recorder telemetry (Poly盘口 follow-ups)
+
+Status: done.
+
+Requested by Poly指挥 from Poly盘口's review of BI / BK. Done by grok-bot on dev@cd4bd52. Logging only: no
+window, deadline or threshold changed.
+
+- `ping` event per PING (`seq`, per connection) and `pong` event per PONG (`rtt_ms`; `unexpected` with
+  `rtt_ms` null when no PING was outstanding). `ping_latency` summaries unchanged.
+- Inbound frames counted: report.inbound_frames (every frame) and report.data_frames (BK's business frames).
+- `disconnected` now carries `silence_s`, `data_silence_s` (from subscribe when nothing came),
+  `last_inbound_ts`, `last_data_ts` (null: nothing on that connection), `pong_wait_since_ts` (the PING that
+  armed AW's deadline; null: no PONG awaited) and the connection's `inbound_frames` / `data_frames`.
+- Backoff waits check the wall clock against the monotonic clock as a session does (clock_jump_s): a jump writes
+  `clock_jump` (`phase` backoff, `jump_s`, `attempt`) and counts report.clock_jumps_in_backoff; the wait and the
+  reconnect go on unchanged. A session `clock_jump` disconnect writes the same event (`phase` session).
+- m1_run manifest counts add `pongs`, `inbound_frames`, `data_frames`, `clock_jumps_in_backoff`.
+- Tests: `tests/test_ws_telemetry.py`; exact `disconnected` events in `tests/test_ws_silence.py` updated.
+
 ## Latest
 
+- 2026-10-10: Task BL: WS recorder `ping` / `pong` events, inbound frame counts, richer `disconnected` events,
+  backoff `clock_jump` events, PONGs and frame counts in the m1_run manifest. Logging only.
 - 2026-10-10: Task BK: WS recorder `data_silent` after WS_DATA_SILENCE_S=90 s with no market event (PONG does
   not count, Poly风控 F6); BI's any-frame `silent` (60 s) kept.
 - 2026-10-10: Task BI: WS recorder inbound-silence watchdog (`silent` after WS_SILENCE_TIMEOUT_S=60 s of no
