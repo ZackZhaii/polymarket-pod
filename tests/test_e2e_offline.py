@@ -75,7 +75,7 @@ def test_the_run_breaks_no_invariant(run):
 def test_the_gate_passes_and_reports_a_summary():
     problems, summary = harness.gate(ROOT)
     assert problems == []
-    assert summary.startswith("2 allow / 5 veto, cash 949.6, sentinel halts ['e2e-charlie'], network 0")
+    assert summary.startswith("2 allow / 5 veto, cash 949.803488, sentinel halts ['e2e-charlie'], network 0")
 
 
 def test_the_whole_run_is_fast():
@@ -154,8 +154,14 @@ def test_allows_book_one_fill_each_with_fees_from_fees_py(run):
     assert (bravo["allow"], bravo["reasons"], bravo["booked_rows"]) == (True, [], 1)
     assert alpha["fill"]["effective_price"] == 0.415 and alpha["fee_usd"] == 0.0
     assert bravo["edge"] == pytest.approx(0.70 - 0.615 - 0.02 * 0.615)
-    assert bravo["fill"]["fee_usd"] == 0.2  # max(notional * rate, shares * rate * price)
-    assert alpha["fill"]["notional_usd"] == bravo["fill"]["notional_usd"] == 10.0  # 1% of 1000
+    # issue #104: shares = min(intent_builder's shares, what fits 1% of 1000 all-in), on the 0.01 grid
+    assert bravo["fill"]["fee_usd"] == 0.196062  # max(notional * rate, shares * rate * price)
+    assert (alpha["fill"]["shares"], alpha["fill"]["notional_usd"]) == (24.09, 9.99735)  # 10 / 0.415, fee-free
+    assert (bravo["fill"]["shares"], bravo["fill"]["notional_usd"]) == (15.94, 9.8031)  # 10 / (0.615 + fee)
+    for d in (alpha, bravo):
+        assert d["fill"]["shares"] <= d["intent_builder"]["shares"]  # never above intent_builder's size
+    for fill in (alpha["fill"], bravo["fill"]):
+        assert fill["notional_usd"] + fill["fee_usd"] <= 10.0  # cost plus fee within the 1% cap
 
 
 def test_cap_vetoes_a_sixth_leg(run):
@@ -166,9 +172,9 @@ def test_cap_vetoes_a_sixth_leg(run):
 
 def test_cash_and_positions(run):
     ledger = run["actual"]["ledger_after_intents"]
-    assert ledger["cash_usd"] == pytest.approx(1000 - 50 - 0.2 - 0.2)
-    assert ledger["positions"]["e2e-alpha|71001"] == {"cost_basis_usd": 10.0, "shares": 24.09638554}
-    assert ledger["positions"]["e2e-bravo|72001"] == {"cost_basis_usd": 10.0, "shares": 16.2601626}
+    assert ledger["cash_usd"] == pytest.approx(949.803488)
+    assert ledger["positions"]["e2e-alpha|71001"] == {"cost_basis_usd": 9.99735, "shares": 24.09}
+    assert ledger["positions"]["e2e-bravo|72001"] == {"cost_basis_usd": 9.8031, "shares": 15.94}
     assert ledger["problems"] == [] and ledger["unique_rows"] == ledger["lines"] == 5
 
 
@@ -181,8 +187,8 @@ def test_duplicate_fill_replay_is_deduped(run):
                                     "open_positions": 5}
     then = replay["then"]
     assert then["allow"] is True and then["booked_rows"] == 1
-    assert replay["ledger"]["cash_usd"] == pytest.approx(main["cash_usd"] - 10.0)
-    assert replay["ledger"]["positions"]["e2e-alpha|71001"]["cost_basis_usd"] == 20.0
+    assert replay["ledger"]["cash_usd"] == pytest.approx(main["cash_usd"] - 9.99735)
+    assert replay["ledger"]["positions"]["e2e-alpha|71001"]["cost_basis_usd"] == pytest.approx(19.9947)
 
 
 def test_corrupted_ledger_before_the_call_vetoes_and_books_nothing(run):

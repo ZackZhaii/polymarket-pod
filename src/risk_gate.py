@@ -13,6 +13,11 @@ market halt every intent on that market; an unreadable, corrupt or lost halt sta
 logs/HALT, is a global halt (src/halt_store.py). Only an Operator resume lifts a halt.
 Issue #76: an intent carrying its own validity window (intent_created_at / intent_expires_at) has
 it re-checked at the decision clock; an expired or invalid window vetoes (veto only, never allows).
+Issue #104: the 1% clip is an all-in cap. Booked shares are min(intent.shares, the shares whose cost at
+max(effective, intent.limit_price) plus the booked fee fits max_order_pct * PAPER_EQUITY_USD), on the
+INTENT_SHARE_STEP grid; notional_usd = shares * effective. RiskGate only ever books fewer shares than the
+intent asked for, never more; an invalid intent size or a size that cannot fit vetoes
+(invalid_intent_shares / invalid_intent_limit_price / order_cost_above_clip).
 Does not place orders, sign messages, read secrets, or edit config/risk.toml.
 """
 from __future__ import annotations
@@ -28,6 +33,7 @@ from src.book_staleness import book_age_problem, parse_book_ts
 from src.podlib import PAPER_EQUITY_USD, pin_problems
 from src.thresholds import EDGE_TOLERANCE, MAX_BOOK_AGE_S, MIN_EDGE  # Task AC: values in src/thresholds.py
 from src.thresholds import ASSUMED_SLIPPAGE  # Task AU: the slippage floor (Task AT's one slippage)
+from src.thresholds import INTENT_SHARE_STEP  # issue #104: booked shares on intent_builder's share grid
 from src.wash_detect import wash_problems
 
 BANNED_STRATEGY_TOKENS = ("wash", "self-trade", "self_trade", "spoof", "layering")
@@ -92,6 +98,12 @@ class Intent:
     # vetoing: no existing check moved and no allowance was added.
     intent_created_at: str | None = None
     intent_expires_at: str | None = None
+    # Issue #104: intent_builder's own size (shares on the INTENT_SHARE_STEP grid) and limit price (the worst
+    # book level, on the tick). Both None (a legacy / operator intent): RiskGate sizes from its clip alone.
+    # When set they only shrink: booked shares <= shares, and the all-in cost is checked at
+    # max(effective_price, limit_price). Not finite or not > 0 (or limit_price >= 1) vetoes.
+    shares: float | None = None
+    limit_price: float | None = None
 
 
 @dataclass
@@ -261,6 +273,32 @@ def intent_time_problems(intent_created_at: object, intent_expires_at: object, n
     if current >= expires:
         problems.append("intent_expired")
     return problems
+
+
+def _floor_to_step(shares: float) -> float:
+    """Issue #104: down to the INTENT_SHARE_STEP grid (intent_builder's rounding); never up."""
+    if not math.isfinite(shares) or shares <= 0:
+        return 0.0
+    stepped = round(math.floor(shares / INTENT_SHARE_STEP + 1e-9) * INTENT_SHARE_STEP, 10)
+    if stepped > shares:  # the float guard above must never round up
+        stepped = round(stepped - INTENT_SHARE_STEP, 10)
+    return max(stepped, 0.0)
+
+
+def _intent_size(intent: Intent) -> tuple[float | None, list[str]]:
+    """Issue #104: the intent's own shares (None: not given) and any problem with shares / limit_price."""
+    problems: list[str] = []
+    shares = None
+    if intent.shares is not None:
+        shares = _finite_number(intent.shares)
+        if shares is None or shares <= 0:
+            problems.append("invalid_intent_shares")
+            shares = None
+    if intent.limit_price is not None:
+        limit = _finite_number(intent.limit_price)
+        if limit is None or not 0.0 < limit < 1.0:
+            problems.append("invalid_intent_limit_price")
+    return shares, problems
 
 
 def evaluate(
@@ -437,8 +475,8 @@ def evaluate(
         reasons.append("invalid_max_order_pct")
         max_order_pct = 0.0
     clip = min(max_order_pct, 0.01)
-    notional = PAPER_EQUITY_USD * clip
-    if notional <= 0:
+    cap_usd = PAPER_EQUITY_USD * clip
+    if cap_usd <= 0:
         reasons.append("zero_notional")
 
     # Caps apply to hypothetical intents too (backlog item 4); there is no bypass flag.
@@ -458,7 +496,22 @@ def evaluate(
         if PAPER_EQUITY_USD <= 0 or daily_loss / PAPER_EQUITY_USD >= caps["max_daily_loss_pct"]:
             reasons.append("max_daily_loss")
 
-    shares = (notional / effective) if math.isfinite(effective) and effective > 0 else 0.0
+    # Issue #104: size inside the all-in cap: shares * cost_price + fee <= cap_usd, never above the
+    # intent's own shares. cost_price = max(effective, intent.limit_price): the fill may come at either.
+    intent_shares, size_problems = _intent_size(intent)
+    reasons.extend(size_problems)
+    cost_price = effective
+    limit_price = _finite_number(intent.limit_price) if intent.limit_price is not None else None
+    if limit_price is not None and not size_problems and limit_price > cost_price:
+        cost_price = limit_price
+    per_share = fees.fee_per_share(intent.fee_rate, intent.market_price, effective)
+    shares = 0.0
+    if (math.isfinite(effective) and effective > 0 and math.isfinite(cost_price) and per_share is not None
+            and cap_usd > 0):
+        shares = _floor_to_step(cap_usd / (cost_price + per_share))
+        if intent_shares is not None:
+            shares = min(shares, intent_shares)
+    notional = shares * effective if shares > 0 else 0.0
     # Task AE: the booked fee comes from the same module; never below notional * fee_rate.
     booked = fees.ledger_fee(intent.fee_rate, intent.market_price, effective, notional, shares)
     if booked is None:
@@ -466,6 +519,9 @@ def evaluate(
             reasons.append("invalid_fee")  # backstop: no allow without a valid fee
         booked = 0.0
     fee_usd = booked
+    if cap_usd > 0 and not (shares > 0 and shares * cost_price + fee_usd <= cap_usd):
+        if not reasons:
+            reasons.append("order_cost_above_clip")  # issue #104: nothing fits, or the float guard tripped
     return Decision(
         allow=not reasons,
         reasons=reasons,
