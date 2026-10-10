@@ -186,9 +186,11 @@ def test_duplicate_fill_replay_is_deduped(run):
     assert replay["load_state"] == {"duplicate_fill_rows": 1, "ledger_problems": [], "leg_already_open": True,
                                     "open_positions": 5}
     then = replay["then"]
-    assert then["allow"] is True and then["booked_rows"] == 1
-    assert replay["ledger"]["cash_usd"] == pytest.approx(main["cash_usd"] - 9.99735)
-    assert replay["ledger"]["positions"]["e2e-alpha|71001"]["cost_basis_usd"] == pytest.approx(19.9947)
+    # Issue #123: the next intent buys the already-open alpha leg again, so it is a same-direction add
+    # (add_to_open_leg) and books nothing; before #123 the leg exemption let it book a second fill.
+    assert (then["allow"], then["reasons"], then["booked_rows"]) == (False, ["add_to_open_leg"], 0)
+    assert replay["ledger"]["cash_usd"] == pytest.approx(main["cash_usd"])
+    assert replay["ledger"]["positions"]["e2e-alpha|71001"] == {"cost_basis_usd": 9.99735, "shares": 24.09}
 
 
 def test_corrupted_ledger_before_the_call_vetoes_and_books_nothing(run):
@@ -325,7 +327,7 @@ def test_conservation_holds_and_fill_ids_are_unique(run):
         assert ledger_store.verify(read) == []
         assert len(read.ids) == len(set(read.ids))
     booked = run["detail"]["booked_ids"]
-    assert len(booked) == len(set(booked)) == 3
+    assert len(booked) == len(set(booked)) == 2  # issue #123: alpha-again (an add to the open alpha leg) no longer books
     assert all(re.fullmatch(r"[0-9a-f]{32}", fill_id) for fill_id in booked)
 
 

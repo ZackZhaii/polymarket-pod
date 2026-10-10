@@ -204,12 +204,14 @@ def test_second_leg_of_a_pair_is_a_new_position_against_the_cap(tmp_path, monkey
     assert "max_open_positions" in decision.reasons
 
 
-def test_adding_to_the_same_open_leg_is_still_exempt(tmp_path, monkeypatch):
+def test_adding_to_the_same_open_leg_is_vetoed_not_exempt(tmp_path, monkeypatch):
+    # Issue #123: the open leg's position-cap exemption no longer lets it grow.
     cfg = load_risk()
     _ledger(tmp_path, monkeypatch, _cap_rows(cfg, [(MARKET, YES)]))
     state = paper_ledger.load_state(MARKET, YES)
     decision = evaluate(_intent(token_id=YES), cfg, state)
-    assert decision.allow is True, decision.reasons
+    assert decision.allow is False
+    assert decision.reasons == ["add_to_open_leg"]
 
 
 def test_a_filled_pair_uses_two_slots(tmp_path, monkeypatch):
@@ -255,7 +257,10 @@ def test_commit_if_allowed_reads_the_intents_own_leg(tmp_path, monkeypatch):
     vetoed = paper_ledger.commit_if_allowed(_intent(token_id=NO), cfg)
     assert vetoed["allow"] is False
     assert "max_open_positions" in vetoed["decision"]["reasons"]
-    allowed = paper_ledger.commit_if_allowed(_intent(token_id=YES), cfg)
-    assert allowed["allow"] is True, allowed
-    assert allowed["fill"]["token_id"] == YES
+    ledger_before = paper_ledger.PAPER_PATH.read_bytes()
+    # Issue #123: the own (open) leg is not counted as a new position, but a buy adds to it.
+    added = paper_ledger.commit_if_allowed(_intent(token_id=YES), cfg)
+    assert added["allow"] is False
+    assert added["decision"]["reasons"] == ["add_to_open_leg"]
+    assert paper_ledger.PAPER_PATH.read_bytes() == ledger_before
     assert RISK_PATH.read_bytes() == before

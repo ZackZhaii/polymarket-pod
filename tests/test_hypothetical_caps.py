@@ -12,7 +12,7 @@ import src.paper_ledger as paper_ledger
 from src.podlib import PAPER_EQUITY_USD, RISK_PATH, load_risk, utc_now
 from src.risk_gate import Intent, evaluate, risk_caps
 
-FRESH = {"open_positions": 0, "market_already_open": False, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
+FRESH = {"open_positions": 0, "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 def _intent(**overrides: object) -> Intent:
@@ -34,7 +34,7 @@ def _intent(**overrides: object) -> Intent:
 
 
 def _full_state(cfg: dict) -> dict:
-    return {"open_positions": int(cfg["max_open_positions"]), "market_already_open": False, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
+    return {"open_positions": int(cfg["max_open_positions"]), "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 def _loss_state(cfg: dict) -> dict:
@@ -71,11 +71,22 @@ def test_hypothetical_and_real_intents_get_the_same_cap_reasons(state_fn):
     assert set(real.reasons) & caps == set(hypo.reasons) & caps != set()
 
 
-def test_already_open_leg_is_exempt_from_the_position_cap_for_both():
+def test_adding_to_an_already_open_leg_is_vetoed_for_both():
+    # Issue #123: the exemption no longer lets an open leg grow (it used to allow both).
     cfg = load_risk()
-    state = dict(_full_state(cfg), leg_already_open=True)
-    assert evaluate(_intent(), cfg, state).allow is True
-    assert evaluate(_intent(strategy="task-m-real", hypothetical=False), cfg, state).allow is True
+    state = dict(_full_state(cfg), leg_already_open=True, leg_net_shares=10.0)
+    for intent in (_intent(), _intent(strategy="task-m-real", hypothetical=False)):
+        reasons = evaluate(intent, cfg, state).reasons
+        assert "add_to_open_leg" in reasons
+        assert "max_open_positions" not in reasons
+
+
+def test_reducing_an_already_open_leg_keeps_the_position_cap_exemption():
+    cfg = load_risk()
+    state = dict(_full_state(cfg), leg_already_open=True, leg_net_shares=10.0)
+    reasons = evaluate(_intent(side="sell"), cfg, state).reasons
+    assert "max_open_positions" not in reasons
+    assert "add_to_open_leg" not in reasons
 
 
 def test_hypothetical_outside_gate_test_strategy_still_vetoed():

@@ -150,16 +150,16 @@
       "BookWatcher>RiskGate:signal": 14,
       "BookWatcher>Sentinel:signal": 3,
       "Endgame>RiskGate:signal": 1,
-      "Executor>Sentinel:fill": 3,
+      "Executor>Sentinel:fill": 2,
       "Executor>Sentinel:halt": 1,
       "NewsForecaster>RiskGate:signal": 24,
       "Operator>Sentinel:resume": 2,
-      "RiskGate>Executor:signal": 4,
-      "RiskGate>Executor:veto": 21,
+      "RiskGate>Executor:signal": 3,
+      "RiskGate>Executor:veto": 22,
       "Scanner>BookWatcher:signal": 7,
       "Sentinel>Executor:halt": 3
     },
-    "fills": 3,
+    "fills": 2,
     "halts": [
       {
         "from": "Sentinel",
@@ -190,32 +190,6 @@
   "calibration_ids": {
     "distinct_forecast_ids": 9,
     "fills": {
-      "alpha-again": {
-        "calibration_problems": [],
-        "decision_id_derived": true,
-        "fields": [
-          "category",
-          "condition_id",
-          "decision_id",
-          "end_date",
-          "forecast_id",
-          "forecast_ts",
-          "model_version",
-          "outcome",
-          "outcome_index",
-          "tags"
-        ],
-        "fill_context": "intent_builder",
-        "joins_forecast": true,
-        "market_fields": {
-          "best_ask": 0.41,
-          "best_bid": 0.39,
-          "hours_to_expiry_at_entry": 1044.0,
-          "kelly_frac_raw": 0.09401709,
-          "kelly_fraction_used": 0.15,
-          "market_mid": 0.4
-        }
-      },
       "alpha-allow": {
         "calibration_problems": [],
         "decision_id_derived": true,
@@ -745,14 +719,14 @@
     "cash_unchanged": true,
     "duplicates_ignored": 1,
     "ledger": {
-      "cash_usd": 939.806138,
+      "cash_usd": 949.803488,
       "duplicates_ignored": 1,
-      "lines": 7,
+      "lines": 6,
       "open_legs": 5,
       "positions": {
         "e2e-alpha|71001": {
-          "cost_basis_usd": 19.9947,
-          "shares": 48.18
+          "cost_basis_usd": 9.99735,
+          "shares": 24.09
         },
         "e2e-bravo|72001": {
           "cost_basis_usd": 9.8031,
@@ -772,7 +746,7 @@
         }
       },
       "problems": [],
-      "unique_rows": 6
+      "unique_rows": 5
     },
     "lines": 6,
     "load_state": {
@@ -784,23 +758,10 @@
     "positions_unchanged": true,
     "problems": [],
     "then": {
-      "allow": true,
-      "booked_rows": 1,
+      "allow": false,
+      "booked_rows": 0,
       "edge": 0.055,
       "fee_usd": 0.0,
-      "fill": {
-        "cash_after_usd": 939.806138,
-        "effective_price": 0.415,
-        "fee_usd": 0.0,
-        "hypothetical": false,
-        "leg_cost_basis_after_usd": 19.9947,
-        "leg_shares_after": 48.18,
-        "market_price": 0.41,
-        "notional_usd": 9.99735,
-        "risk_decision": "allow",
-        "shares": 24.09,
-        "ts": "2026-09-01T12:00:00Z"
-      },
       "halted": false,
       "intent_builder": {
         "edge_no": -0.085,
@@ -819,7 +780,9 @@
       },
       "label": "alpha-again",
       "market": "e2e-alpha",
-      "reasons": [],
+      "reasons": [
+        "add_to_open_leg"
+      ],
       "side": "buy",
       "token_id": "71001"
     },
@@ -998,7 +961,7 @@
     }
   },
   "invariants": {
-    "booked_fill_ids": 3,
+    "booked_fill_ids": 2,
     "live_checks": 41,
     "live_enabled": [
       "False"
