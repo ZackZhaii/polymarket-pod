@@ -1,10 +1,11 @@
-"""NegRiskArb stub. Multi-outcome ask-sum signal only. Never emits a fill."""
+"""NegRiskArb stub. Records a multi-outcome ask-sum gap as a structural_arb_disabled reject (issue #141). Never a fill."""
 from __future__ import annotations
 
 from pathlib import Path
 
 from src.gaps import multi_ask_sum
 from src.podlib import bus
+from src.structural_gate import STRUCTURAL_ARB_DISABLED
 
 
 def emit_gap(
@@ -31,6 +32,11 @@ def emit_gap(
             "displayed_depth": displayed_depth,
             "depth_is_not_an_order": True,
             "note": signal["note"],
+            # Issue #141 (Task BX): a complete set needs every leg filled together; it is rejected, recorded only.
+            "gap_signal": "rejected",
+            "rejected": True,
+            "reject_reason": STRUCTURAL_ARB_DISABLED,
+            "exchange_action": "none",
         },
         path=bus_path,
     )

@@ -10,6 +10,10 @@ constant in src/expiry_rule.py) away; otherwise it fails closed.
 Any parsed number that is NaN or +/-inf (Gamma text such as "NaN" or "-Infinity")
 rejects the market as non_finite_<field> (Task Y); comparisons with NaN are always
 False, so without this a NaN spread, liquidity or bid/ask slipped through.
+Issue #141 (Task BX): a market in UMA resolution (``umaResolutionStatus`` non-empty, or
+``umaResolutionStatuses`` a non-empty JSON list; unparseable counts as non-empty) is rejected as
+market_expired_or_resolving on every scan (src/structural_gate.py, the predicate src/paper_cycle.py
+also applies). A past end date stays ``expired``; both are listed when both apply.
 """
 from __future__ import annotations
 
@@ -40,6 +44,7 @@ from src.podlib import (  # noqa: E402
     utc_now,
 )
 from src.expiry_rule import expiry_problem  # noqa: E402
+from src.structural_gate import MARKET_EXPIRED_OR_RESOLVING, market_uma_resolving  # noqa: E402 - Task BX
 from src.thresholds import MIN_HOURS_TO_EXPIRY, MIN_SCANNED_MARKETS  # noqa: E402 - Task AC
 
 # Legacy single page (top 20 by liquidity, unfiltered). No caller since Task AB moved paper_session to scan().
@@ -100,6 +105,7 @@ REASONS = (
     "near_expiry",
     "invalid_min_hours_to_expiry",
     "invalid_now",
+    MARKET_EXPIRED_OR_RESOLVING,  # Task BX (#141): after the end-date reasons, before accepting orders
     "not_accepting_orders",
     *NON_FINITE_REASONS,
     "missing_bid_ask",
@@ -382,6 +388,9 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
         "volume_usd": as_float(market.get("volumeNum") if market.get("volumeNum") is not None else market.get("volume")),
         "volume_24h_usd": as_float(market.get("volume24hr")) or 0.0,
         "end_date": market.get("endDate") or "",
+        # Task BX (#141): Gamma's UMA resolution state, kept as given (None when absent).
+        "uma_resolution_status": market.get("umaResolutionStatus"),
+        "uma_resolution_statuses": market.get("umaResolutionStatuses"),
         "best_bid": best_bid,
         "best_ask": best_ask,
         "spread": spread,
@@ -437,6 +446,8 @@ def rejection_reasons(
     expiry = expiry_problem(row["end_date"], now, min_hours_to_expiry)
     if expiry is not None:
         reasons.append(expiry)
+    if market_uma_resolving(row):  # Task BX (#141): proposed / disputed / resolved, unreadable fails closed
+        reasons.append(MARKET_EXPIRED_OR_RESOLVING)
     if row["accepting_orders"] is False:
         reasons.append("not_accepting_orders")
     reasons.extend(non_finite_reasons(row))

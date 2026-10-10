@@ -30,6 +30,7 @@ Role name on the bus: `Scanner` (`scanner.persist_markets`). ROSTER and ROLES ag
    - End date (`expiry_rule.expiry_problem`, one reason at most; `expiry_rule.MIN_HOURS_TO_EXPIRY = 24.0`, a code constant, not a risk.toml key):
      `expired` — end <= now; `missing_end_date` — `endDate` missing or blank; `invalid_end_date` — unparseable, naive, date-only or non-string;
      `near_expiry` — under 24 h left (exactly 24 h passes); `invalid_min_hours_to_expiry` — bad threshold; `invalid_now` — naive or bad clock.
+   - `market_expired_or_resolving` (#141, Task BX) — `umaResolutionStatus` non-empty, or `umaResolutionStatuses` a non-empty JSON list (unparseable fails closed); listed with `expired` when both apply.
    - `not_accepting_orders` — `acceptingOrders` is false.
    - `missing_bid_ask` — bid/ask missing, bid <= 0, or ask >= 1 (Gamma's one-sided book).
    - `low_liquidity` — liquidity missing or < `min_liquidity_usd` (`liquidityNum`, else `liquidity`).

@@ -35,6 +35,14 @@ Issue #125 (Task BN, Poly指挥's ruling on the #88 conflict), with ``recording_
   manifest. A ledger that cannot be read in full keeps every market under StaleWatch (fail closed).
 - gap 14's all_markets_stale counts only the StaleWatch markets: the manifest's plus the held ones.
 Without ``recording_dir`` nothing changes.
+Issue #141 (Task BX), tightening only:
+- a market past its end date (``expired``) or in UMA resolution (``market_expired_or_resolving``, the scanner's
+  predicate in src/structural_gate.py) gets no gap path at all: one BookWatcher signal (``gap_signal`` skipped,
+  every reason listed) and a ``resolving_market`` skip. It is still checked by StaleWatch first, as before.
+- every ArbBinary / NegRiskArb gap (a YES+NO or all-outcome complete set: two or more legs) is rejected as
+  ``structural_arb_disabled``: the bus record says ``gap_signal`` rejected, and a ``structural_arb_disabled`` skip is
+  added. ``gaps`` still counts the gaps seen (all rejected; ``structural_rejected`` is the same count). Nothing
+  multi-leg ever becomes an intent or an order.
 No network, no orders, no paper fills, no edits to config/risk.toml.
 """
 from __future__ import annotations
@@ -50,7 +58,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src import arb_binary, halt_store, neg_risk, sentinel  # noqa: E402
+from src import arb_binary, halt_store, neg_risk, sentinel, structural_gate  # noqa: E402
 from src.book_staleness import (  # noqa: E402
     INVALID_BOOK_TS,
     INVALID_NOW,
@@ -215,6 +223,8 @@ def run(
     halted_markets: list[str] = []
     gaps = 0
     stale = 0
+    structural_rejected = 0
+    resolving = 0
     for market_id, market in markets.items():
         tokens = [str(token) for token in market.get("token_ids") or []]
         asks: list[float] = []
@@ -291,11 +301,22 @@ def run(
                           "halt_reasons": halted})
             halted_markets.append(market_id)
             continue
+        ended = structural_gate.resolution_problems(market, now_at)
+        if ended:
+            # Issue #141 (Task BX): expired or in UMA resolution: no gap path, the reasons recorded.
+            _resolving(market_id, ended, skips, bus_path)
+            resolving += 1
+            continue
         message = _gap_message(asks, market_id, depths, bus_path)
         if message is not None:
-            if message["type"] != "signal":
-                raise RuntimeError("paper cycle refused a non-signal")
+            if message["type"] != "signal" or message["payload"].get("rejected") is not True:
+                raise RuntimeError("paper cycle refused a non-signal or an unrejected multi-leg gap")
             gaps += 1
+            # Issue #141 (Task BX): a complete-set gap is a structural reject, recorded, never an order.
+            structural_rejected += 1
+            skips.append({"market": market_id, "kind": structural_gate.STRUCTURAL_ARB_DISABLED,
+                          "reason": structural_gate.STRUCTURAL_ARB_DISABLED, "strategy": message["from"],
+                          "legs": len(asks)})
     # Task AP gap 14: every checked market stale in this cycle extends the all-stale streak.
     all_stale = bool(checked) and len(stale_checked) == len(checked)
     watch.all_stale_streak = watch.all_stale_streak + 1 if all_stale else 0
@@ -319,6 +340,8 @@ def run(
         "reason": "signals_only",
         "signals": gaps + stale,
         "gaps": gaps,
+        "structural_rejected": structural_rejected,
+        "resolving_markets": resolving,
         "stale": stale,
         "fills": 0,
         "skipped": len(skips),
@@ -360,6 +383,14 @@ def _not_recorded(market_id: str, stale_reasons: set[str], stale_after_s: object
     bus("BookWatcher", "Sentinel", "signal", market_id, payload, path=bus_path)
     skips.append({"market": market_id, "kind": "not_recorded_market", "reason": NOT_RECORDED,
                   "stale_reasons": sorted(stale_reasons)})
+
+
+def _resolving(market_id: str, reasons: list[str], skips: list[dict], bus_path: Path | None) -> None:
+    """Issue #141: one reject record for an expired or resolving market (never a gap signal)."""
+    bus("BookWatcher", "Sentinel", "signal", market_id,
+        {"gap_signal": "skipped", "skip_reason": reasons[0], "reasons": list(reasons), "exchange_action": "none"},
+        path=bus_path)
+    skips.append({"market": market_id, "kind": "resolving_market", "reason": reasons[0], "reasons": list(reasons)})
 
 
 def _sentinel_record(watch: sentinel.StaleWatch, market_id: str, problem: str | None, halts: list[str]) -> None:
