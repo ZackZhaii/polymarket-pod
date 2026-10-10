@@ -35,6 +35,10 @@ def signal(**kw) -> ib.ProbabilitySignal:
     base = dict(signal_id="sig-1", source="news", market_id="m1", outcome_index=0, p=0.47, signal_ts=NOW_S,
                 note="gap test forecast")
     base.update(kw)
+    # Issue #105: a news signal must name its token (missing_token_id); default to the outcome's own token.
+    index = base.get("outcome_index")
+    if isinstance(index, int) and not isinstance(index, bool) and index in (0, 1):
+        base.setdefault("token_id", ("t-yes", "t-no")[index])
     return ib.ProbabilitySignal(**base)
 
 
@@ -72,7 +76,8 @@ def build(sig=None, mkt=None, bks=None, cfg=None) -> ib.IntentResult:
 def test_an_outcome_index_outside_0_1_is_rejected_and_never_read_as_outcome_zero(index):
     result = build(sig=signal(outcome_index=index))
     assert result.intent is None
-    assert result.first_reason == "invalid_outcome_index" and "invalid_outcome_index" in result.reasons
+    code = "missing_outcome_index" if index is None else "invalid_outcome_index"  # Issue #105: None is missing
+    assert result.first_reason == code and code in result.reasons
     # no side got a probability, so neither side produced an edge from the unusable index
     assert result.detail["edge_yes"] == -1.0 and result.detail["edge_no"] == -1.0
 
@@ -88,7 +93,8 @@ def test_a_blend_member_with_an_outcome_index_outside_0_1_is_rejected(index):
     blended, reasons = ib.combine_probability([signal(signal_id="a"),
                                                signal(signal_id="b", source="sports_devig",
                                                       outcome_index=index, p=0.5)])
-    assert blended is None and reasons == ["invalid_outcome_index"]
+    code = "missing_outcome_index" if index is None else "invalid_outcome_index"  # Issue #105
+    assert blended is None and reasons == [code]
 
 
 # ---------------------------------------------------------------- invalid_book_levels
