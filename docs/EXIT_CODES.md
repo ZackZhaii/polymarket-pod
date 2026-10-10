@@ -73,7 +73,8 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 
 ## `src/loop_claim.py`
 
-`python -m src.loop_claim status|claim|release`: the paper-loop queue. Start/finish heartbeat.
+`python -m src.loop_claim status|claim|release`: the paper-loop queue. Start/finish heartbeat. Issue #163: claim and release run under `<state>.lock`
+(halt_store.StateLock); a lock not taken within HALT_STATE_LOCK_TIMEOUT_S is also `EXIT_BUSY` (3), nothing changed.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
