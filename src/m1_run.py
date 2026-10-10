@@ -29,6 +29,8 @@ through src.ws_recorder and the public CLOB /book path through src.book.snapshot
   rotated before it would pass ``--rotate-mb`` or once it has been open ``--rotate-s`` seconds.
 - SIGINT / SIGTERM end the run gracefully: the recorder notices within WS_STOP_POLL_S, the REST
   thread stops, files are closed (fsync) and the manifest is finished with status ``interrupted``.
+  Stop-sealing (Issue #82) and every REST publish (row, event, count, heartbeat) share one barrier:
+  a request that returns after the seal publishes nothing and no next asset request is started.
 - ``manifest.json`` (atomic replace) is written at start (status ``running``) and at the end:
   start/end times, elapsed seconds, assets with their market metadata, settings, thresholds,
   versions (Python, websockets, schema), the git sha (and whether the tree was dirty), the
@@ -188,35 +190,66 @@ class RestSampler:
         self.errors = 0
         self.failure: BaseException | None = None
         self.heartbeat = heartbeat  # Task AP: one m1_rest beat after every sample
+        # Issue #82: one barrier shared by every publish (row, event, count, heartbeat) and the
+        # stop-seal; a check of stop before a write alone would still race the seal.
+        self._barrier = threading.Lock()
+        self._sealed = False
+
+    def seal(self) -> None:
+        """Freeze the sampler's publishes (issue #82).
+
+        Under the shared barrier the sampler is marked sealed; once this returns, a request still
+        in flight may return but can no longer publish a row, an event, a count or a heartbeat, and
+        no further asset request is started (its result would have nowhere sealed to go).
+        """
+        with self._barrier:
+            self._sealed = True
+
+    @property
+    def sealed(self) -> bool:
+        with self._barrier:
+            return self._sealed
 
     def sample_once(self) -> None:
-        self.samples += 1
+        with self._barrier:
+            if self._sealed:
+                return  # sealed: no request is ever started
+            self.samples += 1
+            sample = self.samples
         for token in self.assets:
+            with self._barrier:
+                if self._sealed:
+                    return  # sealed: never start the next asset request
             info = self.meta.get(token, {})
             market = {"id": info.get("market_id", ""), "question": info.get("question", ""),
                       "condition_id": info.get("condition_id", ""), "liquidity_usd": info.get("liquidity_usd")}
             requested = self.now()
             row = rest_snapshot(market, info.get("outcome", ""), token, requested, getter=self.getter)
-            if row is None:
-                self.errors += 1
-                self.events.write({"ts": self.now(), "event": "rest_error", "asset": token, "sample": self.samples})
-                continue
-            row["sample"] = self.samples
-            row["received_at"] = self.now()
-            self.sink.write(row)
-            self.rows += 1
-        if self.heartbeat is not None:
-            self.heartbeat.beat("running", {"samples": self.samples, "rows": self.rows, "errors": self.errors},
-                                force=True)
+            with self._barrier:
+                if self._sealed:
+                    return  # the request returned after the seal: drop it, publish nothing
+                if row is None:
+                    self.errors += 1
+                    self.events.write({"ts": self.now(), "event": "rest_error", "asset": token, "sample": sample})
+                    continue
+                row["sample"] = sample
+                row["received_at"] = self.now()
+                self.sink.write(row)
+                self.rows += 1
+        with self._barrier:
+            if not self._sealed and self.heartbeat is not None:
+                self.heartbeat.beat("running", {"samples": self.samples, "rows": self.rows, "errors": self.errors},
+                                    force=True)
 
     def run(self, stop: threading.Event, wait: Callable[[float], bool] | None = None) -> None:
         """Sample now, then every every_s until stop or the deadline. ``wait(seconds)`` returns True on stop."""
         wait = wait or stop.wait
         start = self.monotonic()
         try:
-            self.sample_once()
+            if not stop.is_set():
+                self.sample_once()
             next_at = start + self.every_s
-            while not stop.is_set():
+            while not stop.is_set() and not self.sealed:
                 current = self.monotonic()
                 if current - start >= self.deadline_s:
                     return
@@ -476,6 +509,7 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
         stop.set()
         if thread.is_alive():
             thread.join(timeout=120)
+        sampler.seal()  # Issue #82: freeze publishes before the outputs are closed and finalized
         for signum, handler in previous.items():
             signal.signal(signum, handler)
         if sampler.failure is not None and code == EXIT_OK:
