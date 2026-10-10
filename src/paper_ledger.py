@@ -17,10 +17,15 @@ only caught by the five in-memory ``podlib.PINS`` RiskGate holds, so a changed m
 could still book a fill while the file stayed byte-identical during the run. Drift is refused with
 the existing EXIT_FAILED and a recorded global halt; the two entry points (operator intent and the
 default self-check) both stop there. ``evaluate(cfg)`` still takes an in-memory config.
+Issue #56: the quotes history that RiskGate's structural wash check reads is read strictly
+(``read_quotes``), for every ``load_state`` return path. The generic ``podlib.read_jsonl`` keeps its
+loose behaviour for every other caller; here a quotes file that cannot be read in full is never a
+short history: ``own_quotes`` is None and RiskGate vetoes the existing ``wash_input_invalid``.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 from pathlib import Path
@@ -96,6 +101,57 @@ def leg_positions(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str,
     return legs
 
 
+def read_quotes(path: Path) -> tuple[list[dict[str, Any]] | None, list[str]]:
+    """Read the paper quotes file strictly (issue #56): the whole history, or nothing.
+
+    ``podlib.read_jsonl`` silently skips a bad JSON or non-object line, so one damaged uncancelled
+    opposite quote could turn the history into an empty one and let RiskGate's structural wash check
+    (``src/wash_detect.py``) allow a fill. This reader is used only for the quotes boundary of
+    ``load_state``; the generic reader keeps its behaviour for every other caller.
+
+    Returns ``(rows, [])`` for a file that reads cleanly (a missing file, an empty file and blank
+    lines stay an empty history, as before). Any other outcome is unusable: ``(None, problems)``
+    with one entry per defect, naming the line number and the reason only (a line is never echoed).
+    A defect is a non-empty line that is not one JSON object (bad or truncated JSON,
+    ``malformed_row:<line>``; an array, null, number or string, ``non_object_row:<line>``), a last
+    row without its closing newline (`unterminated_last_row:<line>`, the torn append of
+    ``podlib.append_jsonl``), an unreadable file (``unreadable_quotes:<error>``) and bytes that are
+    not UTF-8 (``undecodable_quotes``). No threshold, no halt: RiskGate vetoes the existing
+    ``wash_input_invalid``, so nothing is booked.
+    """
+    try:
+        data = path.read_bytes() if path.exists() else b""
+    except OSError as exc:
+        return None, [f"unreadable_quotes:{type(exc).__name__}"]
+    if not data:
+        return [], []
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, ["undecodable_quotes"]
+    lines = text.split("\n")
+    rows: list[dict[str, Any]] = []
+    problems: list[str] = []
+    for number, line in enumerate(lines, start=1):
+        line = line.rstrip("\r")
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            problems.append(f"malformed_row:{number}")
+            continue
+        if not isinstance(row, dict):
+            problems.append(f"non_object_row:{number}")
+            continue
+        rows.append(row)
+    if lines[-1].strip():
+        problems.append(f"unterminated_last_row:{len(lines)}")
+    if problems:
+        return None, problems
+    return rows, []
+
+
 def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     """Risk state for an intent on one leg (market + token_id).
 
@@ -107,9 +163,15 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     Task AF: rows come from the strict ledger reader, deduped by fill_id. Any integrity problem
     (parse, ids, Task U numbers, conservation) is listed in ledger_problems and gives the same
     invalid state as Task U, so RiskGate vetoes invalid_risk_state and nothing more is booked.
+    Issue #56: own_quotes comes from the strict quotes reader, once, for every return path. A
+    quotes file that cannot be read in full is not a short history: own_quotes is None,
+    quote_problems names the lines, and RiskGate vetoes the existing wash_input_invalid.
     """
     _, ledger = ledger_store.read_ledger(PAPER_PATH)
     rows = ledger.rows
+    own_quotes, quote_problems = read_quotes(QUOTES_PATH)
+    if quote_problems:
+        own_quotes = None  # issue #56: a partial quote history is not this history (fail closed)
     bad_rows = non_finite_ledger_rows(rows)
     problems = ledger_store.verify(ledger)
     if bad_rows or problems:
@@ -124,7 +186,8 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
             "ledger_problems": problems,
             "duplicate_fill_rows": ledger.duplicates_ignored,
             "recent_fills": rows,
-            "own_quotes": read_jsonl(QUOTES_PATH),
+            "own_quotes": own_quotes,
+            "quote_problems": quote_problems,
         }
     legs = leg_positions(rows)
     # Task AR (backlog #4): today's booked fees plus today's gross realized losses (UTC day).
@@ -140,7 +203,8 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
             "ledger_problems": list(day.problems),
             "duplicate_fill_rows": ledger.duplicates_ignored,
             "recent_fills": rows,
-            "own_quotes": read_jsonl(QUOTES_PATH),
+            "own_quotes": own_quotes,
+            "quote_problems": quote_problems,
         }
     own = legs.get(leg_key(market, token_id))
     return {
@@ -155,7 +219,8 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
         "ledger_problems": [],
         "duplicate_fill_rows": ledger.duplicates_ignored,
         "recent_fills": rows,
-        "own_quotes": read_jsonl(QUOTES_PATH),
+        "own_quotes": own_quotes,
+        "quote_problems": quote_problems,
     }
 
 
@@ -182,7 +247,12 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
                                  "token_id": intent.token_id})
             return {"allow": False, "decision": summary, "halted": True, "halt_reason": "invalid_risk_state",
                     "ledger_problems": problems}
-        return {"allow": False, "decision": summary}
+        veto: dict[str, Any] = {"allow": False, "decision": summary}
+        # Issue #56: a quotes file that could not be read in full shows up as wash_input_invalid.
+        # Name its per-line problems on the veto too (diagnosis only; nothing is booked either way).
+        if state.get("quote_problems"):
+            veto["quote_problems"] = list(state["quote_problems"])
+        return veto
 
     summary["decision"] = "allow"
     bus("RiskGate", "Executor", "signal", intent.market, summary)
