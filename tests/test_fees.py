@@ -237,7 +237,10 @@ def test_ledger_books_the_higher_sell_fee(tmp_path, monkeypatch):
     assert result["allow"] is True
     assert result["fill"]["fee_usd"] == 0.19848  # 24.81 shares * 0.02 * 0.40 (issue #104 sizing)
     assert result["fill"]["edge_formula"] == risk_gate.EDGE_FORMULA_SELL
-    assert paper_ledger.load_state("ae", "t")["daily_loss_usd"] == 0.19848
+    state = paper_ledger.load_state("ae", "t")
+    assert state["daily_fees_usd"] == 0.19848
+    # Task CF (#124): the new short (no book) costs 1 USD a share to buy back: its loss counts too.
+    assert state["daily_loss_usd"] == pytest.approx(0.19848 + result["fill"]["shares"] - result["fill"]["notional_usd"])
 
 
 def test_ledger_buy_fee_is_unchanged(tmp_path, monkeypatch):

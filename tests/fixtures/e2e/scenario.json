@@ -1,6 +1,11 @@
 {
  "now": "2026-09-01T12:00:00Z",
  "second_check_after_s": 60,
+ "mark_books": [
+  {"market_id": "e2e-hist-one", "token_id": "70101", "best_bid": 0.51, "best_bid_size": 1000, "best_ask": 0.53, "best_ask_size": 1000},
+  {"market_id": "e2e-hist-two", "token_id": "70201", "best_bid": 0.26, "best_bid_size": 1000, "best_ask": 0.28, "best_ask_size": 1000},
+  {"market_id": "e2e-dl-c", "token_id": "e2e-dl-c-yes", "best_bid": 0.5, "best_bid_size": 1000, "best_ask": 0.52, "best_ask_size": 1000}
+ ],
  "intents": [
   "charlie-stale",
   "delta-nan",

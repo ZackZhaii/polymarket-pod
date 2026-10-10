@@ -82,7 +82,9 @@ PATH_NAMES = ("BUS_PATH", "PAPER_PATH", "QUOTES_PATH", "MARKETS_PATH", "BOOKS_PA
               # Task AP: heartbeats, Sentinel alerts and tick state (scenarios pass their own paths)
               "HEARTBEAT_DIR", "ALERTS_PATH", "TICK_STATE_PATH",
               # Task AX: sealed forecasts (M3 calibration step 2)
-              "FORECASTS_PATH")
+              "FORECASTS_PATH",
+              # Task CF (#124): start-of-day leg marks and the books open legs are valued from
+              "DAILY_MARKS_DIR", "MARK_BOOKS_PATH")
 BUS_KINDS = frozenset({"signal", "veto", "fill", "halt", "resume"})
 
 
@@ -185,6 +187,8 @@ def offline_sandbox(work: Path, clock: Clock) -> Iterator[dict[str, Any]]:
     explicit = {"BUS_PATH": paths["bus"], "PAPER_PATH": paths["paper"], "QUOTES_PATH": paths["quotes"],
                 "HALT_STATE_PATH": paths["halt"], "HALT_FALLBACK_PATH": paths["halt_file"],
                 "FORECASTS_PATH": paths["forecasts"],
+                # Task CF (#124): the run's own daily marks folder (run_pipeline points MARK_BOOKS_PATH at its books)
+                "DAILY_MARKS_DIR": work / "daily_marks",
                 # Issue #129: the resident Sentinel's heartbeat lives here (no Sentinel at all is a global halt)
                 "HEARTBEAT_DIR": paths["heartbeat"]}
     patches: list[tuple[object, str, object]] = []
@@ -192,6 +196,8 @@ def offline_sandbox(work: Path, clock: Clock) -> Iterator[dict[str, Any]]:
         for name in PATH_NAMES:
             if hasattr(module, name):
                 patches.append((module, name, explicit.get(name, unused / name.lower())))
+    # Task CF (#124): every run starts as a fresh process (no evaluation on the previous UTC day).
+    patches.append((mods["paper_ledger"], "_LAST_EVAL_DAY", None))
     frozen = frozen_datetime(clock)
     for name in ("podlib", "book_staleness", "wash_detect", "heartbeat"):
         patches.append((mods[name], "datetime", frozen))
@@ -578,6 +584,14 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
         book_count = book.record(scan["rows"], now_s, books_path=books_path, bus_path=bus_path, getter=book_getter)
         book_rows = podlib.read_jsonl(books_path)
         books = _latest_books(book_rows)
+        # Task CF (#124): RiskGate values the open legs from the same recorded books, plus scenario.json
+        # "mark_books" (top-of-book rows stamped at the run's clock) for held legs the scanner does not record.
+        # A leg with no row is worth 0. Restored on exit.
+        mark_books_path = work / "mark_books.jsonl"
+        mark_books_path.write_bytes(books_path.read_bytes() if books_path.exists() else b"")
+        for extra in scenario.get("mark_books", []):
+            podlib.append_jsonl(mark_books_path, dict(extra, ts=now_s, book_ts=now_s))
+        paper_ledger.MARK_BOOKS_PATH = mark_books_path
         markets = {row["id"]: row for row in podlib.read_jsonl(markets_path)}
         # 3. paper cycle + Sentinel check 1
         cycle_1 = paper_cycle.run(markets_path=markets_path, books_path=books_path, bus_path=bus_path, now=now_s,
