@@ -23,7 +23,7 @@ Official overview: https://docs.polymarket.com/concepts/resolution.md (UMA Optim
 
 ### 1. What we actually normalize today
 
-`scanner.normalize` persists: `question, slug, condition_id, version, end_date, closed, fees_enabled, accepting_orders, outcomes, outcome_prices, …` — it does **not** currently copy `description`, `resolutionSource`, or UMA status fields.
+`scanner.normalize` persists: `question, slug, condition_id, version, end_date, closed, fees_enabled (a real Gamma bool, else None = unknown, never free; #116), accepting_orders, outcomes, outcome_prices, …` — it does **not** currently copy `description`, `resolutionSource`, or UMA status fields.
 
 - If raw Gamma JSON in a fixture/response contains `description` / `resolutionSource` / similar: read them for research notes, and file a PR to add them to `normalize` if we want them in `data/markets.jsonl`.
 - Until then: mark structured resolution capture as **TBD (not in repo)**; bots may only quote `question` + `end_date` from normalized rows.
