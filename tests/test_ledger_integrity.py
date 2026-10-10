@@ -534,6 +534,133 @@ def test_existing_ledger_is_checked_before_every_booking(ledger):
     assert ledger.read_bytes() == before
 
 
+# --- (d) risk-control fields (issue #68) ----------------------------------------------------------
+# A modern fill (one with a fill_id) must carry hypothetical and counts_toward_risk as JSON
+# booleans in one of the two legal combinations (real: false/true, hypothetical: true/false) and
+# risk_decision as the string "allow". Nothing is coerced: the truthy string 'false' used to drop a
+# fill from cash, positions and the daily loss while its own conservation snapshot still verified.
+# "missing" deletes the key.
+
+
+@pytest.mark.parametrize("field,value,problem", [
+    ("hypothetical", "missing", "missing_hypothetical"),
+    ("hypothetical", "false", "invalid_hypothetical"),
+    ("hypothetical", "true", "invalid_hypothetical"),
+    ("hypothetical", 0, "invalid_hypothetical"),
+    ("hypothetical", 1, "invalid_hypothetical"),
+    ("hypothetical", 0.0, "invalid_hypothetical"),
+    ("hypothetical", None, "invalid_hypothetical"),
+    ("hypothetical", [], "invalid_hypothetical"),
+    ("counts_toward_risk", "missing", "missing_counts_toward_risk"),
+    ("counts_toward_risk", "false", "invalid_counts_toward_risk"),
+    ("counts_toward_risk", "true", "invalid_counts_toward_risk"),
+    ("counts_toward_risk", 0, "invalid_counts_toward_risk"),
+    ("counts_toward_risk", 1, "invalid_counts_toward_risk"),
+    ("counts_toward_risk", None, "invalid_counts_toward_risk"),
+    ("counts_toward_risk", {}, "invalid_counts_toward_risk"),
+])
+def test_a_modern_fill_never_coerces_its_control_fields(ledger, field, value, problem):
+    assert _commit()["allow"] is True
+    rows = _lines(ledger)
+    if value == "missing":
+        del rows[0][field]
+    else:
+        rows[0][field] = value
+    _rewrite(ledger, rows)
+    state = _state()
+    assert _invalid(state) and state["ledger_problems"] == [f"{problem}:{rows[0][FILL_ID_FIELD]}"]
+
+
+@pytest.mark.parametrize("hypothetical,counts_toward_risk", [(False, False), (True, True)],
+                         ids=["real-but-non-counting", "hypothetical-but-counting"])
+def test_only_two_control_field_combinations_are_legal(ledger, hypothetical, counts_toward_risk):
+    assert _commit()["allow"] is True
+    rows = _lines(ledger)
+    rows[0]["hypothetical"] = hypothetical
+    rows[0]["counts_toward_risk"] = counts_toward_risk
+    _rewrite(ledger, rows)
+    state = _state()
+    assert _invalid(state) and state["ledger_problems"] == [f"inconsistent_control_fields:{rows[0][FILL_ID_FIELD]}"]
+
+
+@pytest.mark.parametrize("value,problem", [
+    ("missing", "missing_risk_decision"),
+    ("veto", "invalid_risk_decision"),
+    ("ALLOW", "invalid_risk_decision"),
+    ("", "invalid_risk_decision"),
+    (None, "invalid_risk_decision"),
+    (1, "invalid_risk_decision"),
+    (True, "invalid_risk_decision"),
+])
+def test_risk_decision_must_be_the_string_allow(ledger, value, problem):
+    assert _commit()["allow"] is True
+    rows = _lines(ledger)
+    if value == "missing":
+        del rows[0]["risk_decision"]
+    else:
+        rows[0]["risk_decision"] = value
+    _rewrite(ledger, rows)
+    state = _state()
+    assert _invalid(state) and state["ledger_problems"] == [f"{problem}:{rows[0][FILL_ID_FIELD]}"]
+
+
+def test_the_two_legal_control_combinations_are_accepted(tmp_path):
+    path = tmp_path / "l.jsonl"
+    real = ledger_store.book(path, _row(market="real"))
+    hypo = ledger_store.book(path, _row(market="hypo", hypothetical=True, counts_toward_risk=False))
+    assert verify(parse_ledger(path.read_bytes())) == []
+    assert real["cash_after_usd"] < PAPER_EQUITY_USD and real["leg_shares_after"] == 10.0
+    assert hypo["cash_after_usd"] == real["cash_after_usd"]  # a hypothetical fill moves nothing
+    assert hypo["leg_shares_after"] == 0.0 and hypo["leg_cost_basis_after_usd"] == 0.0
+
+
+@pytest.mark.parametrize("mutate,problem", [
+    (lambda row: row.update(hypothetical="false"), "invalid_hypothetical"),
+    (lambda row: row.update(counts_toward_risk=1), "invalid_counts_toward_risk"),
+    (lambda row: row.pop("counts_toward_risk"), "missing_counts_toward_risk"),
+    (lambda row: row.update(hypothetical=True), "inconsistent_control_fields"),
+    (lambda row: row.update(risk_decision="veto"), "invalid_risk_decision"),
+    (lambda row: row.pop("risk_decision"), "missing_risk_decision"),
+])
+def test_book_refuses_a_new_row_with_bad_control_fields_and_keeps_the_ledger(tmp_path, mutate, problem):
+    path = tmp_path / "l.jsonl"
+    ledger_store.book(path, _row(market="first"))
+    before = path.read_bytes()
+    row = _row(market="next", **{FILL_ID_FIELD: "bad-new"})
+    mutate(row)
+    with pytest.raises(LedgerIntegrityError) as caught:
+        ledger_store.book(path, row)
+    assert caught.value.problems == [f"{problem}:bad-new"]
+    assert path.read_bytes() == before  # rejected before it is applied or written
+
+
+def test_a_bad_control_field_invalidates_the_state_and_halts_booking(ledger):
+    """Issue #68 repro: hypothetical='false' (a truthy string) dropped the fill from every risk
+    total while its own snapshot verified. It is now an integrity problem before it is replayed,
+    and commit_if_allowed books nothing and takes the existing global-halt path."""
+    assert _commit()["allow"] is True
+    rows = _lines(ledger)
+    rows[0]["hypothetical"] = "false"
+    _rewrite(ledger, rows)
+    before = ledger.read_bytes()
+    problem = f"invalid_hypothetical:{rows[0][FILL_ID_FIELD]}"
+    state = _state("other", "x")
+    assert _invalid(state) and state["ledger_problems"] == [problem]
+    result = _commit(market="next")
+    assert result["allow"] is False and result["halted"] is True
+    assert result["halt_reason"] == "invalid_risk_state" and result["ledger_problems"] == [problem]
+    assert ledger.read_bytes() == before  # no new fill
+    assert any(h["scope"] == "global" for h in halt_store.active_halts())
+
+
+def test_a_legacy_row_is_never_control_checked(ledger):
+    # Issue #68 checks modern fills only: a pre-AF row has no fill_id and keeps its old meaning.
+    _rewrite(ledger, [_row(hypothetical="false", counts_toward_risk=1)])
+    state = _state()
+    assert state["ledger_problems"] == []
+    assert state["open_positions"] == 0  # the old truthiness rule: the string 'false' is hypothetical
+
+
 # --- fees (Task AE functions) ---------------------------------------------------------------------
 
 

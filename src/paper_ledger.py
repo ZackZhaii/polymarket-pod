@@ -163,6 +163,9 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     Task AF: rows come from the strict ledger reader, deduped by fill_id. Any integrity problem
     (parse, ids, Task U numbers, conservation) is listed in ledger_problems and gives the same
     invalid state as Task U, so RiskGate vetoes invalid_risk_state and nothing more is booked.
+    Issue #68: a modern fill whose risk-control fields (hypothetical, counts_toward_risk,
+    risk_decision) are not exactly valid is an integrity problem too, rejected before it is
+    replayed into cash, positions or the daily loss.
     Issue #56: own_quotes comes from the strict quotes reader, once, for every return path. A
     quotes file that cannot be read in full is not a short history: own_quotes is None,
     quote_problems names the lines, and RiskGate vetoes the existing wash_input_invalid.
