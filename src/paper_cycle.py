@@ -44,6 +44,14 @@ Issue #141 (Task BX), tightening only:
   added. ``gaps`` still counts the gaps seen (all rejected; ``structural_rejected`` is the same count). Nothing
   multi-leg ever becomes an intent or an order.
 No network, no orders, no paper fills, no edits to config/risk.toml.
+Issue #75 (tightening only): markets, the single-file books and every enumerated rotated book file are read
+strictly, in full, before the latest quote is chosen or any signal is emitted. A blank line, bad JSON, a
+non-object, invalid UTF-8, an unterminated tail line (a torn append) or an unreadable file is refused: the
+cycle returns ``ok`` False with reason ``input_invalid`` and ``input_problems`` (path, line, problem code),
+zero gaps and zero fills, writes no StaleWatch state and repairs no source file. A missing file, empty books
+and a recording dir with no book file keep their old meaning (missing_book). A non-finite constant
+(NaN/Infinity) is not part of the refusal: the e2e recording carries such a row on purpose and its golden
+output must stay unchanged (the row is inert: book age reads book_ts, the gap path needs 0 < ask < 1).
 """
 from __future__ import annotations
 
@@ -77,7 +85,7 @@ from src.podlib import (  # noqa: E402
     bus,
     load_risk,
     pin_problems,
-    read_jsonl,
+    read_jsonl,  # re-exported: scripts/e2e_offline.py reads the fixtures with it
     utc_now_ms,
 )
 
@@ -95,6 +103,72 @@ RECORDING_EMPTY = "recording_has_no_book_file"
 # Issue #125 (Task BN): the recording's market scope.
 RECORDING_MANIFEST = "manifest.json"
 RECORDING_MANIFEST_SCHEMA = "m1_run/1"  # src.m1_run's manifest schema (== m1_report.RUN_SCHEMA)
+# Issue #75: strict input reading for this module's own inputs (markets, books, rotated books).
+# A bad line is never skipped: the cycle stops before choosing quotes or emitting any signal.
+INPUT_INVALID = "input_invalid"
+INPUT_UNREADABLE = "unreadable"
+INPUT_NOT_UTF8 = "not_utf8"
+INPUT_TORN_TAIL = "torn_tail"
+INPUT_BLANK_LINE = "blank_line"
+INPUT_BAD_JSON = "bad_json"
+INPUT_NOT_OBJECT = "not_object"
+
+
+class CorruptInput(Exception):
+    """A markets/books JSONL input cannot be read as complete (Issue #75).
+
+    Carries only where and what: the path, the 1-based line (None for a file-level problem) and one
+    problem code. The source file is never repaired, truncated or rewritten.
+    """
+
+    def __init__(self, path: Path, problem: str, line: int | None = None, detail: str = "") -> None:
+        self.path = str(path)
+        self.problem = problem
+        self.line = line
+        self.detail = detail
+        where = f"{self.path}:{line}" if line is not None else self.path
+        super().__init__(f"{where}: {problem}" + (f" ({detail})" if detail else ""))
+
+    def as_problem(self) -> dict:
+        return {"path": self.path, "line": self.line, "problem": self.problem}
+
+
+def read_strict_jsonl(path: Path) -> list[dict]:
+    """Every line of ``path`` one JSON object, the file ending in a newline. An absent file has no rows.
+
+    Issue #75: a blank line, bad JSON, a non-object, invalid UTF-8, an unterminated last line (a torn
+    append) or an unreadable file raises CorruptInput, so the caller never keeps computing with the
+    rows that happened to be readable. A non-finite constant (NaN/Infinity) is *not* refused here:
+    the e2e fixture records such a row on purpose and criterion 7 keeps that golden output unchanged
+    (the row is inert downstream: book age uses book_ts, and the gap path needs 0 < ask < 1).
+    """
+    path = Path(path)
+    if not path.exists():
+        return []
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise CorruptInput(path, INPUT_UNREADABLE, None, type(exc).__name__) from exc
+    if data and not data.endswith(b"\n"):
+        raise CorruptInput(path, INPUT_TORN_TAIL)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise CorruptInput(path, INPUT_NOT_UTF8, None, str(exc)) from exc
+    rows: list[dict] = []
+    for number, line in enumerate(text.split("\n")[:-1] if text else [], 1):
+        if not line.strip():
+            raise CorruptInput(path, INPUT_BLANK_LINE, number)
+        try:
+            row = json.loads(line)
+        except ValueError as exc:
+            raise CorruptInput(path, INPUT_BAD_JSON, number, str(exc)) from exc
+        if not isinstance(row, dict):
+            raise CorruptInput(path, INPUT_NOT_OBJECT, number)
+        rows.append(row)
+    return rows
+
+
 NOT_RECORDED = "not_recorded"
 MANIFEST_MISSING = "recording_manifest_missing"
 MANIFEST_INVALID = "recording_manifest_invalid"
@@ -161,17 +235,54 @@ def read_books(books_path: Path, recording_dir: Path | None = None) -> tuple[lis
     """Book rows from ``books_path``, or from every rotated file of ``recording_dir`` when given.
 
     Returns (rows, problem). A recording dir with no book file returns no rows and
-    RECORDING_EMPTY: every leg is then missing_book (stale), never skipped.
+    RECORDING_EMPTY: every leg is then missing_book (stale), never skipped. Issue #75: every file is
+    read strictly, so one corrupt row raises CorruptInput instead of dropping the row and keeping
+    the rest; a missing or empty books file still means no rows (the missing_book rule is unchanged).
     """
     if recording_dir is None:
-        return read_jsonl(books_path), None
+        return read_strict_jsonl(books_path), None
     files = recording_book_files(recording_dir)
     if not files:
         return [], RECORDING_EMPTY
     rows: list[dict] = []
     for path in files:
-        rows.extend(read_jsonl(path))
+        rows.extend(read_strict_jsonl(path))
     return rows, None
+
+
+def _input_invalid(exc: CorruptInput, *, state_path: Path | None) -> dict:
+    """Issue #75: the complete result structure of a cycle refused for corrupt input.
+
+    No signal, no gap, no fill, no skip and no StaleWatch bookkeeping: the caller sees a full result
+    dict with ``ok`` False and the offending path, line and problem code in ``input_problems``.
+    """
+    path = state_path if state_path is not None else SENTINEL_STATE_PATH
+    return {
+        "ok": False,
+        "reason": INPUT_INVALID,
+        "signals": 0,
+        "gaps": 0,
+        "structural_rejected": 0,
+        "resolving_markets": 0,
+        "stale": 0,
+        "fills": 0,
+        "skipped": 0,
+        "skips": [],
+        "halted_markets": [],
+        "sentinel": {
+            "checked": 0,
+            "state_problem": None,
+            "write_problem": None,
+            "halts": [],
+            "state_path": str(path),
+            "all_stale_streak": 0,
+            "all_stale_halt": False,
+        },
+        "books_problem": None,
+        "not_recorded": 0,
+        "recording": None,
+        "input_problems": [exc.as_problem()],
+    }
 
 
 def run(
@@ -195,8 +306,16 @@ def run(
     now_s = now or utc_now_ms()  # Issue #128: milliseconds, like the book_ts it is compared with
     now_at = parse_book_ts(now_s)
     skips: list[dict] = []
-    markets = _latest_by(read_jsonl(markets_path), "id", skips, bus_path)
-    book_rows, books_problem = read_books(books_path, recording_dir)
+    # Issue #75: markets, the single-file books and every enumerated rotated book file are read in
+    # full before any quote is chosen or any signal is emitted. A corrupt or unreadable input fails
+    # the cycle with no gap, no stale count and no StaleWatch write (the streaks are untouched).
+    try:
+        market_rows = read_strict_jsonl(markets_path)
+        book_rows, books_problem = read_books(books_path, recording_dir)
+    except CorruptInput as exc:
+        _assert_risk_unchanged(before)
+        return _input_invalid(exc, state_path=sentinel_state_path)
+    markets = _latest_by(market_rows, "id", skips, bus_path)
     books = _latest_books(book_rows, skips, bus_path)
     state_path = sentinel_state_path if sentinel_state_path is not None else SENTINEL_STATE_PATH
     watch, state_problem = sentinel.load_watch(
