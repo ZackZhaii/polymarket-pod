@@ -59,6 +59,7 @@ def _intent(**overrides: object) -> Intent:
         "book_ts": _iso(NOW),
     }
     fields.update(overrides)
+    fields.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
     return Intent(**fields)  # type: ignore[arg-type]
 
 

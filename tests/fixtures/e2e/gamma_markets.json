@@ -18,7 +18,14 @@
   "version": "v1",
   "closed": false,
   "acceptingOrders": true,
-  "feesEnabled": false
+  "feesEnabled": false,
+  "tags": [
+   {
+    "id": "9001",
+    "slug": "e2e-synthetic",
+    "label": "E2E synthetic"
+   }
+  ]
  },
  {
   "id": "e2e-bravo",
@@ -39,7 +46,14 @@
   "version": "v1",
   "closed": false,
   "acceptingOrders": true,
-  "feesEnabled": true
+  "feesEnabled": true,
+  "tags": [
+   {
+    "id": "9001",
+    "slug": "e2e-synthetic",
+    "label": "E2E synthetic"
+   }
+  ]
  },
  {
   "id": "e2e-charlie",
@@ -60,7 +74,14 @@
   "version": "v1",
   "closed": false,
   "acceptingOrders": true,
-  "feesEnabled": false
+  "feesEnabled": false,
+  "tags": [
+   {
+    "id": "9001",
+    "slug": "e2e-synthetic",
+    "label": "E2E synthetic"
+   }
+  ]
  },
  {
   "id": "e2e-delta",
@@ -81,7 +102,14 @@
   "version": "v1",
   "closed": false,
   "acceptingOrders": true,
-  "feesEnabled": false
+  "feesEnabled": false,
+  "tags": [
+   {
+    "id": "9001",
+    "slug": "e2e-synthetic",
+    "label": "E2E synthetic"
+   }
+  ]
  },
  {
   "id": "e2e-echo",
@@ -102,7 +130,14 @@
   "version": "v1",
   "closed": false,
   "acceptingOrders": true,
-  "feesEnabled": false
+  "feesEnabled": false,
+  "tags": [
+   {
+    "id": "9001",
+    "slug": "e2e-synthetic",
+    "label": "E2E synthetic"
+   }
+  ]
  },
  {
   "id": "e2e-foxtrot",
@@ -123,7 +158,14 @@
   "version": "v1",
   "closed": false,
   "acceptingOrders": true,
-  "feesEnabled": false
+  "feesEnabled": false,
+  "tags": [
+   {
+    "id": "9001",
+    "slug": "e2e-synthetic",
+    "label": "E2E synthetic"
+   }
+  ]
  },
  {
   "id": "e2e-golf",
@@ -144,7 +186,14 @@
   "version": "v1",
   "closed": false,
   "acceptingOrders": true,
-  "feesEnabled": false
+  "feesEnabled": false,
+  "tags": [
+   {
+    "id": "9001",
+    "slug": "e2e-synthetic",
+    "label": "E2E synthetic"
+   }
+  ]
  },
  {
   "id": "e2e-hotel",
@@ -165,7 +214,14 @@
   "version": "v1",
   "closed": false,
   "acceptingOrders": true,
-  "feesEnabled": false
+  "feesEnabled": false,
+  "tags": [
+   {
+    "id": "9001",
+    "slug": "e2e-synthetic",
+    "label": "E2E synthetic"
+   }
+  ]
  },
  {
   "id": "e2e-india",
@@ -186,7 +242,14 @@
   "version": "v1",
   "closed": false,
   "acceptingOrders": true,
-  "feesEnabled": false
+  "feesEnabled": false,
+  "tags": [
+   {
+    "id": "9001",
+    "slug": "e2e-synthetic",
+    "label": "E2E synthetic"
+   }
+  ]
  },
  {
   "id": "e2e-juliet",
@@ -207,6 +270,13 @@
   "version": null,
   "closed": false,
   "acceptingOrders": true,
-  "feesEnabled": false
+  "feesEnabled": false,
+  "tags": [
+   {
+    "id": "9001",
+    "slug": "e2e-synthetic",
+    "label": "E2E synthetic"
+   }
+  ]
  }
 ]

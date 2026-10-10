@@ -48,6 +48,7 @@ from src.podlib import (  # noqa: E402
     utc_now,
 )
 from src import calibration_ids  # noqa: E402 - Task AX (M3 step 2)
+from src import category  # noqa: E402 - issue #131: category buckets on the fill
 from src.book_staleness import latest_by_time, parse_book_ts  # noqa: E402
 from src.fees import booked_fee_usd, ledger_fee  # noqa: E402 - Task AE: one fee module
 from src import ledger_store  # noqa: E402 - Task AF: ledger integrity
@@ -315,6 +316,8 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
     # Task BF: the market's Polymarket event, for calibration clustering. None when unknown or unusable;
     # never a calibration problem (the report falls back to condition_id).
     fill.update(event_fields(intent))
+    # Issue #131: the category buckets RiskGate classified the market into (for M3 calibration grouping).
+    fill["category_buckets"] = category.bucket_label(intent.tags)
     fill["calibration_problems"] = sorted(set(calibration_ids.fill_problems(fill)) | set(market_problems)
                                           | set(context_problems))
     try:
@@ -484,6 +487,8 @@ def _intent(**kwargs: Any) -> Intent:
         "hypothetical": True,
         "note": "Gate test only. Not a forecast and not a claim of edge.",
         "fill_context": calibration_ids.FILL_CONTEXT_GATE_CHECK,  # Task BC: no book context
+        # Issue #131: the synthetic gate-test market's tag, so only the check under test can veto.
+        "tags": ("phase0-gate-test",),
         # Synthetic gate-test touch, stamped now so only the check under test can veto.
         "book_ts": utc_now(),
     }
@@ -639,6 +644,8 @@ def run_cli_intent(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, A
         book_ts=args.book_ts,
         note=args.note or "Operator paper intent. Not a promise of profit.",
         fill_context=calibration_ids.FILL_CONTEXT_OPERATOR_CLI,  # Task BC: no book context
+        # Issue #131: the market's Gamma tag slugs; none given vetoes missing_category.
+        tags=tuple(t.strip() for t in (getattr(args, "tags", None) or "").split(",") if t.strip()) or None,
     )
     return commit_if_allowed(intent, cfg)
 
@@ -674,6 +681,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="UTC ISO time of the book snapshot, e.g. 2026-10-09T01:00:00Z. Missing or older than 120 s vetoes.",
     )
+    parser.add_argument("--tags", default=None,
+                        help="comma-separated Gamma tag slugs of the market (issue #131: none vetoes missing_category)")
     parser.add_argument("--note", default="")
     parser.add_argument(
         "--self-check",

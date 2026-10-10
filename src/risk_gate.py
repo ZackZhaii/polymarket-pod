@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 
 from src import fees  # Task AE: the one fee module (stress_fee / ledger_fee)
 from src import halt_store  # Task AL: the halt consumer (persisted Sentinel / Executor halts)
+from src import category  # issue #131: tags -> category, fail closed
 from src import podlib  # issue #76: the decision clock is read through podlib.datetime
 from src.book_staleness import book_age_problem, parse_book_ts
 from src.podlib import PAPER_EQUITY_USD, pin_problems
@@ -383,6 +384,10 @@ def evaluate(
     intent with both stamps None (a legacy intent) keeps the old behaviour. Veto only: an intent
     inside its window changes no decision.
 
+    Issue #131: the market's category comes from intent.tags (src/category.py). Missing, empty or unusable
+    tags veto missing_category; a banned bucket, tag slug or explicit category vetoes category_banned; an
+    unreadable banned-category source vetoes banned_categories_unreadable.
+
     Edge must be at least MIN_EDGE (0.02, inclusive; code constant, Task X): 0 < edge < MIN_EDGE
     vetoes edge_below_min, edge <= 0 vetoes non_positive_edge.
 
@@ -416,6 +421,10 @@ def evaluate(
             now=now,
         )
     )
+    # Issue #131: RiskGate checks the category itself (not only intent_builder): tags that are missing,
+    # empty or unusable veto missing_category; a banned bucket / tag / category vetoes category_banned;
+    # an unreadable banned-category source vetoes banned_categories_unreadable (never read as empty).
+    reasons.extend(category.category_problems(intent.category, intent.tags))
     if intent.hypothetical and intent.strategy != "phase0-gate-test":
         reasons.append("hypothetical_strategy_not_allowed")
     if intent.side not in {"buy", "sell"}:

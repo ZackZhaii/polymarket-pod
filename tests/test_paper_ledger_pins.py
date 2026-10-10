@@ -65,7 +65,8 @@ def drift(tmp_path, old: str, new: str, name: str = "drift.toml") -> Path:
 
 def operator_args() -> list[str]:
     return ["--strategy", "issue63", "--market", "m", "--token-id", "t", "--model-prob", "0.7",
-            "--market-price", "0.4", "--liquidity", "20000", "--spread", "0.01", "--book-ts", podlib.utc_now()]
+            "--market-price", "0.4", "--liquidity", "20000", "--spread", "0.01", "--book-ts", podlib.utc_now(),
+            "--tags", "test-market"]  # issue #131: an untagged market vetoes missing_category
 
 
 def halts() -> list[dict]:

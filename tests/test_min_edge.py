@@ -25,6 +25,7 @@ def _intent(side: str = "buy", **overrides: object) -> Intent:
         "liquidity_usd": 20000.0, "spread": 0.01, "hypothetical": False, "book_ts": utc_now(),
     }
     fields.update(overrides)
+    fields.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
     return Intent(**fields)  # type: ignore[arg-type]
 
 
