@@ -136,9 +136,14 @@ One row per sealed forecast, keys in this order, no extras (`FORECAST_ROW_FIELDS
 
 Writing: `calibration_ids.append_forecast`, one `O_APPEND` write of the whole line plus
 `fsync`. Refused (`ForecastLogError`, nothing written): wrong keys, a value that is not exact
-JSON (nan/inf), a torn last line already in the file, an OS error. A row whose `forecast_id` is
-already on file is not written again. The forecast is written **before** the bus signal; if it
-cannot be written, no signal is sent.
+JSON (nan/inf), a damaged log already on file (not UTF-8, a blank line, a complete line that is
+not a JSON object, a row without a usable `forecast_id`, a torn last line), a `forecast_id`
+already sealed with different content, an OS error. A row is not written again: the top-level
+`forecast_id` of every complete line is parsed and its canonical JSON compared with this row's
+(key order and whitespace do not matter; `true` and `1` are different content), and every line
+is read before that is decided. The same `forecast_id` with another `category`, `note` or
+`end_date` is therefore refused instead of being silently dropped. The forecast is written
+**before** the bus signal; if it cannot be written, no signal is sent.
 
 ### Signal payload (NewsForecaster -> RiskGate)
 

@@ -139,6 +139,93 @@ def test_append_is_one_complete_line_and_idempotent(paths):
     assert paths["forecasts"].read_bytes() == data
 
 
+def test_idempotence_reads_the_row_not_the_bytes(paths):
+    """Whitespace and key order on file are the same seal; a row's own top-level id is what counts."""
+    emit(paths)
+    row = read_jsonl(paths["forecasts"])[0]
+    formatted = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(" , ", " : ")) + "\n"
+    assert b'"forecast_id" : ' in formatted.encode("utf-8")  # the old byte needle would not have matched
+    paths["forecasts"].write_text(formatted, encoding="utf-8")
+    ci.append_forecast(paths["forecasts"], row)  # identical content, other formatting: not written twice
+    assert paths["forecasts"].read_text(encoding="utf-8") == formatted
+    other = {**row, "forecast_id": "fc_other"}
+    paths["forecasts"].write_text(json.dumps(other, ensure_ascii=False, separators=(",", ":")) + "\n",
+                                  encoding="utf-8")
+    ci.append_forecast(paths["forecasts"], row)  # another id on file is not this seal
+    assert [r["forecast_id"] for r in read_jsonl(paths["forecasts"])] == ["fc_other", row["forecast_id"]]
+
+
+def test_true_and_one_are_not_the_same_content(paths):
+    emit(paths)
+    row = read_jsonl(paths["forecasts"])[0]
+    stored = json.dumps({**row, "sealed_before_book_read": 1}, ensure_ascii=False, separators=(",", ":")) + "\n"
+    paths["forecasts"].write_text(stored, encoding="utf-8")
+    with pytest.raises(ci.ForecastLogError):
+        ci.append_forecast(paths["forecasts"], row)  # true != 1: different content, same id
+    assert paths["forecasts"].read_text(encoding="utf-8") == stored
+
+
+@pytest.mark.parametrize("other", [{"category": "Sports"}, {"note": "a second take"},
+                                   {"end_date": "2027-01-01T00:00:00Z"}])
+def test_a_same_id_line_with_other_content_is_refused(paths, other):
+    emit(paths)
+    row = read_jsonl(paths["forecasts"])[0]
+    stored = json.dumps({**row, **other}, ensure_ascii=False, separators=(",", ":")) + "\n"
+    paths["forecasts"].write_text(stored, encoding="utf-8")
+    with pytest.raises(ci.ForecastLogError):
+        ci.append_forecast(paths["forecasts"], row)
+    assert paths["forecasts"].read_text(encoding="utf-8") == stored
+
+
+def test_every_same_id_row_is_read_before_idempotence_is_decided(paths):
+    emit(paths)
+    row = read_jsonl(paths["forecasts"])[0]
+    conflict = {**row, "note": "not what the first line says"}
+    text = "".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n" for r in (row, conflict))
+    paths["forecasts"].write_text(text, encoding="utf-8")
+    with pytest.raises(ci.ForecastLogError):
+        ci.append_forecast(paths["forecasts"], row)  # the first line matched; the second one still wins
+    assert paths["forecasts"].read_text(encoding="utf-8") == text
+
+
+@pytest.mark.parametrize("data", [
+    b'{"forecast_id": "fc_a"}\nnot json\n',       # a complete line that is not JSON
+    b'{"forecast_id": "fc_a"}\n[]\n',             # a complete line that is not an object
+    b'{"forecast_id": "fc_a"}\n"text"\n',
+    b'{"forecast_id": "fc_a"}\n\n',               # a blank line
+    b'{"forecast_id": "fc_a"}\n{"no_id": 1}\n',   # a row without a usable forecast_id
+    b'{"forecast_id": "fc_a"}\n{"forecast_id": NaN}\n',
+    b'{"forecast_id": "fc_a"}\n{"forecast_id": "fc_b"}\xff\xfe\n',  # not UTF-8
+])
+def test_a_damaged_log_is_never_appended_to(paths, data):
+    emit(paths)
+    row = read_jsonl(paths["forecasts"])[0]
+    paths["forecasts"].write_bytes(data)
+    with pytest.raises(ci.ForecastLogError):
+        ci.append_forecast(paths["forecasts"], row)
+    assert paths["forecasts"].read_bytes() == data
+
+
+@pytest.mark.parametrize("change", [{"category": "Sports"}, {"note": "a second take"},
+                                    {"end_date": "2027-01-01T00:00:00Z"}])
+def test_the_forecaster_never_signals_a_refused_seal(paths, monkeypatch, change):
+    """The same content keeps the same forecast_id; other content under it is refused before the bus."""
+    monkeypatch.setattr(forecaster, "utc_now", lambda: "2026-10-10T00:00:00Z")
+    first = emit(paths)
+    # category, note and end_date are not part of the id, so only the sealed content differs
+    assert first["payload"]["forecast_id"] == ci.make_forecast_id(
+        source=forecaster.SOURCE, ts="2026-10-10T00:00:00Z", market_id="m1", condition_id="0xc1",
+        outcome_index=0, token_id="t-yes", model_prob=0.6, p_low=0.55, p_high=0.65,
+        model_version=forecaster.MODEL_VERSION)
+    forecasts = paths["forecasts"].read_bytes()
+    bus = paths["bus"].read_bytes()
+    with pytest.raises(ci.ForecastLogError):
+        emit(paths, **change)
+    assert paths["forecasts"].read_bytes() == forecasts
+    assert paths["bus"].read_bytes() == bus and len(read_jsonl(paths["bus"])) == 1
+    assert read_jsonl(paths["bus"])[0]["payload"]["forecast_id"] == first["payload"]["forecast_id"]
+
+
 def test_forecasts_path_is_the_logs_default():
     assert podlib.FORECASTS_PATH == podlib.LOG_DIR / "forecasts.jsonl"
 
