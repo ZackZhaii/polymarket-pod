@@ -11,6 +11,10 @@ evaluate() on a grid of prices (including near 0 and 1), sizes, fee rates, slipp
 sides, valid and invalid. The first commit of Task AE asserted equality with today's code; after
 src/fees.py every path must give a fee >= its old value on every point (stress fee per share,
 booked fee_usd, ledger fee_usd), so every edge is <= its old value and nothing newly allows.
+Issue #104 (Task BJ): RiskGate now sizes inside the all-in 1% clip (shares * price + fee <= clip), so an
+order is smaller than the old fixed 1% notional and its fee in USD is smaller with it. The guarantee is
+restated per unit of size: the fee per USD of notional (and per share) is never below the old one, the edge
+never above it, and nothing newly allows. The RECORDED fee_usd values are the old fee at the OLD notional.
 Offline, no credentials.
 """
 from __future__ import annotations
@@ -123,6 +127,15 @@ def _evaluate(side, model_prob, market_price, slippage, fee_rate, size, cfg=None
     return evaluate(intent, cfg, STATE, now=NOW_DT)
 
 
+def _old_notional(size: object) -> float:
+    """The old RiskGate notional: PAPER_EQUITY_USD * min(max_order_pct, 0.01), 0 for an invalid size."""
+    try:
+        value = float(size)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    return 1000.0 * min(value, 0.01) if math.isfinite(value) else 0.0
+
+
 def _same(a: float, b: float) -> bool:
     return a == b or (math.isnan(a) and math.isnan(b))
 
@@ -135,7 +148,7 @@ def test_frozen_copies_reproduce_the_recorded_values(point):
     side, p, m, s, f, size, edge, fee_usd, _allow = point
     decision = _evaluate(side, p, m, s, f, size)
     assert _same(old_edge(side, p, m, s, f, decision.effective_price), edge)
-    assert old_ledger_fee(decision.notional_usd, f) == fee_usd
+    assert old_ledger_fee(_old_notional(size), f) == fee_usd
 
 
 def _old_allow(decision, old: float) -> bool:
@@ -148,10 +161,14 @@ def _old_allow(decision, old: float) -> bool:
 def test_recorded_points_never_get_cheaper(point):
     side, p, m, s, f, size, edge, fee_usd, allow = point
     decision = _evaluate(side, p, m, s, f, size)
-    assert decision.fee_usd >= fee_usd, decision
+    old_notional = _old_notional(size)
+    if old_notional > 0 and decision.notional_usd > 0:  # issue #104: per USD of notional, never cheaper
+        assert decision.fee_usd / decision.notional_usd >= fee_usd / old_notional - 1e-12, decision
+        assert decision.notional_usd <= old_notional  # and the order is never larger
+    assert decision.fee_usd >= old_ledger_fee(decision.notional_usd, f), decision
     assert decision.edge <= edge, decision
     assert allow or not decision.allow, decision.reasons  # nothing newly allows
-    assert fees.booked_fee_usd(decision.fee_usd) >= old_booked_fee(fee_usd)
+    assert fees.booked_fee_usd(decision.fee_usd) >= old_booked_fee(old_ledger_fee(decision.notional_usd, f))
 
 
 def test_grid_no_fee_goes_down_and_nothing_newly_allows():
@@ -209,8 +226,12 @@ def test_ledger_never_books_less_than_before(tmp_path, monkeypatch, point):
                     token_id="t", book_ts=utc_now())
     result = paper_ledger.commit_if_allowed(intent, load_risk())
     assert result["allow"] is True
-    assert result["fill"]["fee_usd"] >= old_booked_fee(fee_usd)
-    assert paper_ledger.load_state("ae", "t")["daily_loss_usd"] >= old_booked_fee(fee_usd)
+    fill = result["fill"]
+    # issue #104: the fill is smaller (all-in clip); its fee is the old rate on its own notional or more
+    assert fill["fee_usd"] >= old_booked_fee(old_ledger_fee(fill["notional_usd"], f))
+    assert fill["fee_usd"] / fill["notional_usd"] >= fee_usd / _old_notional(size) - 1e-8
+    assert fill["notional_usd"] + fill["fee_usd"] <= _old_notional(size)
+    assert paper_ledger.load_state("ae", "t")["daily_loss_usd"] >= fill["fee_usd"]
 
 
 @pytest.mark.parametrize("point", [r for r in RECORDED if r[-1] and r[3] < ASSUMED_SLIPPAGE],

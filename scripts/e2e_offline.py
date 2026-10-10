@@ -290,7 +290,8 @@ def risk_sha(root: Path) -> str:
 
 def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: dict[str, Any],
                  books: dict[tuple[str, str], dict[str, Any]], kelly_frac_raw: float | None = None,
-                 intent_created_at: str | None = None, intent_expires_at: str | None = None):
+                 intent_created_at: str | None = None, intent_expires_at: str | None = None,
+                 shares: float | None = None, limit_price: float | None = None):
     """The one stage with no src module: turn a NewsForecaster signal into a RiskGate Intent.
 
     model_prob comes from the bus signal payload, the token from the scanner row, the price
@@ -303,6 +304,8 @@ def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: d
     Issue #76: intent_created_at / intent_expires_at are the shadow intent's own validity window for
     the same token and side when it built one, else both None (a legacy intent, unchanged behaviour):
     this harness stands in for to_risk_intent, which passes the window through.
+    Issue #104: shares / limit_price likewise are the shadow intent's own size for the same token and side,
+    else both None (RiskGate then sizes from its all-in clip alone).
     """
     from src import podlib
     from src.calibration_ids import make_decision_id
@@ -351,6 +354,8 @@ def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: d
         event_slug=market_row.get("event_slug"),
         intent_created_at=intent_created_at,  # issue #76: the window as built, never re-extended
         intent_expires_at=intent_expires_at,
+        shares=shares,  # issue #104: intent_builder's size; RiskGate only shrinks it
+        limit_price=limit_price,
     )
 
 
@@ -428,6 +433,15 @@ def _shadow_intent_window(result, forecast: dict[str, Any],
     if oi.token_id != str(tokens[index]) or oi.side != forecast.get("side"):
         return None, None
     return oi.created_at, oi.expires_at
+
+
+def _shadow_intent_size(result, forecast: dict[str, Any],
+                        market_row: dict[str, Any]) -> tuple[float | None, float | None]:
+    """Issue #104: the shadow intent's shares / limit_price when it is for the forecast's own token and
+    side (as _shadow_intent_window), else (None, None)."""
+    if _shadow_intent_window(result, forecast, market_row) == (None, None):
+        return None, None
+    return result.intent.shares, result.intent.limit_price
 
 
 def shadow_problems(label: str, result, harness_intent, decision_reasons: list[str]) -> list[str]:
@@ -581,9 +595,11 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
             shadow, shadow_view = shadow_intent(forecast, signal, markets[forecast["market"]], books, cfg_now,
                                                 clock.now)
             created_at, expires_at = _shadow_intent_window(shadow, forecast, markets[forecast["market"]])
+            size_shares, size_limit = _shadow_intent_size(shadow, forecast, markets[forecast["market"]])
             intent = build_intent(forecast, signal, markets[forecast["market"]], books,
                                   kelly_frac_raw=_shadow_kelly_raw(shadow, forecast, markets[forecast["market"]]),
-                                  intent_created_at=created_at, intent_expires_at=expires_at)
+                                  intent_created_at=created_at, intent_expires_at=expires_at,
+                                  shares=size_shares, limit_price=size_limit)
             before = _ledger_view(Path(path))  # a plain path: the gate's own reads never count as a writer's
             paper_ledger.PAPER_PATH = path
             result = paper_ledger.commit_if_allowed(intent, cfg_now)

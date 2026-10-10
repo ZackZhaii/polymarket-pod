@@ -1498,8 +1498,29 @@ judged dead (Poly风控 F6). Done by grok-bot on dev@d5026a8.
 - Tests: `tests/test_ws_silence.py` (PONGs but no data -> data_silent at ~90 s; market events restart it; 38.7 s
   gaps never trip it; which frames count); live fakes in the clock-jump / recorder tests now send trades.
 
+## Task BJ — Issue #104: RiskGate sizes inside the all-in 1% clip, never above intent_builder
+
+Status: done.
+
+P1 from Poly预测's review (B2): intent_builder sized 20 shares @ 0.50, to_risk_intent passed no size, and RiskGate
+booked its own $10 / 0.505 = 19.80 shares plus a $0.40 fee: $10.40, 1.04% of equity. Poly风控's interim rule: the
+1% cap includes fees. Done by grok-bot on dev@d5026a8.
+
+- Root cause: two sizings. RiskGate set notional = 1% of equity regardless of the intent, divided by its
+  slippage price, and added the fee on top; intent_builder floored cap / limit_price without slippage or fee.
+- Fix (only shrinks): `risk_gate.Intent.shares` / `limit_price` carry intent_builder's size. Booked shares =
+  min(intent.shares, floor_to_INTENT_SHARE_STEP(cap / (max(effective, limit) + fee_per_share))); notional_usd =
+  shares * effective; fee = fees.ledger_fee. So shares * max(effective, limit) + fee <= cap. A legacy intent
+  (no size) is sized the same all-in way. Invalid shares / limit veto; nothing fitting vetoes
+  `order_cost_above_clip`. No threshold or risk.toml change.
+- e2e golden regenerated via --update-golden (sizes, cash, cost basis only).
+- Tests: `tests/test_riskgate_intent_size.py` (the repro, never above the intent, limit above effective,
+  legacy all-in, invalid sizes, nothing fits, fixed-seed fuzz of intent_builder intents).
+
 ## Latest
 
+- 2026-10-10: Task BJ (issue #104): RiskGate books min(intent_builder's shares, what fits the all-in 1% clip);
+  cost plus fee never above $10. No threshold change.
 - 2026-10-10: Task BK: WS recorder `data_silent` after WS_DATA_SILENCE_S=90 s with no market event (PONG does
   not count, Poly风控 F6); BI's any-frame `silent` (60 s) kept.
 - 2026-10-10: Task BI: WS recorder inbound-silence watchdog (`silent` after WS_SILENCE_TIMEOUT_S=60 s of no

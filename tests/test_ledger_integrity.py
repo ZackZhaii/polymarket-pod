@@ -682,13 +682,14 @@ def test_booked_fee_is_never_lower_and_recomputes_exactly(ledger, side, model_pr
 
 
 def test_rounding_case_books_the_higher_recomputed_fee(ledger):
-    """The decision fee rounds to 0.55923728; recomputed from the stored (rounded) values it is
-    0.55923729. The higher wins (+1e-8 USD), so the conservation check recomputes it exactly."""
-    intent = _intent(side="sell", market_price=0.5339, model_prob=0.2339, fee_rate=0.0554)
+    """The decision fee rounds to 0.30065086; recomputed from the stored (rounded) values it is
+    0.30065087. The higher wins (+1e-8 USD), so the conservation check recomputes it exactly.
+    (Issue #104 resized orders, so the case moved from the old sell 0.5339 / 0.0554 to this buy.)"""
+    intent = _intent(side="buy", market_price=0.1513, model_prob=0.4513, fee_rate=0.031)
     decision = evaluate(intent, load_risk(), _state("none", "none"))
-    assert booked_fee_usd(decision.fee_usd) == 0.55923728
+    assert booked_fee_usd(decision.fee_usd) == 0.30065086
     fill = paper_ledger.commit_if_allowed(intent, load_risk())["fill"]
-    assert fill["fee_usd"] == 0.55923729
+    assert fill["fee_usd"] == 0.30065087
     assert _state()["ledger_problems"] == []
 
 
