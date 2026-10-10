@@ -14,7 +14,7 @@ Sentinel column (what the resident Sentinel does when a heartbeat finishes with 
 For every entry point:
 
 - An uncaught exception ends Python with 1 and a traceback. The heartbeat wrappers write state `crashed` first, and
-  the Sentinel reads that state, not the 1 (ws_recorder / m1_run / halt_consumer crash = global halt, other = alert).
+  the Sentinel reads that state, not the 1 (ws_recorder / m1_run / halt_consumer / m2_runner crash = global halt, other = alert).
 - `--help` exits 0. Usage errors are each module's `EXIT_USAGE` (never argparse's own exit).
 - Pin drift (Task AS, gaps 5 and 6, `src/pins.py`): config/risk.toml is checked as a file (sha256
   `0aea23af…bc04`, CRLF normalised, and every key with its value and type, no unknown key) at start by scanner,
@@ -122,6 +122,21 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 | 4 | `EXIT_SENTINEL_NOT_FRESH` | the launched Sentinel never beat fresh within SENTINEL_HEARTBEAT_TIMEOUT_S; nothing else started | - |
 | 5 | `EXIT_NOT_READY` | the chain append or a runs/m2/current.json write failed, or a later process was not ready within its Sentinel timeout; nothing after it started | - |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins; refused, global halt recorded (`--dry-run`: none recorded) | - |
+
+## `src/m2_runner.py`
+
+`python -m src.m2_runner --run-dir runs/m2 [--max-runtime S] [--once]`: the M2 paper runner (issue #119). Every iteration checks
+KILL, the live flags, the risk.toml pins, halts, the ledger, the daily loss breaker and disk before any read, seal or commit.
+Heartbeat every HEARTBEAT_RUNNER_EVERY_S (`paused` while paused); single instance by `runs/m2/runner.lock`. Paper only, no executor.
+
+| Code | Name | Meaning | Sentinel |
+|---|---|---|---|
+| 0 | `EXIT_OK` | `runs/m2/KILL` found, `--max-runtime` reached or `--once` done | - |
+| 2 | `EXIT_USAGE` | usage error (an unknown argument, `--max-runtime` not > 0) | alert |
+| 3 | `EXIT_ALREADY_RUNNING` | another m2_runner holds `runner.lock` (no heartbeat written, nothing done) | alert |
+| 4 | `EXIT_WRITE_FAILED` | a journal / events / candidates write failed | global halt |
+| 6 | `EXIT_PIN_OR_LIVE` | config/risk.toml off its pins or a live flag (`live_enabled` not false, `mode` not paper, `require_human_gate` not true); global halt recorded (`risk_toml_pin_drift` / `m2_live_flag`) | global halt |
+| 7 | `EXIT_SELF_CHECK` | the start self-check failed (run dir or inbox not writable) | alert |
 
 ## `src/paper_cycle.py`
 

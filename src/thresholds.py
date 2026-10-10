@@ -152,6 +152,25 @@ FORECAST_MAX_ASOF_LAG_S = 21600.0
 # (interval_too_narrow below it: a forecast that claims near-certainty about an open market). Must be in
 # (0, 0.5). M2 pending.
 FORECAST_MIN_HALF_WIDTH = 0.03
+# Issue #119 (Task CE, M2-C1): the paper runner src/m2_runner.py (Poly预测's M2 runner spec C.2, C.4, C.6). All
+# M2 pending. One iteration (checks first, then scan / inbox / decisions) starts this often ...
+RUNNER_LOOP_S = 60.0
+# ... its heartbeat (logs/heartbeat/m2_runner.json, running or paused) is written this often, also while it waits ...
+HEARTBEAT_RUNNER_EVERY_S = 30.0
+# ... and the Sentinel halts everything (global) when a live m2_runner heartbeat is older than this.
+HEARTBEAT_RUNNER_TIMEOUT_S = 120.0
+# The Sentinel alerts when the runner has been paused (a halt, the daily loss breaker, disk) longer than this.
+RUNNER_PAUSED_ALERT_S = 21600.0
+# The runner rescans Gamma this often; a scan older than RUNNER_SCAN_MAX_AGE_S builds no intent.
+RUNNER_SCAN_EVERY_S = 1800.0
+RUNNER_SCAN_MAX_AGE_S = 7200.0
+# At most this many inbox files are checked per iteration, and a sealed signal is evaluated at most this often.
+RUNNER_MAX_INGEST_PER_ITER = 20
+RUNNER_MAX_EVALS_PER_SIGNAL = 10
+# Disk: the runner pauses with less than DISK_MIN_FREE_GB free on the run dir's volume, or when the run dir
+# holds more than RUNNER_DISK_BUDGET_GB.
+DISK_MIN_FREE_GB = 2.0
+RUNNER_DISK_BUDGET_GB = 5.0
 # Acceptance criteria (M2 pending; conservative first values, flagged for Poly指挥 / the user).
 # KEY-approved 2026-10-11 家伟批准: the M1 acceptance run targets 6 h (m1_run's default --max-runtime) ...
 M1_RUN_TARGET_S = 21600.0
@@ -385,6 +404,22 @@ def consistency_problems() -> list[str]:
         problems.append("FORECAST_MAX_ASOF_LAG_S must be a float with 0 < FORECAST_MAX_ASOF_LAG_S <= 86400")
     if not (isinstance(FORECAST_MIN_HALF_WIDTH, float) and 0.0 < FORECAST_MIN_HALF_WIDTH < 0.5):
         problems.append("FORECAST_MIN_HALF_WIDTH must be a float in (0, 0.5)")
+    runner_floats = ("RUNNER_LOOP_S", "HEARTBEAT_RUNNER_EVERY_S", "HEARTBEAT_RUNNER_TIMEOUT_S", "RUNNER_PAUSED_ALERT_S",
+                     "RUNNER_SCAN_EVERY_S", "RUNNER_SCAN_MAX_AGE_S", "DISK_MIN_FREE_GB", "RUNNER_DISK_BUDGET_GB")
+    for name in runner_floats:  # Task CE (#119)
+        value = globals()[name]
+        if not (isinstance(value, float) and 0.0 < value < float("inf")):
+            problems.append(f"{name} must be a finite float > 0")
+    if not HEARTBEAT_RUNNER_EVERY_S < HEARTBEAT_RUNNER_TIMEOUT_S <= RUNNER_PAUSED_ALERT_S:
+        problems.append("need HEARTBEAT_RUNNER_EVERY_S < HEARTBEAT_RUNNER_TIMEOUT_S <= RUNNER_PAUSED_ALERT_S")
+    if not RUNNER_LOOP_S < HEARTBEAT_RUNNER_TIMEOUT_S:
+        problems.append("need RUNNER_LOOP_S < HEARTBEAT_RUNNER_TIMEOUT_S")
+    if not RUNNER_SCAN_EVERY_S < RUNNER_SCAN_MAX_AGE_S:
+        problems.append("need RUNNER_SCAN_EVERY_S < RUNNER_SCAN_MAX_AGE_S")
+    for name in ("RUNNER_MAX_INGEST_PER_ITER", "RUNNER_MAX_EVALS_PER_SIGNAL"):
+        value = globals()[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            problems.append(f"{name} must be a whole number >= 1")
     if not 0.0 < M1_CONSOLE_CLOSE_WAIT_S < 5.0:
         problems.append("0 < M1_CONSOLE_CLOSE_WAIT_S < 5 (Windows kills a closed console's process after about 5 s)")
     if not (M1_ROTATE_S > 0.0 and M1_REST_EVERY_S > 0.0 and M1_MIN_RUN_S > 0.0):
