@@ -64,6 +64,8 @@ EXPECTED = {
     "FEE_CACHE_TTL_S": 900.0,  # Task BZ #117 (M2 pending)
     "FEE_NEG_CACHE_S": 60.0,  # Task BZ #117 (M2 pending)
     "FEE_RATE_MAX": 0.25,  # Task BZ #117 (M2 pending)
+    "FORECAST_MAX_ASOF_LAG_S": 21600.0,  # Task CD #118 (M2 pending)
+    "FORECAST_MIN_HALF_WIDTH": 0.03,  # Task CD #118 (M2 pending)
     "M1_RUN_TARGET_S": 21600.0,  # KEY-approved 2026-10-11 家伟批准
     "M1_MIN_RUN_S": 21540.0,  # KEY-approved 2026-10-11 家伟批准 (was 86340.0)
     "M1_MIN_COVERAGE": 0.99,
@@ -188,6 +190,8 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "M1_MANIFEST_PROGRESS_S", "M1_CONSOLE_CLOSE_WAIT_S",
               # Task BZ (#117, M2-A Gamma-only slice): per-market fee source.
               "FEE_CACHE_TTL_S", "FEE_NEG_CACHE_S", "FEE_RATE_MAX",
+              # Task CD (#118, M2-B): the forecast inbox.
+              "FORECAST_MAX_ASOF_LAG_S", "FORECAST_MIN_HALF_WIDTH",
               # Task AK: Data API v2 reconciliation.
               "RECONCILE_SHARES_TOL", "DATA_API_POSITIONS_DUST_SHARES", "DATA_API_TRADES_MIN_SHARES",
               "DATA_API_MAX_LAG_S", "DATA_API_IDENTITY_TOL_USDC",
@@ -378,6 +382,10 @@ def test_relations_hold():
         ("WS_RAW_BOOK_FILE_MAX_BYTES = 16 * 1024 * 1024", "WS_RAW_BOOK_FILE_MAX_BYTES = 512 * 1024 * 1024"),
         ("WS_RAW_BOOK_RUN_MAX_BYTES = 256 * 1024 * 1024", "WS_RAW_BOOK_RUN_MAX_BYTES = 0"),
         ("WS_ROW_REFRESH_S = 30.0", "WS_ROW_REFRESH_S = 120.0"),
+        ("FORECAST_MAX_ASOF_LAG_S = 21600.0", "FORECAST_MAX_ASOF_LAG_S = 0.0"),  # Task CD
+        ("FORECAST_MAX_ASOF_LAG_S = 21600.0", "FORECAST_MAX_ASOF_LAG_S = 604800.0"),  # Task CD: above one day
+        ("FORECAST_MIN_HALF_WIDTH = 0.03", "FORECAST_MIN_HALF_WIDTH = 0.0"),  # Task CD
+        ("FORECAST_MIN_HALF_WIDTH = 0.03", "FORECAST_MIN_HALF_WIDTH = 0.5"),  # Task CD
         ("WS_STOP_POLL_S = 1.0", "WS_STOP_POLL_S = 0.0"),
         ("WS_STOP_POLL_S = 1.0", "WS_STOP_POLL_S = 11.0"),
         ("M1_TOP_MARKETS = 5", "M1_TOP_MARKETS = 0"),
