@@ -101,9 +101,10 @@ def test_reasons_are_registered_and_ranked_before_ordinary_filters():
     assert all(scanner.REASONS.index(name) < first_plain for name in names)
     assert scanner.REASONS.index("not_accepting_orders") < scanner.REASONS.index(names[0])
     # structural reasons keep their place
-    assert scanner.REASONS[:10] == (
+    assert scanner.REASONS[:11] == (
         "closed", "missing_version", "unsupported_version", "expired", "missing_end_date",
         "invalid_end_date", "near_expiry", "invalid_min_hours_to_expiry", "invalid_now",
+        "market_expired_or_resolving",  # issue #141 (Task BX)
         "not_accepting_orders",
     )
     assert scanner.REASONS[-5:] == ("missing_bid_ask", "low_liquidity", "wide_spread", "missing_price", "long_tail_price")
