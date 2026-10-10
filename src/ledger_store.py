@@ -28,6 +28,11 @@ nothing more. All of this is tightening only and fails closed. No orders, keys o
     an older appender (no final newline) is ``unterminated_last_row``; malformed or non-object
     lines are ``malformed_row`` / ``non_object_row`` (podlib.read_jsonl silently skips them; the
     ledger no longer does).
+    Issue #64: the comparison and the replace run under the issue #52 cross-process mutex
+    (``halt_store.StateLock`` on ``<ledger>.lock``), never a thread lock or an extra unlocked
+    read. The compare re-reads the ledger after the mutex is held, so a competing book that
+    completed in the meantime is detected and kept (``LedgerIntegrityError``, our write is
+    refused). A mutex that cannot be taken refuses the write too (``OSError``, fail closed).
 
 (c) Conservation
     Replaying the counted rows (not hypothetical, counts_toward_risk not False; the same rows
@@ -66,6 +71,7 @@ from pathlib import Path
 from typing import Any
 
 from src.fees import booked_fee_usd, ledger_fee
+from src.halt_store import StateLock  # issue #64: the issue #52 cross-process mutex, reused as-is
 from src.thresholds import LEDGER_OPEN_EPS, PAPER_EQUITY_USD
 
 FILL_ID_FIELD = "fill_id"
@@ -347,7 +353,11 @@ def atomic_append(path: Path, expected: bytes, line: bytes) -> None:
     """Replace ``path`` (whose bytes must still be ``expected``) with ``expected + line``, atomically.
 
     Temp file in the same directory, flush + fsync, os.replace. On any failure the temp file is
-    removed and the old ledger is untouched.
+    removed and the old ledger is untouched. Issue #64: the fresh read, the comparison and the
+    replace all run under the cross-process mutex (issue #52), so another process's completed
+    book can neither slip in between them nor be overwritten by ours; a stale ``expected`` is a
+    LedgerIntegrityError that keeps the other writer's rows, and a mutex we cannot take is an
+    OSError before anything is written (fail closed).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
@@ -356,10 +366,16 @@ def atomic_append(path: Path, expected: bytes, line: bytes) -> None:
             handle.write(expected + line)
             handle.flush()
             os.fsync(handle.fileno())
-        current = path.read_bytes() if path.exists() else b""
-        if current != expected:
-            raise LedgerIntegrityError(["ledger_changed_during_write"])
-        os.replace(tmp, path)
+        mutex = StateLock(path)
+        if not mutex.acquire():
+            raise OSError("ledger_lock_failed")
+        try:
+            current = path.read_bytes() if path.exists() else b""
+            if current != expected:
+                raise LedgerIntegrityError(["ledger_changed_during_write"])
+            os.replace(tmp, path)
+        finally:
+            mutex.release()
     except BaseException:
         try:
             tmp.unlink()
