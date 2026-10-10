@@ -26,16 +26,19 @@ never a default that hides exposure):
   ``cursor_loop``; hitting MAX_PAGES with a cursor left is ``incomplete_walk``.
 * Position rows: ``proxy_wallet`` (must be the requested wallet), ``token_id`` (decimal digits),
   ``condition_id`` (0x + 64 hex), ``current_size`` (finite JSON number >= 0; v2 says a missing or
-  null number means unavailable, never zero) and ``status`` (OPEN or REDEEMABLE on an OPEN request).
+  null number means unavailable, never zero) and ``status`` (a string, OPEN or REDEEMABLE on an
+  OPEN request).
   The documented row identities must hold within DATA_API_IDENTITY_TOL_USDC, so ``current_price``,
   ``current_value``, ``entry_cost_usdc``, ``entry_fees_usdc``, ``total_cost_usdc``, ``realized_pnl``,
   ``unrealized_pnl`` and ``total_pnl`` must be finite numbers too:
   current_value = current_size * current_price, unrealized_pnl = current_value - entry_cost_usdc,
   total_pnl = realized_pnl + unrealized_pnl, total_cost_usdc = entry_cost_usdc + entry_fees_usdc.
   A token served twice is ``duplicate_remote_token``.
-* Trade rows: ``proxy_wallet``, ``side`` (BUY/SELL), ``token_id``, ``condition_id``, ``size``
-  (finite > 0), ``price`` (finite, 0..1), ``timestamp`` (int > 0) and ``transaction_hash``
+* Trade rows: ``proxy_wallet``, ``side`` (a string, BUY/SELL), ``token_id``, ``condition_id``,
+  ``size`` (finite > 0), ``price`` (finite, 0..1), ``timestamp`` (int > 0) and ``transaction_hash``
   (0x + 64 hex). A string where a number is due, a bool, NaN or inf is malformed, not coerced.
+  So is a non-string enum value (issue #54): a list, object, null or bool ``status`` or ``side``
+  is reported invalid (fail, exit 3), never an unhashable crash.
   Dedupe key transaction_hash + token_id + side: an exact repeat of a row is counted once; rows
   sharing the key but differing (one transaction filling several orders, seen live) are separate
   fills and all count. Either way a wrong guess makes the ledger comparison fail, never pass.
@@ -252,7 +255,9 @@ def parse_positions(rows: list[Any], user: str) -> tuple[dict[str, float], list[
         size = _number(row.get("current_size"))
         if size is None or size < 0:
             problems.append(f"position_invalid_current_size:{label}")
-        if row.get("status") not in OPEN_STATUSES:
+        status = row.get("status")
+        # Issue #54: a non-string (list, object, null, bool) is invalid, never an unhashable crash.
+        if not isinstance(status, str) or status not in OPEN_STATUSES:
             problems.append(f"position_invalid_status:{label}")
         values = {name: _number(row.get(name)) for name in IDENTITY_FIELDS}
         missing = [name for name, value in values.items() if value is None]
@@ -296,7 +301,8 @@ def parse_trades(rows: list[Any], user: str) -> tuple[dict[str, dict[str, float]
             problems.append(f"trade_foreign_wallet:{label}")
             bad = True
         side = row.get("side")
-        if side not in SIDES:
+        # Issue #54: same as position status — the type is checked before the set membership test.
+        if not isinstance(side, str) or side not in SIDES:
             problems.append(f"trade_invalid_side:{label}")
             bad = True
         token = _text(row.get("token_id"), TOKEN_RE)
