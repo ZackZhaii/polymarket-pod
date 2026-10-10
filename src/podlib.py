@@ -5,7 +5,9 @@ import http.client
 import json
 import socket
 import ssl
+import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -144,10 +146,38 @@ def pin_problems(cfg: dict[str, Any]) -> list[str]:
     return problems
 
 
+class AppendLockError(OSError):
+    """Issue #162: the ``<file>.lock`` mutex was not taken in time. An OSError, so every caller's
+    existing write-failure path (halt / exit code) handles it: the write fails closed, never unguarded."""
+
+
+@contextmanager
+def append_lock(path: Path):
+    """Issue #162: the cross-process mutex for a JSONL file several processes append to (bus, quotes,
+    forecasts, proposals): halt_store's StateLock (msvcrt / flock byte lock on ``<file>.lock``, a file
+    that is never replaced) with its existing HALT_STATE_LOCK_TIMEOUT_S. Not re-entrant: never nest it
+    on the same file. Raises AppendLockError when the lock is not taken."""
+    from src.halt_store import StateLock  # local: halt_store imports this module
+
+    lock = StateLock(Path(path))
+    if not lock.acquire():
+        raise AppendLockError(f"append lock {lock.path} not taken; nothing written")
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def append_jsonl(path: Path, row: dict[str, Any]) -> None:
+    """Append one JSON line under ``<file>.lock`` (issue #162). Binary mode with an explicit ``\\n`` so a
+    line is the same bytes on every OS. Raises OSError (including AppendLockError): nothing is written."""
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+    payload = (json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    with append_lock(path):
+        with path.open("ab") as handle:
+            handle.write(payload)
+            handle.flush()
 
 
 def canonical_role(name: str) -> str:
@@ -281,18 +311,32 @@ def as_float(value: Any) -> float | None:
         return None
 
 
+READ_JSONL_WARN_LINES = 10  # issue #162: how many bad line numbers a WARN lists (display only)
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Every JSON-object line of ``path``. Issue #162: a line that is not JSON or not an object is still
+    skipped (no strict mode), but never silently: one WARN on stderr names the file, the count and the
+    first line numbers."""
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    bad: list[int] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         text = line.strip()
         if not text:
             continue
         try:
             row = json.loads(text)
         except json.JSONDecodeError:
+            bad.append(number)
             continue
         if isinstance(row, dict):
             rows.append(row)
+        else:
+            bad.append(number)
+    if bad:
+        shown = ", ".join(str(n) for n in bad[:READ_JSONL_WARN_LINES])
+        more = f", ... ({len(bad) - READ_JSONL_WARN_LINES} more)" if len(bad) > READ_JSONL_WARN_LINES else ""
+        print(f"WARN read_jsonl {path}: {len(bad)} unreadable line(s) skipped (line {shown}{more})", file=sys.stderr)
     return rows

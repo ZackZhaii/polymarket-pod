@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Sequence
 
 from src import calibration_ids
-from src.podlib import FORECASTS_PATH, bus, utc_now
+from src.podlib import FORECASTS_PATH, AppendLockError, append_lock, bus, utc_now
 
 BUS_NAME = "NewsForecaster"
 STRATEGY = "news-forecaster"
@@ -117,8 +117,14 @@ def emit_probability(
         "event_slug": calibration_ids.event_value(event_slug),
     }
     row["calibration_problems"] = calibration_ids.forecast_problems(row)
-    # Seal first. A ForecastLogError propagates and nothing reaches the bus.
-    calibration_ids.append_forecast(Path(forecasts_path) if forecasts_path is not None else FORECASTS_PATH, row)
+    # Seal first. A ForecastLogError propagates and nothing reaches the bus. Issue #162: the duplicate
+    # check and the append hold the forecasts file's append lock; a lock not taken is a ForecastLogError.
+    target = Path(forecasts_path) if forecasts_path is not None else FORECASTS_PATH
+    try:
+        with append_lock(target):
+            calibration_ids.append_forecast(target, row)
+    except AppendLockError as exc:
+        raise calibration_ids.ForecastLogError(str(exc)) from exc
     payload: dict = {
         "model_prob": p,
         "order": False,

@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.book_staleness import book_age_problem
-from src.podlib import QUOTES_PATH, bus, read_jsonl, utc_now
+from src.podlib import QUOTES_PATH, append_lock, bus, read_jsonl, utc_now
 from src.thresholds import MAX_BOOK_AGE_S, SENTINEL_STALE_CONSECUTIVE, SENTINEL_STALE_S  # Task AC: values in src/thresholds.py
 
 # Sentinel's proposal (COORDINATION #9): a book older than 120 s is stale, and the alarm fires only
@@ -120,7 +120,15 @@ def cancel_open_quotes(path: Path, ts: str, market: str = "") -> int:
 
     The Maker appends quotes; it checks the halt before and after its append (src/maker.py), so a
     quote racing this rewrite is cancelled by the Maker itself. Raises OSError if the rewrite fails.
+    Issue #162: the read and the rewrite hold the quotes file's append lock (the one the Maker's
+    append_jsonl takes), so no appended quote is lost by the rewrite; a lock not taken raises
+    AppendLockError (an OSError). The strict read of bad lines stays with #134 / #99.
     """
+    with append_lock(path):
+        return _cancel_locked(path, ts, market)
+
+
+def _cancel_locked(path: Path, ts: str, market: str) -> int:
     rows = read_jsonl(path)
     cancelled = 0
     for row in rows:
