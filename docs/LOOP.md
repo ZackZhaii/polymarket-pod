@@ -1517,8 +1517,29 @@ booked its own $10 / 0.505 = 19.80 shares plus a $0.40 fee: $10.40, 1.04% of equ
 - Tests: `tests/test_riskgate_intent_size.py` (the repro, never above the intent, limit above effective,
   legacy all-in, invalid sizes, nothing fits, fixed-seed fuzz of intent_builder intents).
 
+## Task BL — WS recorder telemetry (Poly盘口 follow-ups)
+
+Status: done.
+
+Requested by Poly指挥 from Poly盘口's review of BI / BK. Done by grok-bot on dev@cd4bd52. Logging only: no
+window, deadline or threshold changed.
+
+- `ping` event per PING (`seq`, per connection) and `pong` event per PONG (`rtt_ms`; `unexpected` with
+  `rtt_ms` null when no PING was outstanding). `ping_latency` summaries unchanged.
+- Inbound frames counted: report.inbound_frames (every frame) and report.data_frames (BK's business frames).
+- `disconnected` now carries `silence_s`, `data_silence_s` (from subscribe when nothing came),
+  `last_inbound_ts`, `last_data_ts` (null: nothing on that connection), `pong_wait_since_ts` (the PING that
+  armed AW's deadline; null: no PONG awaited) and the connection's `inbound_frames` / `data_frames`.
+- Backoff waits check the wall clock against the monotonic clock as a session does (clock_jump_s): a jump writes
+  `clock_jump` (`phase` backoff, `jump_s`, `attempt`) and counts report.clock_jumps_in_backoff; the wait and the
+  reconnect go on unchanged. A session `clock_jump` disconnect writes the same event (`phase` session).
+- m1_run manifest counts add `pongs`, `inbound_frames`, `data_frames`, `clock_jumps_in_backoff`.
+- Tests: `tests/test_ws_telemetry.py`; exact `disconnected` events in `tests/test_ws_silence.py` updated.
+
 ## Latest
 
+- 2026-10-10: Task BL: WS recorder `ping` / `pong` events, inbound frame counts, richer `disconnected` events,
+  backoff `clock_jump` events, PONGs and frame counts in the m1_run manifest. Logging only.
 - 2026-10-10: Task BJ (issue #104): RiskGate books min(intent_builder's shares, what fits the all-in 1% clip);
   cost plus fee never above $10. No threshold change.
 - 2026-10-10: Task BK: WS recorder `data_silent` after WS_DATA_SILENCE_S=90 s with no market event (PONG does

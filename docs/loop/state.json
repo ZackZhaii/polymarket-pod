@@ -528,6 +528,15 @@
       "note": "P1 from Poly预测's review B2 (issue #104), Poly风控's interim rule (cap includes fees). Done by grok-bot.",
       "done_at": "2026-10-10T14:05:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "BL",
+      "status": "done",
+      "title": "WS recorder telemetry: PING / PONG events, inbound frame counts, disconnect detail, backoff clock jumps (Poly盘口 follow-ups)",
+      "finish": "src/ws_recorder.py writes a ping event per PING (seq per connection) and a pong event per PONG (rtt_ms, unexpected when no PING was outstanding); counts inbound frames (report.inbound_frames, all frames; report.data_frames, BK's business frames); the disconnected event carries silence_s, data_silence_s, last_inbound_ts, last_data_ts, pong_wait_since_ts (the PING that armed AW's deadline) and the connection's inbound_frames / data_frames; a wall-clock jump during a backoff wait (clock_jump_s, as in a session) writes a clock_jump event (phase backoff, jump_s, attempt) and is counted in report.clock_jumps_in_backoff, the wait and reconnect unchanged; a session clock_jump disconnect also writes clock_jump (phase session). The m1_run manifest counts add pongs, inbound_frames, data_frames and clock_jumps_in_backoff. Logging only: no window, deadline or threshold changed. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 from Poly盘口's review of BI / BK. Done by grok-bot.",
+      "done_at": "2026-10-10T14:40:00Z",
+      "surface": "grok-bot"
     }
   ]
 }

@@ -544,6 +544,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
                 "rest_samples": sampler.samples, "rest_errors": sampler.errors,
                 "connects": report.connects, "connect_failures": report.connect_failures,
                 "disconnects": dict(report.disconnects), "pings": report.pings, "ended_by": report.ended_by,
+                "pongs": report.pongs, "inbound_frames": report.inbound_frames,  # Task BL
+                "data_frames": report.data_frames, "clock_jumps_in_backoff": report.clock_jumps_in_backoff,
                 "snapshots": report.counts["snapshot_applied"],
                 "price_changes": report.counts["price_change_applied"],
                 "resyncs": {key.split(":", 1)[1]: value for key, value in sorted(report.counts.items())
