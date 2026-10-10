@@ -1423,8 +1423,34 @@ the intervals they gave before, the seed and resample count are unchanged, and `
   `docs/THRESHOLDS.md` row note.
 - No decision, threshold, size, gate or proposal moved. config/risk.toml unchanged, `live_enabled` false.
 
+## Task BH — WS recorder: reconnect at once after a suspend / wake
+
+Status: done.
+
+Requested by Poly指挥 after the M1 24h run m1-20261008T2259Z (git f760e51, before AW #51) failed: after each of
+18 host suspend / wake cycles the WS connection was dead but undetected for minutes (coverage 0.858, p99 book age
+~4,020 s, REST unmatched 0.146). Done by grok-bot on dev@d1b94fa.
+
+Finish when a post-wake dead connection is replaced within 30 s offline (fake clocks and connection), the
+reason is counted like any disconnect, and `python -m pytest` and guard --require-git pass.
+
+- Already on dev (AW #51): a PING every WS_PING_INTERVAL_S; the first unanswered PING disconnects after
+  WS_PONG_TIMEOUT_S (`pong_timeout`). After a wake the overdue PING goes out on the first loop pass, so with a
+  monotonic clock that runs through the suspend AW catches the dead socket within 30 s. No silence watchdog was
+  added (no gap found; no duplicate threshold).
+- Added: each session-loop pass compares the wall-clock step (`Recorder(wall=...)`, default `time.time`) with
+  the monotonic step; the wall clock ahead by more than WS_PING_INTERVAL_S (CLOCK_MONOTONIC stops during a
+  suspend) disconnects at once with `clock_jump` (`disconnected` event with `jump_s`, every asset resyncs
+  `disconnect_clock_jump`), then the normal backoff, reconnect and full resync. A wall step back is ignored.
+- Counted in report.disconnects, the reconnect escalation and m1_report's reconnect_attempts (no exemption).
+  M1_MAX_RECONNECTS stays 48: 18 wakes would use 18 of it.
+- Tests: `tests/test_ws_clock_jump.py` (replay: paused 1-120 min, socket dead on resume, reconnect within 30 s,
+  both clock behaviours; no false reconnect on drift or a step back). No new number; THRESHOLDS wording only.
+
 ## Latest
 
+- 2026-10-10: Task BH: WS recorder reconnects at once after a suspend / wake (`clock_jump`, `jump_s`); AW's
+  `pong_timeout` covers a monotonic clock that runs through the suspend. No new threshold. Blocks the M1 rerun.
 - 2026-10-10: Task BG: calibration bootstrap intervals resample by event_id, else condition_id per sample (the
   `event_cluster` key); `bootstrap_cluster_key` / `bootstrap_clusters` recorded. Reported only.
 - Task BF (merged #74): Polymarket event id / slug (Gamma `events`) on scanner rows, forecasts and fills;
@@ -1446,4 +1472,4 @@ the intervals they gave before, the seed and resample count are unchanged, and `
 - pytest + guard (12 checks) pass; risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 - Open: run M1 with `--raw-books` before deciding on hash enforcement; Operator choice on netting realized
   gains (AR); the two-batch Kelly rule and cumulative-loss disable (need Poly反思's numbers); verify live
-  Gamma `events` id / slug in an M1 run. Queue empty after BG.
+  Gamma `events` id / slug in an M1 run. Queue empty after BH.
