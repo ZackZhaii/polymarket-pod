@@ -188,9 +188,11 @@ is read before that is decided. The same `forecast_id` with another `category`, 
 
 Always: `model_prob`, `order: false`, `note`, `forecast_id`, `forecast_ts`, `model_version`.
 When the caller gives them (Poly指挥's signal->intent ruling): `outcome_index`, `outcome`,
-`token_id`, `condition_id`, `p_low`, `p_high`. A field not given stays absent, so
-`intent_builder` keeps its legacy reading (outcome 0, point probability); the forecast row
-lists it in `calibration_problems`. `intent_builder.signal_from_bus` carries `forecast_id`,
+`token_id`, `condition_id`, `p_low`, `p_high`. A field not given stays absent; the forecast row
+lists it in `calibration_problems`. Issue #105: `intent_builder` no longer reads a missing
+`outcome_index` as outcome 0. A signal without `outcome_index` is rejected (`missing_outcome_index`),
+a NewsForecaster signal without `token_id` is rejected (`missing_token_id`), and only one of
+`p_low` / `p_high` is rejected (`incomplete_interval`). Neither bound given is still a point probability. `intent_builder.signal_from_bus` carries `forecast_id`,
 `forecast_ts` and `model_version` into `ProbabilitySignal`, then `OrderIntent` and
 `to_risk_intent`.
 
