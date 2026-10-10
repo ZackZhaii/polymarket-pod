@@ -19,10 +19,10 @@ from pathlib import Path
 import pytest
 
 import src.intent_builder as ib
-from src import fees, risk_gate
+from src import book_staleness, fees, podlib, risk_gate
 from src.podlib import parse_risk_toml, RISK_PATH
-from src.thresholds import (INTENT_ASSUMED_SLIPPAGE, MAX_SIGNAL_AGE_NEWS_S, MAX_SIGNAL_AGE_SPORTS_DEVIG_S,
-                            MIN_EDGE, PAPER_EQUITY_USD)
+from src.thresholds import (INTENT_ASSUMED_SLIPPAGE, INTENT_TTL_S, MAX_SIGNAL_AGE_NEWS_S,
+                            MAX_SIGNAL_AGE_SPORTS_DEVIG_S, MIN_EDGE, PAPER_EQUITY_USD)
 
 ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -95,6 +95,21 @@ def gate(oi: ib.OrderIntent, cfg=None, tmp: Path | None = None) -> risk_gate.Dec
     return risk_gate.evaluate(ib.to_risk_intent(oi), cfg or CFG, copy.deepcopy(STATE), now=NOW, **kwargs)
 
 
+def gate_at(intent: risk_gate.Intent, seconds: float, tmp: Path) -> risk_gate.Decision:
+    """Issue #76: evaluate a risk Intent at NOW + seconds (the delayed-execution clock)."""
+    return risk_gate.evaluate(intent, CFG, copy.deepcopy(STATE), now=NOW + timedelta(seconds=seconds),
+                              halt_path=tmp / "halt_state.json", halt_fallback_path=tmp / "HALT")
+
+
+def fresh_intent(oi: ib.OrderIntent, **kw) -> risk_gate.Intent:
+    """Issue #76: the built intent with book_ts and its validity window stamped from ONE clock read,
+    so a commit_if_allowed at the real clock (no injected now) sees a fresh, unexpired intent — the
+    same consistent times the runner would have, instead of a 2026-09 fixture book with a fresh stamp."""
+    now = datetime.now(timezone.utc)
+    return dataclasses.replace(ib.to_risk_intent(oi), book_ts=ib._iso(now), intent_created_at=ib._iso(now),
+                               intent_expires_at=ib._iso(now + timedelta(seconds=INTENT_TTL_S)), **kw)
+
+
 # ---------------------------------------------------------------- happy path
 
 def test_alpha_like_signal_builds_a_buy_intent_on_outcome_zero():
@@ -133,10 +148,13 @@ def test_to_risk_intent_matches_the_harness_shape():
         "kelly_frac_raw": oi.kelly_raw, "fill_context": "intent_builder",
         # Task BF: the market's Polymarket event (none on the test market), recorded on the fill only.
         "event_id": None, "event_slug": None,
+        # Issue #76: the intent's own validity window, passed through exactly as built (now + INTENT_TTL_S).
+        "intent_created_at": "2026-09-01T12:00:00.000Z", "intent_expires_at": "2026-09-01T12:01:00.000Z",
     }
     assert intent.kelly_fraction_used == oi.kelly_fraction and intent.best_ask == oi.best_ask
     assert intent.kelly_frac_raw == pytest.approx(0.055 / (1 - 0.415))
     assert intent.kelly_frac_raw * intent.kelly_fraction_used == pytest.approx(oi.kelly_frac)
+    assert (intent.intent_created_at, intent.intent_expires_at) == (oi.created_at, oi.expires_at)
 
 
 def test_intent_builder_slippage_meets_the_riskgate_floor(tmp_path):
@@ -145,6 +163,83 @@ def test_intent_builder_slippage_meets_the_riskgate_floor(tmp_path):
     assert oi.assumed_slippage == risk_gate.ASSUMED_SLIPPAGE
     decision = gate(oi, tmp=tmp_path)
     assert "slippage_below_floor" not in decision.reasons and decision.allow is True, decision.reasons
+
+
+# ------------------------------------------- issue #76: RiskGate re-checks the intent window
+
+def test_a_61s_delayed_evaluation_no_longer_allows(tmp_path):
+    """The issue's repro: built 12:00:00, expires 12:01:00; decided 12:01:01 the book is only 66 s
+    old (fresh), but the intent itself is expired — only the window vetoes."""
+    intent = ib.to_risk_intent(build().intent)
+    before = gate_at(intent, 59.0, tmp_path)
+    assert before.allow is True and before.reasons == []
+    late = gate_at(intent, 61.0, tmp_path)
+    assert late.allow is False and late.reasons == ["intent_expired"]
+    assert "stale_book" not in late.reasons
+
+
+def test_exactly_expired_also_vetoes(tmp_path):
+    intent = ib.to_risk_intent(build().intent)
+    exact = gate_at(intent, 60.0, tmp_path)  # now == expires_at
+    assert exact.allow is False and exact.reasons == ["intent_expired"]
+
+
+def test_a_legacy_intent_keeps_its_behaviour_after_the_window(tmp_path):
+    """Both stamps None (a pre-issue intent, e.g. the CLI or the gate self-check): no new check."""
+    intent = dataclasses.replace(ib.to_risk_intent(build().intent), intent_created_at=None,
+                                 intent_expires_at=None)
+    late = gate_at(intent, 61.0, tmp_path)
+    assert late.allow is True and late.reasons == []
+
+
+@pytest.mark.parametrize(("kw", "reason"), [
+    (dict(intent_created_at=None), "missing_intent_created_at"),  # 单缺
+    (dict(intent_expires_at=None), "missing_intent_expires_at"),
+    (dict(intent_created_at=1756729440.0), "invalid_intent_created_at"),  # 非字符串
+    (dict(intent_expires_at=True), "invalid_intent_expires_at"),
+    (dict(intent_created_at="2026-09-01T12:00:00"), "invalid_intent_created_at"),  # 无时区
+    (dict(intent_expires_at="soon"), "invalid_intent_expires_at"),  # 不可解析
+    (dict(intent_expires_at="2026-09-01T12:00:00.000Z"), "intent_expires_not_after_created"),  # == created
+    (dict(intent_expires_at="2026-09-01T11:59:59.000Z"), "intent_expires_not_after_created"),  # < created
+])
+def test_a_broken_window_vetoes_without_raising(kw, reason, tmp_path):
+    intent = dataclasses.replace(ib.to_risk_intent(build().intent), **kw)
+    decision = gate_at(intent, 1.0, tmp_path)
+    assert decision.allow is False and reason in decision.reasons
+
+
+def test_a_future_created_at_vetoes(tmp_path):
+    intent = dataclasses.replace(ib.to_risk_intent(build().intent),
+                                 intent_created_at="2026-09-01T12:00:30.000Z")
+    decision = gate_at(intent, 1.0, tmp_path)
+    assert decision.allow is False and "future_intent_created_at" in decision.reasons
+
+
+@pytest.mark.parametrize("bad_now", ["2026-09-01T12:00:01Z", datetime(2026, 9, 1, 12, 0, 1)])
+def test_an_unusable_decision_clock_vetoes_the_window_without_raising(bad_now, tmp_path):
+    intent = ib.to_risk_intent(build().intent)
+    decision = risk_gate.evaluate(intent, CFG, copy.deepcopy(STATE), now=bad_now,
+                                  halt_path=tmp_path / "halt_state.json", halt_fallback_path=tmp_path / "HALT")
+    assert decision.allow is False
+    assert "invalid_now" in decision.reasons and "invalid_intent_now" in decision.reasons
+
+
+def test_without_an_injected_now_the_window_reads_the_podlib_clock(monkeypatch, tmp_path):
+    """The decision clock without now= is podlib.datetime — the same module the offline gate freezes
+    with book_staleness, so the staleness check and the window check share one clock."""
+    class _Frozen(datetime, metaclass=_AnyDatetime):
+        @classmethod
+        def now(cls, tz=None):
+            late = NOW + timedelta(seconds=120)
+            return late.astimezone(tz) if tz is not None else late.replace(tzinfo=None)
+
+    monkeypatch.setattr(podlib, "datetime", _Frozen)
+    monkeypatch.setattr(book_staleness, "datetime", _Frozen)
+    intent = dataclasses.replace(ib.to_risk_intent(build().intent),
+                                 book_ts=ib._iso(NOW + timedelta(seconds=115)))
+    decision = risk_gate.evaluate(intent, CFG, copy.deepcopy(STATE), now=None,
+                                  halt_path=tmp_path / "halt_state.json", halt_fallback_path=tmp_path / "HALT")
+    assert decision.allow is False and decision.reasons == ["intent_expired"]  # book still fresh
 
 
 # ---------------------------------------------------------------- T-WALK

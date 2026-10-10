@@ -802,7 +802,10 @@ def build_order_intent(signal: ProbabilitySignal | None, market: MarketContext, 
 
 def to_risk_intent(oi: OrderIntent) -> Intent:
     """The risk_gate.Intent for this OrderIntent (never hypothetical, no counterparty). Size is not
-    passed: RiskGate books its own 1% clip until a size_usd field exists (KEY, backlog #7)."""
+    passed: RiskGate books its own 1% clip until a size_usd field exists (KEY, backlog #7).
+    Issue #76: the intent's own validity window (created_at / expires_at) is passed exactly as
+    built, never re-extended; RiskGate re-checks it at its decision clock and vetoes an expired
+    or invalid window."""
     return Intent(
         strategy=oi.strategy,
         market=oi.market_id,
@@ -835,6 +838,10 @@ def to_risk_intent(oi: OrderIntent) -> Intent:
         fill_context="intent_builder",  # Task BC: calibration_ids.FILL_CONTEXT_INTENT_BUILDER
         event_id=oi.event_id,  # Task BF: recorded on the fill only; RiskGate never reads it
         event_slug=oi.event_slug,
+        # Issue #76: the intent's own validity window, as built (now + TTL bounded by the book and
+        # the market's end); RiskGate re-checks it and vetoes once now >= expires_at.
+        intent_created_at=oi.created_at,
+        intent_expires_at=oi.expires_at,
     )
 
 
