@@ -124,8 +124,10 @@ M1_REST_ASSETS = 4
 # report timeline resolution (coverage and book age are evaluated every step)
 M1_REPORT_STEP_S = 1.0
 # Acceptance criteria (M2 pending; conservative first values, flagged for Poly指挥 / the user).
-# the run must last at least 24 h minus 1 min and end by its deadline
-M1_MIN_RUN_S = 86340.0
+# KEY-approved 2026-10-11 家伟批准: the M1 acceptance run targets 6 h (m1_run's default --max-runtime) ...
+M1_RUN_TARGET_S = 21600.0
+# ... and must last at least the target minus 1 min (21540 s) and end by its deadline. Was 86340 (24 h).
+M1_MIN_RUN_S = 21540.0
 # every asset: share of the run with a fresh book (age <= MAX_BOOK_AGE_S)
 M1_MIN_COVERAGE = 0.99
 # connect attempts after the first (reconnects plus failed connects) over the whole run: 2 per hour
@@ -350,6 +352,8 @@ def consistency_problems() -> list[str]:
         problems.append("M1 mismatch and unmatched rates must be in [0, 1)")
     if not 0.0 < M1_REST_MATCH_WINDOW_S <= WS_ROW_REFRESH_S:
         problems.append("M1_REST_MATCH_WINDOW_S must satisfy 0 < M1_REST_MATCH_WINDOW_S <= WS_ROW_REFRESH_S")
+    if M1_MIN_RUN_S != M1_RUN_TARGET_S - 60.0:
+        problems.append("M1_MIN_RUN_S must be M1_RUN_TARGET_S minus 60 s (KEY-approved 2026-10-11)")
     if M1_MIN_RUN_S / M1_REST_EVERY_S * M1_REST_ASSETS < M1_MIN_REST_MATCHED:
         problems.append("a full run must be able to collect M1_MIN_REST_MATCHED REST samples")
     if not 0.0 < RECONCILE_SHARES_TOL < DATA_API_TRADES_MIN_SHARES <= DATA_API_POSITIONS_DUST_SHARES:

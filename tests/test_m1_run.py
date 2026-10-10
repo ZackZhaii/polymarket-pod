@@ -685,6 +685,13 @@ def test_defaults_come_from_thresholds():
     assert int(defaults["rotate_mb"] * 1048576) == M1_ROTATE_BYTES
 
 
+def test_max_runtime_defaults_to_the_6h_target():
+    """KEY-approved 2026-10-11 (家伟批准): the acceptance run is 6 h; M1_MIN_RUN_S is the target minus 60 s."""
+    from src.thresholds import M1_MIN_RUN_S, M1_RUN_TARGET_S
+    assert r.build_parser().parse_args(["--out", "x"]).max_runtime == M1_RUN_TARGET_S == 21600.0
+    assert M1_MIN_RUN_S == M1_RUN_TARGET_S - 60.0 == 21540.0
+
+
 @pytest.mark.parametrize("module", ["m1_run", "m1_report"])
 def test_m1_modules_have_no_urls_no_websockets_import_and_no_order_code(module):
     text = (ROOT / "src" / f"{module}.py").read_text(encoding="utf-8")

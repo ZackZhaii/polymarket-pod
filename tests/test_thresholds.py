@@ -59,7 +59,8 @@ EXPECTED = {
     "M1_REST_EVERY_S": 600.0,
     "M1_REST_ASSETS": 4,
     "M1_REPORT_STEP_S": 1.0,
-    "M1_MIN_RUN_S": 86340.0,
+    "M1_RUN_TARGET_S": 21600.0,  # KEY-approved 2026-10-11 家伟批准
+    "M1_MIN_RUN_S": 21540.0,  # KEY-approved 2026-10-11 家伟批准 (was 86340.0)
     "M1_MIN_COVERAGE": 0.99,
     "M1_MAX_RECONNECTS": 48,
     "M1_MAX_GAP_RESYNCS_PER_ASSET": 24,
@@ -176,7 +177,7 @@ REEXPORTS = {
 M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
               "MIN_HOURS_TO_EXPIRY", "WS_ROW_REFRESH_S",
               # Task AI: the M1 acceptance criteria (conservative first values for the user at M2).
-              "M1_MIN_RUN_S", "M1_MIN_COVERAGE", "M1_MAX_RECONNECTS", "M1_MAX_GAP_RESYNCS_PER_ASSET",
+              "M1_MIN_COVERAGE", "M1_MAX_RECONNECTS", "M1_MAX_GAP_RESYNCS_PER_ASSET",
               "M1_REST_MATCH_WINDOW_S", "M1_MIN_REST_MATCHED", "M1_MAX_TOP_MISMATCH_RATE", "M1_MAX_REST_UNMATCHED_RATE",
               # Task AK: Data API v2 reconciliation.
               "RECONCILE_SHARES_TOL", "DATA_API_POSITIONS_DUST_SHARES", "DATA_API_TRADES_MIN_SHARES",

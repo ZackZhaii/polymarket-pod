@@ -1,6 +1,6 @@
-# M1 acceptance: the 24-hour WebSocket book run (Task AI)
+# M1 acceptance: the 6-hour WebSocket book run (Task AI; 6 h since 2026-10-11, 家伟批准)
 
-M1 is accepted on one 24-hour, read-only recording of the public order books, run on the box and
+M1 is accepted on one 6-hour (`M1_RUN_TARGET_S`; it was 24 hours until 2026-10-11, 家伟批准), read-only recording of the public order books, run on the box and
 judged offline. Two commands do it:
 
 - `python -m src.m1_run` records. It uses the WS market channel through `src.ws_recorder` (Task AG)
@@ -28,10 +28,10 @@ python -m src.scanner                   # must exit 0: writes data/markets.jsonl
 # Optional 2-minute smoke run first (its report FAILs on duration; that is expected):
 python -m src.m1_run --out data/m1-runs/smoke-$(date -u +%Y%m%dT%H%MZ) --max-runtime 120 --rest-every 30
 
-# The 24-hour run:
+# The 6-hour acceptance run (M1_RUN_TARGET_S, the default --max-runtime; 2026-10-11 家伟批准):
 mkdir -p data/m1-runs
 RUN=data/m1-runs/m1-$(date -u +%Y%m%dT%H%MZ)
-nohup python -m src.m1_run --out "$RUN" --max-runtime 86400 > "$RUN.log" 2>&1 &
+nohup python -m src.m1_run --out "$RUN" --max-runtime 21600 > "$RUN.log" 2>&1 &
 echo $! > "$RUN.pid"
 ```
 
@@ -62,7 +62,7 @@ Stopping early: `kill -TERM $(cat "$RUN.pid")` (or Ctrl-C in a foreground run). 
 1 s (`WS_STOP_POLL_S`) and closes its files. It finishes the manifest with status `interrupted` and exits 5.
 Such a run can still be reported, but `run_completed` fails.
 
-When it has finished (exit 0 after 24 h):
+When it has finished (exit 0 after 6 h):
 
 ```bash
 python -m src.m1_report "$RUN"; echo "exit=$?"   # 0 PASS, 1 FAIL, 2 not a run dir
@@ -98,14 +98,14 @@ The report applies all of them; any FAIL fails the run.
 | Criterion | Rule | Default |
 |---|---|---|
 | run_completed | manifest `completed`, exit 0, ended by its deadline (not a signal) | — |
-| run_duration | `elapsed_s >= M1_MIN_RUN_S` | 86340 s (24 h − 1 min) |
+| run_duration | `elapsed_s >= M1_MIN_RUN_S` | 21540 s (6 h − 1 min; was 86340 s; 2026-10-11 家伟批准, KEY) |
 | risk_pinned | risk.toml sha256 equals the pin at start and at end, `live_enabled` false at both | pin `0aea23af…aebc04` |
 | integrity | every listed file present, 0 unreadable lines, row counts equal the manifest, no unknown asset | — |
 | coverage | every asset fresh for `>= M1_MIN_COVERAGE` of the run | 0.99 |
 | book_age_p99 | every asset's p99 book age `<= MAX_BOOK_AGE_S` | 120 s |
 | reconnects | connect attempts after the first (reconnects plus failed connects) `<= M1_MAX_RECONNECTS` | 48 |
 | gap_resyncs | resyncs not caused by a disconnect, per asset, `<= M1_MAX_GAP_RESYNCS_PER_ASSET` | 24 |
-| rest_matched | REST samples compared `>= M1_MIN_REST_MATCHED` | 50 (a default run takes about 580) |
+| rest_matched | REST samples compared `>= M1_MIN_REST_MATCHED` | 50 (a default 6 h run takes about 148) |
 | rest_top_mismatch | best bid or best ask differs, as a share of compared samples, `<= M1_MAX_TOP_MISMATCH_RATE` | 0.02 |
 | rest_unmatched | samples with no live WS row within `M1_REST_MATCH_WINDOW_S` (or an unusable REST `book_ts`) `<= M1_MAX_REST_UNMATCHED_RATE` | 30 s window, 0.10 |
 

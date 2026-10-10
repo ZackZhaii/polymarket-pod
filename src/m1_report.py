@@ -275,7 +275,7 @@ def summarize_events(events: list[dict], assets: list[str]) -> dict[str, Any]:
 
 CRITERIA = {
     "run_completed": "manifest status completed, exit 0, ended by its deadline (not a signal)",
-    "run_duration": f"elapsed >= M1_MIN_RUN_S ({M1_MIN_RUN_S:g} s)",
+    "run_duration": f"elapsed >= M1_MIN_RUN_S ({M1_MIN_RUN_S:g} s; 6 h target minus 1 min, 2026-10-11 家伟批准)",
     "risk_pinned": "config/risk.toml sha256 equals the pin at start and end, live_enabled false at both",
     "integrity": "every listed file present, no unreadable line, no unparseable row time",
     "coverage": f"every asset fresh (age <= MAX_BOOK_AGE_S {MAX_BOOK_AGE_S:g} s) for >= M1_MIN_COVERAGE ({M1_MIN_COVERAGE:g}) of the run",
