@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T18:21:32Z",
+  "ts": "2026-10-10T05:48:00Z",
   "live_enabled": false,
-  "last_done": "BG",
+  "last_done": "BH",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "BG (calibration bootstrap intervals resample by event_id, else condition_id per sample, the event_cluster key; bootstrap_cluster_key event_id / condition_id / mixed and bootstrap_clusters recorded) done by grok-bot. Reported only. Kelly two-batch and cumulative-loss rules still open. No open todo. No live gate."
+  "note": "BH (WS recorder clock_jump reconnect after a suspend / wake, jump_s on the event; AW pong_timeout covers a monotonic clock that runs through the suspend; no new threshold) done by grok-bot. Blocks the M1 rerun. No open todo. No live gate."
 }

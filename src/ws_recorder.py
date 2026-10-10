@@ -55,6 +55,14 @@ What the protocol gives for integrity, and what this recorder does with it:
 - Task AW: a PING still unanswered by a PONG after WS_PONG_TIMEOUT_S means the connection is dead:
   the recorder disconnects (``pong_timeout``, every asset resyncs) and reconnects; it counts toward
   the Task AP reconnect escalation like any other disconnect.
+- Task BH: suspend / wake. Each pass of the session loop compares the wall-clock step (``wall``,
+  time.time) with the monotonic step. When the wall clock moved ahead of the monotonic clock by more
+  than WS_PING_INTERVAL_S (a host suspend: CLOCK_MONOTONIC does not run while suspended, the wall clock
+  does), the connection is presumed dead and the recorder reconnects at once (``clock_jump``, event
+  field ``jump_s``, every asset resyncs). It is a disconnect like any other: counted in
+  report.disconnects, the escalation and M1's reconnect cap. A wall step backwards (NTP) is ignored.
+  Where the monotonic clock does run through a suspend, the AW PONG deadline catches the dead
+  connection instead, within WS_PONG_TIMEOUT_S of waking (a due PING is sent on the first pass).
 
 Safety rails (Poly指挥 ruling: websockets is not a trading dependency if all hold):
 - check_market_url: an allowlist enforced before connecting (Recorder and the adapter): scheme
@@ -1097,6 +1105,16 @@ def validate_assets(assets: Iterable[str]) -> list[str]:
     return cleaned
 
 
+def clock_jump_s(wall_before: float, wall_after: float, mono_before: float, mono_after: float) -> float | None:
+    """Task BH: how far the wall clock ran ahead of the monotonic clock between two loop passes, when that is
+    more than WS_PING_INTERVAL_S (a suspend / wake: the session must be presumed dead), else None. A wall
+    step backwards or a non-finite reading is never a jump."""
+    ahead = (wall_after - wall_before) - (mono_after - mono_before)
+    if not math.isfinite(ahead) or ahead <= WS_PING_INTERVAL_S:
+        return None
+    return ahead
+
+
 class Recorder:
     def __init__(
         self,
@@ -1114,6 +1132,7 @@ class Recorder:
         on_event: Callable[[dict[str, Any]], None] | None = None,
         heartbeat: Any = None,
         raw_books: Callable[[dict[str, Any]], None] | None = None,
+        wall: Callable[[], float] | None = None,
     ) -> None:
         """``stop`` (Task AI): polled at least every WS_STOP_POLL_S; once true the run ends like a deadline
         (graceful shutdown). ``on_event`` (Task AI) receives one dict per connect, disconnect, backoff,
@@ -1124,7 +1143,9 @@ class Recorder:
         the gap-13 escalation counts in its progress (written at once when a count is reached).
         ``raw_books`` (Task AY, opt-in): receives ``{"ts", "asset_id", "frame"}`` for every ``book`` frame of a
         subscribed asset, the parsed frame as received (all levels, the hash, min_order_size / tick_size when
-        sent), whether or not it was applied. Nothing about rows, resyncs or freshness changes."""
+        sent), whether or not it was applied. Nothing about rows, resyncs or freshness changes.
+        ``wall`` (Task BH): the wall clock in seconds (default time.time), compared with ``monotonic`` to
+        detect a suspend / wake (``clock_jump``)."""
         check_market_url(url)
         runtime = _number(max_runtime_s)
         if runtime is None or runtime <= 0:
@@ -1146,6 +1167,8 @@ class Recorder:
         self.escalation = Escalation(monotonic=self.monotonic)
         self.raw_books = raw_books
         self.core.capture_raw = raw_books is not None
+        self.wall = wall or time.time
+        self._jump_s: float | None = None  # Task BH: the wall-clock jump that ended the last session
 
     def _stopped(self) -> bool:
         return self.stop is not None and bool(self.stop())
@@ -1241,7 +1264,8 @@ class Recorder:
             if reason in ("deadline", "stopped"):
                 break
             self.report.disconnects[reason] += 1
-            self._event("disconnected", reason=reason, healthy=healthy)
+            extra = {"jump_s": round(self._jump_s, 3)} if reason == "clock_jump" and self._jump_s is not None else {}
+            self._event("disconnected", reason=reason, healthy=healthy, **extra)
             if self.escalation.reconnect():
                 self._beat(force=True)
             self._write(self.core.invalidate_all(f"disconnect_{reason}", self.now()))
@@ -1262,12 +1286,20 @@ class Recorder:
         self.core.start_waiting(self.monotonic())
         next_ping = self.monotonic() + WS_PING_INTERVAL_S
         pong_due: float | None = None  # Task AW: first unanswered PING's send time + WS_PONG_TIMEOUT_S
+        self._jump_s = None
+        last_mono, last_wall = self.monotonic(), self.wall()  # Task BH: suspend / wake detection
         while True:
             current = self.monotonic()
+            wall_now = self.wall()
             if current >= deadline:
                 return "deadline", healthy
             if self._stopped():
                 return "stopped", healthy
+            jump = clock_jump_s(last_wall, wall_now, last_mono, current)
+            last_mono, last_wall = current, wall_now
+            if jump is not None:
+                self._jump_s = jump
+                return "clock_jump", healthy
             self._beat()
             try:
                 if pong_due is not None and current >= pong_due:

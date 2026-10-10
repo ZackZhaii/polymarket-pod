@@ -492,6 +492,15 @@
       "note": "Requested by Poly指挥 as the open point Task BF (#74) left. Done by grok-bot on the box (NoisePC fallback). With condition_id or mixed keys, markets of one event without an event id are still drawn apart, so those intervals can be too narrow; live Gamma events id / slug still unverified.",
       "done_at": "2026-10-09T18:21:32Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "BH",
+      "status": "done",
+      "title": "WS recorder: reconnect at once after a host suspend / wake (clock_jump, jump_s); the post-wake dead connection replaced within 30 s",
+      "finish": "src/ws_recorder.py compares each session-loop pass's wall-clock step (Recorder wall, default time.time) with its monotonic step; a wall clock ahead by more than WS_PING_INTERVAL_S disconnects with reason clock_jump (event disconnected with jump_s, every asset resyncs disconnect_clock_jump), backoff and reconnect like any disconnect; counted in report.disconnects, the reconnect escalation and M1's reconnect cap (m1_report has no exemption). Where the monotonic clock runs through a suspend, AW's pong_timeout catches it within WS_PONG_TIMEOUT_S of waking. No new threshold (no silence watchdog: no gap found), no acceptance threshold changed. Offline replay test: paused N minutes, socket dead on resume, reconnect within 30 s. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 after the M1 24h run m1-20261008T2259Z (git f760e51, before AW #51) failed: 18 suspend/wake cycles left dead WS connections undetected for minutes. Done by grok-bot. Finding: on current dev AW already sends the overdue PING on the first pass after waking and pong_timeout fires within 30 s, so only the clock_jump reconnect was added.",
+      "done_at": "2026-10-10T05:48:00Z",
+      "surface": "grok-bot"
     }
   ]
 }
