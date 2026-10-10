@@ -339,6 +339,87 @@ def test_rest_sampler_keeps_a_sink_failure_for_main():
     assert isinstance(sampler.failure, OSError)
 
 
+class BeatLog:
+    """A heartbeat stand-in that records every publish (issue #82: a sealed sampler publishes none)."""
+
+    def __init__(self):
+        self.beats: list[tuple] = []
+
+    def beat(self, state="running", progress=None, *, force=False):
+        self.beats.append((state, dict(progress or {}), force))
+
+
+def test_rest_sampler_a_pre_stopped_run_makes_zero_requests():
+    clock = Clock()
+    calls: list[str] = []
+    stop = threading.Event()
+    stop.set()  # stopped before the sampler ever starts
+    sampler = r.RestSampler([A, B], {}, ListSink(), ListSink(), every_s=10, deadline_s=1e6,
+                            getter=_rest_getter(calls), now=clock.now, monotonic=clock.monotonic)
+    sampler.run(stop, lambda s: True)
+    assert calls == [] and sampler.samples == 0 and sampler.rows == 0 and sampler.errors == 0
+
+
+def test_rest_sampler_a_sealed_sampler_makes_zero_requests():
+    clock = Clock()
+    calls: list[str] = []
+    sampler = r.RestSampler([A, B], {}, ListSink(), ListSink(), every_s=10, deadline_s=1e6,
+                            getter=_rest_getter(calls), now=clock.now, monotonic=clock.monotonic)
+    sampler.seal()  # the outputs are already sealed: nothing may be requested or published
+    sampler.sample_once()
+    assert calls == [] and sampler.samples == 0 and sampler.rows == 0
+
+
+def test_rest_sampler_drops_a_result_that_returns_after_the_seal():
+    """Issue #82: a request that returns after the stop-seal publishes nothing and asks for nothing more."""
+    clock = Clock()
+    calls: list[str] = []
+    sink, events, beats = ListSink(), ListSink(), BeatLog()
+    fetch = _rest_getter(calls)
+
+    def sealing_getter(url):
+        sampler.seal()  # the run seals the outputs while this request is still in flight
+        return fetch(url)
+
+    sampler = r.RestSampler([A, B], {}, sink, events, every_s=10, deadline_s=1e6, getter=sealing_getter,
+                            now=clock.now, monotonic=clock.monotonic, heartbeat=beats)
+    sampler.sample_once()
+    assert calls == [f"https://clob.polymarket.com/book?token_id={A}"]  # B is never requested
+    assert sink.rows == [] and events.rows == [] and beats.beats == []  # row, event and heartbeat unchanged
+    assert sampler.samples == 1 and sampler.rows == 0 and sampler.errors == 0
+
+
+def test_rest_sampler_drops_a_failed_read_that_returns_after_the_seal():
+    clock = Clock()
+    calls: list[str] = []
+    events, beats = ListSink(), BeatLog()
+
+    def failing_getter(url):
+        calls.append(url)
+        sampler.seal()
+        raise OSError("timeout")
+
+    sampler = r.RestSampler([A], {}, ListSink(), events, every_s=10, deadline_s=1e6, getter=failing_getter,
+                            now=clock.now, monotonic=clock.monotonic, heartbeat=beats)
+    sampler.sample_once()
+    assert calls != [] and sampler.errors == 0 and events.rows == [] and beats.beats == []
+
+
+def test_main_seals_the_rest_sampler_before_the_finish_event(tmp_path, monkeypatch):
+    seen: list[int] = []
+    real_seal = r.RestSampler.seal
+
+    def seal(self):
+        seen.append(self.events.rows)  # events published so far: sealing must precede "finish"
+        real_seal(self)
+
+    monkeypatch.setattr(r.RestSampler, "seal", seal)
+    code, out, transport, calls, clock = _main(tmp_path, [[_book()], []], ["--rest-assets", "1"])
+    assert code == r.EXIT_OK and len(seen) == 1
+    events = _rows(out, "events")
+    assert events[-1]["event"] == "finish" and seen[0] == len(events) - 1
+
+
 # --- recorder hooks (stop, on_event) -----------------------------------------------------------------
 
 
