@@ -47,20 +47,22 @@ Any problem is a FAIL with a non-zero exit; nothing is coerced or defaulted to a
   a repeated cursor (`cursor_loop`); `MAX_PAGES` reached with a cursor left (`incomplete_walk`); any fetch error
   (network, TLS, HTTP 4xx/5xx after `public_get`'s retries, invalid JSON). Exit 3.
 - Position row (`/v2/positions`): `proxy_wallet` (0x + 40 hex, must be the requested wallet), `token_id` (decimal
-  digits), `condition_id` (0x + 64 hex), `current_size` (finite JSON number >= 0), `status` (`OPEN` or
+  digits), `condition_id` (0x + 64 hex), `current_size` (finite JSON number >= 0), `status` (a string, `OPEN` or
   `REDEEMABLE`), and the documented identities within `DATA_API_IDENTITY_TOL_USDC`:
   `current_value = current_size * current_price`, `unrealized_pnl = current_value - entry_cost_usdc`,
   `total_pnl = realized_pnl + unrealized_pnl`, `total_cost_usdc = entry_cost_usdc + entry_fees_usdc`. So
   `current_price`, `current_value`, `entry_cost_usdc`, `entry_fees_usdc`, `total_cost_usdc`, `realized_pnl`,
   `unrealized_pnl`, `total_pnl` must be finite numbers too (`position_invalid_<field>`), and a broken identity is
   `position_identity_broken_<field>`. A token served twice is `duplicate_remote_token`. Exit 3.
-- Trade row (`/v2/trades`): `proxy_wallet`, `side` (`BUY`/`SELL`), `token_id`, `condition_id`, `size` (finite > 0),
-  `price` (finite, 0..1), `timestamp` (integer > 0), `transaction_hash` (0x + 64 hex). Exit 3.
+- Trade row (`/v2/trades`): `proxy_wallet`, `side` (a string, `BUY`/`SELL`), `token_id`, `condition_id`, `size`
+  (finite > 0), `price` (finite, 0..1), `timestamp` (integer > 0), `transaction_hash` (0x + 64 hex). Exit 3.
 - Trade dedupe on `transaction_hash + token_id + side` (research note): an exact repeat of a row counts once
   (`trades_deduped` in the report). Rows that share the key but differ are kept as separate fills: a live read on
   2026-10-09 had one transaction with two fills of the same token and side (102.73 and 27.27 shares at 0.22), so
   dropping one would hide shares. Either way a wrong guess makes the ledger comparison fail, never pass.
 - Numbers must be JSON numbers: a string, bool, `null`, NaN or inf is malformed (v2 serves all amounts as numbers).
+- Enum fields must be strings (issue #54): a list, object, `null` or bool `status` or `side` is
+  `position_invalid_status` / `trade_invalid_side` (exit 3), never an unhashable crash that would skip the halt.
 - Ledger (`src/ledger_store.py`): any integrity problem, a counted fill without token_id or with invalid shares,
   an open leg without token_id, a token under two markets. Exit 4.
 - Comparison per token (exit 1): ledger open shares vs `current_size` (`position_mismatch`,

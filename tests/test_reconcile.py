@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from src import ledger_store, podlib, reconcile, thresholds
+from src import halt_store, ledger_store, podlib, reconcile, thresholds
 from src.fees import booked_fee_usd, ledger_fee
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -226,7 +226,8 @@ POSITION_FIELDS = {
     "token_id": ([_MISSING, None, "", "0xabc", 12, "12a"], ("position_invalid_token_id",)),
     "condition_id": ([_MISSING, None, "", "0x" + "a" * 63, "a" * 66], ("position_invalid_condition_id",)),
     "current_size": ([_MISSING, *BAD_VALUES], ("position_invalid_current_size",)),
-    "status": ([_MISSING, None, "CLOSED", "open", "MERGEABLE", 1], ("position_invalid_status",)),
+    "status": ([_MISSING, None, "CLOSED", "open", "MERGEABLE", 1, [], {}, True, False],
+               ("position_invalid_status",)),
 }
 POSITION_CASES = [(name, value, kinds) for name, (values, kinds) in POSITION_FIELDS.items() for value in values]
 
@@ -240,7 +241,7 @@ def test_bad_position_field_fails_closed(ledger, name, value, kinds):
 
 TRADE_FIELDS = {
     "proxy_wallet": ([_MISSING, None, "x", "0x" + "2" * 40], ("trade_invalid_proxy_wallet", "trade_foreign_wallet")),
-    "side": ([_MISSING, None, "buy", "HOLD", 1], ("trade_invalid_side",)),
+    "side": ([_MISSING, None, "buy", "HOLD", 1, [], {}, True, False], ("trade_invalid_side",)),
     "token_id": ([_MISSING, None, "", "t", 3], ("trade_invalid_token_id",)),
     "condition_id": ([_MISSING, None, "0x1"], ("trade_invalid_condition_id",)),
     "size": ([_MISSING, 0.0, *BAD_VALUES], ("trade_invalid_size",)),
@@ -385,6 +386,42 @@ def test_cli_usage_is_exit_2_without_fetch_or_bus(tmp_path, argv, capsys):
     bus = tmp_path / "bus.jsonl"
     assert reconcile.main(argv + ["--bus", str(bus), "--ledger", str(tmp_path / "l.jsonl")], getter=api) == 2
     assert api.urls == [] and not bus.exists()
+
+
+# Issue #54: a non-string enum field (list, object, null, bool) must fail closed through the
+# normal report path, and main must still record the global halt (scope=global, source=Reconciler)
+# instead of crashing out of main and skipping it. The valid-response path is unchanged
+# (test_cli_pass_writes_no_bus above: exit 0, no bus line).
+NON_STRING_ENUM_CASES = [
+    (("positions", None), "status", []),
+    (("positions", None), "status", {}),
+    (("positions", None), "status", None),
+    (("positions", None), "status", True),
+    (("trades", None), "side", []),
+    (("trades", None), "side", {}),
+    (("trades", None), "side", None),
+    (("trades", None), "side", False),
+]
+
+
+@pytest.mark.parametrize("route_page,name,value", NON_STRING_ENUM_CASES,
+                         ids=[f"{name}-{i}" for i, (_, name, _) in enumerate(NON_STRING_ENUM_CASES)])
+def test_cli_non_string_enum_fails_closed_and_records_the_global_halt(
+        ledger, tmp_path, route_page, name, value, capsys):
+    bus_path = tmp_path / "bus.jsonl"
+    api = _api_with(route_page, _mutate_row(route_page, 0, name, value))
+    assert reconcile.main(["--user", W, "--ledger", str(ledger), "--bus", str(bus_path)],
+                          getter=api) == reconcile.EXIT_REMOTE
+    lines = [json.loads(line) for line in bus_path.read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 1
+    msg = lines[0]
+    assert (msg["from"], msg["to"], msg["type"], msg["market"]) == ("Reconciler", "Sentinel", "halt", "*")
+    assert msg["payload"]["scope"] == "global" and msg["payload"]["exit_code"] == reconcile.EXIT_REMOTE
+    kind = "position_invalid_status" if name == "status" else "trade_invalid_side"
+    assert any(p.startswith(kind + ":") for p in msg["payload"]["problems"])
+    records = [r for r in halt_store.active_halts() if r["source"] == "Reconciler"]
+    assert records and all(r["scope"] == "global" and r["active"] for r in records)
+    assert "reconcile FAIL" in capsys.readouterr().out
 
 
 def test_no_order_or_key_surface_in_the_module():
