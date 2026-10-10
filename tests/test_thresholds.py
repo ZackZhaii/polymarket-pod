@@ -61,6 +61,9 @@ EXPECTED = {
     "M1_MANIFEST_PROGRESS_S": 60.0,  # Task BT (M2 pending)
     "M1_CONSOLE_CLOSE_WAIT_S": 2.0,  # Task BT (M2 pending)
     "M1_REPORT_STEP_S": 1.0,
+    "FEE_CACHE_TTL_S": 900.0,  # Task BZ #117 (M2 pending)
+    "FEE_NEG_CACHE_S": 60.0,  # Task BZ #117 (M2 pending)
+    "FEE_RATE_MAX": 0.25,  # Task BZ #117 (M2 pending)
     "M1_RUN_TARGET_S": 21600.0,  # KEY-approved 2026-10-11 家伟批准
     "M1_MIN_RUN_S": 21540.0,  # KEY-approved 2026-10-11 家伟批准 (was 86340.0)
     "M1_MIN_COVERAGE": 0.99,
@@ -183,6 +186,8 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "M1_REST_MATCH_WINDOW_S", "M1_MIN_REST_MATCHED", "M1_MAX_TOP_MISMATCH_RATE", "M1_MAX_REST_UNMATCHED_RATE",
               # Task BT: manifest progress interval and the console-close finish wait.
               "M1_MANIFEST_PROGRESS_S", "M1_CONSOLE_CLOSE_WAIT_S",
+              # Task BZ (#117, M2-A Gamma-only slice): per-market fee source.
+              "FEE_CACHE_TTL_S", "FEE_NEG_CACHE_S", "FEE_RATE_MAX",
               # Task AK: Data API v2 reconciliation.
               "RECONCILE_SHARES_TOL", "DATA_API_POSITIONS_DUST_SHARES", "DATA_API_TRADES_MIN_SHARES",
               "DATA_API_MAX_LAG_S", "DATA_API_IDENTITY_TOL_USDC",
