@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-10T13:10:00Z",
+  "ts": "2026-10-10T13:47:00Z",
   "live_enabled": false,
-  "last_done": "BI",
+  "last_done": "BK",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "BI (WS recorder inbound-silence watchdog `silent` at WS_SILENCE_TIMEOUT_S=60 s, ping_latency summary events; AW pong_timeout unchanged and normally fires first) done by grok-bot. Blocks the M1 rerun. Next by Poly指挥's order: issue #104, then book-hash research. No live gate."
+  "note": "BK (WS recorder market-data window data_silent at WS_DATA_SILENCE_S=90 s, PONG does not count; BI's any-frame silent at 60 s kept) done by grok-bot. Blocks the M1 rerun. Next by Poly指挥's order: issue #104 (BJ), then the M2 P0 issues. No live gate."
 }
