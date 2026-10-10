@@ -413,4 +413,4 @@ def _intent():
 
 
 def _state():
-    return {"open_positions": 0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
+    return {"open_positions": 0, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}

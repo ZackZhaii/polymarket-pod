@@ -23,7 +23,7 @@ from src.risk_gate import Intent, evaluate
 
 NOW = "2026-10-08T08:00:00Z"
 NOW_DT = datetime(2026, 10, 8, 8, tzinfo=timezone.utc)
-STATE = {"open_positions": 0, "leg_already_open": False, "daily_loss_usd": 0.0,
+STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
          "recent_fills": [], "own_quotes": []}
 RISK_SHA = "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04"
 INVALID = [math.nan, math.inf, -math.inf, "0.02", None, True]

@@ -157,7 +157,9 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
 
     open_positions counts open legs, not markets. leg_already_open is True only
     when this exact token already has an open position; another leg of the same
-    market does not count. exposure_usd is the gross sum over open legs.
+    market does not count. exposure_usd is the gross sum over open legs. leg_net_shares is this
+    leg's net shares (buys minus sells; issue #123: RiskGate reads its sign to tell an add from a
+    reduction, and vetoes a same-direction add as add_to_open_leg).
     recent_fills (every ledger row) and own_quotes (every paper quote row) are the
     history RiskGate's structured wash / self-trade check reads (Task S).
     Task AF: rows come from the strict ledger reader, deduped by fill_id. Any integrity problem
@@ -184,6 +186,7 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
             "leg_already_open": False,
             "exposure_usd": None,
             "leg_exposure_usd": None,
+            "leg_net_shares": None,
             "daily_loss_usd": None,
             "non_finite_ledger_rows": bad_rows,
             "ledger_problems": problems,
@@ -201,6 +204,7 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
             "leg_already_open": False,
             "exposure_usd": None,
             "leg_exposure_usd": None,
+            "leg_net_shares": None,
             "daily_loss_usd": None,
             "daily_loss_problems": day.problems,
             "ledger_problems": list(day.problems),
@@ -215,6 +219,7 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
         "leg_already_open": own is not None and abs(own["shares"]) > OPEN_EPS,
         "exposure_usd": sum(leg["exposure_usd"] for leg in legs.values()),
         "leg_exposure_usd": 0.0 if own is None else own["exposure_usd"],
+        "leg_net_shares": 0.0 if own is None else own["shares"],  # issue #123: the open leg's direction
         "daily_loss_usd": day.total_usd,
         "daily_fees_usd": day.fees_usd,
         "daily_realized_loss_usd": day.realized_loss_usd,

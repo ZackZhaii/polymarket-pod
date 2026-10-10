@@ -21,7 +21,7 @@ from src.risk_gate import Intent, evaluate
 
 NOW = datetime(2026, 10, 8, 0, 10, 0, tzinfo=timezone.utc)
 NOW_S = "2026-10-08T00:10:00Z"
-STATE = {"open_positions": 0, "market_already_open": False, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
+STATE = {"open_positions": 0, "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 def _iso(moment: datetime) -> str:

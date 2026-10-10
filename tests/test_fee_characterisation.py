@@ -33,7 +33,7 @@ from src.thresholds import ASSUMED_SLIPPAGE, EDGE_TOLERANCE, MIN_EDGE
 
 NOW = "2026-10-08T08:00:00Z"
 NOW_DT = datetime(2026, 10, 8, 8, tzinfo=timezone.utc)
-STATE = {"open_positions": 0, "leg_already_open": False, "daily_loss_usd": 0.0,
+STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
          "recent_fills": [], "own_quotes": []}
 NAN, INF = float("nan"), float("inf")
 
