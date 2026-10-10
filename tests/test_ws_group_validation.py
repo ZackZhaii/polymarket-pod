@@ -73,11 +73,17 @@ def test_repro_vector_gives_no_resync_and_ends_on_the_snapshot(name):
     core, out = replay(frames)
     assert out.resyncs == [] and not any(key.startswith("resync:") for key in out.counts)
     assert core.all_live() and out.counts["group_held"] >= 1
-    last = {}
+    last = {}  # asset -> its last snapshot, when no delta for it came after that snapshot
     for frame in frames:
-        message = json.loads(frame["raw"])
-        if message.get("event_type", "book") == "book" and "bids" in message:
-            last[message["asset_id"]] = frame["raw"]
+        try:
+            decoded = json.loads(frame["raw"])
+        except ValueError:
+            continue  # e.g. PONG
+        for message in decoded if isinstance(decoded, list) else [decoded]:
+            if "bids" in message and message.get("event_type", "book") == "book":
+                last[message["asset_id"]] = json.dumps(message)
+            for item in message.get("price_changes") or []:
+                last.pop(item.get("asset_id"), None)
     for asset, raw in last.items():
         assert (core.books[asset].bids, core.books[asset].asks) == _levels(raw)
     assert all(row["ws_state"] == "live" for row in out.rows)
