@@ -17,6 +17,8 @@ def _isolate_sentinel_state(tmp_path_factory, monkeypatch):
     base = tmp_path_factory.mktemp("sentinel_state")
     monkeypatch.setattr(paper_cycle, "SENTINEL_STATE_PATH", base / "sentinel_stale.json")
     monkeypatch.setattr(paper_cycle, "QUOTES_PATH", base / "quotes.jsonl")
+    # Issue #125: paper_cycle --recording-dir reads the paper ledger's open positions; never the real one.
+    monkeypatch.setattr(paper_cycle, "PAPER_PATH", base / "paper.jsonl")
     # Task AL: the persisted halt state and logs/HALT fallback live in the test's own folder too.
     monkeypatch.setattr(halt_store, "HALT_STATE_PATH", base / "halt_state.json")
     monkeypatch.setattr(halt_store, "HALT_FALLBACK_PATH", base / "HALT")
