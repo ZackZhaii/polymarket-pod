@@ -8,7 +8,7 @@ Fixed, sanitised recordings for `tests/test_e2e_offline.py` and the guard's `e2e
 | `scenario.json` | The frozen clock (`now`), the second Sentinel check offset, the intent order, the duplicate-replay and corrupted-ledger plans, and the Task AL `halt` plan (blocked market, corrupt halt file text, resume drill). |
 | `gamma_markets.json` | Raw Gamma `/markets` rows, the shape `scanner.scan` reads (v1 `clobTokenIds`). |
 | `clob_books.json` | Raw public CLOB `GET /book` bodies per token, fed to the real `book.record` through its getter hook. |
-| `forecasts.json` | NewsForecaster inputs (model_prob per market and outcome) plus the per-intent fee_rate and assumed_slippage. |
+| `forecasts.json` | NewsForecaster inputs (model_prob per market and outcome) plus the per-intent fee_rate and assumed_slippage. `alpha-again` repeats `alpha-allow`'s content on purpose: the duplicate replay re-emits the same sealed forecast (same `forecast_id`, same content), so nothing is sealed twice. |
 | `ledger_start.jsonl` | The paper ledger start state: three fills written by the real `paper_ledger.commit_if_allowed` / `ledger_store.book` with readable fill ids. |
 | `quotes_start.jsonl` | Paper maker quotes (two open, one cancelled) that Sentinel's halt cancels and the wash check reads. |
 | `golden.json` | The expected output: every allow/veto with its reasons, fills, cash, positions, Sentinel halts, bus counts; each decision also carries the Task AO `intent_builder` shadow result (reasons, chosen outcome, both edges, 1% size, shadow Kelly). |
