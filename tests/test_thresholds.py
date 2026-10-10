@@ -51,6 +51,7 @@ EXPECTED = {
     "WS_RAW_BOOK_FILE_MAX_BYTES": 16777216,  # Task AY
     "WS_RAW_BOOK_RUN_MAX_BYTES": 268435456,  # Task AY
     "WS_ROW_REFRESH_S": 30.0,
+    "WS_GROUP_FLUSH_S": 0.25,  # Task CC (#182): same-ts group window
     # Task AI: M1 acceptance (first values; the criteria are M2 pending).
     "WS_STOP_POLL_S": 1.0,
     "M1_TOP_MARKETS": 5,
@@ -204,6 +205,8 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "WS_SILENCE_TIMEOUT_S", "WS_SILENCE_OBSERVED_HEALTHY_MAX_S",
               # Task BK: market-data silence (Poly风控 F6).
               "WS_DATA_SILENCE_S",
+              # Task CC (#182): same-timestamp price_change group window.
+              "WS_GROUP_FLUSH_S",
               # Task AY: raw book snapshot caps.
               "WS_RAW_BOOK_FILE_MAX_BYTES", "WS_RAW_BOOK_RUN_MAX_BYTES",
               # Task AP: heartbeats, the resident Sentinel and its escalations.
@@ -378,6 +381,9 @@ def test_relations_hold():
         ("WS_RAW_BOOK_FILE_MAX_BYTES = 16 * 1024 * 1024", "WS_RAW_BOOK_FILE_MAX_BYTES = 512 * 1024 * 1024"),
         ("WS_RAW_BOOK_RUN_MAX_BYTES = 256 * 1024 * 1024", "WS_RAW_BOOK_RUN_MAX_BYTES = 0"),
         ("WS_ROW_REFRESH_S = 30.0", "WS_ROW_REFRESH_S = 120.0"),
+        ("WS_GROUP_FLUSH_S = 0.25", "WS_GROUP_FLUSH_S = 0.0"),  # Task CC: must be > 0
+        ("WS_GROUP_FLUSH_S = 0.25", "WS_GROUP_FLUSH_S = 5.0"),  # Task CC: not well below WS_ROW_REFRESH_S
+        ("WS_GROUP_FLUSH_S = 0.25", "WS_GROUP_FLUSH_S = 1"),  # Task CC: a float
         ("WS_STOP_POLL_S = 1.0", "WS_STOP_POLL_S = 0.0"),
         ("WS_STOP_POLL_S = 1.0", "WS_STOP_POLL_S = 11.0"),
         ("M1_TOP_MARKETS = 5", "M1_TOP_MARKETS = 0"),

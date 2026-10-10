@@ -28,6 +28,7 @@ from src.thresholds import (
     RECORDER_RECONNECT_ALERT_COUNT,
     WS_BACKOFF_BASE_S,
     WS_BACKOFF_CAP_S,
+    WS_GROUP_FLUSH_S,
     WS_PING_INTERVAL_S,
     WS_PONG_TIMEOUT_S,
     WS_RESYNC_TIMEOUT_S,
@@ -307,18 +308,32 @@ def test_crossed_or_locked_snapshot_is_rejected(ask):
     _assert_resync(core, _feed(core, _book(asks=((ask, "1"),), ts=T0 + 1)), "crossed_book")
 
 
+def _merge(*outs):
+    total = w.Outcome()
+    for part in outs:
+        total.rows += part.rows
+        total.resyncs += part.resyncs
+        total.counts.update(part.counts)
+    return total
+
+
 def test_a_delta_that_crosses_the_book_resyncs():
+    """Issue #182: the crossed state is held (never written) for WS_GROUP_FLUSH_S; still crossed then: resync."""
     core = _core()
     _feed(core, _book())
-    _assert_resync(core, _feed(core, _pc(_ch(price="0.53", size="1"))), "crossed_book")
+    held = _feed(core, _pc(_ch(price="0.53", size="1")))
+    assert held.rows == [] and held.resyncs == [] and held.counts["group_held"] == 1
+    assert core.flush_groups(TS, WS_GROUP_FLUSH_S - 0.001).resyncs == []
+    _assert_resync(core, _merge(held, core.flush_groups(TS, WS_GROUP_FLUSH_S)), "crossed_book")
 
 
 def test_reported_top_of_book_must_match_the_local_book():
     core = _core()
     _feed(core, _book())
     assert _feed(core, _pc(_ch(price="0.40", size="1", best_bid="0.48", best_ask="0.52"))).resyncs == []
-    _assert_resync(core, _feed(core, _pc(_ch(price="0.41", size="1", best_bid="0.49", best_ask="0.52"),
-                                          ts=T0 + 2000)), "top_of_book_mismatch")
+    held = _feed(core, _pc(_ch(price="0.41", size="1", best_bid="0.49", best_ask="0.52"), ts=T0 + 2000))
+    assert held.resyncs == [] and held.rows == []
+    _assert_resync(core, _merge(held, core.flush_groups(TS, WS_GROUP_FLUSH_S)), "top_of_book_mismatch")
 
 
 def test_reported_top_is_not_checked_against_an_empty_side():
