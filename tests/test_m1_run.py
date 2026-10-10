@@ -638,7 +638,7 @@ def test_live_is_an_event_only_on_the_transition():
     delta = {"event_type": "price_change", "market": M, "timestamp": str(BASE_MS + 2000),
              "price_changes": [{"asset_id": A, "price": "0.49", "size": "10", "side": "BUY", "hash": "h"}]}
     _, sink, events, _, _ = _hooked([[_book(), delta, delta]], runtime=20)
-    assert len(sink.rows) == 2 and [event["event"] for event in events.rows] == ["connected", "live", "end"]
+    assert len(sink.rows) == 2 and [event["event"] for event in events.rows] == ["connected", "live", "ping_latency", "end"]
 
 
 def test_an_event_write_failure_propagates_and_still_closes_the_connection():

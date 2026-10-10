@@ -154,15 +154,30 @@ def test_monotonic_paused_by_the_suspend_reconnects_at_once_with_clock_jump(paus
 
 @pytest.mark.parametrize("pause_s", [60.0, 600.0, 1500.0])
 @pytest.mark.parametrize("before", [[], ["IDLE"]], ids=["right-after-pong", "mid-ping-cycle"])
-def test_monotonic_running_through_the_suspend_is_caught_by_the_aw_pong_deadline(pause_s, before):
+def test_monotonic_running_through_a_long_suspend_is_caught_at_once_as_silent(pause_s, before):
+    """Task BI: once the monotonic pause reaches WS_SILENCE_TIMEOUT_S nothing has arrived for that long, so the
+    silence watchdog closes the dead socket on the first pass after waking, before any PING goes out."""
     report, transport, sink, events, _ = _run([_book(), *before, "SUSPEND"], pause_s=pause_s, mono_runs=True)
     woke = transport.log["woke"]
-    assert report.disconnects == {"pong_timeout": 1} and report.connects == 2
+    assert report.disconnects == {"silent": 1} and report.connects == 2
+    detected = transport.connect_times[1] - w.backoff_delay(0)
+    assert detected - woke < 0.1 <= WAKE_BOUND_S
+    assert sink.rows[1]["resync_reason"] == "disconnect_silent"
+
+
+@pytest.mark.parametrize("pause_s", [15.0, 45.0])
+@pytest.mark.parametrize("before", [[], ["IDLE"]], ids=["right-after-pong", "mid-ping-cycle"])
+def test_monotonic_running_through_a_short_suspend_is_caught_by_the_aw_pong_deadline(pause_s, before):
+    report, transport, sink, events, _ = _run([_book(), *before, "SUSPEND"], pause_s=pause_s, mono_runs=True)
+    woke = transport.log["woke"]
+    assert sum(report.disconnects.values()) == 1 and report.connects == 2
+    assert set(report.disconnects) <= {"pong_timeout", "silent"}
     first_ping_after_wake = min(t for t, text in transport.sent if text == "PING" and t >= woke)
     assert first_ping_after_wake - woke < 0.1  # the overdue PING goes out on the first pass after waking
     detected = transport.connect_times[1] - w.backoff_delay(0)
     assert detected - woke <= WS_PONG_TIMEOUT_S <= WAKE_BOUND_S
-    assert sink.rows[1]["resync_reason"] == "disconnect_pong_timeout"
+    reason = next(iter(report.disconnects))
+    assert sink.rows[1]["resync_reason"] == f"disconnect_{reason}"
 
 
 def test_without_a_suspend_nothing_disconnects():
