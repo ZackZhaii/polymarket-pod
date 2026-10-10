@@ -35,6 +35,8 @@ def signal(**kw) -> ib.ProbabilitySignal:
     base = dict(signal_id="sig-1", source="news", market_id="m1", outcome_index=0, p=0.47, signal_ts=NOW_S,
                 note="gap test forecast")
     base.update(kw)
+    # Issue #105: a news signal must name its token (missing_token_id); default to the outcome's own token.
+    base.setdefault("token_id", "t-no" if base.get("outcome_index") == 1 else "t-yes")
     return ib.ProbabilitySignal(**base)
 
 

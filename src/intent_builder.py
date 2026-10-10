@@ -88,7 +88,8 @@ REASON_ORDER = (
     "invalid_gate_threshold",
     # B signal
     "missing_signal", "unsupported_signal_source", "missing_model_prob", "invalid_model_prob",
-    "non_finite_model_prob", "model_prob_out_of_range", "invalid_outcome_index", "market_mismatch",
+    "non_finite_model_prob", "model_prob_out_of_range", "invalid_outcome_index", "missing_outcome_index",
+    "missing_token_id", "incomplete_interval", "market_mismatch",
     "invalid_now", "missing_signal_ts", "invalid_signal_ts", "future_signal_ts", "stale_signal",
     "source_conflict", "duplicate_intent",
     # C market
@@ -120,7 +121,7 @@ class ProbabilitySignal:
     signal_id: str
     source: str  # news | sports_devig | endgame_confirm | forecaster_override | blend (endgame: no p)
     market_id: str
-    outcome_index: int  # the outcome p is about; legacy NewsForecaster rows = 0
+    outcome_index: int | None  # the outcome p is about; None (missing) is rejected, never read as 0 (Issue #105)
     p: float | None
     p_low: float | None = None
     p_high: float | None = None
@@ -324,6 +325,9 @@ def probability_problems(signal: ProbabilitySignal) -> list[str]:
     """Reasons the signal's probability (and interval) is unusable; [] when 0 < p_low <= p <= p_high < 1."""
     if signal.source in NO_PROBABILITY_SOURCES or signal.p is None:
         return ["missing_model_prob"]
+    if (signal.p_low is None) != (signal.p_high is None):
+        # Issue #105: half an interval is not completed from p (the forecaster never emits one).
+        return ["incomplete_interval"]
     out: list[str] = []
     for value in _interval(signal):
         problem = _number_problem("model_prob", value)
@@ -347,6 +351,27 @@ def outcome_zero_interval(signal: ProbabilitySignal) -> tuple[float, float, floa
 
 def _valid_outcome_index(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value in (0, 1)
+
+
+# Issue #105: sources whose signal must name its token; a news row without one is rejected.
+TOKEN_REQUIRED_SOURCES = frozenset({"news"})
+
+
+def outcome_index_problems(signal: ProbabilitySignal) -> list[str]:
+    """Issue #105: which outcome (and token) the signal is about, fail closed.
+
+    A missing (None) outcome_index is ``missing_outcome_index`` (never read as outcome 0 / YES); any other
+    value but the int 0 or 1 is ``invalid_outcome_index``. A news signal without a token_id (None, "" or
+    blank) is ``missing_token_id``.
+    """
+    out: list[str] = []
+    if signal.outcome_index is None:
+        out.append("missing_outcome_index")
+    elif not _valid_outcome_index(signal.outcome_index):
+        out.append("invalid_outcome_index")
+    if signal.source in TOKEN_REQUIRED_SOURCES and not str(signal.token_id or "").strip():
+        out.append("missing_token_id")
+    return out
 
 
 # ---------------------------------------------------------------- pure building blocks
@@ -483,8 +508,7 @@ def combine_probability(signals: Sequence[ProbabilitySignal],
     for item in items:
         if item.source not in SOURCES or item.source in ("blend", "forecaster_override"):
             reasons.append("unsupported_signal_source")
-        if not _valid_outcome_index(item.outcome_index):
-            reasons.append("invalid_outcome_index")
+        reasons.extend(outcome_index_problems(item))
         reasons.extend(probability_problems(item))
     if len({item.market_id for item in items}) != 1:
         reasons.append("market_mismatch")
@@ -586,8 +610,7 @@ def build_order_intent(signal: ProbabilitySignal | None, market: MarketContext, 
     else:
         if signal.source not in SOURCES and signal.source not in NO_PROBABILITY_SOURCES:
             reasons.append("unsupported_signal_source")
-        if not _valid_outcome_index(signal.outcome_index):
-            reasons.append("invalid_outcome_index")
+        reasons.extend(outcome_index_problems(signal))
         problems = probability_problems(signal)
         reasons.extend(problems)
         if not problems and _valid_outcome_index(signal.outcome_index):
@@ -864,7 +887,8 @@ def signal_id_for(row: Mapping[str, object]) -> str:
 def signal_from_bus(row: Mapping[str, object]) -> ProbabilitySignal | None:
     """A NewsForecaster / SportsDevig / Endgame bus signal as a ProbabilitySignal; anything else is None.
 
-    NewsForecaster: p = model_prob, outcome_index from the payload or 0 (legacy rows). SportsDevig:
+    NewsForecaster: p = model_prob, outcome_index and token_id from the payload; a missing one stays None
+    and build_order_intent rejects it (Issue #105: a legacy row is never read as outcome 0). SportsDevig:
     p = fair_prob, outcome 0; its own edge is not used. Endgame: no probability (missing_model_prob).
     """
     if row.get("type") != "signal":
@@ -877,18 +901,19 @@ def signal_from_bus(row: Mapping[str, object]) -> ProbabilitySignal | None:
               "forecast_id": _id_or_none(payload.get("forecast_id")),
               "forecast_ts": _id_or_none(payload.get("forecast_ts")),
               "model_version": _id_or_none(payload.get("model_version"))}
-    index = payload.get("outcome_index", 0)
     token = payload.get("token_id")
     token = str(token) if token not in (None, "") else None
     if frm == "NewsForecaster":
-        return ProbabilitySignal(source="news", outcome_index=index, p=payload.get("model_prob"),  # type: ignore[arg-type]
+        news_index = payload.get("outcome_index")  # Issue #105: no default; None -> missing_outcome_index
+        return ProbabilitySignal(source="news", outcome_index=news_index, p=payload.get("model_prob"),  # type: ignore[arg-type]
                                  p_low=payload.get("p_low"), p_high=payload.get("p_high"), token_id=token,  # type: ignore[arg-type]
                                  **common)
     if frm == "SportsDevig":
         return ProbabilitySignal(source="sports_devig", outcome_index=0, p=payload.get("fair_prob"),  # type: ignore[arg-type]
                                  token_id=token, **common)
     if frm == "Endgame":
-        return ProbabilitySignal(source="endgame", outcome_index=index, p=None, token_id=token, **common)  # type: ignore[arg-type]
+        # Endgame carries no probability, so it is always rejected (missing_model_prob) whatever the index.
+        return ProbabilitySignal(source="endgame", outcome_index=payload.get("outcome_index", 0), p=None, token_id=token, **common)  # type: ignore[arg-type]
     return None
 
 
