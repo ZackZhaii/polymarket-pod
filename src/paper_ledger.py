@@ -412,6 +412,12 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
     # Task BF: the market's Polymarket event, for calibration clustering. None when unknown or unusable;
     # never a calibration problem (the report falls back to condition_id).
     fill.update(event_fields(intent))
+    # Issue #119 (Task CE): the M2 runner's fee provenance (src/fee_source), recorded only. Older intents carry
+    # none and their fills keep their old shape.
+    if getattr(intent, "fee_source", None) is not None:
+        fill["fee_source"] = intent.fee_source
+        fill["fee_gamma_fetched_at"] = intent.fee_gamma_fetched_at
+        fill["fee_schedule_sha"] = intent.fee_schedule_sha
     # Issue #131: the category buckets RiskGate classified the market into (for M3 calibration grouping).
     fill["category_buckets"] = category.bucket_label(intent.tags)
     fill["calibration_problems"] = sorted(set(calibration_ids.fill_problems(fill)) | set(market_problems)

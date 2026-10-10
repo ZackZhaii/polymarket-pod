@@ -1,0 +1,846 @@
+"""Issue #119 (Task CE, M2-C1): the M2 paper runner skeleton. Paper only; there is no executor.
+
+    python -m src.m2_runner --run-dir runs/m2 [--max-runtime 604800] [--once]
+
+One process, one loop (Poly预测's M2 runner spec, /workspace/pod-bots/poly-forecast-m2-runner-spec.md, C.1, C.2,
+C.4, C.6, C.8; Poly执行's no-live audit F2 / T1-T13 on the issue):
+
+    scanner (Gamma)  ->  forecast inbox (src/forecast_inbox: seal first)  ->  fee (src/fee_source, Gamma)
+    ->  CLOB /book for both tokens (read only after the seal)  ->  intent_builder.build_order_intent(paper=True)
+    ->  paper_ledger.commit_if_allowed (RiskGate decides in that same call; nothing else writes the ledger)
+
+**Every iteration starts with the checks, before any getter, seal or commit** (``preflight``). In this order:
+
+1. ``<run dir>/KILL`` (the Operator's file): stop. Heartbeat ``finished``, exit 0.
+2. config/risk.toml: ``live_enabled is False``, ``mode == "paper"`` and ``require_human_gate is True``, else a
+   global halt ``m2_live_flag`` is recorded and the runner exits 6.
+3. ``pins.risk_file_problems()`` on every iteration (not PinWatch's 60 s throttle): drift records the global halt
+   ``risk_toml_pin_drift`` (``pins.record_drift``) and the runner exits 6.
+4. Halts: any global halt (``halt_store.global_halt_active``: a stored global halt, a corrupt or unreadable halt
+   state file, ``logs/HALT``, a lost or never-seen Sentinel) pauses the runner. It keeps beating ``paused`` and
+   waits; it never resumes anything (only the Operator does, with ``halt_store resume``). A market halt skips
+   that market's signals before any getter.
+5. The paper ledger: ``ledger_store.read_ledger`` + ``verify``. A problem records the global halt
+   ``invalid_risk_state`` (as paper_ledger does) and pauses.
+6. The daily loss breaker: today's (UTC) fees plus realized losses (src/daily_loss.py, as RiskGate counts them)
+   at or above ``max_daily_loss_pct x PAPER_EQUITY_USD``: paused (``daily_loss_breaker``) for the rest of the UTC
+   day; the next day counts from zero again, so it resumes by itself. RiskGate vetoes these anyway; this only
+   stops earlier.
+7. Disk: less than DISK_MIN_FREE_GB free on the run dir's volume, or the run dir above RUNNER_DISK_BUDGET_GB:
+   paused (``disk_low`` / ``disk_budget``), one event line.
+
+KILL comes first and the live / pin checks before the halts, so a drifted file exits 6 even while a halt is in
+force (stricter than the order listed in the issue; each case still does nothing else that iteration).
+
+Network: the runner reaches the network only through its getters (``Getters``; production: ``podlib.public_get``
+for both). Every URL first passes ``url_allowed``: GET only, https, Gamma ``/markets`` or ``/markets/keyset``, or
+CLOB ``/book``; no user info, port or order / auth word. ``main`` also installs ``network_guard``, a socket-level
+tripwire for the process: name resolution for any host but those two raises. ``/clob-markets`` is not used (its
+allowlisting is a KEY issue) and no WebSocket is opened.
+
+There is no executor. ``EXECUTOR_ENABLED`` is the literal ``False``, assigned once; no argument, environment
+variable or config key reaches it, and the CLI has only ``--run-dir``, ``--max-runtime`` and ``--once``. Every
+intent is built with ``paper=True``. Nothing here signs, sends or cancels anything, and no credential is read.
+
+Heartbeat ``logs/heartbeat/m2_runner.json`` (src/heartbeat.py fields; a failed write is the global halt
+``heartbeat_write_failed:m2_runner``, issue #79) every HEARTBEAT_RUNNER_EVERY_S, ``paused`` while paused. The
+Sentinel watches it (src/sentinel_tick.PROC_SPECS): stale is a global halt, ``paused`` longer than
+RUNNER_PAUSED_ALERT_S an alert. Single instance: ``<run dir>/runner.lock`` (pid, host, started_at) is held with an
+OS byte lock for the process's life; a second runner exits 3. ``<run dir>/journal.jsonl`` (one fsynced line per
+step: sealed, rejected, built, committed, vetoed, skipped) and ``events.jsonl`` record what happened.
+
+NOT here (issue #120): restart recovery from the journal, unique-decision_id booking, suspend detection and clock
+skew. A runner restarted after a crash starts with no pending signals (files already sealed are not evaluated
+again), so it can miss a trade but never books one twice through this code. Brier backfill is #121.
+
+Exit codes (docs/EXIT_CODES.md): 0 KILL or --max-runtime reached or --once done; 2 usage; 3 another runner holds
+the lock; 4 a journal / event / candidates write failed; 6 risk.toml off its pins or a live flag (global halt
+recorded); 7 the start self-check failed (run dir not writable).
+"""
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import json
+import os
+import platform
+import shutil
+import socket
+import sys
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlencode, urlsplit
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src import (  # noqa: E402
+    book,
+    fee_source,
+    forecast_inbox,
+    forecaster,
+    halt_store,
+    heartbeat,
+    intent_builder,
+    ledger_store,
+    paper_ledger,
+    pins,
+    podlib,
+    scanner,
+    sentinel,
+)
+from src.daily_loss import daily_loss  # noqa: E402
+from src.thresholds import (  # noqa: E402
+    DISK_MIN_FREE_GB,
+    HEARTBEAT_RUNNER_EVERY_S,
+    RUNNER_DISK_BUDGET_GB,
+    RUNNER_LOOP_S,
+    RUNNER_MAX_EVALS_PER_SIGNAL,
+    RUNNER_MAX_INGEST_PER_ITER,
+    RUNNER_SCAN_EVERY_S,
+    RUNNER_SCAN_MAX_AGE_S,
+)
+
+PROC = "m2_runner"
+EXECUTOR_ENABLED = False  # no switch, argument, environment variable or config key changes this (issue #119 F2)
+
+STRATEGY = forecaster.STRATEGY
+DEFAULT_MAX_RUNTIME_S = 604800  # spec C.6: one week (the M2 window); the CLI value, not a threshold
+
+EXIT_OK = 0
+EXIT_USAGE = 2
+EXIT_ALREADY_RUNNING = 3
+EXIT_WRITE_FAILED = 4
+EXIT_PIN_OR_LIVE = 6
+EXIT_SELF_CHECK = 7
+
+LIVE_HALT_REASON = "m2_live_flag"
+LEDGER_HALT_REASON = "invalid_risk_state"
+
+ACT_RUN = "run"
+ACT_PAUSE = "pause"
+ACT_FINISH = "finish"
+ACT_EXIT_PIN = "exit_pin_or_live"
+ACT_WRITE_FAILED = "write_failed"
+
+# The only reads: Gamma /markets (+ /markets/keyset, the scanner's pages) and CLOB /book. Derived from podlib's
+# pinned prefixes, so this module spells no host.
+_GAMMA = urlsplit(podlib.GAMMA_PREFIX)
+_BOOK = urlsplit(podlib.BOOK_PREFIX)
+ALLOWED_GETS = frozenset({
+    ("https", _GAMMA.hostname, _GAMMA.path),
+    ("https", _GAMMA.hostname, _GAMMA.path + "/keyset"),
+    ("https", _BOOK.hostname, _BOOK.path),
+})
+ALLOWED_HOSTS = frozenset(host for _, host, _ in ALLOWED_GETS)
+BANNED_URL_WORDS = ("/order", "/cancel", "/auth", "api-key", "api_key", "apikey", "balance-allowance", "/ws/user",
+                    "relayer", "secret", "passphrase", "signature", "withdraw", "/clob-markets")
+DROP_REASONS = frozenset({"stale_signal", "duplicate_intent", "closed", "expired", "near_expiry",
+                          "not_accepting_orders", "market_mismatch", "token_mismatch"})
+
+
+class RefusedURL(RuntimeError):
+    """A getter was asked for a URL outside ALLOWED_GETS; nothing was fetched."""
+
+
+class WriteFailed(RuntimeError):
+    """A journal / event / candidates write failed (exit 4)."""
+
+
+def url_allowed(url: object) -> bool:
+    """GET-able by the runner: https, an allowed (host, path), no user info / port / order or auth word."""
+    if not isinstance(url, str):
+        return False
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return False
+    if parts.scheme != "https" or parts.username or parts.password or port is not None or parts.fragment:
+        return False
+    lowered = url.lower()
+    if any(word in lowered for word in BANNED_URL_WORDS):
+        return False
+    return (parts.scheme, (parts.hostname or "").lower(), parts.path) in ALLOWED_GETS
+
+
+@dataclass
+class Getters:
+    """The runner's only way out. Each is ``get(url) -> parsed JSON``; production: podlib.public_get (GET only)."""
+
+    gamma: Callable[[str], Any] = podlib.public_get
+    book: Callable[[str], Any] = podlib.public_get
+
+
+class GuardedGetter:
+    """Calls ``inner`` only for an allowed URL; counts calls and refusals."""
+
+    def __init__(self, inner: Callable[[str], Any]) -> None:
+        self.inner = inner
+        self.calls: list[str] = []
+        self.refused: list[str] = []
+
+    def __call__(self, url: str) -> Any:
+        if not url_allowed(url):
+            self.refused.append(str(url))
+            raise RefusedURL(f"m2_runner refuses {url!r}")
+        self.calls.append(url)
+        return self.inner(url)
+
+
+@dataclass
+class RunnerPaths:
+    """Everything the runner writes, under one run dir (tests use a temp dir)."""
+
+    run_dir: Path
+    inbox: Path
+    archive: Path
+    journal: Path
+    events: Path
+    kill_file: Path
+    lock_file: Path
+    candidates: Path
+
+    @classmethod
+    def under(cls, run_dir: Path) -> RunnerPaths:
+        run_dir = Path(run_dir)
+        return cls(run_dir=run_dir, inbox=run_dir / "inbox" / "pending", archive=run_dir / "inbox" / "archive",
+                   journal=run_dir / "journal.jsonl", events=run_dir / "events.jsonl", kill_file=run_dir / "KILL",
+                   lock_file=run_dir / "runner.lock", candidates=run_dir / "candidates.jsonl")
+
+
+@dataclass
+class Pending:
+    signal: intent_builder.ProbabilitySignal
+    evals: int = 0
+
+
+@dataclass
+class RunnerState:
+    paths: RunnerPaths
+    risk_path: Path | None = None
+    forecasts_path: Path | None = None  # None: forecaster.FORECASTS_PATH at the time of use
+    bus_path: Path | None = None  # None: podlib.BUS_PATH at the time of use
+    clock: Callable[[], datetime] = field(default=lambda: datetime.now(timezone.utc))
+    monotonic: Callable[[], float] = time.monotonic
+    iteration: int = 0
+    markets: dict[str, dict[str, Any]] = field(default_factory=dict)
+    scan_at: datetime | None = None
+    pending: dict[str, Pending] = field(default_factory=dict)
+    seen_keys: set[str] = field(default_factory=set)
+    rejected_files: dict[str, tuple[int, int]] = field(default_factory=dict)
+    fee_cache: fee_source.FeeCache | None = None
+    fee_getter: Callable[[str], Any] | None = None
+    paused_reason: str | None = None
+    paused_since: str | None = None
+    counters: dict[str, int] = field(default_factory=lambda: {
+        "forecasts_sealed_total": 0, "forecasts_rejected_total": 0, "intents_built_total": 0, "allows_total": 0,
+        "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0})
+    last_book_age_s_max: float | None = None
+    disk_free_gb: float | None = None
+    ledger_rows: int | None = None
+
+
+@dataclass
+class Preflight:
+    action: str
+    reasons: list[str]
+    disk_free_gb: float | None = None
+    ledger_rows: int | None = None
+
+
+@dataclass
+class IterationReport:
+    action: str
+    reasons: list[str] = field(default_factory=list)
+    sealed: int = 0
+    rejected: int = 0
+    built: int = 0
+    allows: int = 0
+    vetoes: int = 0
+    skipped: int = 0
+    fills: list[dict[str, Any]] = field(default_factory=list)
+    paused_reason: str | None = None
+
+
+# ---------------------------------------------------------------- small I/O helpers
+
+def _stamp(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def append_synced(path: Path, row: dict[str, Any]) -> None:
+    """One JSON line, flushed and fsynced. Raises WriteFailed."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = (json.dumps(row, ensure_ascii=False, separators=(",", ":"), default=str) + "\n").encode("utf-8")
+        with open(path, "ab") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as exc:
+        raise WriteFailed(f"{path.name}: {type(exc).__name__}") from exc
+
+
+def journal(state: RunnerState, step: str, now: datetime, **fields: Any) -> None:
+    append_synced(state.paths.journal, {"ts": _stamp(now), "step": step, **fields})
+
+
+def event(state: RunnerState, kind: str, now: datetime, **fields: Any) -> None:
+    append_synced(state.paths.events, {"ts": _stamp(now), "event": kind, **fields})
+
+
+def _risk_cfg(risk_path: Path | None) -> dict[str, Any]:
+    target = Path(risk_path) if risk_path is not None else Path(podlib.RISK_PATH)
+    return podlib.parse_risk_toml(target.read_text(encoding="utf-8"))
+
+
+def _dir_bytes(root: Path) -> int:
+    total = 0
+    for folder, _, files in os.walk(root):
+        for name in files:
+            try:
+                total += os.stat(os.path.join(folder, name)).st_size
+            except OSError:
+                continue
+    return total
+
+
+def _record_global_halt(reason: str, extra: dict[str, Any]) -> None:
+    """One global halt for ``reason`` unless one is already in force (or the state is unreadable). Never raises."""
+    try:
+        active = halt_store.has_active_halt(scope=halt_store.SCOPE_GLOBAL, reason_prefix=reason)
+        if active is not False or halt_store.fallback_active():
+            return
+        sentinel.halt(reason=reason, scope=halt_store.SCOPE_GLOBAL, source="Sentinel", to="Executor",
+                      extra={"detected_by": PROC, "live_enabled": False, **extra})
+    except Exception as exc:  # noqa: BLE001 - last resort: logs/HALT (a global halt)
+        try:
+            halt_store.write_fallback(f"{PROC} {reason} record_failed {type(exc).__name__}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# ---------------------------------------------------------------- 1. the checks (before any action)
+
+def live_flag_problems(risk_path: Path | None = None) -> list[str]:
+    ident = heartbeat.risk_identity(risk_path)
+    problems = []
+    if ident["live_enabled"] is not False:
+        problems.append(f"live_enabled={ident['live_enabled']!r}")
+    if ident["mode"] != "paper":
+        problems.append(f"mode={ident['mode']!r}")
+    if ident["require_human_gate"] is not True:
+        problems.append(f"require_human_gate={ident['require_human_gate']!r}")
+    return problems
+
+
+def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = None,
+              ledger_path: Path | None = None) -> Preflight:
+    """The C.2 checks, in order; the first failing one decides. Calls no getter and writes no fill."""
+    if paths.kill_file.exists():
+        return Preflight(ACT_FINISH, ["kill_file"])
+    live = live_flag_problems(risk_path)
+    if live:
+        _record_global_halt(LIVE_HALT_REASON, {"problems": live, "severity": "sev1"})
+        return Preflight(ACT_EXIT_PIN, [LIVE_HALT_REASON, *live])
+    try:
+        drift = pins.risk_file_problems(risk_path)
+    except Exception as exc:  # noqa: BLE001 - a broken check is drift
+        drift = [f"pin_check_failed:{type(exc).__name__}"]
+    if drift:
+        pins.record_drift(PROC, drift, phase="runtime")
+        return Preflight(ACT_EXIT_PIN, [pins.PIN_HALT_REASON, *drift])
+    halts = halt_store.global_halt_active()
+    if halts:
+        return Preflight(ACT_PAUSE, ["global_halt", *halts])
+    ledger = Path(ledger_path) if ledger_path is not None else Path(paper_ledger.PAPER_PATH)
+    try:
+        _, read = ledger_store.read_ledger(ledger)
+        problems = ledger_store.verify(read)
+    except Exception as exc:  # noqa: BLE001 - an unreadable ledger is invalid (fail closed)
+        read, problems = None, [f"ledger_unreadable:{type(exc).__name__}"]
+    if not problems and read is not None:
+        day = daily_loss(read.rows, now.astimezone(timezone.utc).strftime("%Y-%m-%d"), read.ids)
+        problems = list(day.problems)
+    if problems or read is None:
+        _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": [str(p) for p in problems[:10]]})
+        return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]]])
+    rows = len(read.rows)
+    try:
+        cap = float(_risk_cfg(risk_path)["max_daily_loss_pct"]) * podlib.PAPER_EQUITY_USD
+    except Exception:  # noqa: BLE001 - the pin check above makes this unreachable; fail closed anyway
+        return Preflight(ACT_PAUSE, ["daily_loss_cap_unreadable"], ledger_rows=rows)
+    total = day.total_usd
+    if total is None or total >= cap:
+        return Preflight(ACT_PAUSE, ["daily_loss_breaker", f"daily_loss_usd={total!r} cap_usd={cap:g}"],
+                         ledger_rows=rows)
+    try:
+        free_gb = shutil.disk_usage(paths.run_dir).free / 1e9
+        used_gb = _dir_bytes(paths.run_dir) / 1e9
+    except OSError as exc:
+        return Preflight(ACT_PAUSE, [f"disk_unreadable:{type(exc).__name__}"], ledger_rows=rows)
+    if free_gb < DISK_MIN_FREE_GB:
+        return Preflight(ACT_PAUSE, ["disk_low", f"free_gb={free_gb:.2f}"], free_gb, rows)
+    if used_gb > RUNNER_DISK_BUDGET_GB:
+        return Preflight(ACT_PAUSE, ["disk_budget", f"run_dir_gb={used_gb:.2f}"], free_gb, rows)
+    return Preflight(ACT_RUN, [], free_gb, rows)
+
+
+# ---------------------------------------------------------------- books
+
+def _levels(raw: object, *, descending: bool) -> tuple[tuple[float, float], ...] | None:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for level in raw:
+        if not isinstance(level, dict):
+            return None
+        price, size = podlib.as_float(level.get("price")), podlib.as_float(level.get("size"))
+        if price is None or size is None:
+            return None
+        out.append((price, size))
+    return tuple(sorted(out, key=lambda item: item[0], reverse=descending))
+
+
+def book_snapshot_from_clob(raw: object, market_id: str, token_id: str) -> intent_builder.BookSnapshot:
+    """A CLOB /book body as a full-depth BookSnapshot (asks ascending, bids descending).
+
+    Anything unusable (not an object, another asset, a level that is not a number pair) gives a snapshot that
+    intent_builder rejects (no levels; another token id): never a guessed book."""
+    body = raw if isinstance(raw, dict) else {}
+    asks = _levels(body.get("asks"), descending=False)
+    bids = _levels(body.get("bids"), descending=True)
+    asset = body.get("asset_id")
+    same_token = isinstance(raw, dict) and (asset is None or str(asset) == token_id)
+    if asks is None or bids is None or not same_token:
+        asks, bids = (), ()
+    best_ask = asks[0][0] if asks else None
+    best_bid = bids[0][0] if bids else None
+    spread = None if best_ask is None or best_bid is None else round(best_ask - best_bid, 6)
+    book_ts, _ = book.book_timestamp(body.get("timestamp"))
+    return intent_builder.BookSnapshot(
+        market_id=market_id, token_id=token_id if same_token else "", asks=asks, bids=bids, best_bid=best_bid,
+        best_ask=best_ask, spread=spread, book_ts=book_ts, tick_size=podlib.as_float(body.get("tick_size")),
+        min_order_size=podlib.as_float(body.get("min_order_size")))
+
+
+def book_url(token_id: str) -> str:
+    return podlib.BOOK_PREFIX + urlencode({"token_id": token_id})
+
+
+def gamma_market_url(market_id: str) -> str:
+    return podlib.GAMMA_PREFIX + "?" + urlencode({"id": market_id})
+
+
+def _gamma_market(getter: Callable[[str], Any], market_id: str) -> object:
+    """Gamma's /markets?id=<id> row for the fee (src/fee_source reads feesEnabled / feeSchedule)."""
+    data = getter(gamma_market_url(market_id))
+    rows = data if isinstance(data, list) else []
+    matches = [row for row in rows if isinstance(row, dict) and str(row.get("id")) == str(market_id)]
+    return matches[0] if len(matches) == 1 else None
+
+
+# ---------------------------------------------------------------- one iteration
+
+def _signal_from_forecast(row: dict[str, Any]) -> intent_builder.ProbabilitySignal:
+    return intent_builder.ProbabilitySignal(
+        signal_id=str(row["forecast_id"]), source="news", market_id=str(row.get("market_id") or ""),
+        outcome_index=row.get("outcome_index"), p=row.get("model_prob"), p_low=row.get("p_low"),  # type: ignore[arg-type]
+        p_high=row.get("p_high"), token_id=row.get("token_id"), signal_ts=row.get("ts"),
+        note=str(row.get("note") or ""), forecast_id=row.get("forecast_id"), forecast_ts=row.get("ts"),
+        model_version=row.get("model_version"))
+
+
+def _forecast_row(path: Path, forecast_id: str) -> dict[str, Any] | None:
+    for row in podlib.read_jsonl(path) if path.exists() else []:
+        if row.get("forecast_id") == forecast_id:
+            return row
+    return None
+
+
+def _pending_files(inbox: Path) -> list[Path]:
+    if not inbox.exists():
+        return []
+    return sorted(p for p in inbox.glob("*/*.json") if p.is_file())
+
+
+def _scan(state: RunnerState, now: datetime, gamma: GuardedGetter) -> None:
+    try:
+        result = scanner.scan(getter=gamma, risk_path=Path(state.risk_path or podlib.RISK_PATH), now=now)
+    except Exception as exc:  # noqa: BLE001 - a failed scan keeps the last one (until it is too old)
+        state.counters["scan_failures_total"] += 1
+        event(state, "scan_failed", now, error=type(exc).__name__)
+        return
+    if not result.get("fetch", {}).get("complete"):
+        state.counters["scan_failures_total"] += 1
+        event(state, "scan_incomplete", now, stop_reason=result.get("fetch", {}).get("stop_reason"))
+        return
+    rows = result["rows"]
+    state.markets = {str(row["id"]): row for row in rows if row.get("id")}
+    state.scan_at = now
+    state.counters["scans_total"] += 1
+    try:
+        forecast_inbox.write_candidates(rows, state.paths.candidates)
+    except OSError as exc:
+        raise WriteFailed(f"candidates: {type(exc).__name__}") from exc
+    event(state, "scanned", now, scanned=result.get("scanned"), passed=result.get("passed"))
+
+
+def _ingest(state: RunnerState, now: datetime, report: IterationReport) -> None:
+    forecasts = Path(state.forecasts_path or forecaster.FORECASTS_PATH)
+    bus_path = Path(state.bus_path or podlib.BUS_PATH)
+    checked = 0
+    for path in _pending_files(state.paths.inbox):
+        if checked >= RUNNER_MAX_INGEST_PER_ITER:
+            break
+        try:
+            info = path.stat()
+        except OSError:
+            continue
+        key = (info.st_size, info.st_mtime_ns)
+        if state.rejected_files.get(str(path)) == key:
+            continue  # the same rejected bytes: not checked again until the file changes
+        checked += 1
+        result = forecast_inbox.ingest_one(path, markets=state.markets, now=now, forecasts_path=forecasts,
+                                           bus_path=bus_path, archive_dir=state.paths.archive)
+        if result.status == forecast_inbox.SEALED and result.forecast_id:
+            row = _forecast_row(forecasts, result.forecast_id)
+            journal(state, "sealed", now, file=path.name, sha256=result.sha256, forecast_id=result.forecast_id)
+            state.counters["forecasts_sealed_total"] += 1
+            report.sealed += 1
+            if row is not None:
+                state.pending[result.forecast_id] = Pending(_signal_from_forecast(row))
+        elif result.status == forecast_inbox.REJECTED:
+            state.rejected_files[str(path)] = key
+            journal(state, "rejected", now, file=path.name, sha256=result.sha256, reasons=list(result.reasons))
+            state.counters["forecasts_rejected_total"] += 1
+            report.rejected += 1
+        else:
+            journal(state, "duplicate", now, file=path.name, sha256=result.sha256)
+
+
+def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: GuardedGetter, book_get: GuardedGetter,
+            report: IterationReport) -> None:
+    if state.fee_cache is None:
+        state.fee_cache = fee_source.FeeCache(lambda market_id: _gamma_market(state.fee_getter, market_id),
+                                              clock=state.monotonic)
+    state.fee_getter = gamma  # this iteration's guarded getter (the cache outlives it)
+    for forecast_id in sorted(state.pending, key=lambda k: str(state.pending[k].signal.forecast_ts)):
+        item = state.pending[forecast_id]
+        signal = item.signal
+        market_id = signal.market_id
+        row = state.markets.get(market_id)
+        if row is None:
+            _skip(state, now, report, item, forecast_id, ["market_not_in_scan"])
+            continue
+        market_halts = [r for r in halt_store.halt_problems(market_id) if r.startswith("halt_market:")]
+        if market_halts:
+            _skip(state, now, report, item, forecast_id, ["halted_market", *market_halts])
+            continue
+        quote = state.fee_cache.get(market_id)
+        if quote.fee_rate is None:
+            state.counters["missing_fee_total"] += 1
+            _skip(state, now, report, item, forecast_id, ["missing_fee_data", str(quote.problem)])
+            continue
+        books: dict[str, intent_builder.BookSnapshot] = {}
+        for token in [str(t) for t in row.get("token_ids") or []]:
+            try:
+                raw = book_get(book_url(token))
+            except RefusedURL:
+                raise
+            except Exception:  # noqa: BLE001 - an unreadable book is a missing book (intent_builder rejects)
+                continue
+            books[token] = book_snapshot_from_clob(raw, market_id, token)
+        decided_at = max(now, state.clock())
+        ages = [age for age in (_book_age_s(b.book_ts, decided_at) for b in books.values()) if age is not None]
+        if ages:
+            state.last_book_age_s_max = max(ages)
+        context = intent_builder.market_context_from_row(row, fee_rate=quote.fee_rate)
+        result = intent_builder.build_order_intent(signal, context, books, cfg, now=decided_at, strategy=STRATEGY,
+                                                   paper=True, seen_keys=frozenset(state.seen_keys),
+                                                   banned_categories=frozenset())
+        oi = result.intent
+        if oi is None:
+            _skip(state, now, report, item, forecast_id, list(result.reasons))
+            continue
+        journal(state, "built", now, forecast_id=forecast_id, intent_id=oi.intent_id, decision_id=oi.decision_id,
+                idempotency_key=oi.idempotency_key)
+        state.counters["intents_built_total"] += 1
+        report.built += 1
+        risk_intent = dataclasses.replace(intent_builder.to_risk_intent(oi), fee_source=quote.fee_source,
+                                          fee_gamma_fetched_at=quote.fee_gamma_fetched_at,
+                                          fee_schedule_sha=quote.fee_schedule_sha)
+        outcome = paper_ledger.commit_if_allowed(risk_intent, cfg)
+        fill = outcome.get("fill") if isinstance(outcome, dict) else None
+        if outcome.get("allow") is True and isinstance(fill, dict) and fill.get("risk_decision") == "allow":
+            journal(state, "committed", now, forecast_id=forecast_id, decision_id=oi.decision_id,
+                    fill_id=fill.get("fill_id"))
+            state.counters["allows_total"] += 1
+            report.allows += 1
+            report.fills.append(fill)
+            state.seen_keys.add(oi.idempotency_key)
+            del state.pending[forecast_id]
+            continue
+        reasons = list((outcome.get("decision") or {}).get("reasons") or []) if isinstance(outcome, dict) else []
+        journal(state, "vetoed", now, forecast_id=forecast_id, decision_id=oi.decision_id, reasons=reasons,
+                halted=bool(outcome.get("halted")))
+        state.counters["vetoes_total"] += 1
+        report.vetoes += 1
+        item.evals += 1
+        if item.evals >= RUNNER_MAX_EVALS_PER_SIGNAL:
+            del state.pending[forecast_id]
+        if outcome.get("halted"):
+            break  # a ledger halt: nothing more this iteration; the next one pauses on it
+
+
+def _skip(state: RunnerState, now: datetime, report: IterationReport, item: Pending, forecast_id: str,
+          reasons: list[str]) -> None:
+    journal(state, "skipped", now, forecast_id=forecast_id, reasons=reasons)
+    report.skipped += 1
+    item.evals += 1
+    if item.evals >= RUNNER_MAX_EVALS_PER_SIGNAL or DROP_REASONS.intersection(reasons):
+        del state.pending[forecast_id]
+
+
+def _book_age_s(book_ts: object, now: datetime) -> float | None:
+    parsed = heartbeat.parse_stamp(book_ts) if isinstance(book_ts, str) else None
+    return None if parsed is None else round((now - parsed).total_seconds(), 3)
+
+
+def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> IterationReport:
+    """One loop step: the checks first; only when they all pass, scan / inbox / decisions."""
+    state.iteration += 1
+    check = preflight(state.paths, now=now, risk_path=state.risk_path)
+    state.disk_free_gb = check.disk_free_gb if check.disk_free_gb is not None else state.disk_free_gb
+    state.ledger_rows = check.ledger_rows if check.ledger_rows is not None else state.ledger_rows
+    if check.action != ACT_RUN:
+        report = IterationReport(check.action, check.reasons)
+        if check.action == ACT_PAUSE:
+            if state.paused_reason != check.reasons[0]:
+                state.paused_since = _stamp(now)
+                try:
+                    event(state, "paused", now, reasons=check.reasons)
+                except WriteFailed:
+                    return IterationReport(ACT_WRITE_FAILED, ["events_write_failed"])
+            state.paused_reason = check.reasons[0]
+            report.paused_reason = state.paused_reason
+        return report
+    if state.paused_reason is not None:
+        state.paused_reason = state.paused_since = None
+    report = IterationReport(ACT_RUN)
+    gamma, book_get = GuardedGetter(getters.gamma), GuardedGetter(getters.book)
+    try:
+        cfg = _risk_cfg(state.risk_path)
+        if state.scan_at is None or (now - state.scan_at).total_seconds() >= RUNNER_SCAN_EVERY_S:
+            _scan(state, now, gamma)
+        if state.scan_at is None or (now - state.scan_at).total_seconds() > RUNNER_SCAN_MAX_AGE_S:
+            report.reasons.append("scan_too_old")
+            return report
+        _ingest(state, now, report)
+        _decide(state, now, cfg, gamma, book_get, report)
+    except WriteFailed as exc:
+        return IterationReport(ACT_WRITE_FAILED, [str(exc)])
+    return report
+
+
+def progress(state: RunnerState, now: datetime) -> dict[str, Any]:
+    scan_age = None if state.scan_at is None else round((now - state.scan_at).total_seconds(), 3)
+    return {"iteration": state.iteration, "last_scan_ts": None if state.scan_at is None else _stamp(state.scan_at),
+            "scan_age_s": scan_age, **state.counters, "last_book_age_s_max": state.last_book_age_s_max,
+            "resume_count": 0, "paused_reason": state.paused_reason, "paused_since": state.paused_since,
+            "disk_free_gb": None if state.disk_free_gb is None else round(state.disk_free_gb, 3),
+            "ledger_rows": state.ledger_rows, "pending_signals": len(state.pending),
+            "executor_enabled": EXECUTOR_ENABLED}
+
+
+# ---------------------------------------------------------------- single instance, network guard, CLI
+
+class RunnerLock:
+    """``runner.lock``: an OS byte lock held for the process's life (released by the OS if it dies, so it is
+    never stale) plus pid / host / started_at for the Operator. ``acquire`` never waits."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self._fd: int | None = None
+
+    def acquire(self, started_at: str) -> bool:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        except OSError:
+            return False
+        try:
+            _lock_byte(fd)
+        except OSError:
+            os.close(fd)
+            return False
+        self._fd = fd
+        info = json.dumps({"pid": os.getpid(), "host": platform.node(), "started_at": started_at}).encode("utf-8")
+        try:
+            os.lseek(fd, 1, os.SEEK_SET)  # byte 0 is the lock byte; the info follows it
+            os.ftruncate(fd, 1)
+            os.write(fd, info + b"\n")
+        except OSError:
+            pass  # the lock itself is what counts
+        return True
+
+    def release(self) -> None:
+        fd, self._fd = self._fd, None
+        if fd is None:
+            return
+        try:
+            _unlock_byte(fd)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+
+if os.name == "nt":  # NoisePC
+    import msvcrt
+
+    def _lock_byte(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+
+    def _unlock_byte(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _lock_byte(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _unlock_byte(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextmanager
+def network_guard() -> Iterator[list[str]]:
+    """Socket-level tripwire for a real paper run (issue #119 F2): resolving any host but ALLOWED_HOSTS raises
+    (and is recorded), so even a code path that bypassed the getters could reach nothing else."""
+    refused: list[str] = []
+    real = socket.getaddrinfo
+
+    def guarded(host, *args, **kwargs):  # noqa: ANN001 - socket.getaddrinfo's signature
+        name = host.decode("ascii", "replace") if isinstance(host, bytes) else str(host)
+        if name.lower().rstrip(".") not in ALLOWED_HOSTS:
+            refused.append(name)
+            raise OSError(f"m2_runner network guard: {name!r} is not an allowed host")
+        return real(host, *args, **kwargs)
+
+    socket.getaddrinfo = guarded
+    try:
+        yield refused
+    finally:
+        socket.getaddrinfo = real
+
+
+def self_check(paths: RunnerPaths) -> str | None:
+    """The start self-check: the run dir and inbox exist and are writable. None when fine."""
+    try:
+        for folder in (paths.run_dir, paths.inbox, paths.archive):
+            folder.mkdir(parents=True, exist_ok=True)
+        probe = paths.run_dir / f".m2_runner_probe_{os.getpid()}"
+        probe.write_bytes(b"ok")
+        probe.unlink()
+    except OSError as exc:
+        return f"run_dir_not_writable:{type(exc).__name__}"
+    return None
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m src.m2_runner",
+        description="M2 paper runner: scanner -> forecast inbox -> intent_builder -> RiskGate -> paper ledger. "
+                    "Paper only; no executor, no orders, no credentials.",
+        epilog="Exit codes: 0 KILL / max-runtime / --once; 2 usage; 3 another runner holds the lock; 4 a write "
+               "failed; 6 risk.toml off its pins or a live flag (global halt); 7 start self-check failed.")
+    parser.add_argument("--run-dir", required=True, type=Path, help="the run dir (runs/m2)")
+    parser.add_argument("--max-runtime", type=float, default=float(DEFAULT_MAX_RUNTIME_S),
+                        help="stop after this many seconds (default one week)")
+    parser.add_argument("--once", action="store_true", help="one iteration, then exit")
+    return parser
+
+
+def main(argv: list[str] | None = None, *, getters: Getters | None = None,
+         clock: Callable[[], datetime] | None = None, sleep: Callable[[float], None] = time.sleep,
+         monotonic: Callable[[], float] = time.monotonic, risk_path: Path | None = None) -> int:
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit as exc:
+        return EXIT_OK if exc.code == 0 else EXIT_USAGE
+    if not args.max_runtime > 0:
+        return EXIT_USAGE
+    now_fn = clock or (lambda: datetime.now(timezone.utc))
+    paths = RunnerPaths.under(args.run_dir)
+    problem = self_check(paths)
+    if problem is not None:
+        print(f"{PROC}: start self-check failed: {problem}; orders=none", file=sys.stderr)
+        return EXIT_SELF_CHECK
+    lock = RunnerLock(paths.lock_file)
+    if not lock.acquire(_stamp(now_fn())):
+        print(f"{PROC}: another m2_runner holds {paths.lock_file}; exiting", file=sys.stderr)
+        return EXIT_ALREADY_RUNNING
+    try:
+        with network_guard():
+            return _run(args, paths, getters or Getters(), now_fn, sleep, monotonic, risk_path)
+    finally:
+        lock.release()
+
+
+def _run(args: argparse.Namespace, paths: RunnerPaths, getters: Getters, now_fn: Callable[[], datetime],
+         sleep: Callable[[float], None], monotonic: Callable[[], float], risk_path: Path | None) -> int:
+    hb = heartbeat.Heartbeat(PROC, every_s=HEARTBEAT_RUNNER_EVERY_S, monotonic=monotonic, now=now_fn,
+                             risk_path=risk_path)
+    state = RunnerState(paths=paths, risk_path=risk_path, clock=now_fn, monotonic=monotonic)
+    started = monotonic()
+    hb.beat(heartbeat.STATE_STARTING, progress(state, now_fn()), force=True)
+    try:
+        while True:
+            began = monotonic()
+            now = now_fn()
+            report = iteration(state, now=now, getters=getters)
+            line = (f"{PROC} iteration={state.iteration} action={report.action} sealed={report.sealed} "
+                    f"built={report.built} allows={report.allows} vetoes={report.vetoes} orders=none")
+            print(line + (f" reasons={','.join(report.reasons[:3])}" if report.reasons else ""))
+            if report.action == ACT_FINISH:
+                hb.finish(EXIT_OK, progress(state, now_fn()))
+                return EXIT_OK
+            if report.action == ACT_EXIT_PIN:
+                hb.finish(EXIT_PIN_OR_LIVE, progress(state, now_fn()))
+                return EXIT_PIN_OR_LIVE
+            if report.action == ACT_WRITE_FAILED:
+                hb.finish(EXIT_WRITE_FAILED, progress(state, now_fn()))
+                return EXIT_WRITE_FAILED
+            beat_state = heartbeat.STATE_PAUSED if report.action == ACT_PAUSE else heartbeat.STATE_RUNNING
+            hb.beat(beat_state, progress(state, now_fn()), force=True)
+            if args.once or monotonic() - started >= args.max_runtime:
+                hb.finish(EXIT_OK, progress(state, now_fn()))
+                return EXIT_OK
+            while True:  # wait for the next iteration, beating meanwhile
+                left = RUNNER_LOOP_S - (monotonic() - began)
+                if left <= 0 or monotonic() - started >= args.max_runtime:
+                    break
+                sleep(min(left, HEARTBEAT_RUNNER_EVERY_S, max(0.0, args.max_runtime - (monotonic() - started))))
+                hb.beat(beat_state, progress(state, now_fn()))
+            if monotonic() - started >= args.max_runtime:
+                hb.finish(EXIT_OK, progress(state, now_fn()))
+                return EXIT_OK
+    except BaseException:
+        hb.finish(None, progress(state, now_fn()), crashed=True)
+        raise
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

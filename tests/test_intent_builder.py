@@ -156,6 +156,8 @@ def test_to_risk_intent_matches_the_harness_shape():
         # Issue #76: the intent's own validity window, passed through exactly as built (now + INTENT_TTL_S).
         "intent_created_at": "2026-09-01T12:00:00.000Z", "intent_expires_at": "2026-09-01T12:01:00.000Z",
         "shares": 24.39, "limit_price": 0.41,  # issue #104: intent_builder's size, RiskGate only shrinks it
+        # Task CE (#119): fee provenance, set by the M2 runner after building; None from to_risk_intent.
+        "fee_source": None, "fee_gamma_fetched_at": None, "fee_schedule_sha": None,
     }
     assert intent.kelly_fraction_used == oi.kelly_fraction and intent.best_ask == oi.best_ask
     assert intent.kelly_frac_raw == pytest.approx(0.055 / (1 - 0.415))

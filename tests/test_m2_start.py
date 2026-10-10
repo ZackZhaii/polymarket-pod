@@ -175,7 +175,9 @@ def test_m2_runner_starts_last_once_it_exists_and_is_watched(rig, no_sentinel, m
     assert runner[:5] == ["python", "-m", "src.m2_runner", "--run-dir", "runs/m2"]
 
 
-def test_m2_runner_present_but_not_watched_refuses_everything(rig, no_sentinel):
+def test_m2_runner_present_but_not_watched_refuses_everything(rig, no_sentinel, monkeypatch):
+    # Issue #119 (Task CE) added the watch; a checkout without it must still refuse everything.
+    monkeypatch.delitem(sentinel_tick.PROC_SPECS, "m2_runner", raising=False)
     assert "m2_runner" not in sentinel_tick.PROC_SPECS
     assert _start(rig, runner_available=lambda root: True) == m2_start.EXIT_REFUSED
     assert rig.launched == [] and _chain(rig.root) == []
