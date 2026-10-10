@@ -163,6 +163,22 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 | 3 | `EXIT_REMOTE` | Data API unavailable, lagging or invalid (global halt recorded) | - |
 | 4 | `EXIT_LEDGER` | local ledger unreadable or invalid (global halt recorded) | - |
 
+## `src/replay_intent.py`
+
+`python -m src.replay_intent --bundle path/to/bundle.json` (issue #80 step 1): one single-shot offline
+Intent-builder replay on one fixed bundle (schema_version 1: one raw bus signal row, one scanner market
+row, that market's book rows, strategy, fee_rate, a zoned now). One signal and one run only, no bus, no
+ledger, no halt, no RiskGate, no executor and no network; it prints the intent or the complete ordered
+rejection reasons. The pin check is read only, so drift is refused here without recording a global halt.
+
+| Code | Name | Meaning | Sentinel |
+|---|---|---|---|
+| 0 | `EXIT_OK` | the single replay ran; the printed JSON holds an intent or the builder's ordered reasons | - |
+| 2 | `EXIT_USAGE` | usage error (missing `--bundle`; `--help` exits 0) | - |
+| 3 | `EXIT_CORRUPT_BUNDLE` | bundle unreadable, not JSON, wrong `schema_version`, missing keys, bad types, or a `now` without a timezone | - |
+| 4 | `EXIT_UNSUPPORTED_BUNDLE` | not a single-shot bundle: extra keys (history, loop), a list of signals, or a book row for another market | - |
+| 6 | `EXIT_PIN_DRIFT` | refused: config/risk.toml off its pins (read-only check; this entry records no halt); nothing replayed | - |
+
 ## `src/reflector.py`
 
 `python -m src.reflector`: one Reflector proposal (paper). No heartbeat.
