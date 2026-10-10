@@ -21,7 +21,8 @@ from pathlib import Path
 
 from src import halt_store, sentinel
 from src.book_staleness import INVALID_BOOK_TS, MISSING_BOOK_TS, book_age_problem, latest_by_time
-from src.podlib import BOOKS_PATH, PAPER_EQUITY_USD, QUOTES_PATH, append_jsonl, bus, read_jsonl, utc_now
+from src.podlib import PAPER_EQUITY_USD, QUOTES_PATH, append_jsonl, bus, utc_now
+from src.podlib import BOOKS_PATH, read_jsonl
 from src.thresholds import MAX_BOOK_AGE_S
 
 MISSING_BOOK = "missing_book"  # no recorded book row for the quoted leg (same word as paper_cycle)
