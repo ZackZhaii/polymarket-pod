@@ -510,6 +510,15 @@
       "note": "Requested by Poly指挥 (queue order 1) after Poly盘口's M1 analysis: 13 awake-but-dead stretches of 657-1,270 s in m1-20261008T2259Z (git f760e51, before AW #51). Done by grok-bot. Finding: on current dev AW's pong_timeout would already have ended each within ~40 s (first unanswered PING + 30 s); the watchdog is a backstop that does not depend on PING / PONG bookkeeping and fires first when the process was paused >= 60 s with the monotonic clock running.",
       "done_at": "2026-10-10T13:10:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "BJ",
+      "status": "done",
+      "title": "Issue #104: RiskGate books at most intent_builder's shares; cost plus fee never above the 1% clip",
+      "finish": "risk_gate.Intent gains shares / limit_price (intent_builder's size; to_risk_intent and the e2e harness pass them). RiskGate books shares = min(intent.shares, floor to INTENT_SHARE_STEP of cap / (max(effective, limit_price) + fee_per_share)), notional_usd = shares * effective, fee from fees.ledger_fee, so shares * max(effective, limit) + fee <= max_order_pct * PAPER_EQUITY_USD; legacy intents without a size get the same all-in sizing. Invalid shares / limit veto (invalid_intent_shares / invalid_intent_limit_price); nothing fitting vetoes order_cost_above_clip. Only shrinks: never more shares than the intent, no threshold or risk.toml change. e2e golden regenerated via --update-golden (sizes only). Regression test from the review repro (20 @ 0.50 fee 4%: was 19.80 shares + $0.40 fee = $10.40, now 19.04 shares, $9.9998 all-in) and a fixed-seed fuzz. live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "P1 from Poly预测's review B2 (issue #104), Poly风控's interim rule (cap includes fees). Done by grok-bot.",
+      "done_at": "2026-10-10T14:05:00Z",
+      "surface": "grok-bot"
     }
   ]
 }

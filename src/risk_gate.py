@@ -349,7 +349,8 @@ def evaluate(
     logs/HALT) vetoes with its halt_* reason. halt_path / halt_fallback_path default to
     src/halt_store.py's paths.
 
-    Size is the 1% clip. kelly_fraction is not applied and cannot increase size.
+    Size is the 1% clip, all-in (issue #104): shares * max(effective, intent.limit_price) + fee <= the clip,
+    and never more than intent.shares. kelly_fraction is not applied and cannot increase size.
     A single-leg fill is directional exposure, not risk-free arbitrage.
     """
     reasons: list[str] = []
