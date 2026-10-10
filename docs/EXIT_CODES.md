@@ -73,13 +73,14 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 
 ## `src/loop_claim.py`
 
-`python -m src.loop_claim status|claim|release`: the paper-loop queue. Start/finish heartbeat.
+`python -m src.loop_claim status|claim|release`: the paper-loop queue. Start/finish heartbeat. Issue #163: claim and release run under `<state>.lock`
+(halt_store.StateLock); a lock not taken within HALT_STATE_LOCK_TIMEOUT_S is also `EXIT_BUSY` (3), nothing changed.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
 | 0 | `EXIT_OK` | done | - |
 | 2 | `EXIT_PIN` | refused: pins drifted (podlib.PINS, or since Task AS the risk file sha / any key); queue unchanged | global halt |
-| 3 | `EXIT_BUSY` | another surface holds the claim, or (issue #163) the state lock `<state>.lock` could not be taken within HALT_STATE_LOCK_TIMEOUT_S | alert |
+| 3 | `EXIT_BUSY` | another surface holds the claim | alert |
 | 4 | `EXIT_CLOSED` | the task is not open | alert |
 | 5 | `EXIT_USAGE` | usage error (Task AS: was argparse 2, which collided with EXIT_PIN) | alert |
 
