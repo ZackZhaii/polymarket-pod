@@ -260,6 +260,7 @@ def _ok_intent(**kw) -> Intent:
                 best_bid=0.38, best_ask=0.4, kelly_fraction_used=0.15,
                 kelly_frac_raw=0.1, fill_context="intent_builder")  # Task BC
     base.update(kw)
+    base.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
     return Intent(**base)
 
 
@@ -275,10 +276,12 @@ def test_a_full_identity_fill_is_joinable(paths):
 
 def test_a_fill_without_ids_is_booked_and_flagged(paths):
     bare = _ok_intent(forecast_id=None, forecast_ts=None, condition_id=None, outcome_index=None, outcome=None,
-                      tags=None, end_date=None, model_version=None, best_bid=None, best_ask=None,
+                      end_date=None, model_version=None, best_bid=None, best_ask=None,
                       kelly_fraction_used=None, kelly_frac_raw=None)
     result = paper_ledger.commit_if_allowed(bare, load_risk())
-    assert result["allow"] is True  # RiskGate decided; identity is never a veto
+    # RiskGate decided; identity is never a veto. (Issue #131: tags are no longer identity only, they are the
+    # category input RiskGate checks, so the bare intent keeps its tags; missing tags are tested in test_category.)
+    assert result["allow"] is True
     fill = read_jsonl(paths["tmp"] / "paper.jsonl")[0]
     assert fill["decision_id"] is None and fill["forecast_id"] is None  # not invented
     assert fill["calibration_problems"] == ["missing_best_ask", "missing_best_bid", "missing_condition_id",
@@ -303,7 +306,7 @@ def test_identity_never_changes_a_risk_decision():
     for kw in [dict(), dict(model_prob=0.41), dict(spread=0.2), dict(liquidity_usd=10.0), dict(side="sell")]:
         full = evaluate(_ok_intent(**kw), cfg, dict(STATE), now=now)
         bare = evaluate(_ok_intent(**kw, decision_id=None, forecast_id=None, forecast_ts=None, condition_id=None,
-                                   outcome_index=None, outcome=None, tags=None, end_date=None, model_version=None),
+                                   outcome_index=None, outcome=None, end_date=None, model_version=None),
                         cfg, dict(STATE), now=now)
         assert dataclasses.asdict(full) == dataclasses.asdict(bare), kw
 
@@ -311,9 +314,13 @@ def test_identity_never_changes_a_risk_decision():
 def test_risk_gate_never_reads_identity():
     src = (ROOT / "src" / "risk_gate.py").read_text(encoding="utf-8")
     body = src[src.index("def evaluate"):]
-    for name in ("decision_id", "forecast_id", "forecast_ts", "model_version", "intent.tags", "intent.category",
+    # Issue #131: intent.tags / intent.category are now read, but only by the category check.
+    for name in ("decision_id", "forecast_id", "forecast_ts", "model_version",
                  "intent.outcome", "intent.end_date", "intent.condition_id"):
         assert name not in body, name
+    reads = [line.strip() for line in body.splitlines() if ("intent.tags" in line or "intent.category" in line)
+             and not line.strip().startswith(("#", "Issue #131", "tags veto", "unreadable"))]
+    assert reads == ["reasons.extend(category.category_problems(intent.category, intent.tags))"], reads
 
 
 # ------------------------------------------------------------------ intent builder

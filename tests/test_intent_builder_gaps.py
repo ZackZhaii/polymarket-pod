@@ -43,6 +43,7 @@ def market(**kw) -> ib.MarketContext:
                 end_date="2026-10-15T00:00:00Z", liquidity_usd=52000.0, fee_rate=0.0, accepting_orders=True,
                 closed=False)
     base.update(kw)
+    base.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
     return ib.MarketContext(**base)
 
 

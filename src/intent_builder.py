@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from src import fees
+from src.category import category_problems  # issue #131
 from src.calibration_ids import event_value, make_decision_id
 from src.book_staleness import book_age_problem, parse_book_ts
 from src.expiry_rule import expiry_problem, parse_end_date
@@ -93,7 +94,8 @@ REASON_ORDER = (
     # C market
     "missing_token_ids", "not_binary_market", "token_mismatch", "missing_condition_id", "closed",
     "not_accepting_orders", "missing_end_date", "invalid_end_date", "expired", "near_expiry",
-    "ambiguous_resolution", "category_banned", "missing_fee_data", "invalid_fee_rate",
+    "ambiguous_resolution", "category_banned", "missing_category", "banned_categories_unreadable",
+    "invalid_category_buckets", "missing_fee_data", "invalid_fee_rate",
     "negative_cost_assumption",
     # D book
     "missing_book", "token_book_mismatch", "missing_book_ts", "invalid_book_ts", "future_book_ts", "stale_book",
@@ -159,7 +161,8 @@ class MarketContext:
     category: str | None = None
     resolution_flag: str | None = None  # "ambiguous" -> ambiguous_resolution
     # Task AX (M3 step 2): Gamma's own labels from the scanner row, for calibration grouping only.
-    # Never read by any check (category_banned reads ``category``, which only the caller sets).
+    # Issue #131: tags are read (category.classify, missing_category); gamma_category / category are checked
+    # against the banned list only.
     gamma_category: str | None = None
     tags: tuple[str, ...] | None = None
     # Task BF: the market's Polymarket event from the scanner row; recorded on the fill only, never checked.
@@ -548,7 +551,7 @@ def _book_usable(book: object, market_id: str, token_id: str) -> bool:
 def build_order_intent(signal: ProbabilitySignal | None, market: MarketContext, books: Mapping[str, BookSnapshot],
                        cfg: Mapping[str, object], *, now: datetime, strategy: str, paper: bool = True,
                        side: str = "buy", seen_keys: frozenset[str] = frozenset(), held_shares: float = 0.0,
-                       banned_categories: frozenset[str] = frozenset()) -> IntentResult:
+                       banned_categories: frozenset[str] | None = None) -> IntentResult:
     """Return an OrderIntent, or every reason it cannot be one (SPEC section 5 order). Never raises on data."""
     reasons: list[str] = []
     detail: dict = {"kelly_mode": "shadow"}
@@ -630,8 +633,10 @@ def build_order_intent(signal: ProbabilitySignal | None, market: MarketContext, 
             reasons.append(problem)
     if market.resolution_flag == "ambiguous":
         reasons.append("ambiguous_resolution")
-    if market.category is not None and market.category in banned_categories:
-        reasons.append("category_banned")
+    # Issue #131: category from the tags, fail closed (missing / empty / unusable tags: missing_category).
+    # banned_categories None reads src/category.BANNED_CATEGORIES; an unreadable source vetoes, never empty.
+    explicit_category = market.category if market.category is not None else market.gamma_category
+    reasons.extend(category_problems(explicit_category, market.tags, banned=banned_categories))
     fee_rate = _finite(market.fee_rate)
     if market.fee_rate is None:
         reasons.append("missing_fee_data")
