@@ -45,6 +45,19 @@ What the protocol gives for integrity, and what this recorder does with it:
   handle that names a subscribed asset or its market, or names nothing (``unknown_event``); a non-finite or out-of-range price, size, tick
   or timestamp, a bad side, a duplicate level or a malformed message (``invalid_*``,
   ``malformed_message``). A frame that is not JSON resyncs every asset (``undecodable_message``).
+- Issue #182 (Task CC): crossed / top-of-book are judged per same-timestamp GROUP, not per frame. The exchange
+  splits one match into several price_change frames with one timestamp (resting remainder first, the consumed
+  level's removal next, then a book), and each item's best_bid / best_ask is the state after the whole group.
+  A frame that leaves the book crossed or off that reported top is held, never written, as an open group:
+  a later frame with the same timestamp that makes it consistent applies it (``group_resolved``), the asset's
+  ``book`` replaces it (``group_replaced_by_book``; a snapshot is authoritative), and a newer timestamp, a
+  tick_size_change or WS_GROUP_FLUSH_S (monotonic, from the first held frame; later frames cannot extend it)
+  closes it as a gap resync with the held reason (``group_unresolved``). Per-item errors (bad values,
+  ``unknown_level_removed``, an older timestamp) still resync at once. Rows publish the exchange's own
+  best_bid / best_ask, which an applied group's levels always agree with. After a gap resync the recorder
+  resubscribes; when the exchange's own book recovered the asset first, the resubscribe snapshot can arrive
+  older than deltas applied since: one such snapshot, not older than the recovery book and within
+  WS_RESYNC_TIMEOUT_S, is dropped (``stale_resubscribe_snapshot``) instead of a timestamp_regression.
 - Resync = if the asset was live, write one price-less invalidation row at once (see Rows below),
   then discard its local book and wait for a fresh ``book`` snapshot; deltas for it are ignored and
   no further row is written for it until then (the invalidation row is the only row a resyncing
@@ -157,6 +170,7 @@ from src.thresholds import (  # noqa: E402
     WS_BACKOFF_CAP_S,
     WS_PING_INTERVAL_S,
     WS_DATA_SILENCE_S,
+    WS_GROUP_FLUSH_S,
     WS_LATENCY_SUMMARY_PINGS,
     WS_PONG_TIMEOUT_S,
     WS_SILENCE_TIMEOUT_S,
@@ -288,6 +302,14 @@ class AssetBook:
     last_top: tuple | None = None
     last_row_ms: int | None = None
     awaiting_since: float | None = None
+    # Issue #182 (A): an open same-timestamp group whose levels do not (yet) agree: {"bids", "asks", "stamp",
+    # "reported", "reason", "since"}. Never written out; closed by a later frame of the same ts that makes it
+    # agree (applied), a book snapshot (replaced), or a newer ts / WS_GROUP_FLUSH_S / tick change (resync).
+    pending: dict[str, Any] | None = None
+    # Issue #182 (B): the exchange's own best_bid / best_ask of the last applied group (None after a snapshot).
+    reported_top: tuple[float | None, float | None] | None = None
+    # Issue #182 (C): after a gap resync the recorder resubscribes; {"since": mono, "floor": recovery ts or None}.
+    resubscribe: dict[str, Any] | None = None
 
     def discard(self, since: float | None) -> None:
         """Resync: drop every piece of local book state and wait for a fresh snapshot.
@@ -307,6 +329,8 @@ class AssetBook:
         self.last_top = None
         self.last_row_ms = None
         self.awaiting_since = since
+        self.pending = None
+        self.reported_top = None
 
 
 @dataclass
@@ -326,6 +350,21 @@ class _Reject(Exception):
 
 def _crossed(bids: dict[float, float], asks: dict[float, float]) -> bool:
     return bool(bids) and bool(asks) and max(bids) >= min(asks)
+
+
+def _disagreement(bids: dict[float, float], asks: dict[float, float],
+                  reported: tuple[float | None, float | None] | None) -> str | None:
+    """Why these levels are not a consistent book: ``crossed_book``, ``top_of_book_mismatch`` or None.
+
+    The reported best_bid / best_ask are checked against a non-empty local side only (unchanged)."""
+    if _crossed(bids, asks):
+        return "crossed_book"
+    if reported is not None:
+        if bids and reported[0] is not None and reported[0] != max(bids):
+            return "top_of_book_mismatch"
+        if asks and reported[1] is not None and reported[1] != min(asks):
+            return "top_of_book_mismatch"
+    return None
 
 
 def _levels(raw: object) -> dict[float, float]:
@@ -368,6 +407,25 @@ class BookCore:
         times = [book.awaiting_since for book in self.books.values()
                  if book.state != LIVE and book.awaiting_since is not None]
         return min(times) if times else None
+
+    def next_group_deadline(self) -> float | None:
+        """Issue #182: the monotonic time the oldest open same-ts group must be closed by (None: none open)."""
+        times = [book.pending["since"] + WS_GROUP_FLUSH_S for book in self.books.values()
+                 if book.state == LIVE and book.pending is not None and book.pending["since"] is not None]
+        return min(times) if times else None
+
+    def flush_groups(self, ts: str, mono: float | None, *, force: bool = False) -> Outcome:
+        """Issue #182: close every open group whose WS_GROUP_FLUSH_S window has passed (all of them with
+        ``force``). A group still open at its deadline did not become consistent: the asset resyncs with
+        the reason the group was held for (crossed_book / top_of_book_mismatch)."""
+        out = Outcome()
+        for book in self.books.values():
+            if book.state != LIVE or book.pending is None:
+                continue
+            since = book.pending["since"]
+            if force or (mono is not None and since is not None and mono >= since + WS_GROUP_FLUSH_S):
+                self._close_group(book, ts, mono, out)
+        return out
 
     def start_waiting(self, mono: float) -> None:
         """A (re)subscription went out: every asset not yet live waits from now."""
@@ -499,7 +557,14 @@ class BookCore:
                 raise _Reject("malformed_message")
             if book.state == LIVE and book.market != market:
                 raise _Reject("market_mismatch")
-            if book.state == LIVE and book.last_ms is not None and stamp[0] < book.last_ms:
+            newest = self._newest_ms(book)
+            if book.state == LIVE and newest is not None and stamp[0] < newest:
+                if self._late_resubscribe_snapshot(book, stamp[0], mono):
+                    # Issue #182 (C): the asset already recovered from a newer exchange book; the snapshot our
+                    # resubscribe asked for came after deltas we applied since. Dropped, not a gap.
+                    book.resubscribe = None
+                    out.counts["stale_resubscribe_snapshot"] += 1
+                    return
                 raise _Reject("timestamp_regression")
             bids = _levels(message.get("bids"))
             asks = _levels(message.get("asks"))
@@ -525,6 +590,15 @@ class BookCore:
         except _Reject as reject:
             self._resync(asset, reject.reason, ts, mono, out)
             return
+        if book.pending is not None:  # Issue #182 (A): the snapshot is authoritative over an open group
+            book.pending = None
+            out.counts["group_replaced_by_book"] += 1
+        if book.resubscribe is not None:
+            if book.state == LIVE:  # the one further snapshot expected after a recovery has come
+                book.resubscribe = None
+            else:  # recovering: a later, older resubscribe snapshot may still be dropped (C)
+                book.resubscribe["floor"] = stamp[0]
+        book.reported_top = None
         book.state = LIVE
         book.market = market
         book.bids, book.asks = bids, asks
@@ -563,10 +637,23 @@ class BookCore:
                     raise _Reject("invalid_timestamp")
                 if market != book.market:
                     raise _Reject("market_mismatch")
-                if book.last_ms is not None and stamp[0] < book.last_ms:
+                newest = self._newest_ms(book)
+                if newest is not None and stamp[0] < newest:
                     raise _Reject("timestamp_regression")
-                bids, asks = dict(book.bids), dict(book.asks)
-                reported: tuple[float | None, float | None] | None = None
+            except _Reject as reject:
+                self._resync(asset, reject.reason, ts, mono, out)
+                continue
+            group = book.pending
+            if group is not None and stamp[0] > group["stamp"][0]:
+                # Issue #182 (A): a newer timestamp closes the open group, which never became consistent.
+                self._close_group(book, ts, mono, out)
+                out.counts["ignored_awaiting_snapshot"] += 1
+                continue
+            try:
+                if group is not None:  # same timestamp: this frame continues the open group
+                    bids, asks, reported = dict(group["bids"]), dict(group["asks"]), group["reported"]
+                else:
+                    bids, asks, reported = dict(book.bids), dict(book.asks), None
                 for item in items:
                     side = item.get("side")
                     if side not in SIDES:
@@ -590,20 +677,51 @@ class BookCore:
                         del levels[price]
                     else:
                         levels[price] = size
-                if _crossed(bids, asks):
-                    raise _Reject("crossed_book")
-                if reported is not None:
-                    if bids and reported[0] is not None and reported[0] != max(bids):
-                        raise _Reject("top_of_book_mismatch")
-                    if asks and reported[1] is not None and reported[1] != min(asks):
-                        raise _Reject("top_of_book_mismatch")
             except _Reject as reject:
                 self._resync(asset, reject.reason, ts, mono, out)
                 continue
+            problem = _disagreement(bids, asks, reported)
+            if problem is not None:
+                # Issue #182 (A): the exchange splits one match into several frames with the same timestamp
+                # (resting remainder first, the consumed level's removal next, then a book). The state at the
+                # end of one frame may be crossed or behind its own reported top; hold it (never written) until
+                # the group closes instead of resyncing on an intermediate state.
+                book.pending = {"bids": bids, "asks": asks, "stamp": stamp, "reported": reported,
+                                "reason": problem, "since": group["since"] if group is not None else mono}
+                out.counts["group_held"] += 1
+                continue
+            if group is not None:
+                book.pending = None
+                out.counts["group_resolved"] += 1
             book.bids, book.asks = bids, asks
             book.last_ms, book.last_iso = stamp
+            book.reported_top = reported
             out.counts["price_change_applied"] += 1
             self._emit(book, ts, "price_change", out)
+
+    def _newest_ms(self, book: AssetBook) -> int | None:
+        """The newest exchange time applied to the book, or held in its open group (Issue #182)."""
+        if book.pending is not None:
+            held = book.pending["stamp"][0]
+            return held if book.last_ms is None else max(held, book.last_ms)
+        return book.last_ms
+
+    def _close_group(self, book: AssetBook, ts: str, mono: float | None, out: Outcome) -> None:
+        """Issue #182 (A): an open group closes without having become consistent: the asset resyncs."""
+        reason = book.pending["reason"] if book.pending is not None else "crossed_book"
+        out.counts["group_unresolved"] += 1
+        self._resync(book.asset_id, reason, ts, mono, out)
+
+    def _late_resubscribe_snapshot(self, book: AssetBook, stamp_ms: int, mono: float | None) -> bool:
+        """Issue #182 (C): a snapshot older than what the book holds is the late answer to our resubscribe when
+        the asset already recovered from an exchange book after a gap resync, the snapshot is not older than
+        that recovery book, and it came within WS_RESYNC_TIMEOUT_S of the resync. Anything else is a
+        timestamp_regression as before."""
+        guard = book.resubscribe
+        if guard is None or guard.get("floor") is None or stamp_ms < guard["floor"]:
+            return False
+        since = guard.get("since")
+        return mono is None or since is None or mono - since <= WS_RESYNC_TIMEOUT_S
 
     def _on_tick_size_change(self, message: dict[str, Any], ts: str, mono: float | None, out: Outcome) -> None:
         out.counts["tick_size_change"] += 1
@@ -616,6 +734,9 @@ class BookCore:
             return
         if book.state != LIVE:
             out.counts["ignored_awaiting_snapshot"] += 1
+            return
+        if book.pending is not None:  # Issue #182: the open group closes first (still inconsistent: resync)
+            self._close_group(book, ts, mono, out)
             return
         try:
             stamp = _exchange_time(message.get("timestamp"))
@@ -688,6 +809,15 @@ class BookCore:
     def _emit(self, book: AssetBook, ts: str, event: str, out: Outcome, *, force: bool = False) -> None:
         best_bid = max(book.bids) if book.bids else None
         best_ask = min(book.asks) if book.asks else None
+        # Issue #182 (B): the published top is the exchange's own best_bid / best_ask for the applied group.
+        # A group is only applied when its levels agree with them (_disagreement), so a non-empty side's
+        # reported value is a level we hold; an intermediate frame state is never published.
+        reported = book.reported_top
+        if reported is not None:
+            if reported[0] is not None and reported[0] in book.bids:
+                best_bid = reported[0]
+            if reported[1] is not None and reported[1] in book.asks:
+                best_ask = reported[1]
         top = (best_bid, None if best_bid is None else book.bids[best_bid],
                best_ask, None if best_ask is None else book.asks[best_ask], book.tick_size)
         refresh_due = (book.last_ms is not None and book.last_row_ms is not None
@@ -719,6 +849,8 @@ class BookCore:
         # An asset already waiting keeps its original wait start, so repeated bad frames
         # cannot postpone the resync timeout forever.
         book.discard(mono if was_live or book.awaiting_since is None else book.awaiting_since)
+        # Issue #182 (C): a gap resync is answered by our resubscribe (a disconnect is not: it reconnects).
+        book.resubscribe = None if reason.startswith("disconnect_") else {"since": mono, "floor": None}
         out.resyncs.append((asset, reason))
         out.counts[f"resync:{reason}"] += 1
         if was_live:
@@ -1291,6 +1423,14 @@ class Recorder:
                     if asset in before and asset not in awaiting:
                         self._event("live", asset=asset)
 
+    def _resubscribe(self, connection: Connection, out: Outcome, before: set[str]) -> None:
+        """Ask for a fresh snapshot for every asset this outcome newly put into resync."""
+        fresh = list(dict.fromkeys(asset for asset, _ in out.resyncs if asset not in before))
+        if fresh:
+            self._event("resubscribe", assets=fresh)
+            for frame in resubscribe_frames(fresh):
+                self._send(connection, frame)
+
     def _send(self, connection: Connection, frame: str) -> None:
         connection.send(check_outgoing_frame(frame))
 
@@ -1444,10 +1584,19 @@ class Recorder:
                     if pong_due is None:
                         pong_due = current + WS_PONG_TIMEOUT_S
                         link["pong_wait_since_ts"] = sent_ts
+                group_due = self.core.next_group_deadline()
+                if group_due is not None and current >= group_due:  # Issue #182: same sum as the wait
+                    before = set(self.core.awaiting())
+                    flushed = self.core.flush_groups(self.now(), current)
+                    self._write(flushed, before)
+                    self._resubscribe(connection, flushed, before)
+                    group_due = self.core.next_group_deadline()
                 oldest = self.core.oldest_awaiting_since()
                 if oldest is not None and current >= oldest + WS_RESYNC_TIMEOUT_S:  # Task BK: same sum as the wait
                     return "resync_timeout", healthy
                 waits = [deadline - current, next_ping - current]
+                if group_due is not None:
+                    waits.append(group_due - current)
                 if self.stop is not None:
                     waits.append(WS_STOP_POLL_S)
                 if self.heartbeat is not None:
@@ -1483,12 +1632,7 @@ class Recorder:
                         self._event("pong", rtt_ms=None if rtt is None else round(rtt * 1000.0, 1),
                                     unexpected=rtt is None)
                 self._write(out, before)
-                fresh = [asset for asset, _ in out.resyncs if asset not in before]
-                fresh = list(dict.fromkeys(fresh))
-                if fresh:
-                    self._event("resubscribe", assets=fresh)
-                    for frame in resubscribe_frames(fresh):
-                        self._send(connection, frame)
+                self._resubscribe(connection, out, before)
                 if self.core.all_live():
                     healthy = True
             except TransportClosed:
