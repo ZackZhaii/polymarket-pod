@@ -3,12 +3,13 @@ StaleWatch re-alarm after an Operator resume, and the Reconciler halt in the hal
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from src import halt_store, heartbeat, reconcile, risk_gate, sentinel
+from src import halt_store, heartbeat, podlib, reconcile, risk_gate, sentinel, sentinel_tick
 from src.podlib import read_jsonl
 from src.thresholds import SENTINEL_HEARTBEAT_TIMEOUT_S
 
@@ -73,11 +74,124 @@ def test_beats_are_throttled_unless_forced(tmp_path):
     assert hb.seq == 3
 
 
-def test_a_failed_write_is_reported_never_raised(tmp_path):
+def test_a_failed_write_is_reported_never_raised(tmp_path, monkeypatch):
+    """Issue #79: the first write failure (no file, no .seen) halts globally at once, without the bus."""
+    monkeypatch.setattr(podlib, "BUS_PATH", tmp_path / "bus.jsonl")
     blocker = tmp_path / "file"
     blocker.write_text("x", encoding="utf-8")
     hb = heartbeat.Heartbeat("m1_run", every_s=1, directory=blocker / "sub")
     assert hb.beat(force=True) == heartbeat.HB_WRITE_FAILED
+    assert hb.last_problem == heartbeat.HB_WRITE_FAILED
+    assert not hb.path.exists() and not heartbeat.state_marker(hb.path).exists()
+    assert hb.last_halt["persisted"] == halt_store.PERSISTED_STATE
+    assert [h["id"] for h in halt_store.active_halts()] == [hb.last_halt["id"]]
+    assert [(h["scope"], h["reason"], h["source"]) for h in halt_store.active_halts()] == [
+        ("global", "heartbeat_write_failed:m1_run", "heartbeat")]
+    assert not (tmp_path / "bus.jsonl").exists()  # the halt never goes through the bus
+    # the persisted halt blocks the existing consumers
+    assert [r.split(":", 1)[0] for r in halt_store.halt_problems("m1")] == ["halt_global"]
+    vetoed = risk_gate.evaluate(_intent(), _cfg(), _state(), now=NOW)
+    assert not vetoed.allow and any(r.startswith("halt_global:") for r in vetoed.reasons)
+
+
+def test_a_replace_failure_halts_and_leaves_no_temp_file(tmp_path, monkeypatch):
+    real_replace = os.replace
+
+    def boom(src, dst, **kwargs):
+        if Path(dst).name == "m1_run.json":
+            raise OSError("replace refused")
+        return real_replace(src, dst, **kwargs)
+
+    monkeypatch.setattr(os, "replace", boom)
+    hb = heartbeat.Heartbeat("m1_run", every_s=1, directory=tmp_path)
+    assert hb.beat(force=True) == heartbeat.HB_WRITE_FAILED
+    assert [(h["scope"], h["reason"], h["source"]) for h in halt_store.active_halts()] == [
+        ("global", "heartbeat_write_failed:m1_run", "heartbeat")]
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_a_marker_write_failure_halts(tmp_path, monkeypatch):
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(heartbeat, "state_marker", lambda path: blocker / "sub" / path.name)
+    hb = heartbeat.Heartbeat("m1_run", every_s=1, directory=tmp_path)
+    assert hb.beat(force=True) == heartbeat.HB_WRITE_FAILED
+    assert hb.path.exists() and not heartbeat.state_marker(hb.path).exists()  # only the marker step failed
+    assert [(h["scope"], h["reason"], h["source"]) for h in halt_store.active_halts()] == [
+        ("global", "heartbeat_write_failed:m1_run", "heartbeat")]
+
+
+def test_repeat_failures_halt_once_and_a_good_write_does_not_resume(tmp_path, monkeypatch):
+    real_replace = os.replace
+    failing = [False]
+
+    def boom(src, dst, **kwargs):
+        if failing[0] and Path(dst).name == "m1_run.json":
+            raise OSError("replace refused")
+        return real_replace(src, dst, **kwargs)
+
+    monkeypatch.setattr(os, "replace", boom)
+    hb = heartbeat.Heartbeat("m1_run", every_s=1, directory=tmp_path)
+    assert hb.beat(force=True) is None
+    failing[0] = True
+    assert hb.beat(force=True) == heartbeat.HB_WRITE_FAILED
+    assert hb.beat(force=True) == heartbeat.HB_WRITE_FAILED
+    assert hb.last_halt["duplicate"] is True  # the halt store dedupes
+    assert [h["reason"] for h in halt_store.active_halts()] == ["heartbeat_write_failed:m1_run"]
+    failing[0] = False
+    assert hb.beat(force=True) is None and hb.last_halt is None
+    assert [h["reason"] for h in halt_store.active_halts()] == ["heartbeat_write_failed:m1_run"]  # needs a resume
+
+
+def test_a_halt_state_write_failure_falls_back_to_the_halt_file(tmp_path, monkeypatch):
+    def boom(path, records):
+        raise OSError("state write refused")
+
+    monkeypatch.setattr(halt_store, "_atomic_write", boom)
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")
+    hb = heartbeat.Heartbeat("m1_run", every_s=1, directory=blocker / "sub")
+    assert hb.beat(force=True) == heartbeat.HB_WRITE_FAILED
+    assert hb.last_halt["persisted"] == halt_store.PERSISTED_FALLBACK
+    assert "heartbeat_write_failed:m1_run" in halt_store.HALT_FALLBACK_PATH.read_text(encoding="utf-8")
+    assert halt_store.halt_problems("m1") == [halt_store.FALLBACK_ACTIVE]
+
+
+def test_when_both_halt_paths_are_down_the_failure_result_is_kept(tmp_path, monkeypatch):
+    def boom(path, records):
+        raise OSError("state write refused")
+
+    monkeypatch.setattr(halt_store, "_atomic_write", boom)
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(halt_store, "HALT_FALLBACK_PATH", blocker / "HALT")
+    hb = heartbeat.Heartbeat("m1_run", every_s=1, directory=blocker / "sub")
+    assert hb.beat(force=True) == heartbeat.HB_WRITE_FAILED  # the write failure is not swallowed
+    assert hb.last_halt["persisted"] == halt_store.PERSISTED_NONE  # and nothing claims a persisted halt
+    assert hb.beat(force=True) == heartbeat.HB_WRITE_FAILED and hb.last_halt["persisted"] == halt_store.PERSISTED_NONE
+
+
+def test_a_broken_halt_store_never_raises_out_of_beat(tmp_path, monkeypatch):
+    def boom(**kwargs):
+        raise RuntimeError("halt store down")
+
+    monkeypatch.setattr(halt_store, "record_halt", boom)
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")
+    hb = heartbeat.Heartbeat("m1_run", every_s=1, directory=blocker / "sub")
+    assert hb.beat(force=True) == heartbeat.HB_WRITE_FAILED
+    assert hb.last_halt is None
+
+
+def test_a_plain_state_write_is_never_a_heartbeat_event(tmp_path):
+    """write_record stays generic (sentinel_tick's tick state goes through it)."""
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")
+    assert heartbeat.write_record(blocker / "sub" / "x.json", record("m1_run")) == heartbeat.HB_WRITE_FAILED
+    assert halt_store.active_halts() == []
+    state = {"version": sentinel_tick.TICK_STATE_VERSION, "raised": [], "handled": {}, "ticks": 0}
+    assert sentinel_tick.save_state(blocker / "sub" / "tick.json", state) == heartbeat.HB_WRITE_FAILED
+    assert halt_store.active_halts() == []
 
 
 def test_first_run_lost_unreadable_corrupt_and_malformed(tmp_path):

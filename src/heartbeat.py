@@ -12,8 +12,11 @@ exit_code, progress{}. ``state`` is one of STATES. ``exit_code`` is null until t
 Reading is fail closed: read_beat returns a problem for a file that is unreadable, not JSON,
 malformed (any field of the wrong type, a naive or unparseable time, an unknown state, another
 proc's name) or missing after its marker exists. src/sentinel_tick.py treats every such problem
-as a stale heartbeat (a global halt). A failed write is never raised into the caller's loop: the
-file simply goes stale and the Sentinel halts.
+as a stale heartbeat (a global halt). A failed write is never raised into the caller's loop
+(issue #79): Heartbeat.beat records it at once as the global halt ``heartbeat_write_failed:<proc>``
+through src/halt_store.py (deduplicated, logs/HALT fallback, no bus, independent of the ``.seen``
+marker), and only an Operator resume lifts that halt. write_record stays generic: the Sentinel
+tick state (src/sentinel_tick.py save_state) is written with it and is never a heartbeat event.
 
 Cadences and timeouts are code constants in src/thresholds.py (M2 pending). No network, no orders,
 no edits to config/risk.toml (it is only read, to stamp risk_sha256 / live_enabled / mode).
@@ -244,6 +247,7 @@ class Heartbeat:
         self.seq = 0
         self.last_mono: float | None = None
         self.last_problem: str | None = None
+        self.last_halt: dict[str, Any] | None = None  # the heartbeat_write_failed halt of the last beat
         self.carry: dict[str, Any] = {}
 
     def record(self, state: str, progress: dict[str, Any] | None, exit_code: int | None) -> dict[str, Any]:
@@ -256,7 +260,16 @@ class Heartbeat:
 
     def beat(self, state: str = STATE_RUNNING, progress: dict[str, Any] | None = None, *,
              exit_code: int | None = None, force: bool = False) -> str | None:
-        """Write now if forced or ``every_s`` has passed. Returns the write problem (None when fine)."""
+        """Write now if forced or ``every_s`` has passed. Returns the write problem (None when fine).
+
+        The shared failure branch (the first write and every later one alike): a failed write is
+        recorded at once as the global halt ``heartbeat_write_failed:<proc>`` through
+        src/halt_store.py (deduplicated, with the logs/HALT fallback, no bus, no ``.seen``
+        dependency). ``last_halt`` is that halt record -- its ``persisted`` says where it landed
+        (state, fallback or ``none``: never claim a persisted halt on ``none``) -- and None on a
+        good write or when even recording the halt broke. A later good write never resumes the
+        halt: only the Operator does.
+        """
         try:
             current = self.monotonic()
             if not force and self.last_mono is not None and current - self.last_mono < self.every_s:
@@ -264,10 +277,25 @@ class Heartbeat:
             self.seq += 1
             problem = write_record(self.path, self.record(state, progress, exit_code))
             self.last_mono = current
-        except Exception:  # noqa: BLE001 - a heartbeat never breaks the loop; the file just goes stale
+        except Exception:  # noqa: BLE001 - a heartbeat never breaks the loop; the failure halts below
             problem = HB_WRITE_FAILED
         self.last_problem = problem
+        self.last_halt = self._write_failed_halt() if problem is not None else None
         return problem
+
+    def _write_failed_halt(self) -> dict[str, Any] | None:
+        """The failed write's global halt (issue #79), through the existing halt store. Never raises.
+
+        record_halt keeps the halt deduplicated and falls back to logs/HALT when the halt state
+        cannot take it; its ``persisted`` result is handed to the caller unchanged (``none`` means
+        even logs/HALT failed: the halt is in force but nothing persisted it).
+        """
+        try:
+            from src import halt_store  # local: heartbeat imports podlib only at module level
+            return halt_store.record_halt(scope=halt_store.SCOPE_GLOBAL, reason=f"{HB_WRITE_FAILED}:{self.proc}",
+                                          source="heartbeat")
+        except Exception:  # noqa: BLE001 - a broken halt store must not break the caller's loop
+            return None
 
     def finish(self, exit_code: int | None, progress: dict[str, Any] | None = None, *,
                crashed: bool = False) -> str | None:

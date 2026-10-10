@@ -245,6 +245,13 @@ everything until the Operator resumes it after restarting the Sentinel. Halts ar
 resume above; a condition that still holds is halted again on the next tick or check. To retire a process for
 good, let it finish cleanly, or (Operator) remove its heartbeat file and `.seen` marker.
 
+A failed heartbeat write is the same kind of stop (issue #79): `Heartbeat.beat` records the global halt
+`heartbeat_write_failed:<proc>` in the halt store at once (deduplicated, `logs/HALT` fallback, no bus, no
+`.seen` needed), on the first write as well as on every later one. A good write afterwards does not lift it;
+only the Operator resume does. When neither halt path can be written the beat keeps reporting the write failure
+and nothing claims a persisted halt. The Sentinel tick state goes through the same generic writer and is never
+a heartbeat event.
+
 ## Resolutions snapshot (Task AN)
 
 M3 calibration step 1. Design: `docs/M3_CALIBRATION.md`. Read-only; no bus, no order, no key.
