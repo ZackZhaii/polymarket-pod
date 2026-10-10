@@ -72,6 +72,12 @@ RiskGate vetoes `max_daily_loss` when `daily_loss_usd / PAPER_EQUITY_USD >= max_
 `daily_loss_usd` (`src/daily_loss.py`, read by `paper_ledger.load_state`) is today's booked fees plus
 today's **gross realized losses** of the paper ledger. Before Task AR it was the fees only.
 
+Issue #127 (Task CA) adds a pre-trade check: after sizing, RiskGate also vetoes `max_daily_loss_projected` when
+`daily_loss_usd + worst_case_loss > max_daily_loss_pct * PAPER_EQUITY_USD` ($30). The order's worst case is
+`shares * cost_price + fee_usd` for a buy (the #104 all-in cost) and `shares * (1 - effective) + fee_usd` for a
+sell; reaching exactly the cap passes, and a worst case that cannot be computed vetoes. Hypothetical intents get
+the same check. `max_daily_loss` (already at the cap) is unchanged.
+
 - Realized P&L is replayed per leg (market + token_id) over the rows that count toward risk, in
   ledger order, at average cost. A sell that closes a long realizes proceeds minus average cost; a
   buy that closes a short realizes average proceeds minus cost. Fees are counted once, separately.

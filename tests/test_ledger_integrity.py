@@ -737,6 +737,12 @@ def test_booked_fee_is_never_lower_and_recomputes_exactly(ledger, side, model_pr
                      market=f"{side}-{rate}-{price}")
     decision = evaluate(intent, load_risk(), _state("none", "none"))
     result = paper_ledger.commit_if_allowed(intent, load_risk())
+    if side == "sell" and price == 0.13:
+        # Issue #127 (Task CA): an opening short of ~80 shares at 0.125 can lose ~$70 (> the $30 daily cap),
+        # so it is now vetoed before any fill (tightening; nothing is booked).
+        assert decision.reasons == ["max_daily_loss_projected"] and result["allow"] is False
+        assert "fill" not in result or result["fill"] is None
+        return
     assert decision.allow is True and result["allow"] is True
     fill = result["fill"]
     assert fill["fee_usd"] >= booked_fee_usd(decision.fee_usd)

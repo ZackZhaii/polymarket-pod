@@ -110,9 +110,10 @@ def test_endgame_emits_a_signal_only(run):
 def test_every_intent_starts_from_a_newsforecaster_signal(run):
     forecasts = [r for r in run["detail"]["bus"] if r["from"] == "NewsForecaster"]
     # 7 intents, the replay commit, two corrupted-ledger commits, two Task AL halt-consumer commits,
-    # four Task AP heartbeat-halt commits (all vetoed), six Task AR daily-loss cases (one each),
-    # one Task AU slippage-floor signal (shared by its cases), one issue #129 never-started-Sentinel commit
-    assert len(forecasts) == 24
+    # four Task AP heartbeat-halt commits (all vetoed), seven daily-loss cases (one each; Task AR's six plus
+    # issue #127's projected case), one Task AU slippage-floor signal (shared by its cases), one issue #129
+    # never-started-Sentinel commit
+    assert len(forecasts) == 25
     assert all(r["to"] == "RiskGate" and r["payload"]["order"] is False for r in forecasts)
 
 
@@ -568,7 +569,7 @@ def test_the_start_ledger_is_a_valid_ledger():
 def test_daily_loss_cases_by_meaning(run):
     section = run["actual"]["daily_loss"]
     assert set(section) == {"a_loss_closed_today", "b_loss_closed_yesterday", "c_gain_does_not_offset",
-                            "d_below_cap", "e_fees_plus_loss", "f_unparseable_ts"}
+                            "d_below_cap", "e_fees_plus_loss", "f_unparseable_ts", "g_projected_over_cap"}
     for name in ("a_loss_closed_today", "c_gain_does_not_offset", "e_fees_plus_loss"):
         case = section[name]
         assert (case["allow"], case["reasons"], case["booked_rows"], case["halted"]) == (
@@ -580,6 +581,12 @@ def test_daily_loss_cases_by_meaning(run):
     assert section["e_fees_plus_loss"]["state"]["daily_fees_usd"] == 0.2
     for name in ("b_loss_closed_yesterday", "d_below_cap"):
         assert (section[name]["allow"], section[name]["reasons"]) == (True, []), name
+    assert section["d_below_cap"]["state"]["daily_loss_usd"] == pytest.approx(19.0)  # + this order stays <= $30
+    # Issue #127 (Task CA): $25 lost today is below the $30 cap, but $25 + this order's worst case is above it.
+    g = section["g_projected_over_cap"]
+    assert g["state"]["daily_loss_usd"] == pytest.approx(25.0)
+    assert (g["allow"], g["reasons"], g["booked_rows"], g["halted"], g["ledger_unchanged"]) == (
+        False, ["max_daily_loss_projected"], 0, False, True)
     f = section["f_unparseable_ts"]
     assert (f["allow"], f["reasons"], f["halted"], f["ledger_unchanged"]) == (False, ["invalid_risk_state"], True, True)
     assert f["state"]["daily_loss_usd"] is None
