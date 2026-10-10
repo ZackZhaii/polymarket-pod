@@ -44,7 +44,7 @@ def test_the_real_registry_matches_the_code():
 
 def test_every_entry_point_is_registered():
     found = exit_codes.entry_points(ROOT)
-    assert len(found) == 21  # Task BB: + src/reflector_proposals.py;  # Task AY: src/ws_hash_check.py; Task AZ: src/calibration.py
+    assert len(found) == 22  # Task BR: + src/m2_start.py; Task BB: + src/reflector_proposals.py;  # Task AY: src/ws_hash_check.py; Task AZ: src/calibration.py
     assert {"src/scanner.py", "src/m1_run.py", "src/sentinel_tick.py", "scripts/guard.py",
             "scripts/e2e_offline.py"} <= set(found)
     sections, problems = exit_codes.parse_registry((ROOT / exit_codes.REGISTRY_REL).read_text(encoding="utf-8"))

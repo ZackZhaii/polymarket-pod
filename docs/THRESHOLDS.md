@@ -146,6 +146,7 @@ Paging, retry and sampling limits. They decide how much is read, not what passes
 | `podlib.PUBLIC_GET_ATTEMPTS` | `3` | attempts | Tries per public GET on transient network/TLS errors. | `src/podlib.py` | Task K (9c41d5a) | no |
 | `podlib.PUBLIC_GET_BACKOFF_S` | `0.5` | s | Retry backoff base (0.5 s, then 1 s). | `src/podlib.py` | Task K (9c41d5a) | no |
 | `paper_session.BOOK_LIMIT` | `5` | markets | A paper session books the first N passing markets. | `src/paper_session.py` | Task E | no |
+| `m2_start.START_POLL_S` | `1.0` | s | How often the M2 start orchestration looks again for a fresh heartbeat while it waits; the waits themselves are the existing Sentinel timeouts (`SENTINEL_HEARTBEAT_TIMEOUT_S`, `PROC_SPECS`). | `src/m2_start.py` | Task BR (issue #133) | yes |
 | `m1_report.MISMATCH_LIST_LIMIT` | `200` | rows | The M1 report lists at most this many REST-vs-WS mismatches (all are counted). | `src/m1_report.py` | Task AI | no |
 | `reconcile.PAGE_LIMIT` | `500` | rows/page | Data API v2 first-page size for `/v2/positions` and `/v2/trades` (doc maximum 1000; later pages use the cursor's size). | `src/reconcile.py` | Task AK | no |
 | `reconcile.MAX_PAGES` | `200` | pages | Cap on one cursor walk; hitting it with a cursor left is `incomplete_walk` (exit 3, fails closed). | `src/reconcile.py` | Task AK | no |

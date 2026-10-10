@@ -259,6 +259,72 @@ only the Operator resume does. When neither halt path can be written the beat ke
 and nothing claims a persisted halt. The Sentinel tick state goes through the same generic writer and is never
 a heartbeat event.
 
+## M2 start order on NoisePC (issue #133)
+
+One command starts M2 in the right order, paper only. `scripts/m2_start.ps1` is a thin wrapper around
+`python -m src.m2_start` in the same checkout (it uses `.venv\Scripts\python.exe` when present, else `python`):
+
+```powershell
+# first start of M2: give the M2 end (UTC); later starts read it from runs/m2-chain.jsonl
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\m2_start.ps1 -Reason first -M2End 2026-10-20T00:00:00Z
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\m2_start.ps1 -Reason reboot
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\m2_start.ps1 -Reason check -DryRun   # plan only
+```
+
+1. **The resident Sentinel first** (`python -m src.sentinel_tick`). A Sentinel that is already running with a fresh
+   heartbeat is kept, never doubled. Otherwise the script launches one and waits up to `SENTINEL_HEARTBEAT_TIMEOUT_S`
+   (90 s) for a fresh heartbeat **from that launch**: state running, started after the launch, younger than 90 s,
+   stamped `live_enabled=false`, `mode=paper` and the pinned risk sha, and accepted by the consumers. An old heartbeat
+   file never counts. If that never happens, nothing else starts (exit 4).
+2. One line is appended to `runs/m2-chain.jsonl`: `ts, run_dir, git_sha, reason, m2_end, max_runtime_s, host,
+   sentinel_pid`. If the append fails, nothing else starts (exit 5).
+3. `python -m src.m1_run --out runs/m2/m1-<UTC stamp> --max-runtime <seconds left until the M2 end>`. The run dir is
+   new on every start, under #119's fixed `runs/m2/`, and is never reused. It counts as ready once m1_run's own fresh
+   heartbeat, a valid manifest and a books file all exist, within m1_run's Sentinel timeout (120 s). Then
+   paper_cycle never starts on an empty recording.
+4. `python -m src.paper_cycle --loop --recording-dir <the same run dir>`: ready on its own fresh heartbeat within
+   180 s.
+5. `python -m src.m2_runner --run-dir runs/m2 --max-runtime <seconds left>` once `src/m2_runner.py` exists (#119)
+   and the Sentinel watches `m2_runner`. A checkout with the module but without that watch refuses to start anything.
+
+While a later step waits, the Sentinel must stay fresh too. A process that fails its check is left running for
+the Operator to look at, and nothing after it starts (exit 5). The Sentinel watches that process like any other.
+Refused before anything starts (exit 3):
+- the checkout is the M1 clone `D:\AI_Workspace\pod-m1`;
+- `runs/m2/KILL` is present;
+- the chain is unreadable or inconsistent;
+- the M2 window is over;
+- m1_run, paper_cycle or m2_runner is already running with a fresh heartbeat;
+- the new run dir already exists.
+
+config/risk.toml off its pins exits 6. Exit codes: `docs/EXIT_CODES.md`.
+
+At the end the script prints `python -m src.halt_store status`. **It never resumes anything.** Old halts stay until
+the Operator handles each one by the M2 runbook §6.3, one resume at a time, after the heartbeats have been fresh for
+10 min. The script reads no `.env` or credential, passes no live flag and calls no order or trading interface.
+
+**Boot start is a manual Operator step (家伟 on NoisePC); the script never registers anything.** Run it from an
+elevated PowerShell in the M2 checkout, and replace the path with the real one:
+
+```powershell
+$dir = 'C:\poly\pod'   # the M2 checkout (never D:\AI_Workspace\pod-m1)
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $dir `
+  -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$dir\scripts\m2_start.ps1`" -Reason boot"
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName 'PolyPod-M2Start' -Action $action -Trigger $trigger -Settings $settings `
+  -User $env:USERNAME -RunLevel Limited
+```
+
+After registering, run the task once (`Start-ScheduledTask PolyPod-M2Start`). Then check three things:
+- `runs\m2-chain.jsonl` has a new line;
+- the three heartbeats in `logs\heartbeat\` stay fresh **after the task has ended**, which shows the started
+  processes outlive the task;
+- `python -m src.halt_store status` still lists the old halts.
+
+To remove the task: `Unregister-ScheduledTask PolyPod-M2Start`. A start refused because something is still
+running (exit 3) is the intended result when the task fires while M2 is up.
+
 ## Resolutions snapshot (Task AN)
 
 M3 calibration step 1. Design: `docs/M3_CALIBRATION.md`. Read-only; no bus, no order, no key.

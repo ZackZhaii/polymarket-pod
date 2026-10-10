@@ -107,6 +107,21 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 | 5 | `EXIT_INTERRUPTED` | stopped by SIGINT/SIGTERM (Operator stop) | log |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins at start (no run dir created) or while running (PIN_RECHECK_S); global halt recorded | global halt |
 
+## `src/m2_start.py`
+
+`python -m src.m2_start --reason R [--m2-end T] [--dry-run]` (wrapper `scripts/m2_start.ps1`): the M2 start order on NoisePC
+(issue #133). Sentinel first, then m1_run, paper_cycle, and m2_runner once it exists, each after the one before passed its
+check. Writes no heartbeat; never resumes, never stops what it started.
+
+| Code | Name | Meaning | Sentinel |
+|---|---|---|---|
+| 0 | `EXIT_OK` | every step started and passed its check (`--dry-run`: the plan passed the refusals) | - |
+| 2 | `EXIT_USAGE` | usage error: blank --reason, no or bad --m2-end, --m2-end differs from the chain | - |
+| 3 | `EXIT_REFUSED` | refused before anything started: M1 clone, runs/m2/KILL, bad chain, M2 window over, a process already running, run dir exists, m2_runner not watched | - |
+| 4 | `EXIT_SENTINEL_NOT_FRESH` | the launched Sentinel never beat fresh within SENTINEL_HEARTBEAT_TIMEOUT_S; nothing else started | - |
+| 5 | `EXIT_NOT_READY` | the chain append failed, or a later process was not ready within its Sentinel timeout; nothing after it started | - |
+| 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins; refused, global halt recorded (`--dry-run`: none recorded) | - |
+
 ## `src/paper_cycle.py`
 
 `python -m src.paper_cycle [--loop]`: gap / staleness signals and the Sentinel StaleWatch. Heartbeat every cycle.
