@@ -1447,8 +1447,41 @@ reason is counted like any disconnect, and `python -m pytest` and guard --requir
 - Tests: `tests/test_ws_clock_jump.py` (replay: paused 1-120 min, socket dead on resume, reconnect within 30 s,
   both clock behaviours; no false reconnect on drift or a step back). No new number; THRESHOLDS wording only.
 
+## Task BI — WS recorder: inbound-silence watchdog and PING / PONG latency summary
+
+Status: done.
+
+Requested by Poly指挥 (queue order 1) after Poly盘口's analysis of M1 run m1-20261008T2259Z (git f760e51, before
+AW #51): 13 awake-but-dead stretches, 657-1,270 s each (median 952 s), every one after a pause and ended by the
+peer's close; healthy global data silence max 38.7 s (none above 45 s). Done by grok-bot on dev@5440002.
+
+Finish when a connection silent for WS_SILENCE_TIMEOUT_S is replaced offline, any frame (data or PONG) restarts
+the window, 38.7 s of silence never trips it, the latency summary is checked, and `python -m pytest` and guard
+--require-git pass.
+
+- Finding: on current dev AW's `pong_timeout` would have ended each of the 13 within about 40 s (the first
+  unanswered PING, at most WS_PING_INTERVAL_S after the last PONG, plus WS_PONG_TIMEOUT_S). Polymarket answers
+  the text `PING` with the text frame `PONG`, which the recorder recognises; only a PONG clears the deadline, and
+  recv never blocks past it. f760e51 had no PONG deadline at all.
+- Added: no inbound frame of any kind for WS_SILENCE_TIMEOUT_S (monotonic; opens at subscribe) disconnects with
+  `silent` (`disconnected` event, every asset resyncs `disconnect_silent`), then the normal backoff, reconnect and
+  full resync. Not a duplicate of `pong_timeout`: it looks only at what actually arrives, not at PING / PONG
+  bookkeeping, and fires at once when the process was paused >= 60 s with the monotonic clock running (before
+  any PING goes out). While PONGs flow it cannot fire; a stalled data feed with live PONGs is not caught (a
+  data-only window would be a separate decision).
+- `ping_latency` event every WS_LATENCY_SUMMARY_PINGS PINGs (periodic) and after each connection
+  (connection_end): pings, pongs, unanswered, unexpected_pongs, rtt_n, RTT p50 / p99 / max ms, last PING / PONG
+  times. RunReport.pongs added.
+- Counted in report.disconnects, the reconnect escalation and m1_report's reconnect_attempts (no exemption).
+  M1_MAX_RECONNECTS stays 48.
+- New numbers: WS_SILENCE_TIMEOUT_S 60 (M2 pending), WS_SILENCE_OBSERVED_HEALTHY_MAX_S 38.7 (evidence, M2
+  pending), WS_LATENCY_SUMMARY_PINGS 60 (operational); checks WS_PONG_TIMEOUT_S < WS_SILENCE_TIMEOUT_S and
+  38.7 < WS_SILENCE_TIMEOUT_S. Tests: `tests/test_ws_silence.py`; `tests/test_ws_clock_jump.py` updated.
+
 ## Latest
 
+- 2026-10-10: Task BI: WS recorder inbound-silence watchdog (`silent` after WS_SILENCE_TIMEOUT_S=60 s of no
+  frame of any kind) and `ping_latency` summary events. AW's `pong_timeout` unchanged. Blocks the M1 rerun.
 - 2026-10-10: Task BH: WS recorder reconnects at once after a suspend / wake (`clock_jump`, `jump_s`); AW's
   `pong_timeout` covers a monotonic clock that runs through the suspend. No new threshold. Blocks the M1 rerun.
 - 2026-10-10: Task BG: calibration bootstrap intervals resample by event_id, else condition_id per sample (the

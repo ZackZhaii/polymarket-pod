@@ -81,6 +81,16 @@ WS_PING_INTERVAL_S = 10.0
 # (counted toward the Task AP reconnect escalation). 30 s per Poly研究's notes on the market channel.
 # M2 pending.
 WS_PONG_TIMEOUT_S = 30.0
+# Task BI: no inbound frame of any kind (book data or PONG) for this long = a silent connection; the
+# recorder closes it and reconnects (reason "silent", full resync), counted like any disconnect.
+# Backstop next to WS_PONG_TIMEOUT_S that does not depend on the PING / PONG bookkeeping. M2 pending.
+WS_SILENCE_TIMEOUT_S = 60.0
+# Task BI evidence, not a setting: the longest inbound data silence across all assets in the healthy
+# periods of M1 run m1-20261008T2259Z (Poly盘口's analysis). WS_SILENCE_TIMEOUT_S must stay above it.
+WS_SILENCE_OBSERVED_HEALTHY_MAX_S = 38.7
+# Task BI: the recorder writes a ping_latency event (PING / PONG round trips, unanswered PINGs) every this
+# many PINGs and at the end of each connection. Operational (logging only).
+WS_LATENCY_SUMMARY_PINGS = 60
 # Task AY: opt-in raw book snapshots (src.m1_run --raw-books), kept to validate the snapshot hash
 # offline (src.ws_hash_check). One raw_books file never passes the file cap (nor --rotate-mb); once a
 # run has written the run cap, further frames are dropped (counted), the recording goes on. M2 pending.
@@ -306,6 +316,14 @@ def consistency_problems() -> list[str]:
         problems.append("WS_PONG_TIMEOUT_S must satisfy 0 < WS_PING_INTERVAL_S < WS_PONG_TIMEOUT_S")
     if not 0.0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S:
         problems.append("WS_STOP_POLL_S must satisfy 0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S")
+    if not WS_PONG_TIMEOUT_S < WS_SILENCE_TIMEOUT_S:
+        problems.append("WS_SILENCE_TIMEOUT_S must satisfy WS_PONG_TIMEOUT_S < WS_SILENCE_TIMEOUT_S")
+    if not 0.0 < WS_SILENCE_OBSERVED_HEALTHY_MAX_S < WS_SILENCE_TIMEOUT_S:
+        problems.append("WS_SILENCE_TIMEOUT_S must exceed the observed healthy silence "
+                        "(0 < WS_SILENCE_OBSERVED_HEALTHY_MAX_S < WS_SILENCE_TIMEOUT_S)")
+    if not (isinstance(WS_LATENCY_SUMMARY_PINGS, int) and not isinstance(WS_LATENCY_SUMMARY_PINGS, bool)
+            and WS_LATENCY_SUMMARY_PINGS >= 1):
+        problems.append("WS_LATENCY_SUMMARY_PINGS must be a whole number >= 1")
     for name, value in (("M1_TOP_MARKETS", M1_TOP_MARKETS), ("M1_ROTATE_BYTES", M1_ROTATE_BYTES),
                         ("M1_REST_ASSETS", M1_REST_ASSETS), ("M1_MIN_REST_MATCHED", M1_MIN_REST_MATCHED)):
         if not (isinstance(value, int) and not isinstance(value, bool) and value >= 1):

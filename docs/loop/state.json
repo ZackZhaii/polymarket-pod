@@ -501,6 +501,15 @@
       "note": "Requested by Poly指挥 after the M1 24h run m1-20261008T2259Z (git f760e51, before AW #51) failed: 18 suspend/wake cycles left dead WS connections undetected for minutes. Done by grok-bot. Finding: on current dev AW already sends the overdue PING on the first pass after waking and pong_timeout fires within 30 s, so only the clock_jump reconnect was added.",
       "done_at": "2026-10-10T05:48:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "BI",
+      "status": "done",
+      "title": "WS recorder: inbound-silence watchdog (silent, WS_SILENCE_TIMEOUT_S=60) and a PING / PONG latency summary",
+      "finish": "src/ws_recorder.py closes a connection that received no inbound frame of any kind (book data or PONG) for WS_SILENCE_TIMEOUT_S (monotonic; window opens at subscribe, any frame restarts it) with reason silent (event disconnected, every asset resyncs disconnect_silent), then the normal backoff, reconnect and full resync; counted in report.disconnects, the reconnect escalation and M1's reconnect cap (no exemption). A ping_latency event (pings, pongs, unanswered, unexpected_pongs, RTT p50/p99/max ms, last PING / PONG times) every WS_LATENCY_SUMMARY_PINGS PINGs and after each connection. New: WS_SILENCE_TIMEOUT_S 60 (M2 pending), WS_SILENCE_OBSERVED_HEALTHY_MAX_S 38.7 (evidence, M2 pending), WS_LATENCY_SUMMARY_PINGS 60 (operational); relation checks PONG timeout < silence and 38.7 < silence. No acceptance threshold changed. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (queue order 1) after Poly盘口's M1 analysis: 13 awake-but-dead stretches of 657-1,270 s in m1-20261008T2259Z (git f760e51, before AW #51). Done by grok-bot. Finding: on current dev AW's pong_timeout would already have ended each within ~40 s (first unanswered PING + 30 s); the watchdog is a backstop that does not depend on PING / PONG bookkeeping and fires first when the process was paused >= 60 s with the monotonic clock running.",
+      "done_at": "2026-10-10T13:10:00Z",
+      "surface": "grok-bot"
     }
   ]
 }
