@@ -340,6 +340,70 @@ def test_ledger_changed_during_write_is_not_clobbered(ledger, monkeypatch):
     assert ledger.read_bytes().endswith(b"\nx") and _tmp_files(ledger) == []
 
 
+def test_a_fill_booked_before_the_compare_is_kept(ledger, monkeypatch):
+    # Issue #64, the race before the compare: a real book completes while our temp file is still
+    # being written. The compare must refuse our stale write and the successful racer must stay.
+    real_fsync = os.fsync
+    fired, racer = [], []
+
+    def fsync_then_book(fd):
+        real_fsync(fd)
+        if not fired:  # once: the racer books exactly one fill here
+            fired.append(fd)
+            racer.append(ledger_store.book(ledger, _row(market="racer")))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ledger_store.os, "fsync", fsync_then_book)
+        with pytest.raises(LedgerIntegrityError) as excinfo:
+            ledger_store.book(ledger, _row(market="ours"))
+    assert excinfo.value.problems == ["ledger_changed_during_write"]
+    _, read = ledger_store.read_ledger(ledger)
+    assert read.ids == [racer[0]["fill_id"]] and ledger_store.verify(read) == []
+
+
+def test_the_replace_window_never_loses_a_successful_book(ledger, monkeypatch):
+    # Issue #64, the reported window: a competing book is run inside our os.replace, i.e. after our
+    # compare and before our replace. It can never complete successfully and then vanish; at most
+    # one of the two writes wins and every book that returned must still be in the ledger.
+    first = ledger_store.book(ledger, _row(market="first"))
+    real_replace = os.replace
+    fired, racer = [], []
+
+    def replace_with_race(src, dst):
+        if not fired:  # once: the racer's own replace (if any) must not re-enter
+            fired.append(src)
+            try:
+                racer.append(ledger_store.book(ledger, _row(market="racer")))
+            except (LedgerIntegrityError, OSError) as exc:
+                racer.append(f"{type(exc).__name__}: {exc}")
+        return real_replace(src, dst)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(halt_store, "HALT_STATE_LOCK_TIMEOUT_S", 0.0)  # the racer must not wait 5 s
+        patch.setattr(ledger_store.os, "replace", replace_with_race)
+        ours = ledger_store.book(ledger, _row(market="ours"))
+    assert racer == ["OSError: ledger_lock_failed"]  # refused inside the window, never a silent success
+    _, read = ledger_store.read_ledger(ledger)
+    assert read.ids == [first["fill_id"], ours["fill_id"]] and ledger_store.verify(read) == []
+    later = ledger_store.book(ledger, _row(market="racer"))  # serial success keeps every fill
+    _, read = ledger_store.read_ledger(ledger)
+    assert read.ids == [first["fill_id"], ours["fill_id"], later["fill_id"]]
+    assert ledger_store.verify(read) == []
+
+
+def test_a_ledger_lock_that_cannot_be_taken_fails_closed(ledger, monkeypatch):
+    # Issue #64, criterion 5: no mutex, no write. The old ledger stands byte-for-byte.
+    ledger_store.book(ledger, _row(market="first"))
+    before = ledger.read_bytes()
+    with monkeypatch.context() as patch:
+        patch.setattr(halt_store.StateLock, "acquire", lambda self: False)
+        with pytest.raises(OSError) as excinfo:
+            ledger_store.book(ledger, _row(market="second"))
+    assert "ledger_lock_failed" in str(excinfo.value)
+    assert ledger.read_bytes() == before and _tmp_files(ledger) == []
+    assert ledger_store.verify(ledger_store.read_ledger(ledger)[1]) == []
+
+
 def test_atomic_append_writes_old_bytes_plus_line(tmp_path):
     path = tmp_path / "sub" / "l.jsonl"
     ledger_store.atomic_append(path, b"", b"a\n")
@@ -718,7 +782,8 @@ def test_ledger_store_is_standard_library_only_and_adds_no_number():
         elif isinstance(node, ast.ImportFrom):
             modules.add(node.module or "")
     assert modules == {"__future__", "hashlib", "json", "math", "os", "uuid", "dataclasses", "pathlib", "typing",
-                       "src.fees", "src.thresholds"}
+                       "src.fees", "src.thresholds",
+                       "src.halt_store"}  # issue #64: the issue #52 cross-process mutex (StateLock)
     numbers = {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
                and isinstance(node.value, (int, float)) and not isinstance(node.value, bool)}
     assert numbers <= {0.0, 1, 1.0}  # empty totals, line numbers from 1, 1 USD per share (as leg_positions)
