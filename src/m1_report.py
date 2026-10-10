@@ -163,6 +163,27 @@ def timeline(rows: list[dict], start_us: int, end_us: int, step_us: int, max_age
     }
 
 
+def observed_span(manifest: dict[str, Any], rows_by_stream: dict[str, list[dict]], start_us: int | None,
+                  end_us: int | None) -> dict[str, Any] | None:
+    """Task BT: the span a run that did not complete actually covered. Its end is ``ended_at`` when the
+    manifest was finished (e.g. interrupted), else the last ``progress.last_flush_at`` (m1_run writes it
+    every M1_MANIFEST_PROGRESS_S), else the latest row ``ts`` on disk (a run killed before progress
+    existed). Not a criterion: the criteria above still FAIL such a run."""
+    if start_us is None:
+        return None
+    progress = manifest.get("progress") if isinstance(manifest.get("progress"), dict) else {}
+    candidates = [("ended_at", end_us), ("progress.last_flush_at", to_us(progress.get("last_flush_at")))]
+    last_row = max((value for name in ("books", "events", "rest") for row in rows_by_stream.get(name, [])
+                    if (value := to_us(row.get("ts"))) is not None), default=None)
+    candidates.append(("last_row_ts", last_row))
+    for source, value in candidates:
+        if value is not None and value >= start_us:
+            return {"source": source, "start_us": start_us, "end_us": value,
+                    "end": datetime.fromtimestamp(value / 1e6, tz=timezone.utc).isoformat(timespec="milliseconds")
+                    .replace("+00:00", "Z"), "span_s": round((value - start_us) / 1e6, 3)}
+    return None
+
+
 # --- REST vs WS --------------------------------------------------------------------------------
 
 
@@ -320,6 +341,20 @@ def build_report(run_dir: Path) -> dict[str, Any]:
         meta = next((item for item in manifest["assets"] if isinstance(item, dict) and str(item.get("token_id")) == asset), {})
         per_asset[asset].update({"market_id": meta.get("market_id"), "outcome": meta.get("outcome"),
                                  "question": meta.get("question")})
+    status = manifest.get("status")
+    span = observed_span(manifest, rows_by_stream, start_us, end_us) if status != "completed" or not window_ok else None
+    observed = None
+    if span is not None:
+        observed = {
+            "label": "OBSERVED SPAN ONLY, NOT A CRITERION: coverage and book age over the span this unfinished "
+                     f"run covered (status {status}); the criteria still FAIL it",
+            "source": span["source"], "start": manifest.get("started_at"), "end": span["end"], "span_s": span["span_s"],
+            "assets": {},
+        }
+        for asset in assets:
+            item = timeline(ws_by_asset.get(asset, []), span["start_us"], span["end_us"], step_us,
+                            int(MAX_BOOK_AGE_S * 1e6))
+            observed["assets"][asset] = {key: item[key] for key in ("points", "coverage", "no_book_share", "age_s", "rows")}
     events = summarize_events(rows_by_stream["events"], assets)
     rest = compare_rest(rows_by_stream["rest"], ws_by_asset, int(M1_REST_MATCH_WINDOW_S * 1e6))
     risk = manifest.get("risk") if isinstance(manifest.get("risk"), dict) else {}
@@ -374,6 +409,15 @@ def build_report(run_dir: Path) -> dict[str, Any]:
     for name, info in streams.items():
         if info["unlisted_files"]:
             warnings.append(f"{name}: files on disk not in the manifest {info['unlisted_files']}")
+    max_runtime = manifest.get("max_runtime_s")
+    if isinstance(max_runtime, (int, float)) and not isinstance(max_runtime, bool) and max_runtime < M1_MIN_RUN_S:
+        # Task BT: a rehearsal shorter than M1_MIN_RUN_S (21540 s since 2026-10-11, 家伟批准); this only says why
+        # run_duration fails.
+        warnings.append(f"max_runtime_s {max_runtime:g} < M1_MIN_RUN_S {M1_MIN_RUN_S:g}: run_duration cannot pass "
+                        "by design (a shorter run is a rehearsal, not the M1 acceptance run)")
+    if isinstance(counts.get("partial"), bool) and counts["partial"]:
+        warnings.append("manifest counts are partial (written by the console-close handler before the process "
+                        f"was killed: {counts.get('ended_by')})")
     return {
         "schema": SCHEMA,
         "run_dir": str(run_dir),
@@ -383,7 +427,8 @@ def build_report(run_dir: Path) -> dict[str, Any]:
         "integrity_problems": integrity_problems,
         "warnings": warnings,
         "run": {key: manifest.get(key) for key in ("status", "started_at", "ended_at", "elapsed_s", "max_runtime_s",
-                                                  "exit_code", "stop_signal")},
+                                                  "exit_code", "stop_signal", "stop_reason")},
+        "observed_span": observed,
         "version": manifest.get("version"),
         "git": git,
         "risk": risk,
@@ -433,6 +478,16 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.append(f"| `{asset[:16]}...` | {item.get('market_id')} | {item.get('outcome')} | {item['coverage']:.4f} | "
                      f"{item['no_book_share']:.4f} | {_fmt(age['p50'])} | {_fmt(age['p90'])} | {_fmt(age['p99'])} | "
                      f"{_fmt(age['max'])} | {item['rows']} | {gaps.get(asset, 0)} |")
+    observed = report.get("observed_span")
+    if observed:
+        lines += ["", f"## Observed span (not a criterion; source: {observed['source']})", "",
+                  f"{observed['label']}. Span {observed['start']} .. {observed['end']} ({_fmt(observed['span_s'])} s).", "",
+                  "| Asset | Coverage (span) | No book (span) | p50 s | p90 s | p99 s (span) | max s | Rows |",
+                  "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+        for asset, item in observed["assets"].items():
+            age = item["age_s"]
+            lines.append(f"| `{asset[:16]}...` | {item['coverage']:.4f} | {item['no_book_share']:.4f} | {_fmt(age['p50'])} | "
+                         f"{_fmt(age['p90'])} | {_fmt(age['p99'])} | {_fmt(age['max'])} | {item['rows']} |")
     events = report["events"]
     lines += ["", "## Connection and resyncs", "",
               f"- connects {events['connects']}, reconnects {events['reconnects']}, connect failures "

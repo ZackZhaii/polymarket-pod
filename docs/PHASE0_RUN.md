@@ -287,6 +287,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\m2_start.ps1 -Reason
 5. `python -m src.m2_runner --run-dir runs/m2 --max-runtime <seconds left>` once `src/m2_runner.py` exists (#119)
    and the Sentinel watches `m2_runner`. A checkout with the module but without that watch refuses to start anything.
 
+`runs/m2/current.json` is rewritten atomically (the heartbeat writer: temp file, fsync, `os.replace`) after every
+launch and every check. It holds `schema` (`m2_current/1`), `status` (`starting` / `started` / `failed`), `failure`,
+`updated_ts`, `run_dir` (null until the chain line is written), `m2_end`, `reason`, `git_sha`, `host`, and
+`processes[]`. Each process entry has `name`, `pid` (launched or kept), `started_ts`, `state` (`starting` / `ready` /
+`not_ready` / `kept`) and `heartbeat_pid`. Monitors such as the box patrol read it read-only. If the write fails, the
+order stops (exit 5), as it does for a failed chain append.
+
 While a later step waits, the Sentinel must stay fresh too. A process that fails its check is left running for
 the Operator to look at, and nothing after it starts (exit 5). The Sentinel watches that process like any other.
 Refused before anything starts (exit 3):
@@ -347,6 +354,12 @@ drift writes nothing (exit 4). Calibration consumers must filter `uma_checked=tr
 
 The 24-hour read-only WebSocket book run and its offline report are `python -m src.m1_run` and
 `python -m src.m1_report`. Commands, outputs and the M2-pending acceptance criteria: `docs/M1_ACCEPTANCE.md`.
+
+Operator step for long runs on Windows (Task BT, documentation only): make the scheduled task non-interactive
+("Run whether user is logged on or not", S4U) and start python in its own process group / detached console
+(`CREATE_NEW_PROCESS_GROUP`), so closing a console or logging off does not kill the run. m1_run finishes its
+manifest as `interrupted` on a console close and records `progress` every `M1_MANIFEST_PROGRESS_S`; details in
+`docs/M1_ACCEPTANCE.md`.
 
 ## Not in this phase
 

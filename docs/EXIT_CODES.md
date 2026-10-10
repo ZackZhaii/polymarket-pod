@@ -104,7 +104,7 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 | 2 | `EXIT_USAGE` | usage error | alert |
 | 3 | `EXIT_NO_WEBSOCKETS` | the optional websockets package is missing | alert |
 | 4 | `EXIT_WRITE_FAILED` | writing the run directory failed | global halt |
-| 5 | `EXIT_INTERRUPTED` | stopped by SIGINT/SIGTERM (Operator stop) | log |
+| 5 | `EXIT_INTERRUPTED` | stopped by SIGINT/SIGTERM/SIGBREAK or Ctrl+C/Ctrl+Break (Operator stop). Task BT: a Windows console close / logoff / shutdown also finishes the manifest `interrupted` with exit_code 5, but the m1_run heartbeat ends `crashed` (global halt), not this log-only exit | log |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins at start (no run dir created) or while running (PIN_RECHECK_S); global halt recorded | global halt |
 
 ## `src/m2_start.py`
@@ -119,7 +119,7 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 | 2 | `EXIT_USAGE` | usage error: blank --reason, no or bad --m2-end, --m2-end differs from the chain | - |
 | 3 | `EXIT_REFUSED` | refused before anything started: M1 clone, runs/m2/KILL, bad chain, M2 window over, a process already running, run dir exists, m2_runner not watched | - |
 | 4 | `EXIT_SENTINEL_NOT_FRESH` | the launched Sentinel never beat fresh within SENTINEL_HEARTBEAT_TIMEOUT_S; nothing else started | - |
-| 5 | `EXIT_NOT_READY` | the chain append failed, or a later process was not ready within its Sentinel timeout; nothing after it started | - |
+| 5 | `EXIT_NOT_READY` | the chain append or a runs/m2/current.json write failed, or a later process was not ready within its Sentinel timeout; nothing after it started | - |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins; refused, global halt recorded (`--dry-run`: none recorded) | - |
 
 ## `src/paper_cycle.py`

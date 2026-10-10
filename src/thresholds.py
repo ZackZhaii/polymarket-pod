@@ -121,6 +121,12 @@ M1_ROTATE_S = 3600.0
 M1_REST_EVERY_S = 600.0
 # ... of the first N recorded assets
 M1_REST_ASSETS = 4
+# M2 pending. Task BT: a running m1_run rewrites manifest.json with ``progress`` (last_flush_at, files, rows)
+# this often, so a run killed hard (console closed, power) still shows the span it covered.
+M1_MANIFEST_PROGRESS_S = 60.0
+# M2 pending. Task BT: on a Windows console close / logoff / shutdown (about 5 s before the OS kills the
+# process) m1_run waits at most this long for its normal finish, then writes the interrupted manifest itself.
+M1_CONSOLE_CLOSE_WAIT_S = 2.0
 # report timeline resolution (coverage and book age are evaluated every step)
 M1_REPORT_STEP_S = 1.0
 # Acceptance criteria (M2 pending; conservative first values, flagged for Poly指挥 / the user).
@@ -342,6 +348,10 @@ def consistency_problems() -> list[str]:
                         ("M1_MAX_GAP_RESYNCS_PER_ASSET", M1_MAX_GAP_RESYNCS_PER_ASSET)):
         if not (isinstance(value, int) and not isinstance(value, bool) and value >= 0):
             problems.append(f"{name} must be a whole number >= 0")
+    if not M1_MANIFEST_PROGRESS_S > 0.0:
+        problems.append("M1_MANIFEST_PROGRESS_S must be > 0")
+    if not 0.0 < M1_CONSOLE_CLOSE_WAIT_S < 5.0:
+        problems.append("0 < M1_CONSOLE_CLOSE_WAIT_S < 5 (Windows kills a closed console's process after about 5 s)")
     if not (M1_ROTATE_S > 0.0 and M1_REST_EVERY_S > 0.0 and M1_MIN_RUN_S > 0.0):
         problems.append("M1_ROTATE_S, M1_REST_EVERY_S and M1_MIN_RUN_S must be > 0")
     if not 0.0 < M1_REPORT_STEP_S <= WS_ROW_REFRESH_S:

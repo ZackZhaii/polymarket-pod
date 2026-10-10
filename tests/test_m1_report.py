@@ -451,3 +451,73 @@ def test_a_resync_row_never_counts_as_a_book_even_with_a_stamp():
 
 def test_percentile_rounds_the_rank_up():
     assert rep.percentile(list(range(1, 11)), 99) == 10 and rep.percentile(list(range(1, 11)), 91) == 10
+
+
+# --- Task BT: an unfinished run's observed span and the run-duration note -----------------------------
+
+
+def _killed(tmp_path, **extra):
+    """The M1 rehearsal failure: killed at ~4h45m of 6h; manifest stuck at running with no ended_at."""
+    streams = good_streams(elapsed=17_000)
+    man = manifest(status="running", ended_at=None, elapsed_s=None, exit_code=None, max_runtime_s=21600.0,
+                   counts={}, **extra)
+    man["risk"] = dict(man["risk"], end=None)
+    run_dir = write_run(tmp_path, streams, man)
+    data = json.loads((run_dir / "manifest.json").read_text())
+    data["counts"] = {}  # m1_run never wrote counts
+    (run_dir / "manifest.json").write_text(json.dumps(data))
+    return run_dir
+
+
+def test_a_killed_run_still_fails_but_reports_the_span_it_covered_from_its_rows(tmp_path):
+    report = rep.build_report(_killed(tmp_path))
+    assert report["verdict"] == "FAIL"
+    for name in ("run_completed", "run_duration", "risk_pinned", "integrity", "coverage", "book_age_p99"):
+        assert name in report["failed"]  # the criteria are unchanged: an unfinished run never passes
+    observed = report["observed_span"]
+    assert observed["source"] == "last_row_ts" and observed["span_s"] == pytest.approx(16_981.0, abs=30)
+    assert "NOT A CRITERION" in observed["label"]
+    assert observed["assets"][A]["coverage"] >= 0.999 and observed["assets"][A]["age_s"]["p99"] <= 31
+    text = rep.render_markdown(report)
+    assert "## Observed span (not a criterion; source: last_row_ts)" in text and "p99 s (span)" in text
+
+
+def test_the_observed_span_ends_at_the_last_progress_flush(tmp_path):
+    report = rep.build_report(_killed(tmp_path, progress={"last_flush_at": iso(12_000), "book_rows": 1}))
+    observed = report["observed_span"]
+    assert observed["source"] == "progress.last_flush_at" and observed["span_s"] == 12_000.0
+    assert observed["end"] == iso(12_000)
+
+
+def test_an_interrupted_run_reports_its_span_from_ended_at(tmp_path):
+    streams = good_streams(elapsed=17_000)
+    man = manifest(elapsed=17_000, status="interrupted", exit_code=5, stop_signal="CTRL_CLOSE_EVENT",
+                   stop_reason="console:CTRL_CLOSE_EVENT", max_runtime_s=21600.0,
+                   counts={"partial": True, "ended_by": "console"})
+    report = rep.build_report(write_run(tmp_path, streams, man))
+    assert "run_completed" in report["failed"] and report["verdict"] == "FAIL"
+    assert report["observed_span"]["source"] == "ended_at" and report["run"]["stop_reason"] == "console:CTRL_CLOSE_EVENT"
+    assert any("counts are partial" in item for item in report["warnings"])
+
+
+def test_a_completed_run_has_no_observed_span_section(tmp_path):
+    report = rep.build_report(write_run(tmp_path, good_streams()))
+    assert report["observed_span"] is None and "Observed span" not in rep.render_markdown(report)
+
+
+def test_a_rehearsal_shorter_than_m1_min_run_s_says_run_duration_cannot_pass(tmp_path):
+    from src.thresholds import M1_MIN_RUN_S, M1_RUN_TARGET_S
+    assert M1_MIN_RUN_S == 21540.0  # 6 h minus 60 s (KEY-approved 2026-10-11 家伟批准; was 86340)
+    report = rep.build_report(write_run(tmp_path, good_streams(elapsed=3600),
+                                        manifest(elapsed=3600, max_runtime_s=3600.0)))
+    assert "run_duration" in report["failed"]
+    assert any("run_duration cannot pass by design" in item for item in report["warnings"])
+    assert "run_duration cannot pass by design" in rep.render_markdown(report)
+    # the 6 h acceptance run itself: no such warning, and run_duration passes on its elapsed time
+    six = rep.build_report(write_run(tmp_path, good_streams(elapsed=21600),
+                                     manifest(elapsed=21600, max_runtime_s=M1_RUN_TARGET_S), name="six"))
+    assert not any("cannot pass by design" in item for item in six["warnings"])
+    assert six["criteria"]["run_duration"]["pass"] is True
+    edge = rep.build_report(write_run(tmp_path, good_streams(elapsed=21600),
+                                      manifest(elapsed=21600, max_runtime_s=M1_MIN_RUN_S - 1), name="edge"))
+    assert any("cannot pass by design" in item for item in edge["warnings"])
