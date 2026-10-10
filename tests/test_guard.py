@@ -677,7 +677,9 @@ def test_a_risk_gate_that_ignores_halts_fails_halt_and_e2e(repo):
     code, lines, out = run(repo)
     assert code == 1, out
     failed_only(lines, "e2e", "halt", "heartbeat")
-    assert "(a)" in lines["halt"][1] or "(b)" in lines["halt"][1]
+    # issue #129: scenario (j)'s halted commit now also books, which can push (a)/(b) past the summary's cut
+    assert ("(a)" in lines["halt"][1] or "(b)" in lines["halt"][1]
+            or "hb_sentinel_never_seen: a halted intent changed the ledger" in lines["halt"][1])
 
 
 def test_a_market_resume_that_lifts_a_global_halt_fails_halt(repo):

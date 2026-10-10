@@ -32,6 +32,34 @@ def _isolate_sentinel_state(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sentinel_tick, "TICK_STATE_PATH", base / "sentinel_tick.json")
     # Task AX: sealed forecasts (logs/forecasts.jsonl) stay in the test's folder too.
     monkeypatch.setattr(forecaster, "FORECASTS_PATH", base / "forecasts.jsonl")
+    # Issue #129: no Sentinel heartbeat at all is a global halt (sentinel_heartbeat_never_seen), so every
+    # test starts with a resident Sentinel that has just beaten (a fixture, not a switch in the code).
+    # A test about the Sentinel's absence removes it with the ``no_sentinel`` fixture.
+    _sentinel_beat()
+
+
+def _sentinel_beat() -> None:
+    """Write one fresh, running Sentinel heartbeat (and its .seen marker) into heartbeat.HEARTBEAT_DIR."""
+    beat = heartbeat.Heartbeat("sentinel", every_s=30.0)
+    beat.beat(heartbeat.STATE_RUNNING, force=True)
+    if beat.last_problem is not None:
+        raise RuntimeError(f"test fixture could not write the Sentinel heartbeat: {beat.last_problem}")
+
+
+@pytest.fixture
+def no_sentinel():
+    """Issue #129: remove the fixture's Sentinel heartbeat and its .seen marker: a Sentinel never run here."""
+    path = heartbeat.beat_path("sentinel")
+    path.unlink(missing_ok=True)
+    heartbeat.state_marker(path).unlink(missing_ok=True)
+    return path
+
+
+@pytest.fixture
+def sentinel_beat():
+    """Issue #129: ``sentinel_beat()`` writes a fresh Sentinel heartbeat into the current HEARTBEAT_DIR
+    (for a test that points the heartbeat folder somewhere else)."""
+    return _sentinel_beat
 
 
 @pytest.fixture

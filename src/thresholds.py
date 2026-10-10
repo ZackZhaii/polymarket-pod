@@ -219,8 +219,9 @@ HEARTBEAT_PAPER_CYCLE_HALT_FACTOR = 2
 # M2 pending. A polling halt consumer: heartbeat this often, stale (global halt) after the timeout.
 HEARTBEAT_CONSUMER_EVERY_S = 5.0
 HEARTBEAT_CONSUMER_TIMEOUT_S = 30.0
-# M2 pending. The resident Sentinel ticks this often; once it has beaten once, a Sentinel heartbeat
-# older than the timeout is a global halt for every consumer (RiskGate, Maker, paper_cycle).
+# M2 pending. The resident Sentinel ticks this often; a Sentinel heartbeat older than the timeout is a
+# global halt for every consumer (RiskGate, Maker, paper_cycle). Issue #129: so is no heartbeat at all
+# (sentinel_heartbeat_never_seen): start the Sentinel first.
 SENTINEL_TICK_S = 30.0
 SENTINEL_HEARTBEAT_TIMEOUT_S = 90.0
 # M2 pending. Recorder escalation (gap 13), over a sliding window: this many reconnects (connect
