@@ -6,9 +6,10 @@ Task AX (M3 calibration step 2): every forecast is sealed first, as one row in l
 (src/calibration_ids.py FORECAST_ROW_FIELDS), and only then sent to RiskGate. The signal payload
 carries the same forecast_id, forecast_ts and model_version, plus outcome_index, outcome, token_id,
 condition_id and the interval p_low / p_high when the caller gives them (Poly指挥's signal->intent
-ruling). A field the caller does not give stays absent from the payload (intent_builder keeps its
-legacy defaults) and is listed in the forecast row's calibration_problems; it is never guessed. If
-the forecast row cannot be written, no signal is sent (fail closed).
+ruling). A field the caller does not give stays absent from the payload and is listed in the forecast
+row's calibration_problems; it is never guessed. If the forecast row cannot be written, no signal is
+sent (fail closed). Issue #118: ``require_ids=True`` (the M2 inbox, src/forecast_inbox.py) refuses a
+call without outcome_index or token_id before anything is written.
 """
 from __future__ import annotations
 
@@ -63,8 +64,14 @@ def emit_probability(
     forecasts_path: Path | None = None,
     event_id: object = None,
     event_slug: object = None,
+    require_ids: bool = False,
 ) -> dict:
     p = _prob("model_prob", model_prob)
+    if require_ids is True and (outcome_index is None or token_id is None
+                                or (isinstance(token_id, str) and not token_id.strip())):
+        # Issue #118: the M2 inbox (src/forecast_inbox.py) seals with require_ids=True, so a forecast that does
+        # not name its outcome and token never reaches the forecast log or the bus (#105's ids, fail closed).
+        raise ValueError("outcome_index and token_id are required (require_ids)")
     if (p_low is None) != (p_high is None):
         raise ValueError("p_low and p_high go together")
     low = high = None

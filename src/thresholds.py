@@ -144,6 +144,14 @@ FEE_NEG_CACHE_S = 60.0
 # M2 pending. The largest per-market fee rate accepted from Gamma's feeSchedule.rate; above it the fee is
 # rejected (fee_rate_out_of_range -> fee_rate None -> intent_builder missing_fee_data).
 FEE_RATE_MAX = 0.25
+# Issue #118 (Task CD, M2-B): the NewsForecaster inbox (src/forecast_inbox.py). A forecast whose as_of is more
+# than this before the moment it is sealed is stale_forecast (research older than this no longer counts as a
+# forecast made now). Must be > 0 and at most one day. M2 pending.
+FORECAST_MAX_ASOF_LAG_S = 21600.0
+# Issue #118: an inbox forecast's interval half-width (p_high - p_low) / 2 must be at least this
+# (interval_too_narrow below it: a forecast that claims near-certainty about an open market). Must be in
+# (0, 0.5). M2 pending.
+FORECAST_MIN_HALF_WIDTH = 0.03
 # Acceptance criteria (M2 pending; conservative first values, flagged for Poly指挥 / the user).
 # KEY-approved 2026-10-11 家伟批准: the M1 acceptance run targets 6 h (m1_run's default --max-runtime) ...
 M1_RUN_TARGET_S = 21600.0
@@ -373,6 +381,10 @@ def consistency_problems() -> list[str]:
         problems.append("need 0 < FEE_NEG_CACHE_S <= FEE_CACHE_TTL_S")
     if not 0.0 < FEE_RATE_MAX < 1.0:
         problems.append("FEE_RATE_MAX must be in (0, 1)")
+    if not (isinstance(FORECAST_MAX_ASOF_LAG_S, float) and 0.0 < FORECAST_MAX_ASOF_LAG_S <= 86400.0):
+        problems.append("FORECAST_MAX_ASOF_LAG_S must be a float with 0 < FORECAST_MAX_ASOF_LAG_S <= 86400")
+    if not (isinstance(FORECAST_MIN_HALF_WIDTH, float) and 0.0 < FORECAST_MIN_HALF_WIDTH < 0.5):
+        problems.append("FORECAST_MIN_HALF_WIDTH must be a float in (0, 0.5)")
     if not 0.0 < M1_CONSOLE_CLOSE_WAIT_S < 5.0:
         problems.append("0 < M1_CONSOLE_CLOSE_WAIT_S < 5 (Windows kills a closed console's process after about 5 s)")
     if not (M1_ROTATE_S > 0.0 and M1_REST_EVERY_S > 0.0 and M1_MIN_RUN_S > 0.0):
