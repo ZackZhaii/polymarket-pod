@@ -1,0 +1,102 @@
+{
+ "schema": "gamma_fee_markets/1",
+ "source": "public Gamma GET /markets/keyset (2026-10-10 scan, /workspace/pod-bots/poly-scan-m2-raw/gamma_keyset_liq10k.jsonl): one market per distinct (feesEnabled, feeSchedule); fields trimmed, values unchanged. makerBaseFee/takerBaseFee are a signing cap (1000), never the rate.",
+ "markets": [
+  {
+   "id": "5457981",
+   "slug": "dota2-ty-ts8-2026-10-10-game2",
+   "feesEnabled": true,
+   "feeSchedule": {
+    "exponent": 1,
+    "rate": 0.05,
+    "takerOnly": true,
+    "rebateRate": 0.15
+   },
+   "makerBaseFee": 1000,
+   "takerBaseFee": 1000
+  },
+  {
+   "id": "601819",
+   "slug": "will-luiz-incio-lula-da-silva-win-the-2026-brazilian-presidential-election",
+   "feesEnabled": true,
+   "feeSchedule": {
+    "exponent": 1,
+    "rate": 0.04,
+    "takerOnly": true,
+    "rebateRate": 0.25
+   },
+   "makerBaseFee": 1000,
+   "takerBaseFee": 1000
+  },
+  {
+   "id": "5234660",
+   "slug": "us-x-iran-ceasefire-continues-through-october-12",
+   "feesEnabled": false
+  },
+  {
+   "id": "2772194",
+   "slug": "will-shakhtar-donetsk-win-the-2026-27-uefa-champions-league-championship-20260701202025578",
+   "feesEnabled": true,
+   "feeSchedule": {
+    "exponent": 1,
+    "rate": 0.03,
+    "takerOnly": true,
+    "rebateRate": 0.25
+   },
+   "makerBaseFee": 1000,
+   "takerBaseFee": 1000
+  },
+  {
+   "id": "2589811",
+   "slug": "will-the-fed-decrease-interest-rates-by-25-bps-after-the-october-2026-meeting-20260617190324030",
+   "feesEnabled": true,
+   "feeSchedule": {
+    "exponent": 1,
+    "rate": 0.05,
+    "takerOnly": true,
+    "rebateRate": 0.25
+   },
+   "makerBaseFee": 1000,
+   "takerBaseFee": 1000
+  },
+  {
+   "id": "5097979",
+   "slug": "cfb-tx-okl-2026-10-10-spread-away-7pt5",
+   "feesEnabled": true,
+   "feeSchedule": {
+    "exponent": 1,
+    "rate": 0.03,
+    "takerOnly": true,
+    "rebateRate": 0.15
+   },
+   "makerBaseFee": 1000,
+   "takerBaseFee": 1000
+  },
+  {
+   "id": "5238644",
+   "slug": "bitcoin-above-84k-on-october-10-2026",
+   "feesEnabled": true,
+   "feeSchedule": {
+    "exponent": 1,
+    "rate": 0.07,
+    "takerOnly": true,
+    "rebateRate": 0.2
+   },
+   "makerBaseFee": 1000,
+   "takerBaseFee": 1000
+  },
+  {
+   "id": "4826276",
+   "slug": "republican-senate-odds-hit-50-by-october-31",
+   "feesEnabled": true,
+   "feeSchedule": {
+    "exponent": 1,
+    "rate": 0,
+    "takerOnly": true,
+    "rebateRate": 0
+   },
+   "makerBaseFee": 1000,
+   "takerBaseFee": 1000
+  }
+ ]
+}

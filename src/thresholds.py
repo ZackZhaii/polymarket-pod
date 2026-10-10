@@ -129,6 +129,14 @@ M1_MANIFEST_PROGRESS_S = 60.0
 M1_CONSOLE_CLOSE_WAIT_S = 2.0
 # report timeline resolution (coverage and book age are evaluated every step)
 M1_REPORT_STEP_S = 1.0
+# M2 pending. Issue #117 (Task BZ, M2-A Gamma-only slice): src/fee_source.FeeCache keeps a usable Gamma fee
+# quote this long; after it the fee is read again (an expired quote is never a fallback) ...
+FEE_CACHE_TTL_S = 900.0
+# ... and a quote that could not be used (unreadable / rejected) this long before the next read.
+FEE_NEG_CACHE_S = 60.0
+# M2 pending. The largest per-market fee rate accepted from Gamma's feeSchedule.rate; above it the fee is
+# rejected (fee_rate_out_of_range -> fee_rate None -> intent_builder missing_fee_data).
+FEE_RATE_MAX = 0.25
 # Acceptance criteria (M2 pending; conservative first values, flagged for Poly指挥 / the user).
 # KEY-approved 2026-10-11 家伟批准: the M1 acceptance run targets 6 h (m1_run's default --max-runtime) ...
 M1_RUN_TARGET_S = 21600.0
@@ -350,6 +358,10 @@ def consistency_problems() -> list[str]:
             problems.append(f"{name} must be a whole number >= 0")
     if not M1_MANIFEST_PROGRESS_S > 0.0:
         problems.append("M1_MANIFEST_PROGRESS_S must be > 0")
+    if not 0.0 < FEE_NEG_CACHE_S <= FEE_CACHE_TTL_S:  # Task BZ (#117)
+        problems.append("need 0 < FEE_NEG_CACHE_S <= FEE_CACHE_TTL_S")
+    if not 0.0 < FEE_RATE_MAX < 1.0:
+        problems.append("FEE_RATE_MAX must be in (0, 1)")
     if not 0.0 < M1_CONSOLE_CLOSE_WAIT_S < 5.0:
         problems.append("0 < M1_CONSOLE_CLOSE_WAIT_S < 5 (Windows kills a closed console's process after about 5 s)")
     if not (M1_ROTATE_S > 0.0 and M1_REST_EVERY_S > 0.0 and M1_MIN_RUN_S > 0.0):
