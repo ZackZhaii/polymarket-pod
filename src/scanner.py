@@ -354,6 +354,15 @@ def select_token_ids(market: dict[str, Any]) -> tuple[list[str], str | None, str
     return ids, field, None
 
 
+def fees_enabled(value: Any) -> bool | None:
+    """Issue #116 (Task BY): Gamma's ``feesEnabled`` only when it is a real bool.
+
+    Missing, null or any non-bool (``"true"``, ``1``, ...) is None: unknown, which no reader may treat as a
+    free market (fail closed; bool(None) used to read as False, i.e. "no fees").
+    """
+    return value if isinstance(value, bool) else None
+
+
 def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
     tokens, token_source, token_problem = select_token_ids(market)
     outcomes = [str(item) for item in json_list(market.get("outcomes"))]
@@ -388,7 +397,7 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
         "price": price,
         "price_source": price_source,
         "accepting_orders": None if accepting is None else bool(accepting),
-        "fees_enabled": bool(market.get("feesEnabled")),
+        "fees_enabled": fees_enabled(market.get("feesEnabled")),  # issue #116: unknown is None, never free
         "closed": bool(market.get("closed")),
         # Task AX (M3 step 2): grouping labels for calibration. Gamma's own values or None/[]; not guessed.
         "category": scanner_category(market),
