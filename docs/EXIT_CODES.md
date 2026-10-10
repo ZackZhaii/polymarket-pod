@@ -104,7 +104,7 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 | 2 | `EXIT_USAGE` | usage error | alert |
 | 3 | `EXIT_NO_WEBSOCKETS` | the optional websockets package is missing | alert |
 | 4 | `EXIT_WRITE_FAILED` | writing the run directory failed | global halt |
-| 5 | `EXIT_INTERRUPTED` | stopped by SIGINT/SIGTERM (Operator stop) | log |
+| 5 | `EXIT_INTERRUPTED` | stopped by SIGINT/SIGTERM/SIGBREAK or Ctrl+C/Ctrl+Break (Operator stop). Task BT: a Windows console close / logoff / shutdown also finishes the manifest `interrupted` with exit_code 5, but the m1_run heartbeat ends `crashed` (global halt), not this log-only exit | log |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins at start (no run dir created) or while running (PIN_RECHECK_S); global halt recorded | global halt |
 
 ## `src/m2_start.py`

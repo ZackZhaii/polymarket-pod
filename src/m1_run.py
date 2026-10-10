@@ -70,6 +70,8 @@ from src.book import snapshot as rest_snapshot  # noqa: E402
 from src.book_staleness import parse_book_ts  # noqa: E402
 from src.podlib import MARKETS_PATH, RISK_PATH, parse_risk_toml, read_jsonl  # noqa: E402
 from src.thresholds import (  # noqa: E402
+    M1_CONSOLE_CLOSE_WAIT_S,
+    M1_MANIFEST_PROGRESS_S,
     M1_REST_ASSETS,
     M1_REST_EVERY_S,
     M1_ROTATE_BYTES,
@@ -105,6 +107,18 @@ EXIT_NO_WEBSOCKETS = 3
 EXIT_WRITE_FAILED = 4
 EXIT_INTERRUPTED = 5
 EXIT_PIN_DRIFT = 6  # Task AS: config/risk.toml off its pins at start or while running (global halt recorded)
+
+# Task BT: Windows console control events (wincon.h). C and BREAK are an Operator stop (like SIGINT);
+# CLOSE, LOGOFF and SHUTDOWN mean the OS kills the process about 5 s after the handler is called.
+CTRL_C_EVENT = 0
+CTRL_BREAK_EVENT = 1
+CTRL_CLOSE_EVENT = 2
+CTRL_LOGOFF_EVENT = 5
+CTRL_SHUTDOWN_EVENT = 6
+CTRL_EVENT_NAMES = {CTRL_C_EVENT: "CTRL_C_EVENT", CTRL_BREAK_EVENT: "CTRL_BREAK_EVENT",
+                    CTRL_CLOSE_EVENT: "CTRL_CLOSE_EVENT", CTRL_LOGOFF_EVENT: "CTRL_LOGOFF_EVENT",
+                    CTRL_SHUTDOWN_EVENT: "CTRL_SHUTDOWN_EVENT"}
+CTRL_OPERATOR_STOP = frozenset({CTRL_C_EVENT, CTRL_BREAK_EVENT})
 
 
 def utc_now_ms() -> str:
@@ -312,6 +326,102 @@ def write_manifest(run_dir: Path, manifest: dict[str, Any]) -> None:
     os.replace(temp, path)
 
 
+class ManifestWriter:
+    """Task BT: every manifest.json write goes through one lock (the main path, the progress thread and
+    a console-close handler never interleave on the fixed temp file). ``final`` is set once a finished
+    manifest (status other than running) is on disk."""
+
+    def __init__(self, run_dir: Path, manifest: dict[str, Any]) -> None:
+        self.run_dir = run_dir
+        self.manifest = manifest
+        self.lock = threading.Lock()
+        self.final = threading.Event()
+        self.progress_writes = 0
+        self.progress_failures = 0
+
+    def write(self) -> None:
+        with self.lock:
+            write_manifest(self.run_dir, self.manifest)
+
+    def progress(self, snapshot: dict[str, Any]) -> bool:
+        """Record a progress snapshot while running. A failed write is counted (and returned False);
+        it never ends the run: the next snapshot or the final manifest replaces it."""
+        with self.lock:
+            if self.final.is_set():
+                return True
+            self.manifest["progress"] = dict(snapshot, writes=self.progress_writes + 1,
+                                             write_failures=self.progress_failures)
+            try:
+                write_manifest(self.run_dir, self.manifest)
+            except (OSError, ValueError):
+                self.progress_failures += 1
+                return False
+            self.progress_writes += 1
+            return True
+
+    def finish(self, updates: dict[str, Any]) -> None:
+        """The normal end: always written (it is the complete one). Raises OSError."""
+        with self.lock:
+            self.manifest.update(updates)
+            if isinstance(self.manifest.get("progress"), dict):  # the final tally, not the last attempt's
+                self.manifest["progress"].update(writes=self.progress_writes, write_failures=self.progress_failures)
+            write_manifest(self.run_dir, self.manifest)
+            self.final.set()
+
+    def fast_finish(self, updates: dict[str, Any], timeout_s: float) -> bool:
+        """A console close: write the interrupted manifest unless the normal end already did. Never raises."""
+        if not self.lock.acquire(timeout=max(0.0, timeout_s)):
+            return False
+        try:
+            if self.final.is_set():
+                return True
+            self.manifest.update(updates)
+            try:
+                write_manifest(self.run_dir, self.manifest)
+            except (OSError, ValueError):
+                return False
+            self.final.set()
+            return True
+        finally:
+            self.lock.release()
+
+
+def install_console_handler(handler: Callable[[int], bool]) -> Callable[[], None] | None:
+    """Windows only: register ``handler(ctrl_type) -> handled`` with SetConsoleCtrlHandler (ctypes).
+
+    Returns the remover, or None where there is no such API (POSIX) or registering failed. The ctypes
+    callback is kept alive by the returned closure.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        prototype = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+
+        def raw(ctrl_type: int) -> int:
+            try:
+                return 1 if handler(int(ctrl_type)) else 0
+            except BaseException:  # noqa: BLE001 - never raise into the OS callback
+                return 0
+
+        callback = prototype(raw)
+        if not kernel32.SetConsoleCtrlHandler(callback, True):
+            return None
+    except Exception:  # noqa: BLE001 - no handler: SIGINT / SIGBREAK still stop gracefully
+        return None
+
+    def remove() -> None:
+        try:
+            kernel32.SetConsoleCtrlHandler(callback, False)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return remove
+
+
 def _threshold_values() -> dict[str, Any]:
     return {name: value for name, value in vars(thresholds).items()
             if name.isupper() and not name.startswith("_") and isinstance(value, (int, float))}
@@ -352,37 +462,55 @@ def _usage(message: str) -> int:
 def main(argv: list[str] | None = None, *, transport: Transport | None = None, rest_getter: Any = None,
          monotonic: Callable[[], float] | None = None, sleep: Callable[[float], None] | None = None,
          now: Callable[[], str] | None = None, stop_event: threading.Event | None = None,
-         install_signals: bool = True, git: Callable[[], dict] = git_state) -> int:
+         install_signals: bool = True, git: Callable[[], dict] = git_state,
+         console: Callable[[Callable[[int], bool]], Callable[[], None] | None] | None = None,
+         progress_every_s: float = M1_MANIFEST_PROGRESS_S) -> int:
     """Task AP (Sentinel design gap 2): logs/heartbeat/m1_run.json is written by the recorder loop every
     HEARTBEAT_RECORDER_EVERY_S (also while backing off) and logs/heartbeat/m1_rest.json after every REST
     sample; both end with a beat carrying the exit code. For the resident Sentinel (src/sentinel_tick.py):
     m1_run exit 4 is a global halt, 1/2/3 an alert, 5 (Operator stop) only logged; a lost m1_run
     heartbeat (HEARTBEAT_RECORDER_TIMEOUT_S) is a global halt, a lost m1_rest one
-    (HEARTBEAT_REST_TIMEOUT_S) an alert."""
+    (HEARTBEAT_REST_TIMEOUT_S) an alert.
+
+    Task BT: a Windows console close / logoff / shutdown is not an Operator stop: the run's manifest
+    is finished as interrupted (exit_code 5, stop_reason ``console:<event>``), but the m1_run heartbeat
+    ends ``crashed`` (a global halt for the Sentinel, as the killed process's stale heartbeat was),
+    never the log-only exit 5. ``console`` installs the console handler (default: SetConsoleCtrlHandler
+    on Windows, nothing elsewhere); tests pass their own to call the handler directly."""
     from src.heartbeat import Heartbeat  # local: keeps the module import light
 
     hb = Heartbeat("m1_run", every_s=thresholds.HEARTBEAT_RECORDER_EVERY_S)
     rest_hb = Heartbeat("m1_rest", every_s=thresholds.HEARTBEAT_RECORDER_EVERY_S)
     hb.beat("starting", force=True)
+    outcome: dict[str, Any] = {"console_event": None, "done": threading.Event()}
     try:
         code = _main(argv, transport=transport, rest_getter=rest_getter, monotonic=monotonic, sleep=sleep, now=now,
                      stop_event=stop_event, install_signals=install_signals, git=git, heartbeat=hb,
-                     rest_heartbeat=rest_hb)
+                     rest_heartbeat=rest_hb, console=console, progress_every_s=progress_every_s, outcome=outcome)
     except BaseException:
         hb.finish(None, crashed=True)
         if rest_hb.seq:
             rest_hb.finish(None, crashed=True)
+        outcome["done"].set()
         raise
-    hb.finish(code)
-    if rest_hb.seq:
-        rest_hb.finish(0 if code in (EXIT_OK, EXIT_NO_ROWS, EXIT_INTERRUPTED) else code)
+    if outcome["console_event"] is not None:
+        hb.finish(None, {"console_event": outcome["console_event"]}, crashed=True)
+        if rest_hb.seq:
+            rest_hb.finish(None, {"console_event": outcome["console_event"]}, crashed=True)
+    else:
+        hb.finish(code)
+        if rest_hb.seq:
+            rest_hb.finish(0 if code in (EXIT_OK, EXIT_NO_ROWS, EXIT_INTERRUPTED) else code)
+    outcome["done"].set()
     return code
 
 
 def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: Any,
           monotonic: Callable[[], float] | None, sleep: Callable[[float], None] | None,
           now: Callable[[], str] | None, stop_event: threading.Event | None,
-          install_signals: bool, git: Callable[[], dict], heartbeat: Any = None, rest_heartbeat: Any = None) -> int:
+          install_signals: bool, git: Callable[[], dict], heartbeat: Any = None, rest_heartbeat: Any = None,
+          console: Callable[[Callable[[int], bool]], Callable[[], None] | None] | None = None,
+          progress_every_s: float = M1_MANIFEST_PROGRESS_S, outcome: dict[str, Any] | None = None) -> int:
     try:
         args = build_parser().parse_args(argv)
     except SystemExit as exc:
@@ -435,6 +563,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
                             args.rotate_s, monotonic, on_event=sinks["events"].write, now=now)
                 if args.raw_books else None)
     rest_assets = assets[:args.rest_assets]
+    outcome = outcome if outcome is not None else {"console_event": None, "done": threading.Event()}
+    run_start_mono = monotonic()
     manifest: dict[str, Any] = {
         "schema": SCHEMA,
         "status": "running",
@@ -458,10 +588,13 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
         "counts": {},
         "exit_code": None,
         "stop_signal": None,
+        "stop_reason": None,  # Task BT: signal:<name>, console:<event>, or null (deadline / failure)
+        "progress": None,  # Task BT: last_flush_at, elapsed_s, files, rows; every M1_MANIFEST_PROGRESS_S
         "orders": "none",
     }
+    writer = ManifestWriter(run_dir, manifest)
     try:
-        write_manifest(run_dir, manifest)
+        writer.write()
     except OSError as exc:
         print(f"m1_run: writing the manifest failed: {exc}", file=sys.stderr)
         return EXIT_WRITE_FAILED
@@ -469,14 +602,50 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
     previous: dict[int, Any] = {}
 
     def on_signal(signum: int, frame: Any) -> None:  # noqa: ARG001
-        manifest["stop_signal"] = signal.Signals(signum).name
+        name = signal.Signals(signum).name
+        if manifest["stop_signal"] is None:
+            manifest["stop_signal"], manifest["stop_reason"] = name, f"signal:{name}"
         stop.set()
 
     if install_signals and threading.current_thread() is threading.main_thread():
-        for name in ("SIGINT", "SIGTERM"):
+        for name in ("SIGINT", "SIGTERM", "SIGBREAK"):  # SIGBREAK: Windows Ctrl+Break if no console handler
             if hasattr(signal, name):
                 signum = getattr(signal, name)
                 previous[signum] = signal.signal(signum, on_signal)
+
+    def stream_files() -> dict[str, Any]:
+        files: dict[str, Any] = {name: list(sink.files) for name, sink in sinks.items()}
+        return files
+
+    def on_console(ctrl_type: int) -> bool:
+        """Task BT (Windows console control handler; runs on an OS thread). C / BREAK: an Operator
+        stop, the run finishes normally. CLOSE / LOGOFF / SHUTDOWN: the OS kills the process about
+        5 s after this returns, so wait at most M1_CONSOLE_CLOSE_WAIT_S for the normal finish, else
+        write the interrupted manifest (and a crashed heartbeat) here, atomically, then return."""
+        name = CTRL_EVENT_NAMES.get(ctrl_type, f"CTRL_{ctrl_type}")
+        if manifest["stop_signal"] is None:
+            manifest["stop_signal"], manifest["stop_reason"] = name, f"console:{name}"
+        if ctrl_type not in CTRL_OPERATOR_STOP and outcome["console_event"] is None:
+            outcome["console_event"] = name
+        stop.set()
+        if ctrl_type in CTRL_OPERATOR_STOP:
+            return True
+        started = time.monotonic()
+        if outcome["done"].wait(M1_CONSOLE_CLOSE_WAIT_S):
+            return True
+        left = max(0.0, M1_CONSOLE_CLOSE_WAIT_S - (time.monotonic() - started))
+        writer.fast_finish({
+            "status": "interrupted",
+            "ended_at": now(),
+            "elapsed_s": round(monotonic() - run_start_mono, 3),
+            "exit_code": EXIT_INTERRUPTED,
+            "files": stream_files(),
+            "counts": {"partial": True, "ended_by": "console", "book_rows_at_close": recorder.report.rows},
+            "risk": dict(manifest["risk"], end=risk_state()),
+        }, timeout_s=left + 1.0)
+        if heartbeat is not None:
+            heartbeat.finish(None, {"console_event": name}, crashed=True)
+        return True
 
     events = sinks["events"]
     events.write({"ts": now(), "event": "start", "assets": assets, "rest_assets": rest_assets})
@@ -491,6 +660,24 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
     code = EXIT_OK
     status = "completed"
     report = recorder.report
+
+    def progress_loop() -> None:
+        while not stop.wait(progress_every_s):
+            snapshot = {"last_flush_at": now(), "elapsed_s": round(monotonic() - run_start_mono, 3),
+                        "files": stream_files(), "book_rows": recorder.report.rows, "events": events.rows,
+                        "rest_rows": sampler.rows}
+            if not writer.progress(snapshot):
+                try:
+                    events.write({"ts": now(), "event": "manifest_progress_write_failed",
+                                  "failures": writer.progress_failures})
+                except OSError:
+                    pass
+
+    progress = threading.Thread(target=progress_loop, name="m1-manifest-progress", daemon=True)
+    progress.start()
+    remove_console = None  # installed once everything the handler reads exists
+    if install_signals or console is not None:
+        remove_console = (console or install_console_handler)(on_console)
     if rest_assets:
         thread.start()
     try:
@@ -507,11 +694,14 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
     finally:
         stopped_by_signal = stop.is_set()
         stop.set()
+        progress.join(timeout=30)
         if thread.is_alive():
             thread.join(timeout=120)
         sampler.seal()  # Issue #82: freeze publishes before the outputs are closed and finalized
         for signum, handler in previous.items():
             signal.signal(signum, handler)
+        if remove_console is not None:
+            remove_console()
         if sampler.failure is not None and code == EXIT_OK:
             print(f"m1_run: REST sampler failed: {sampler.failure!r}", file=sys.stderr)
             code, status = EXIT_WRITE_FAILED, "failed"
@@ -531,7 +721,7 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
                 sink.close()
             except OSError:
                 code, status = (EXIT_WRITE_FAILED, "failed") if code == EXIT_OK else (code, status)
-        manifest.update({
+        updates = {
             "status": status,
             "ended_at": now(),
             "elapsed_s": round(monotonic() - start_mono, 3),
@@ -553,10 +743,10 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
                 "unmapped_assets": report.unmapped_assets,
             },
             "exit_code": code,
-        })
-        manifest["risk"]["end"] = risk_state()
+            "risk": dict(manifest["risk"], end=risk_state()),
+        }
         try:
-            write_manifest(run_dir, manifest)
+            writer.finish(updates)
         except OSError as exc:
             print(f"m1_run: writing the manifest failed: {exc}", file=sys.stderr)
             code = EXIT_WRITE_FAILED

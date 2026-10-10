@@ -58,6 +58,8 @@ EXPECTED = {
     "M1_ROTATE_S": 3600.0,
     "M1_REST_EVERY_S": 600.0,
     "M1_REST_ASSETS": 4,
+    "M1_MANIFEST_PROGRESS_S": 60.0,  # Task BT (M2 pending)
+    "M1_CONSOLE_CLOSE_WAIT_S": 2.0,  # Task BT (M2 pending)
     "M1_REPORT_STEP_S": 1.0,
     "M1_MIN_RUN_S": 86340.0,
     "M1_MIN_COVERAGE": 0.99,
@@ -178,6 +180,8 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               # Task AI: the M1 acceptance criteria (conservative first values for the user at M2).
               "M1_MIN_RUN_S", "M1_MIN_COVERAGE", "M1_MAX_RECONNECTS", "M1_MAX_GAP_RESYNCS_PER_ASSET",
               "M1_REST_MATCH_WINDOW_S", "M1_MIN_REST_MATCHED", "M1_MAX_TOP_MISMATCH_RATE", "M1_MAX_REST_UNMATCHED_RATE",
+              # Task BT: manifest progress interval and the console-close finish wait.
+              "M1_MANIFEST_PROGRESS_S", "M1_CONSOLE_CLOSE_WAIT_S",
               # Task AK: Data API v2 reconciliation.
               "RECONCILE_SHARES_TOL", "DATA_API_POSITIONS_DUST_SHARES", "DATA_API_TRADES_MIN_SHARES",
               "DATA_API_MAX_LAG_S", "DATA_API_IDENTITY_TOL_USDC",
