@@ -85,6 +85,17 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def utc_now_ms() -> str:
+    """UTC now with milliseconds and Z (``2026-10-10T12:59:04.634Z``), the precision of a CLOB book_ts.
+
+    Issue #128: a clock that compares itself with a millisecond book_ts must not be cut to whole seconds,
+    or a book stamped within the current second reads as from the future (future_book_ts). Truncated to
+    the millisecond, never rounded up, so it is never later than the real clock. utc_now() (seconds) stays
+    for row and log stamps.
+    """
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def parse_risk_toml(text: str) -> dict[str, Any]:
     """Parse the flat key = value file. Not a general TOML parser."""
     parsed: dict[str, Any] = {}
