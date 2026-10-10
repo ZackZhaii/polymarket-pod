@@ -131,7 +131,9 @@ def test_paper_cycle_skips_gap_signals_of_a_halted_market(tmp_path):
     halt_store.record_halt(scope="market", market="m1", reason="drill", source="Sentinel")
     result = _cycle(tmp_path)
     assert result["gaps"] == 1 and result["halted_markets"] == ["m1"]
-    assert [s["kind"] for s in result["skips"]] == ["halted_market"]
+    # Issue #141 (Task BX): the other market's gap is recorded as a structural reject, never passed on.
+    assert [(s["market"], s["kind"]) for s in result["skips"]] == [("m1", "halted_market"),
+                                                                    ("m2", "structural_arb_disabled")]
 
 
 def test_paper_cycle_under_a_corrupt_halt_file_emits_no_gap(tmp_path):
