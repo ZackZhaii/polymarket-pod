@@ -70,7 +70,7 @@ from src.podlib import (  # noqa: E402
     load_risk,
     pin_problems,
     read_jsonl,
-    utc_now,
+    utc_now_ms,
 )
 
 # Same value as book_staleness.MAX_BOOK_AGE_S (RiskGate). Not a risk.toml key.
@@ -184,7 +184,7 @@ def run(
     if pin_problems(loaded):
         _assert_risk_unchanged(before)
         return {"ok": False, "reason": "phase0_pin", "signals": 0, "gaps": 0, "stale": 0, "fills": 0}
-    now_s = now or utc_now()
+    now_s = now or utc_now_ms()  # Issue #128: milliseconds, like the book_ts it is compared with
     now_at = parse_book_ts(now_s)
     skips: list[dict] = []
     markets = _latest_by(read_jsonl(markets_path), "id", skips, bus_path)
