@@ -187,6 +187,115 @@ def test_runner_detection_reads_the_checkout(tmp_path, no_sentinel):
     assert "m2_runner" not in rig.order()
 
 
+# ---------------------------------------------------------------- runs/m2/current.json
+
+def _current(root: Path) -> dict:
+    return json.loads((root / "runs" / "m2" / "current.json").read_text(encoding="utf-8"))
+
+
+def test_current_json_names_the_run_dir_and_every_launched_process(rig, no_sentinel):
+    assert _start(rig) == m2_start.EXIT_OK
+    current = _current(rig.root)
+    assert current["schema"] == "m2_current/1" and current["status"] == "started" and current["failure"] is None
+    m1_argv = rig.launched[1][1]
+    assert current["run_dir"] == m1_argv[m1_argv.index("--out") + 1] == _chain(rig.root)[0]["run_dir"]
+    assert current["reason"] == "boot" and current["m2_end"] == "2099-01-01T00:00:00.000Z"
+    assert [p["name"] for p in current["processes"]] == ["sentinel", "m1_run", "paper_cycle"]
+    assert [p["pid"] for p in current["processes"]] == [1001, 1002, 1003]  # the launched handles
+    for entry in current["processes"]:
+        assert entry["state"] == "ready" and entry["heartbeat_pid"] == os.getpid()
+        assert heartbeat.parse_stamp(entry["started_ts"]) is not None
+    assert heartbeat.parse_stamp(current["updated_ts"]) is not None
+    leftovers = [p.name for p in (rig.root / "runs" / "m2").iterdir() if p.name.endswith(".tmp")]
+    assert leftovers == []
+
+
+def test_current_json_is_updated_as_each_process_starts(rig, no_sentinel):
+    seen: dict[str, dict] = {}
+    path = rig.root / "runs" / "m2" / "current.json"
+    real = rig.on["paper_cycle"]
+    rig.on["sentinel"] = lambda argv: (seen.__setitem__("sentinel", json.loads(path.read_text()) if path.exists()
+                                                         else None), _beat("sentinel"))
+    rig.on["paper_cycle"] = lambda argv: (seen.__setitem__("paper_cycle", _current(rig.root)), real(argv))
+    assert _start(rig) == m2_start.EXIT_OK
+    assert seen["sentinel"] is None  # written right after the launch, not before
+    at_cycle = seen["paper_cycle"]
+    assert [(p["name"], p["state"]) for p in at_cycle["processes"]] == [("sentinel", "ready"), ("m1_run", "ready")]
+    assert at_cycle["status"] == "starting" and at_cycle["run_dir"] is not None
+
+
+def test_current_json_is_written_through_the_atomic_writer(rig, no_sentinel, monkeypatch):
+    writes: list[str] = []
+    real = heartbeat.write_record
+
+    def spy(path, record):
+        if path.name == "current.json":
+            writes.append(record["status"])
+        return real(path, record)
+
+    monkeypatch.setattr(heartbeat, "write_record", spy)
+    assert _start(rig) == m2_start.EXIT_OK
+    # sentinel launched, ready+run dir, m1_run starting, ready, paper_cycle starting, ready, started
+    assert writes == ["starting"] * 6 + ["started"]
+
+
+def test_a_kept_sentinel_is_listed_as_kept(rig):
+    assert _start(rig) == m2_start.EXIT_OK
+    sentinel = _current(rig.root)["processes"][0]
+    assert sentinel["name"] == "sentinel" and sentinel["state"] == "kept" and sentinel["pid"] == os.getpid()
+
+
+def test_current_json_records_a_sentinel_that_never_got_fresh(rig, no_sentinel):
+    rig.on["sentinel"] = lambda argv: None
+    assert _start(rig) == m2_start.EXIT_SENTINEL_NOT_FRESH
+    current = _current(rig.root)
+    assert current["status"] == "failed" and current["failure"].startswith("sentinel: timeout_90s")
+    assert current["run_dir"] is None and [(p["name"], p["state"]) for p in current["processes"]] == [
+        ("sentinel", "not_ready")]
+
+
+def test_current_json_records_a_process_that_was_not_ready(rig, no_sentinel):
+    rig.on["paper_cycle"] = lambda argv: None
+    assert _start(rig) == m2_start.EXIT_NOT_READY
+    current = _current(rig.root)
+    assert current["status"] == "failed" and current["failure"].startswith("paper_cycle: timeout_180s")
+    assert [(p["name"], p["state"]) for p in current["processes"]] == [
+        ("sentinel", "ready"), ("m1_run", "ready"), ("paper_cycle", "not_ready")]
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3])
+def test_a_failed_current_json_write_stops_the_order(rig, no_sentinel, monkeypatch, fail_at):
+    real = heartbeat.write_record
+    count = {"n": 0}
+
+    def flaky(path, record):
+        if path.name == "current.json":
+            count["n"] += 1
+            if count["n"] == fail_at:
+                return heartbeat.HB_WRITE_FAILED
+        return real(path, record)
+
+    monkeypatch.setattr(heartbeat, "write_record", flaky)
+    lines: list[str] = []
+    assert _start(rig, lines) == m2_start.EXIT_NOT_READY
+    expected = {1: ["sentinel"], 2: ["sentinel"], 3: ["sentinel", "m1_run"]}[fail_at]
+    assert rig.order() == expected
+    assert any("cannot write runs/m2/current.json" in line for line in lines)
+
+
+def test_a_second_start_rewrites_current_json(rig, no_sentinel):
+    assert _start(rig) == m2_start.EXIT_OK
+    first = _current(rig.root)
+    for proc in ("m1_run", "paper_cycle"):
+        _beat(proc, state="finished")
+    time.sleep(1.1)
+    assert _start(rig, m2_end=None, reason="reboot") == m2_start.EXIT_OK
+    second = _current(rig.root)
+    assert second["run_dir"] != first["run_dir"] and second["reason"] == "reboot"
+    assert [(p["name"], p["state"]) for p in second["processes"]] == [
+        ("sentinel", "kept"), ("m1_run", "ready"), ("paper_cycle", "ready")]
+
+
 # ---------------------------------------------------------------- the Sentinel gate (fail closed)
 
 def test_sentinel_never_fresh_starts_nothing_else_within_the_bounded_wait(rig, no_sentinel):
@@ -473,6 +582,9 @@ def test_real_detached_children_start_in_order_and_stop_cleanly(tmp_path, no_sen
         assert [h.poll() for h in handles] == [None, None, None]  # all three still running
         procs = [json.loads(heartbeat.beat_path(p).read_text())["pid"] for p in ("sentinel", "m1_run", "paper_cycle")]
         assert len(set(procs)) == 3
+        current = _current(root)
+        assert [p["pid"] for p in current["processes"]] == [h.pid for h in handles]
+        assert [p["heartbeat_pid"] for p in current["processes"]] == procs
     finally:
         stop.write_text("", encoding="utf-8")
         for handle in handles:

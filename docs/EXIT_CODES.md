@@ -119,7 +119,7 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 | 2 | `EXIT_USAGE` | usage error: blank --reason, no or bad --m2-end, --m2-end differs from the chain | - |
 | 3 | `EXIT_REFUSED` | refused before anything started: M1 clone, runs/m2/KILL, bad chain, M2 window over, a process already running, run dir exists, m2_runner not watched | - |
 | 4 | `EXIT_SENTINEL_NOT_FRESH` | the launched Sentinel never beat fresh within SENTINEL_HEARTBEAT_TIMEOUT_S; nothing else started | - |
-| 5 | `EXIT_NOT_READY` | the chain append failed, or a later process was not ready within its Sentinel timeout; nothing after it started | - |
+| 5 | `EXIT_NOT_READY` | the chain append or a runs/m2/current.json write failed, or a later process was not ready within its Sentinel timeout; nothing after it started | - |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins; refused, global halt recorded (`--dry-run`: none recorded) | - |
 
 ## `src/paper_cycle.py`

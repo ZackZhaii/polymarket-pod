@@ -24,6 +24,11 @@ Start order (issue #129, Poly指挥: the Sentinel first, nothing else before its
    src/m2_runner.py exists (#119) and the Sentinel watches it (PROC_SPECS has ``m2_runner``; if the
    module exists without that, the script refuses to start anything: exit 3).
 
+``runs/m2/current.json`` (Current below) is rewritten atomically after every launch and every check:
+the run dir (once the chain line is written) and each launched or kept process's name, pid, start ts
+and state, plus status starting / started / failed. Monitors read it read-only. A failed write stops
+the order like a failed chain append (exit 5).
+
 Then it prints ``halt_store status`` and reminds the Operator: existing halts stay. This script never
 resumes, never reads .env or any credential, never calls an order or trading interface, never passes a
 live flag, never registers a scheduled task or service (boot start is a manual Operator step,
@@ -74,6 +79,8 @@ M1_CLONE = "D:\\AI_Workspace\\pod-m1"  # the running M1 clone: never started fro
 RUNS_DIR = ROOT / "runs"
 M2_DIR = RUNS_DIR / "m2"
 CHAIN_PATH = RUNS_DIR / "m2-chain.jsonl"
+CURRENT_NAME = "current.json"  # runs/m2/current.json: this start's run dir and processes (read-only for monitors)
+CURRENT_SCHEMA = "m2_current/1"
 KILL_NAME = "KILL"
 CHAIN_FIELDS = ("ts", "run_dir", "git_sha", "reason", "m2_end", "max_runtime_s", "host", "sentinel_pid")
 LIVE_STATES = (heartbeat.STATE_STARTING, heartbeat.STATE_RUNNING, heartbeat.STATE_PAUSED)
@@ -224,6 +231,38 @@ def rel(path: Path, root: Path) -> str:
         return path.as_posix()
 
 
+# ---------------------------------------------------------------- runs/m2/current.json
+
+class Current:
+    """``runs/m2/current.json``: the current start's run dir and every process it launched or kept.
+
+    Written whole on every change through the repo's atomic writer (heartbeat.write_record: temp
+    file in the same folder, fsync, os.replace), so a reader sees the old or the new file, never a
+    torn one. Fields: schema, status (starting / started / failed), updated_ts, run_dir (null until
+    the chain line is written), m2_end, reason, git_sha, host, failure, and processes[]: name, pid
+    (the launched or kept process), started_ts, state (starting / ready / not_ready / kept) and
+    heartbeat_pid (the pid in its heartbeat once ready; on Windows a venv launcher's child may
+    differ). A failed write is reported and stops the start order (fail closed), never skipped.
+    """
+
+    def __init__(self, path: Path, *, m2_end: str, reason: str, now: Callable[[], datetime]) -> None:
+        self.path = path
+        self.now = now
+        self.data: dict[str, Any] = {"schema": CURRENT_SCHEMA, "status": "starting", "updated_ts": None,
+                                     "run_dir": None, "m2_end": m2_end, "reason": reason,
+                                     "git_sha": heartbeat.git_sha(), "host": socket.gethostname(),
+                                     "failure": None, "processes": []}
+
+    def process(self, name: str, pid: int, started_ts: str, state: str) -> dict[str, Any]:
+        entry = {"name": name, "pid": pid, "started_ts": started_ts, "state": state, "heartbeat_pid": None}
+        self.data["processes"].append(entry)
+        return entry
+
+    def write(self) -> str | None:
+        self.data["updated_ts"] = heartbeat.utc_stamp(self.now())
+        return heartbeat.write_record(self.path, self.data)
+
+
 # ---------------------------------------------------------------- the orchestration
 
 def plan_commands(python: str, run_dir_arg: str, max_runtime_s: int, with_runner: bool) -> list[tuple[str, list[str]]]:
@@ -310,12 +349,28 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
         sentinel_argv = argv_for("sentinel", sentinel_argv)
     say(f"root={root} m2_end={heartbeat.utc_stamp(end)} max_runtime_s={max_runtime_s} run_dir={run_arg} "
         f"m2_runner={'yes' if with_runner else 'not in this checkout (#119)'} live=none")
+    current = Current(m2_dir / CURRENT_NAME, m2_end=heartbeat.utc_stamp(end), reason=reason.strip(), now=now)
+    current_rel = rel(current.path, root)
+
+    def publish(failing: str | None = None) -> bool:
+        """Write current.json; on a failed write say so. False = stop the order (fail closed)."""
+        if failing is not None:
+            current.data["status"], current.data["failure"] = "failed", failing
+        problem = current.write()
+        if problem is not None:
+            say(f"FAILED: cannot write {current_rel} ({problem}); nothing after this point started")
+            return False
+        return True
 
     # 1. The resident Sentinel, first.
     sentinel_record, _ = sentinel_fresh(now=moment)
     sentinel_handle: Handle | None = None
+    sentinel_entry: dict[str, Any] | None = None
     if sentinel_record is not None:
         say(f"step 1 sentinel: already running and fresh (pid {sentinel_record['pid']}); kept, no second one")
+        if not dry_run:
+            sentinel_entry = current.process("sentinel", sentinel_record["pid"], sentinel_record["started_at"], "kept")
+            sentinel_entry["heartbeat_pid"] = sentinel_record["pid"]
     elif dry_run:
         say(f"step 1 sentinel: would start {' '.join(sentinel_argv)} and wait up to "
             f"{SENTINEL_HEARTBEAT_TIMEOUT_S:g} s (SENTINEL_HEARTBEAT_TIMEOUT_S) for its own fresh heartbeat")
@@ -324,15 +379,22 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
         launched = now()
         sentinel_handle = launcher(sentinel_argv, logs_dir / "sentinel.log", root)
         say(f"step 1 sentinel: started pid {sentinel_handle.pid}; waiting up to {SENTINEL_HEARTBEAT_TIMEOUT_S:g} s")
+        sentinel_entry = current.process("sentinel", sentinel_handle.pid, heartbeat.utc_stamp(launched), "starting")
+        if not publish():
+            return EXIT_NOT_READY
         why = wait_for(lambda: sentinel_fresh(now=now(), launched_at=launched)[1],
                        timeout_s=SENTINEL_HEARTBEAT_TIMEOUT_S, handle=sentinel_handle, sleep=sleep,
                        monotonic=monotonic)
         if why is not None:
             say(f"FAILED step 1: the Sentinel heartbeat never became fresh ({why}); nothing else started "
                 f"(the launched Sentinel pid {sentinel_handle.pid} is left as is; log {rel(logs_dir, root)})")
+            sentinel_entry["state"] = "not_ready"
+            publish(f"sentinel: {why}")
             return EXIT_SENTINEL_NOT_FRESH
         sentinel_record, _ = sentinel_fresh(now=now(), launched_at=launched)
         say(f"step 1 sentinel: fresh heartbeat (pid {sentinel_record['pid'] if sentinel_record else '?'})")
+        sentinel_entry["state"] = "ready"
+        sentinel_entry["heartbeat_pid"] = sentinel_record["pid"] if sentinel_record else None
 
     # 2. The chain line (before the run dir gets any data).
     chain_row = {"ts": heartbeat.utc_stamp(now()), "run_dir": run_arg, "git_sha": heartbeat.git_sha(),
@@ -342,6 +404,7 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
     line = json.dumps(chain_row, ensure_ascii=False, sort_keys=True)
     if dry_run:
         say(f"step 2 chain: would append to {rel(chain_path, root)}: {line}")
+        say(f"step 2 current: would write {current_rel} (run dir, then each process as it starts)")
     else:
         try:
             runs_dir.mkdir(parents=True, exist_ok=True)
@@ -354,6 +417,10 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
             say(f"FAILED step 2: cannot append {rel(chain_path, root)} ({type(exc).__name__}); nothing else started")
             return EXIT_NOT_READY
         say(f"step 2 chain: appended to {rel(chain_path, root)}")
+        current.data["run_dir"] = run_arg
+        if not publish():
+            return EXIT_NOT_READY
+        say(f"step 2 current: {current_rel} names {run_arg}")
 
     # 3.. m1_run, paper_cycle, m2_runner: each only after the one before passed its check.
     for number, (proc, argv) in enumerate(steps, 3):
@@ -366,6 +433,9 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
         launched = now()
         handle = launcher(argv, logs_dir / f"{proc}.log", root)
         say(f"step {number} {proc}: started pid {handle.pid}; waiting up to {timeout_s:g} s")
+        entry = current.process(proc, handle.pid, heartbeat.utc_stamp(launched), "starting")
+        if not publish():
+            return EXIT_NOT_READY
 
         def check(proc: str = proc, launched: datetime = launched) -> str | None:
             why = fresh_beat(proc, timeout_s=timeout_s, now=now(), launched_at=launched)[1]
@@ -379,12 +449,21 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
         if why is not None:
             say(f"FAILED step {number}: {proc} not ready ({why}); nothing after it started "
                 f"(pid {handle.pid} is left as is; log {rel(logs_dir, root)})")
+            entry["state"] = "not_ready"
+            publish(f"{proc}: {why}")
+            return EXIT_NOT_READY
+        record, _ = fresh_beat(proc, timeout_s=timeout_s, now=now())
+        entry["state"], entry["heartbeat_pid"] = "ready", record["pid"] if record else None
+        if not publish():
             return EXIT_NOT_READY
         say(f"step {number} {proc}: ready")
 
     if dry_run:
         say("would print `python -m src.halt_store status` and stop; nothing was started, created or appended")
         return EXIT_OK
+    current.data["status"] = "started"
+    if not publish():
+        return EXIT_NOT_READY
     say("all started. Existing halts are NOT resumed by this script; `python -m src.halt_store status`:")
     try:
         halt_store.main(["status"])
