@@ -11,16 +11,20 @@ own counterparty). Either firing vetoes; missing or invalid history vetoes too.
 Task AL (Sentinel design gap 1): an active halt vetoes. A global halt vetoes every intent, a
 market halt every intent on that market; an unreadable, corrupt or lost halt state file, or
 logs/HALT, is a global halt (src/halt_store.py). Only an Operator resume lifts a halt.
+Issue #76: an intent carrying its own validity window (intent_created_at / intent_expires_at) has
+it re-checked at the decision clock; an expired or invalid window vetoes (veto only, never allows).
 Does not place orders, sign messages, read secrets, or edit config/risk.toml.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from src import fees  # Task AE: the one fee module (stress_fee / ledger_fee)
 from src import halt_store  # Task AL: the halt consumer (persisted Sentinel / Executor halts)
-from src.book_staleness import book_age_problem
+from src import podlib  # issue #76: the decision clock is read through podlib.datetime
+from src.book_staleness import book_age_problem, parse_book_ts
 from src.podlib import PAPER_EQUITY_USD, pin_problems
 from src.thresholds import EDGE_TOLERANCE, MAX_BOOK_AGE_S, MIN_EDGE  # Task AC: values in src/thresholds.py
 from src.thresholds import ASSUMED_SLIPPAGE  # Task AU: the slippage floor (Task AT's one slippage)
@@ -80,6 +84,14 @@ class Intent:
     # clustering. Recorded only: RiskGate never reads either; None = unknown (never guessed).
     event_id: str | None = None
     event_slug: str | None = None
+    # Issue #76: the intent's own validity window, carried as text (intent_builder's created_at /
+    # expires_at ISO Z stamps). Both None (a legacy intent) keeps the pre-issue behaviour. Once
+    # either is set, intent_time_problems below re-checks the pair at the decision clock: a missing
+    # half, a stamp that is not a zoned ISO string, a future created_at, expires_at <= created_at or
+    # now >= expires_at vetoes. Unlike the calibration fields above, these decide — but only by
+    # vetoing: no existing check moved and no allowance was added.
+    intent_created_at: str | None = None
+    intent_expires_at: str | None = None
 
 
 @dataclass
@@ -187,6 +199,70 @@ def _risk_state(state: dict) -> tuple[int, float] | None:
     return int(positions), loss
 
 
+# Issue #76: the intent's own validity window. The window is carried as text, never as an epoch
+# number or a datetime object, so a non-string stamp is refused outright (parse_book_ts's stricter
+# string rules: a date, a time and a zone, or None).
+def _intent_window_stamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    return parse_book_ts(value)
+
+
+def _evaluation_now(now: object) -> datetime | None:
+    """Issue #76: the decision clock as an aware UTC datetime, or None when it is unusable.
+
+    The injected ``now`` counts only as an aware datetime (the same rule book_age_problem applies);
+    when ``now`` is None the wall clock is read through ``podlib.datetime`` — the same module the
+    offline gate freezes together with book_staleness, so both time checks see one clock. A ``now``
+    that is neither None nor an aware datetime (a string, a naive datetime, ...) is unusable.
+    """
+    if now is None:
+        return podlib.datetime.now(timezone.utc)
+    return parse_book_ts(now) if isinstance(now, datetime) else None
+
+
+def intent_time_problems(intent_created_at: object, intent_expires_at: object, now: object) -> list[str]:
+    """Issue #76: re-check the intent's own validity window. Veto only; never raises.
+
+    Both stamps None (a legacy intent) returns [] and reads no clock: the pre-issue behaviour is
+    unchanged. Once either stamp is set: a missing half (missing_intent_created_at /
+    missing_intent_expires_at), a stamp that is not a zoned ISO string (invalid_intent_created_at /
+    invalid_intent_expires_at), an unusable decision clock (invalid_intent_now), a created_at in the
+    future (future_intent_created_at), expires_at <= created_at (intent_expires_not_after_created)
+    or now >= expires_at (intent_expired; exactly at expires_at is expired) vetoes. The book
+    staleness check on book_ts still runs separately and unchanged.
+    """
+    created_set = intent_created_at is not None
+    expires_set = intent_expires_at is not None
+    if not created_set and not expires_set:
+        return []  # a legacy intent: nothing new to check and no clock read
+    problems: list[str] = []
+    if not created_set:
+        problems.append("missing_intent_created_at")
+    if not expires_set:
+        problems.append("missing_intent_expires_at")
+    created = _intent_window_stamp(intent_created_at) if created_set else None
+    expires = _intent_window_stamp(intent_expires_at) if expires_set else None
+    if created_set and created is None:
+        problems.append("invalid_intent_created_at")
+    if expires_set and expires is None:
+        problems.append("invalid_intent_expires_at")
+    if created is None or expires is None:
+        return problems
+    if expires <= created:
+        problems.append("intent_expires_not_after_created")
+        return problems
+    current = _evaluation_now(now)
+    if current is None:
+        problems.append("invalid_intent_now")
+        return problems
+    if created > current:
+        problems.append("future_intent_created_at")
+    if current >= expires:
+        problems.append("intent_expired")
+    return problems
+
+
 def evaluate(
     intent: Intent,
     cfg: dict,
@@ -220,6 +296,13 @@ def evaluate(
 
     Task AU: assumed_slippage must be a finite number >= ASSUMED_SLIPPAGE (src/thresholds.py, inclusive);
     below it vetoes slippage_below_floor, missing / non-finite vetoes invalid_ / non_finite_assumed_slippage.
+
+    Issue #76: an intent that carries its own validity window (intent_created_at / intent_expires_at,
+    both set by intent_builder.to_risk_intent) has it re-checked at the same decision clock as the
+    book staleness check: a missing half, a stamp that is not a zoned ISO string, a future
+    created_at, expires_at <= created_at or now >= expires_at vetoes (intent_time_problems). An
+    intent with both stamps None (a legacy intent) keeps the old behaviour. Veto only: an intent
+    inside its window changes no decision.
 
     Edge must be at least MIN_EDGE (0.02, inclusive; code constant, Task X): 0 < edge < MIN_EDGE
     vetoes edge_below_min, edge <= 0 vetoes non_positive_edge.
@@ -311,6 +394,9 @@ def evaluate(
     book_problem = book_age_problem(intent.book_ts, now, max_book_age_s)
     if book_problem is not None:
         reasons.append(book_problem)
+    # Issue #76: the intent's own validity window, re-checked at the same decision clock. A legacy
+    # intent (both stamps None) adds nothing and reads no clock.
+    reasons.extend(intent_time_problems(intent.intent_created_at, intent.intent_expires_at, now))
 
     if intent.side == "buy":
         effective = market_price + assumed_slippage

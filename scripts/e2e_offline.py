@@ -289,7 +289,8 @@ def risk_sha(root: Path) -> str:
 # ---------------------------------------------------------------- glue: signal -> intent
 
 def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: dict[str, Any],
-                 books: dict[tuple[str, str], dict[str, Any]], kelly_frac_raw: float | None = None):
+                 books: dict[tuple[str, str], dict[str, Any]], kelly_frac_raw: float | None = None,
+                 intent_created_at: str | None = None, intent_expires_at: str | None = None):
     """The one stage with no src module: turn a NewsForecaster signal into a RiskGate Intent.
 
     model_prob comes from the bus signal payload, the token from the scanner row, the price
@@ -299,6 +300,9 @@ def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: d
     Task BC: kelly_frac_raw (recorded only) is the shadow intent builder's per-trade raw Kelly for the
     same token and side when it built one (no second Kelly formula here), else None; fill_context is the
     intent_builder path this harness stands in for.
+    Issue #76: intent_created_at / intent_expires_at are the shadow intent's own validity window for
+    the same token and side when it built one, else both None (a legacy intent, unchanged behaviour):
+    this harness stands in for to_risk_intent, which passes the window through.
     """
     from src import podlib
     from src.calibration_ids import make_decision_id
@@ -345,6 +349,8 @@ def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: d
         fill_context="intent_builder",
         event_id=market_row.get("event_id"),  # Task BF: the scanner row's event, recorded on the fill only
         event_slug=market_row.get("event_slug"),
+        intent_created_at=intent_created_at,  # issue #76: the window as built, never re-extended
+        intent_expires_at=intent_expires_at,
     )
 
 
@@ -408,6 +414,20 @@ def _shadow_kelly_raw(result, forecast: dict[str, Any], market_row: dict[str, An
     if oi.token_id != str(tokens[index]) or oi.side != forecast.get("side"):
         return None
     return oi.kelly_raw
+
+
+def _shadow_intent_window(result, forecast: dict[str, Any],
+                          market_row: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Issue #76: the shadow intent's created_at / expires_at when it is for the forecast's own
+    token and side, else (None, None) — build_intent then stands as a legacy intent (unchanged)."""
+    oi = result.intent
+    tokens = market_row.get("token_ids") or []
+    index = forecast.get("outcome_index")
+    if oi is None or not isinstance(index, int) or index >= len(tokens):
+        return None, None
+    if oi.token_id != str(tokens[index]) or oi.side != forecast.get("side"):
+        return None, None
+    return oi.created_at, oi.expires_at
 
 
 def shadow_problems(label: str, result, harness_intent, decision_reasons: list[str]) -> list[str]:
@@ -560,8 +580,10 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
             cfg_now = risk_cfg()
             shadow, shadow_view = shadow_intent(forecast, signal, markets[forecast["market"]], books, cfg_now,
                                                 clock.now)
+            created_at, expires_at = _shadow_intent_window(shadow, forecast, markets[forecast["market"]])
             intent = build_intent(forecast, signal, markets[forecast["market"]], books,
-                                  kelly_frac_raw=_shadow_kelly_raw(shadow, forecast, markets[forecast["market"]]))
+                                  kelly_frac_raw=_shadow_kelly_raw(shadow, forecast, markets[forecast["market"]]),
+                                  intent_created_at=created_at, intent_expires_at=expires_at)
             before = _ledger_view(Path(path))  # a plain path: the gate's own reads never count as a writer's
             paper_ledger.PAPER_PATH = path
             result = paper_ledger.commit_if_allowed(intent, cfg_now)

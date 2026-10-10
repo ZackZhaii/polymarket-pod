@@ -13,11 +13,11 @@ from datetime import datetime, timezone
 import pytest
 
 from src import calibration_ids as ci
-from src import intent_builder, paper_ledger, podlib
+from src import paper_ledger
 from src.podlib import load_risk, read_jsonl
 from src.risk_gate import NUMERIC_INTENT_FIELDS, evaluate
 from tests.test_calibration_ids import ROOT, STATE, _ok_intent, paths  # noqa: F401 - fixture
-from tests.test_intent_builder import build
+from tests.test_intent_builder import build, fresh_intent
 
 FIELDS = ci.FILL_MARKET_FIELDS
 TS = "2026-10-09T12:00:00Z"
@@ -108,9 +108,10 @@ def test_a_fill_without_market_context_is_booked_and_flagged(paths):
 
 
 def test_the_intent_builder_path_records_the_books_top_and_shadow_kelly(paths):
+    # Issue #76: one consistent clock stamps book_ts and the intent window (fresh_intent), so the
+    # commit at the real clock sees a fresh, unexpired intent instead of a 2026-09 book with one.
     oi = build().intent
-    intent = dataclasses.replace(intent_builder.to_risk_intent(oi), book_ts=podlib.utc_now(),
-                                 end_date="2027-01-01T00:00:00Z")
+    intent = fresh_intent(oi, end_date="2027-01-01T00:00:00Z")
     result = paper_ledger.commit_if_allowed(intent, load_risk())
     assert result["allow"] is True
     fill = result["fill"]
