@@ -20,10 +20,11 @@ STALE = (NOW - timedelta(seconds=121)).isoformat().replace("+00:00", "Z")
 
 
 @pytest.fixture()
-def paper(tmp_path):
+def paper(tmp_path, fresh_book):
     quotes = tmp_path / "quotes.jsonl"
     bus = tmp_path / "bus.jsonl"
     for market, token in (("m1", "a"), ("m2", "b")):
+        fresh_book(market, token)
         maker.quote(market=market, token_id=token, side="buy", price=0.40, size=5,
                     bus_path=bus, quotes_path=quotes)
     return {"quotes": quotes, "bus": bus}

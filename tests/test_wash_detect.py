@@ -274,7 +274,8 @@ def _live_intent(**overrides: object) -> Intent:
     return _intent(book_ts=utc_now(), **overrides)
 
 
-def test_ledger_vetoes_buy_against_own_resting_sell_until_cancelled(paper):
+def test_ledger_vetoes_buy_against_own_resting_sell_until_cancelled(paper, fresh_book):
+    fresh_book(MARKET, YES)
     before = RISK_PATH.read_bytes()
     cfg = load_risk()
     maker.quote(market=MARKET, token_id=YES, side="sell", price=0.6, size=5,

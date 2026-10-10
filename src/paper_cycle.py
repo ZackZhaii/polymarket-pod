@@ -23,11 +23,24 @@ Task AP (Sentinel design gaps 11, 12, 14):
   resumes it while every market is still stale, the next such cycle halts again at once.
 - gap 12: ``python -m src.paper_cycle --loop`` runs a cycle every HEARTBEAT_PAPER_CYCLE_EVERY_S and
   writes logs/heartbeat/paper_cycle.json each cycle (a one-shot run writes start and finish).
+Issue #125 (Task BN, Poly指挥's ruling on the #88 conflict), with ``recording_dir`` only:
+- (b) only markets in ``RUN_DIR/manifest.json`` (``assets[].market_id``, schema m1_run/1) may produce a gap
+  signal. A missing, unreadable, corrupt, wrong-schema or empty manifest lets no market produce one (fail
+  closed, never "all markets"); every market then stays under StaleWatch exactly as before.
+- (c) a market outside the manifest is rejected as ``not_recorded``: no gap signal, one BookWatcher signal
+  (``skip_reason`` not_recorded, its stale reasons still recorded and alarmed) and a ``not_recorded_market``
+  skip, but no StaleWatch check, so a book it was never going to have no longer halts it market by market.
+- (d) except a market with an open paper position (paper ledger): it stays under StaleWatch (stale or missing
+  book -> market halt after the usual consecutive checks) and still gets no gap signal when outside the
+  manifest. A ledger that cannot be read in full keeps every market under StaleWatch (fail closed).
+- gap 14's all_markets_stale counts only the StaleWatch markets: the manifest's plus the held ones.
+Without ``recording_dir`` nothing changes.
 No network, no orders, no paper fills, no edits to config/risk.toml.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from datetime import datetime
@@ -49,6 +62,7 @@ from src.book_staleness import (  # noqa: E402
 from src.podlib import (  # noqa: E402
     BOOKS_PATH,
     MARKETS_PATH,
+    PAPER_PATH,
     QUOTES_PATH,
     RISK_PATH,
     SENTINEL_STATE_PATH,
@@ -70,6 +84,64 @@ ALL_STALE_ALARM = "all_markets_stale"
 # Task AP gap 11: the M1 run's rotated book files inside a run directory.
 RECORDING_BOOKS_GLOB = "books/books-*.jsonl"
 RECORDING_EMPTY = "recording_has_no_book_file"
+# Issue #125 (Task BN): the recording's market scope.
+RECORDING_MANIFEST = "manifest.json"
+RECORDING_MANIFEST_SCHEMA = "m1_run/1"  # src.m1_run's manifest schema (== m1_report.RUN_SCHEMA)
+NOT_RECORDED = "not_recorded"
+MANIFEST_MISSING = "recording_manifest_missing"
+MANIFEST_INVALID = "recording_manifest_invalid"
+MANIFEST_NO_MARKETS = "recording_manifest_no_markets"
+LEDGER_UNREADABLE = "paper_ledger_unreadable"
+
+
+def recording_markets(recording_dir: Path) -> tuple[frozenset[str], str | None]:
+    """Issue #125: the market ids the M1 run records (``assets[].market_id`` of its manifest).
+
+    Returns (markets, problem). Any problem (no manifest, unreadable or not JSON, not an m1_run/1 object,
+    ``assets`` not a list, no non-empty market id) returns an empty set and the reason: fail closed, so no
+    market is treated as recorded.
+    """
+    path = Path(recording_dir) / RECORDING_MANIFEST
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return frozenset(), MANIFEST_MISSING
+    except (OSError, UnicodeDecodeError):
+        return frozenset(), MANIFEST_INVALID
+    try:
+        manifest = json.loads(raw)
+    except ValueError:
+        return frozenset(), MANIFEST_INVALID
+    if not isinstance(manifest, dict) or manifest.get("schema") != RECORDING_MANIFEST_SCHEMA:
+        return frozenset(), MANIFEST_INVALID
+    assets = manifest.get("assets")
+    if not isinstance(assets, list):
+        return frozenset(), MANIFEST_INVALID
+    markets = frozenset(str(item["market_id"]) for item in assets
+                        if isinstance(item, dict) and isinstance(item.get("market_id"), str)
+                        and item["market_id"].strip())
+    if not markets:
+        return frozenset(), MANIFEST_NO_MARKETS
+    return markets, None
+
+
+def held_markets(paper_path: Path) -> frozenset[str] | None:
+    """Issue #125 (d): markets with an open paper position (any leg's net shares above LEDGER_OPEN_EPS).
+
+    None when the ledger cannot be read in full (integrity problems or non-finite rows, the rule RiskGate's
+    load_state applies): the caller then treats every market as held (fail closed). No ledger file is no
+    position."""
+    from src import ledger_store, paper_ledger  # local: keeps the cycle's import light
+
+    try:
+        _, ledger = ledger_store.read_ledger(paper_path)
+        if paper_ledger.non_finite_ledger_rows(ledger.rows) or ledger_store.verify(ledger):
+            return None
+        legs = paper_ledger.leg_positions(ledger.rows)
+    except Exception:  # noqa: BLE001 - an unreadable ledger is fail closed, never "no positions"
+        return None
+    return frozenset(str(market) for (market, _), leg in legs.items()
+                     if market and abs(leg["shares"]) > paper_ledger.OPEN_EPS)
 
 
 def recording_book_files(recording_dir: Path) -> list[Path]:
@@ -105,6 +177,7 @@ def run(
     sentinel_state_path: Path | None = None,
     quotes_path: Path | None = None,
     recording_dir: Path | None = None,
+    paper_path: Path | None = None,
 ) -> dict:
     before = RISK_PATH.read_bytes()
     loaded = cfg if cfg is not None else load_risk()
@@ -123,6 +196,19 @@ def run(
         bus_path=bus_path,
         quotes_path=quotes_path if quotes_path is not None else QUOTES_PATH,
     )
+    # Issue #125: with a recording dir, only the manifest's markets may signal; others are not_recorded.
+    recorded: frozenset[str] = frozenset()
+    manifest_problem: str | None = None
+    held: frozenset[str] | None = frozenset()
+    if recording_dir is not None:
+        recorded, manifest_problem = recording_markets(recording_dir)
+        held = held_markets(paper_path if paper_path is not None else PAPER_PATH)
+        if manifest_problem is not None:
+            bus("BookWatcher", "Sentinel", "signal", "",
+                {"recording_manifest_problem": manifest_problem, "recording_dir": str(recording_dir),
+                 "gap_signal": "skipped", "skip_reason": NOT_RECORDED, "exchange_action": "none"},
+                path=bus_path)
+    not_recorded = 0
     checked: list[str] = []
     stale_checked: list[str] = []
     halts: list[str] = []
@@ -156,6 +242,15 @@ def run(
         if not tokens:
             stale_reasons.add(MISSING_BOOK)
             sentinel_reasons.add(MISSING_BOOK)
+        in_scope = recording_dir is None or (manifest_problem is None and market_id in recorded)
+        watched = (in_scope or manifest_problem is not None or held is None or market_id in held)
+        if not watched:
+            # Issue #125 (c): outside the recording, no position: a reject, not a StaleWatch check.
+            _not_recorded(market_id, stale_reasons, stale_after_s, None, skips, bus_path)
+            not_recorded += 1
+            if stale_reasons:
+                stale += 1
+            continue
         # Task AL gap 10: every market is checked; a missing book is a stale check, never a skip.
         checked.append(market_id)
         if state_problem is not None:
@@ -183,6 +278,11 @@ def run(
                           "stale_reasons": sorted(stale_reasons)})
             stale += 1
             # A stale market gets no gap/spread signal at all (Task T).
+            continue
+        if not in_scope:
+            # Issue #125 (b)/(d): watched (held, or the manifest is unusable) but not recorded: no signal.
+            _not_recorded(market_id, stale_reasons, stale_after_s, manifest_problem, skips, bus_path)
+            not_recorded += 1
             continue
         halted = halt_store.halt_problems(market_id)
         if halted:
@@ -234,7 +334,32 @@ def run(
             "all_stale_halt": all_stale_halt is not None,
         },
         "books_problem": books_problem,
+        "not_recorded": not_recorded,
+        "recording": None if recording_dir is None else {
+            "manifest_problem": manifest_problem,
+            "recorded_markets": len(recorded),
+            "held_markets": None if held is None else len(held),
+            "ledger_problem": LEDGER_UNREADABLE if held is None else None,
+        },
     }
+
+
+def _not_recorded(market_id: str, stale_reasons: set[str], stale_after_s: object, manifest_problem: str | None,
+                  skips: list[dict], bus_path: Path | None) -> None:
+    """Issue #125: one reject record for a market the recording does not cover (never a gap signal)."""
+    payload = {
+        "stale": bool(stale_reasons),
+        "stale_after_s": stale_after_s,
+        "stale_reasons": sorted(stale_reasons),
+        "gap_signal": "skipped",
+        "skip_reason": NOT_RECORDED,
+        "exchange_action": "none",
+    }
+    if manifest_problem is not None:
+        payload["recording_manifest_problem"] = manifest_problem
+    bus("BookWatcher", "Sentinel", "signal", market_id, payload, path=bus_path)
+    skips.append({"market": market_id, "kind": "not_recorded_market", "reason": NOT_RECORDED,
+                  "stale_reasons": sorted(stale_reasons)})
 
 
 def _sentinel_record(watch: sentinel.StaleWatch, market_id: str, problem: str | None, halts: list[str]) -> None:

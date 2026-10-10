@@ -1085,6 +1085,11 @@ def run_heartbeat_scenarios(plan: dict[str, Any], work: Path, commit, paper_ledg
         run_dir = folder / "m1-run"
         (run_dir / "books").mkdir(parents=True)
         (run_dir / "books" / "books-000001.jsonl").write_bytes(books_path.read_bytes())
+        # Issue #125: the run records every fixture market (its manifest scope; without one nothing signals)
+        recorded = sorted({str(row.get("id")) for row in paper_cycle.read_jsonl(markets_path) if row.get("id")})
+        (run_dir / "manifest.json").write_text(json.dumps(
+            {"schema": "m1_run/1", "assets": [{"token_id": f"t-{m}", "market_id": m} for m in recorded]}),
+            encoding="utf-8")
         from_dir = paper_cycle.run(markets_path=markets_path, books_path=folder / "unused.jsonl", bus_path=bus_path,
                                    now=clock.stamp(), cfg=risk_cfg(), sentinel_state_path=folder / "s1.json",
                                    quotes_path=scope["quotes"], recording_dir=run_dir)

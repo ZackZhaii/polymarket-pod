@@ -79,7 +79,9 @@ def test_a_halt_survives_a_fresh_book_and_a_new_process(tmp_path):
     assert _veto("m1")  # book_ts is fresh (now); the halt alone vetoes
 
 
-def test_maker_refuses_a_halted_market(tmp_path):
+def test_maker_refuses_a_halted_market(tmp_path, fresh_book):
+    fresh_book("m1", "t")
+    fresh_book("m2", "t")
     sentinel.halt(reason="drill", market="m1", bus_path=tmp_path / "bus.jsonl", quotes_path=tmp_path / "q.jsonl")
     with pytest.raises(maker.HaltActive):
         maker.quote(market="m1", token_id="t", side="buy", price=0.4, size=5,
@@ -90,7 +92,8 @@ def test_maker_refuses_a_halted_market(tmp_path):
     assert [q["market"] for q in read_jsonl(tmp_path / "q.jsonl")] == ["m2"]
 
 
-def test_maker_cancels_its_own_quote_when_a_halt_lands_during_the_append(tmp_path, monkeypatch):
+def test_maker_cancels_its_own_quote_when_a_halt_lands_during_the_append(tmp_path, monkeypatch, fresh_book):
+    fresh_book("m1", "t")
     quotes = tmp_path / "q.jsonl"
     real_append = maker.append_jsonl
 
