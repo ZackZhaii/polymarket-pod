@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-10T05:48:00Z",
+  "ts": "2026-10-10T13:10:00Z",
   "live_enabled": false,
-  "last_done": "BH",
+  "last_done": "BI",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "BH (WS recorder clock_jump reconnect after a suspend / wake, jump_s on the event; AW pong_timeout covers a monotonic clock that runs through the suspend; no new threshold) done by grok-bot. Blocks the M1 rerun. No open todo. No live gate."
+  "note": "BI (WS recorder inbound-silence watchdog `silent` at WS_SILENCE_TIMEOUT_S=60 s, ping_latency summary events; AW pong_timeout unchanged and normally fires first) done by grok-bot. Blocks the M1 rerun. Next by Poly指挥's order: issue #104, then book-hash research. No live gate."
 }

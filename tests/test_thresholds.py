@@ -44,6 +44,9 @@ EXPECTED = {
     "WS_RESYNC_TIMEOUT_S": 30.0,
     "WS_PING_INTERVAL_S": 10.0,
     "WS_PONG_TIMEOUT_S": 30.0,  # Task AW
+    "WS_SILENCE_TIMEOUT_S": 60.0,  # Task BI
+    "WS_SILENCE_OBSERVED_HEALTHY_MAX_S": 38.7,  # Task BI (evidence)
+    "WS_LATENCY_SUMMARY_PINGS": 60,  # Task BI (operational)
     "WS_RAW_BOOK_FILE_MAX_BYTES": 16777216,  # Task AY
     "WS_RAW_BOOK_RUN_MAX_BYTES": 268435456,  # Task AY
     "WS_ROW_REFRESH_S": 30.0,
@@ -186,6 +189,8 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "SECRET_VALUE_MIN_LEN", "MNEMONIC_MIN_WORDS", "SECRET_HASH_PREFIX_CHARS",
               # Task AW: WS heartbeat liveness.
               "WS_PONG_TIMEOUT_S",
+              # Task BI: inbound silence watchdog (and the healthy silence it must stay above).
+              "WS_SILENCE_TIMEOUT_S", "WS_SILENCE_OBSERVED_HEALTHY_MAX_S",
               # Task AY: raw book snapshot caps.
               "WS_RAW_BOOK_FILE_MAX_BYTES", "WS_RAW_BOOK_RUN_MAX_BYTES",
               # Task AP: heartbeats, the resident Sentinel and its escalations.
@@ -352,6 +357,9 @@ def test_relations_hold():
         ("WS_BACKOFF_BASE_S = 1.0", "WS_BACKOFF_BASE_S = 0.0"),
         ("WS_PING_INTERVAL_S = 10.0", "WS_PING_INTERVAL_S = 30.0"),
         ("WS_PONG_TIMEOUT_S = 30.0", "WS_PONG_TIMEOUT_S = 10.0"),
+        ("WS_SILENCE_TIMEOUT_S = 60.0", "WS_SILENCE_TIMEOUT_S = 30.0"),  # Task BI: not above the PONG timeout
+        ("WS_SILENCE_TIMEOUT_S = 60.0", "WS_SILENCE_TIMEOUT_S = 35.0"),  # Task BI: under the healthy 38.7 s
+        ("WS_LATENCY_SUMMARY_PINGS = 60", "WS_LATENCY_SUMMARY_PINGS = 0"),
         ("WS_RAW_BOOK_FILE_MAX_BYTES = 16 * 1024 * 1024", "WS_RAW_BOOK_FILE_MAX_BYTES = 512 * 1024 * 1024"),
         ("WS_RAW_BOOK_RUN_MAX_BYTES = 256 * 1024 * 1024", "WS_RAW_BOOK_RUN_MAX_BYTES = 0"),
         ("WS_ROW_REFRESH_S = 30.0", "WS_ROW_REFRESH_S = 120.0"),

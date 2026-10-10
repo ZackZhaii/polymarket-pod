@@ -55,6 +55,12 @@ What the protocol gives for integrity, and what this recorder does with it:
 - Task AW: a PING still unanswered by a PONG after WS_PONG_TIMEOUT_S means the connection is dead:
   the recorder disconnects (``pong_timeout``, every asset resyncs) and reconnects; it counts toward
   the Task AP reconnect escalation like any other disconnect.
+- Task BI: inbound silence. No inbound frame of any kind (book data or PONG) for WS_SILENCE_TIMEOUT_S
+  (monotonic) closes the connection (``silent``, every asset resyncs) and reconnects; counted like any
+  disconnect. A backstop beside the PONG deadline that only looks at what actually arrives. PING / PONG
+  round trips are summarised in a ``ping_latency`` event every WS_LATENCY_SUMMARY_PINGS PINGs and at the
+  end of each connection (pings, pongs, unanswered, unexpected_pongs, RTT p50 / p99 / max in ms, last PING
+  and PONG times).
 - Task BH: suspend / wake. Each pass of the session loop compares the wall-clock step (``wall``,
   time.time) with the monotonic step. When the wall clock moved ahead of the monotonic clock by more
   than WS_PING_INTERVAL_S (a host suspend: CLOCK_MONOTONIC does not run while suspended, the wall clock
@@ -138,7 +144,9 @@ from src.thresholds import (  # noqa: E402
     WS_BACKOFF_BASE_S,
     WS_BACKOFF_CAP_S,
     WS_PING_INTERVAL_S,
+    WS_LATENCY_SUMMARY_PINGS,
     WS_PONG_TIMEOUT_S,
+    WS_SILENCE_TIMEOUT_S,
     WS_RAW_BOOK_FILE_MAX_BYTES,
     WS_RAW_BOOK_RUN_MAX_BYTES,
     WS_RESYNC_TIMEOUT_S,
@@ -1043,8 +1051,54 @@ class RunReport:
     backoffs: list[float] = field(default_factory=list)
     counts: Counter = field(default_factory=Counter)
     pings: int = 0
+    pongs: int = 0  # Task BI: PONG frames received (answering a PING or not)
     unmapped_assets: list[str] = field(default_factory=list)
     ended_by: str = ""  # "deadline" or "stopped" (Task AI)
+
+
+def _nearest_rank(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
+
+
+class PingLatency:
+    """Task BI: PING / PONG bookkeeping for one connection. PONGs answer PINGs in order (FIFO)."""
+
+    def __init__(self) -> None:
+        self.pings = 0
+        self.pongs = 0
+        self.unexpected_pongs = 0
+        self.outstanding: deque[float] = deque()  # monotonic send times of unanswered PINGs
+        self.rtts: list[float] = []  # since the last summary, seconds
+        self.last_ping_ts: str | None = None
+        self.last_pong_ts: str | None = None
+
+    def ping(self, mono: float, ts: str) -> None:
+        self.pings += 1
+        self.outstanding.append(mono)
+        self.last_ping_ts = ts
+
+    def pong(self, mono: float, ts: str) -> None:
+        self.last_pong_ts = ts
+        if not self.outstanding:
+            self.unexpected_pongs += 1
+            return
+        self.pongs += 1
+        self.rtts.append(max(0.0, mono - self.outstanding.popleft()))
+
+    def summary(self, scope: str) -> dict[str, Any]:
+        def ms(value: float | None) -> float | None:
+            return None if value is None else round(value * 1000.0, 1)
+
+        out = {"scope": scope, "pings": self.pings, "pongs": self.pongs, "unanswered": len(self.outstanding),
+               "unexpected_pongs": self.unexpected_pongs, "rtt_n": len(self.rtts),
+               "rtt_p50_ms": ms(_nearest_rank(self.rtts, 0.50)), "rtt_p99_ms": ms(_nearest_rank(self.rtts, 0.99)),
+               "rtt_max_ms": ms(max(self.rtts) if self.rtts else None),
+               "last_ping_ts": self.last_ping_ts, "last_pong_ts": self.last_pong_ts}
+        self.rtts = []
+        return out
 
 
 class Escalation:
@@ -1169,6 +1223,7 @@ class Recorder:
         self.core.capture_raw = raw_books is not None
         self.wall = wall or time.time
         self._jump_s: float | None = None  # Task BH: the wall-clock jump that ended the last session
+        self._latency: PingLatency | None = None  # Task BI: this connection's PING / PONG bookkeeping
 
     def _stopped(self) -> bool:
         return self.stop is not None and bool(self.stop())
@@ -1261,11 +1316,17 @@ class Recorder:
                 reason, healthy = self._session(connection, deadline)
             finally:
                 connection.close()
+            latency = self._latency.summary("connection_end") if self._latency is not None else None
+            self._latency = None
             if reason in ("deadline", "stopped"):
+                if latency is not None:
+                    self._event("ping_latency", **latency)
                 break
             self.report.disconnects[reason] += 1
             extra = {"jump_s": round(self._jump_s, 3)} if reason == "clock_jump" and self._jump_s is not None else {}
             self._event("disconnected", reason=reason, healthy=healthy, **extra)
+            if latency is not None:
+                self._event("ping_latency", **latency)  # Task BI: this connection's PING / PONG summary
             if self.escalation.reconnect():
                 self._beat(force=True)
             self._write(self.core.invalidate_all(f"disconnect_{reason}", self.now()))
@@ -1288,6 +1349,8 @@ class Recorder:
         pong_due: float | None = None  # Task AW: first unanswered PING's send time + WS_PONG_TIMEOUT_S
         self._jump_s = None
         last_mono, last_wall = self.monotonic(), self.wall()  # Task BH: suspend / wake detection
+        latency = self._latency = PingLatency()  # Task BI
+        last_inbound = self.monotonic()  # Task BI: the subscribe frame opens the silence window
         while True:
             current = self.monotonic()
             wall_now = self.wall()
@@ -1304,9 +1367,14 @@ class Recorder:
             try:
                 if pong_due is not None and current >= pong_due:
                     return "pong_timeout", healthy
+                if current - last_inbound >= WS_SILENCE_TIMEOUT_S:
+                    return "silent", healthy  # Task BI: nothing at all arrived (no data, no PONG)
                 if current >= next_ping:
                     self._send(connection, PING)
                     self.report.pings += 1
+                    latency.ping(current, self.now())
+                    if latency.pings % WS_LATENCY_SUMMARY_PINGS == 0:
+                        self._event("ping_latency", **latency.summary("periodic"))
                     next_ping = current + WS_PING_INTERVAL_S
                     if pong_due is None:
                         pong_due = current + WS_PONG_TIMEOUT_S
@@ -1322,13 +1390,18 @@ class Recorder:
                     waits.append(oldest + WS_RESYNC_TIMEOUT_S - current)
                 if pong_due is not None:
                     waits.append(pong_due - current)
+                waits.append(last_inbound + WS_SILENCE_TIMEOUT_S - current)
                 text = connection.recv(max(0.0, min(waits)))
                 if text is None:
                     continue
+                last_inbound = self.monotonic()  # Task BI: any inbound frame, data or PONG
                 before = set(self.core.awaiting())
-                out = self.core.handle_text(text, self.now(), self.monotonic())
+                out = self.core.handle_text(text, self.now(), last_inbound)
                 if out.counts["pong"]:
                     pong_due = None
+                    self.report.pongs += out.counts["pong"]
+                    for _ in range(out.counts["pong"]):
+                        latency.pong(last_inbound, self.now())
                 self._write(out, before)
                 fresh = [asset for asset, _ in out.resyncs if asset not in before]
                 fresh = list(dict.fromkeys(fresh))
