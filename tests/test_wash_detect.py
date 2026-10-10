@@ -1,5 +1,8 @@
 """Task S (backlog item 1): structured wash / self-trade detection in RiskGate.
 
+Issue #56 adds the strict quotes boundary of paper_ledger.load_state to this file: a quotes file
+that cannot be read in full is an unusable history (wash_input_invalid), never a short one.
+
 The strategy-name keyword ban stays; these checks look at structure, so a clean name
 does not get through. Offline. No network, no credentials. config/risk.toml is read,
 never written.
@@ -307,3 +310,116 @@ def test_load_state_carries_the_history(paper):
     state = paper_ledger.load_state(MARKET, YES)
     assert len(state["recent_fills"]) == 1
     assert len(state["own_quotes"]) == 1
+
+
+# --- issue #56: strict quotes reading at the load_state boundary ---------------------
+#
+# A loose read (podlib.read_jsonl) skips bad lines, so a damaged uncancelled opposite quote
+# could leave an empty history and let the structural check allow. Every case below must end in
+# the existing wash_input_invalid veto, never in a partial history.
+
+GOOD_QUOTE = json.dumps(_quote("sell"))  # an uncancelled opposite open quote on the intent's leg
+
+
+def _write_quotes(paper, text: str) -> None:
+    paper["quotes"].write_bytes(text.encode("utf-8"))
+
+
+def _quote_state(paper) -> dict:
+    return paper_ledger.load_state(MARKET, YES)
+
+
+def test_a_clean_quotes_file_reads_as_before_and_still_vetoes(paper):
+    _write_quotes(paper, GOOD_QUOTE + "\n")
+    state = _quote_state(paper)
+    assert state["quote_problems"] == []
+    assert len(state["own_quotes"]) == 1
+    result = paper_ledger.commit_if_allowed(_live_intent(), load_risk())
+    assert result["allow"] is False
+    assert CROSS_SIDE_SAME_LEG in result["decision"]["reasons"]
+    assert read_jsonl(paper["paper"]) == []
+
+
+def test_one_sided_and_cancelled_quotes_keep_their_result(paper):
+    _write_quotes(paper, json.dumps(_quote("buy")) + "\n" + json.dumps(_quote("sell", status="cancelled")) + "\n")
+    state = _quote_state(paper)
+    assert state["quote_problems"] == []
+    assert len(state["own_quotes"]) == 2
+    result = paper_ledger.commit_if_allowed(_live_intent(), load_risk())
+    assert result["allow"] is True, result
+    assert len(read_jsonl(paper["paper"])) == 1
+
+
+def test_a_missing_quotes_file_is_still_an_empty_history(paper):
+    state = _quote_state(paper)
+    assert state["own_quotes"] == [] and state["quote_problems"] == []
+    assert paper_ledger.commit_if_allowed(_live_intent(), load_risk())["allow"] is True
+
+
+def test_a_blank_quotes_file_is_still_an_empty_history(paper):
+    _write_quotes(paper, "\n   \n")
+    state = _quote_state(paper)
+    assert state["own_quotes"] == [] and state["quote_problems"] == []
+    assert paper_ledger.commit_if_allowed(_live_intent(), load_risk())["allow"] is True
+
+
+@pytest.mark.parametrize(
+    "lines,problems",
+    [
+        (["{not json", GOOD_QUOTE], ["malformed_row:1"]),                       # bad first line
+        ([GOOD_QUOTE, '{"market": "task-s-market", "side":', GOOD_QUOTE],
+         ["malformed_row:2"]),                                                 # bad middle line, truncated
+        ([GOOD_QUOTE, "not json either"], ["malformed_row:2"]),                 # bad last line
+        (["[]", GOOD_QUOTE], ["non_object_row:1"]),                             # array line
+        ([GOOD_QUOTE, "null"], ["non_object_row:2"]),                           # null line
+        (["7", GOOD_QUOTE], ["non_object_row:1"]),                              # number line
+        (['"a quote"', GOOD_QUOTE], ["non_object_row:1"]),                      # string line
+    ],
+)
+def test_a_broken_quote_line_makes_the_whole_history_unusable(paper, lines, problems):
+    _write_quotes(paper, "".join(line + "\n" for line in lines))
+    state = _quote_state(paper)
+    assert state["own_quotes"] is None  # never a partial history
+    assert state["quote_problems"] == problems
+    result = paper_ledger.commit_if_allowed(_live_intent(), load_risk())
+    assert result["allow"] is False
+    assert WASH_INPUT_INVALID in result["decision"]["reasons"]
+    assert result.get("halted") is not True  # no new halt policy: the existing veto only
+    assert read_jsonl(paper["paper"]) == []
+
+
+def test_a_quote_file_without_the_final_newline_is_unusable(paper):
+    _write_quotes(paper, GOOD_QUOTE)  # a torn append: podlib.append_jsonl always writes "\n"
+    state = _quote_state(paper)
+    assert state["own_quotes"] is None
+    assert state["quote_problems"] == ["unterminated_last_row:1"]
+    assert WASH_INPUT_INVALID in paper_ledger.commit_if_allowed(_live_intent(), load_risk())["decision"]["reasons"]
+
+
+def test_undecodable_quote_bytes_are_unusable(paper):
+    paper["quotes"].write_bytes(GOOD_QUOTE.encode("utf-8") + b"\n\xff\xfe\n")
+    state = _quote_state(paper)
+    assert state["own_quotes"] is None
+    assert state["quote_problems"] == ["undecodable_quotes"]
+    assert WASH_INPUT_INVALID in paper_ledger.commit_if_allowed(_live_intent(), load_risk())["decision"]["reasons"]
+
+
+def test_an_unreadable_quotes_file_is_unusable(paper):
+    paper["quotes"].mkdir()  # a directory where the file belongs: read_bytes raises OSError
+    state = _quote_state(paper)
+    assert state["own_quotes"] is None
+    assert len(state["quote_problems"]) == 1
+    assert state["quote_problems"][0].startswith("unreadable_quotes:")
+
+
+def test_a_broken_quotes_file_vetoes_and_writes_nothing(paper):
+    _write_quotes(paper, GOOD_QUOTE + "\n" + "{oops\n")
+    before = paper["quotes"].read_bytes()
+    result = paper_ledger.commit_if_allowed(_live_intent(), load_risk())
+    assert result["allow"] is False
+    assert WASH_INPUT_INVALID in result["decision"]["reasons"]  # the veto RiskGate already had
+    assert result["quote_problems"] == ["malformed_row:2"]      # the diagnosis is visible
+    assert result.get("halted") is not True                     # and it is not a halt
+    assert paper["quotes"].read_bytes() == before               # the source file is untouched
+    assert not paper["paper"].exists() or read_jsonl(paper["paper"]) == []  # no fill booked
+    assert halt_store.active_halts() == []
