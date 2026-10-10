@@ -110,6 +110,11 @@ class Intent:
     # max(effective_price, limit_price). Not finite or not > 0 (or limit_price >= 1) vetoes.
     shares: float | None = None
     limit_price: float | None = None
+    # Issue #119 (Task CE): where the M2 runner's fee rate came from (src/fee_source.FeeQuote: fee_source, the
+    # Gamma read's fetched_at and the feeSchedule sha). Recorded on the paper fill only; RiskGate never reads them.
+    fee_source: str | None = None
+    fee_gamma_fetched_at: str | None = None
+    fee_schedule_sha: str | None = None
 
 
 @dataclass

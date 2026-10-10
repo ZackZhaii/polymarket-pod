@@ -67,6 +67,16 @@ EXPECTED = {
     "FEE_RATE_MAX": 0.25,  # Task BZ #117 (M2 pending)
     "FORECAST_MAX_ASOF_LAG_S": 21600.0,  # Task CD #118 (M2 pending)
     "FORECAST_MIN_HALF_WIDTH": 0.03,  # Task CD #118 (M2 pending)
+    "RUNNER_LOOP_S": 60.0,  # Task CE #119 (M2 pending)
+    "HEARTBEAT_RUNNER_EVERY_S": 30.0,  # Task CE #119 (M2 pending)
+    "HEARTBEAT_RUNNER_TIMEOUT_S": 120.0,  # Task CE #119 (M2 pending)
+    "RUNNER_PAUSED_ALERT_S": 21600.0,  # Task CE #119 (M2 pending)
+    "RUNNER_SCAN_EVERY_S": 1800.0,  # Task CE #119 (M2 pending)
+    "RUNNER_SCAN_MAX_AGE_S": 7200.0,  # Task CE #119 (M2 pending)
+    "RUNNER_MAX_INGEST_PER_ITER": 20,  # Task CE #119 (M2 pending)
+    "RUNNER_MAX_EVALS_PER_SIGNAL": 10,  # Task CE #119 (M2 pending)
+    "DISK_MIN_FREE_GB": 2.0,  # Task CE #119 (M2 pending)
+    "RUNNER_DISK_BUDGET_GB": 5.0,  # Task CE #119 (M2 pending)
     "M1_RUN_TARGET_S": 21600.0,  # KEY-approved 2026-10-11 家伟批准
     "M1_MIN_RUN_S": 21540.0,  # KEY-approved 2026-10-11 家伟批准 (was 86340.0)
     "M1_MIN_COVERAGE": 0.99,
@@ -193,6 +203,10 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "FEE_CACHE_TTL_S", "FEE_NEG_CACHE_S", "FEE_RATE_MAX",
               # Task CD (#118, M2-B): the forecast inbox.
               "FORECAST_MAX_ASOF_LAG_S", "FORECAST_MIN_HALF_WIDTH",
+              # Task CE (#119, M2-C1): the paper runner.
+              "RUNNER_LOOP_S", "HEARTBEAT_RUNNER_EVERY_S", "HEARTBEAT_RUNNER_TIMEOUT_S", "RUNNER_PAUSED_ALERT_S",
+              "RUNNER_SCAN_EVERY_S", "RUNNER_SCAN_MAX_AGE_S", "RUNNER_MAX_INGEST_PER_ITER",
+              "RUNNER_MAX_EVALS_PER_SIGNAL", "DISK_MIN_FREE_GB", "RUNNER_DISK_BUDGET_GB",
               # Task AK: Data API v2 reconciliation.
               "RECONCILE_SHARES_TOL", "DATA_API_POSITIONS_DUST_SHARES", "DATA_API_TRADES_MIN_SHARES",
               "DATA_API_MAX_LAG_S", "DATA_API_IDENTITY_TOL_USDC",
@@ -389,6 +403,16 @@ def test_relations_hold():
         ("FORECAST_MAX_ASOF_LAG_S = 21600.0", "FORECAST_MAX_ASOF_LAG_S = 604800.0"),  # Task CD: above one day
         ("FORECAST_MIN_HALF_WIDTH = 0.03", "FORECAST_MIN_HALF_WIDTH = 0.0"),  # Task CD
         ("FORECAST_MIN_HALF_WIDTH = 0.03", "FORECAST_MIN_HALF_WIDTH = 0.5"),  # Task CD
+        ("RUNNER_LOOP_S = 60.0", "RUNNER_LOOP_S = 0.0"),  # Task CE
+        ("RUNNER_LOOP_S = 60.0", "RUNNER_LOOP_S = 120.0"),  # Task CE: not below the heartbeat timeout
+        ("HEARTBEAT_RUNNER_EVERY_S = 30.0", "HEARTBEAT_RUNNER_EVERY_S = 120.0"),  # Task CE
+        ("HEARTBEAT_RUNNER_TIMEOUT_S = 120.0", "HEARTBEAT_RUNNER_TIMEOUT_S = 120"),  # Task CE: a float
+        ("RUNNER_PAUSED_ALERT_S = 21600.0", "RUNNER_PAUSED_ALERT_S = 60.0"),  # Task CE
+        ("RUNNER_SCAN_MAX_AGE_S = 7200.0", "RUNNER_SCAN_MAX_AGE_S = 1800.0"),  # Task CE
+        ("RUNNER_MAX_INGEST_PER_ITER = 20", "RUNNER_MAX_INGEST_PER_ITER = 0"),  # Task CE
+        ("RUNNER_MAX_EVALS_PER_SIGNAL = 10", "RUNNER_MAX_EVALS_PER_SIGNAL = True"),  # Task CE
+        ("DISK_MIN_FREE_GB = 2.0", "DISK_MIN_FREE_GB = -1.0"),  # Task CE
+        ("RUNNER_DISK_BUDGET_GB = 5.0", "RUNNER_DISK_BUDGET_GB = float('nan')"),  # Task CE
         ("WS_GROUP_FLUSH_S = 0.25", "WS_GROUP_FLUSH_S = 0.0"),  # Task CC: must be > 0
         ("WS_GROUP_FLUSH_S = 0.25", "WS_GROUP_FLUSH_S = 5.0"),  # Task CC: not well below WS_ROW_REFRESH_S
         ("WS_GROUP_FLUSH_S = 0.25", "WS_GROUP_FLUSH_S = 1"),  # Task CC: a float
