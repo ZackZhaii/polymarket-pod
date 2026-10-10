@@ -101,7 +101,10 @@ EXIT_WRITE_FAILED = 5  # the report files could not be written
 EXCLUDED_STRATEGIES = frozenset({"phase0-gate-test", "no-edge-check", "wash-probe"})
 EXCLUDED_MARKET_PREFIXES = ("phase0-self-check", "e2e-")
 RESOLUTION_FIELDS = ("condition_id", "winning_token_id", "outcome_prices_final", "closed_ts", "snapshot_ts",
-                     "status", "uma_checked")  # src/resolutions.py ROW_FIELDS (tested equal)
+                     "status", "uma_checked", "outcome_token_ids")  # src/resolutions.py ROW_FIELDS (tested equal)
+# issue #81: rows written before the outcome_token_ids key. Both schemas are accepted, by name; the
+# legacy one simply cannot prove which tokens belong to the market.
+LEGACY_RESOLUTION_FIELDS = RESOLUTION_FIELDS[:-1]
 NOTES = (
     "Labels are only data/resolutions.jsonl rows with uma_checked=true and status=resolved; nothing is imputed.",
     "UMA dispute status not checked (beyond umaResolutionStatus=resolved).",
@@ -196,12 +199,21 @@ def check_forecast_rows(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
 
 
 def check_resolution_rows(rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], set[str]]:
-    """Schema of data/resolutions.jsonl; condition_id -> row, plus disputed ids (conflicting rows)."""
+    """Schema of data/resolutions.jsonl; condition_id -> row, plus disputed ids (conflicting rows).
+
+    issue #81: exactly two schemas are accepted, the legacy seven fields and today's eight. Anything
+    else is still corrupt input. An eight-field row's outcome_token_ids must be a non-empty list of
+    unique non-empty strings, as long as the final price list, and must name the winner it records.
+    """
     by_condition: dict[str, dict[str, Any]] = {}
     disputed: set[str] = set()
     for number, row in enumerate(rows, 1):
         where = f"resolutions:{number}"
-        if set(row) != set(RESOLUTION_FIELDS):
+        if set(row) == set(LEGACY_RESOLUTION_FIELDS):
+            tokens = None
+        elif set(row) == set(RESOLUTION_FIELDS):
+            tokens = row["outcome_token_ids"]
+        else:
             raise CorruptInput(f"{where}: keys differ from the resolutions schema")
         prices = row["outcome_prices_final"]
         if not (isinstance(row["condition_id"], str) and row["condition_id"].strip()
@@ -210,6 +222,14 @@ def check_resolution_rows(rows: list[dict[str, Any]]) -> tuple[dict[str, dict[st
                 and _parse_ts(row["closed_ts"]) is not None and isinstance(row["snapshot_ts"], str)
                 and isinstance(row["status"], str) and isinstance(row["uma_checked"], bool)):
             raise CorruptInput(f"{where}: a field has the wrong type")
+        if tokens is not None:
+            if not (isinstance(tokens, list) and tokens and len(tokens) == len(prices)
+                    and all(isinstance(token, str) and token and token == token.strip() for token in tokens)
+                    and len(set(tokens)) == len(tokens)):
+                raise CorruptInput(f"{where}: outcome_token_ids is not a usable mapping")
+            winners = [index for index, price in enumerate(prices) if float(price) == 1.0]
+            if len(winners) == 1 and tokens[winners[0]] != row["winning_token_id"]:
+                raise CorruptInput(f"{where}: outcome_token_ids does not name the winning token")
         key = row["condition_id"]
         prior = by_condition.get(key)
         if prior is not None and _label_view(prior) != _label_view(row):

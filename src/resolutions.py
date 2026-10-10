@@ -67,7 +67,13 @@ ROW_FIELDS = (
     "snapshot_ts",
     "status",
     "uma_checked",
+    # issue #81: every outcome token of the market, in select_token_ids order, so a later label can
+    # prove a sample's token really belongs to this market instead of trusting a bare index.
+    "outcome_token_ids",
 )
+# issue #81: rows written before this key existed. They stay readable (and byte for byte unchanged);
+# only the two schemas above are ever accepted, anything else is still exit 3.
+LEGACY_ROW_FIELDS = ROW_FIELDS[:-1]
 UMA_RESOLVED = "resolved"
 STATUS_RESOLVED = "resolved"  # the only status a confirmation upgrade may append
 STATUS_CLOSED = "closed"  # unique 1/0 winner after the hold, UMA not yet exactly resolved
@@ -116,11 +122,40 @@ def _reject_constant(value: str) -> None:
     raise ValueError(f"{value} is not valid JSON")
 
 
+def outcome_token_problem(tokens: Any, price_count: int) -> str | None:
+    """Why a token list cannot identify this settlement's outcomes, else None (issue #81).
+
+    The producer checks the list it is about to write and read_history checks every stored list, so
+    a foreign, repeated, empty or short mapping is never silently kept. Same rules in both places.
+    """
+    if not isinstance(tokens, list) or not tokens:
+        return "outcome_token_ids is not a non-empty list"
+    if len(tokens) != price_count:
+        return "outcome_token_ids is not as long as outcome_prices_final"
+    seen: set[str] = set()
+    for token in tokens:
+        if not isinstance(token, str) or not token or token != token.strip():
+            return "outcome_token_ids holds a value that is not a non-empty stripped string"
+        if token in seen:
+            return "outcome_token_ids repeats a token"
+        seen.add(token)
+    return None
+
+
 def _snapshot_problem(row: Any) -> str | None:
-    """Why one stored row is not a snapshot this module wrote, else None."""
+    """Why one stored row is not a snapshot this module wrote, else None.
+
+    issue #81: exactly two schemas are ours, the legacy seven fields and today's eight. A legacy row
+    is accepted as stored (its missing mapping is not proven here); an eight-field row must carry a
+    usable mapping whose winner position is the recorded winning_token_id.
+    """
     if not isinstance(row, dict):
         return "not a JSON object"
-    if set(row) != set(ROW_FIELDS):
+    if set(row) == set(LEGACY_ROW_FIELDS):
+        tokens = None
+    elif set(row) == set(ROW_FIELDS):
+        tokens = row["outcome_token_ids"]
+    else:
         return "keys differ from the snapshot schema"
     for field in ("condition_id", "winning_token_id"):
         value = row[field]
@@ -136,6 +171,12 @@ def _snapshot_problem(row: Any) -> str | None:
         numbers.append(float(price))
     if unique_winner_index(numbers) is None:
         return "outcome_prices_final has no unique 1.0/0.0 winner"
+    if tokens is not None:
+        problem = outcome_token_problem(tokens, len(numbers))
+        if problem is not None:
+            return problem
+        if tokens[unique_winner_index(numbers)] != row["winning_token_id"]:
+            return "outcome_token_ids and winning_token_id disagree"
     if parse_end_date(row["closed_ts"]) is None:
         return "closed_ts is not a zoned ISO timestamp"
     if parse_end_date(row["snapshot_ts"]) is None:
@@ -151,8 +192,9 @@ def _snapshot_problem(row: Any) -> str | None:
 def read_history(path: Path) -> list[dict[str, Any]]:
     """Read an existing data/resolutions.jsonl strictly, else raise HistoryError.
 
-    Every complete line must be a JSON object holding exactly ROW_FIELDS with the values
-    classify_market writes. read_jsonl would silently skip a line it cannot parse, and a lost row
+    Every complete line must be a JSON object holding exactly ROW_FIELDS (or exactly the legacy seven
+    fields written before issue #81) with the values classify_market writes. read_jsonl would
+    silently skip a line it cannot parse, and a lost row
     is exactly what a later append would duplicate, so a torn last line (no closing newline), a
     blank line, bad JSON, NaN/Infinity, a non-object, another key or a wrong value fails the run
     (exit 3) with nothing appended. An absent file is an empty history.
@@ -187,7 +229,11 @@ def read_history(path: Path) -> list[dict[str, Any]]:
 
 
 def content_conflict(prior: dict[str, Any], row: dict[str, Any]) -> str | None:
-    """Why two rows disagree about the settlement, else None (same winner, prices and close time)."""
+    """Why two rows disagree about the settlement, else None (same winner, prices and close time).
+
+    issue #81: when both rows carry the outcome token mapping it must be identical too, so a
+    confirmation can never quietly replace one mapping with another.
+    """
     if prior["winning_token_id"] != row["winning_token_id"]:
         return "upgrade_winner_conflict"
     if [float(price) for price in prior["outcome_prices_final"]] != [
@@ -196,6 +242,12 @@ def content_conflict(prior: dict[str, Any], row: dict[str, Any]) -> str | None:
         return "upgrade_prices_conflict"
     if parse_end_date(prior["closed_ts"]) != parse_end_date(row["closed_ts"]):
         return "upgrade_closed_ts_conflict"
+    # issue #81: last, so the older names keep their meaning; when both rows carry the mapping it
+    # must be identical, a confirmation never quietly replaces one mapping with another.
+    prior_tokens = prior.get("outcome_token_ids")
+    row_tokens = row.get("outcome_token_ids")
+    if prior_tokens is not None and row_tokens is not None and list(prior_tokens) != list(row_tokens):
+        return "upgrade_token_mapping_conflict"
     return None
 
 
@@ -269,6 +321,9 @@ def classify_market(
         return None, token_problem
     if len(tokens) != len(prices) or winner >= len(tokens):
         return None, "token_winner_mismatch"
+    # issue #81: the producer checks its own mapping before writing it (the scanner is not widened).
+    if outcome_token_problem(tokens, len(prices)) is not None:
+        return None, "invalid_outcome_token_ids"
     winning_token_id = tokens[winner]
     if not isinstance(winning_token_id, str) or not winning_token_id:
         return None, "token_winner_mismatch"
@@ -280,6 +335,7 @@ def classify_market(
         "snapshot_ts": snapshot_ts,
         "status": STATUS_RESOLVED if uma_checked else STATUS_CLOSED,
         "uma_checked": uma_checked,
+        "outcome_token_ids": list(tokens),
     }
     return row, None
 

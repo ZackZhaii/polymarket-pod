@@ -82,6 +82,21 @@ def build(fs, rs, fills=()):
 
 def test_schema_matches_the_resolutions_writer():
     assert cal.RESOLUTION_FIELDS == res.ROW_FIELDS
+    assert cal.LEGACY_RESOLUTION_FIELDS == tuple(k for k in res.ROW_FIELDS if k != "outcome_token_ids")
+
+
+def test_the_eight_field_schema_is_accepted_and_a_bad_mapping_is_corrupt():
+    # issue #81: the consumer names two schemas only; a mapping that cannot identify the outcomes
+    # is corrupt input, exactly like any other off-schema row.
+    row = resolution(1, 0)
+    row["outcome_token_ids"] = ["t1-0", "t1-1"]
+    by_condition, disputed = cal.check_resolution_rows([row])
+    assert by_condition["0xc1"]["outcome_token_ids"] == ["t1-0", "t1-1"] and disputed == set()
+    for broken in (["t1-0", "t1-0"], ["t1-0"], "t1-0", ["t1-1", "t1-0"], ["t1-0", ""]):
+        with pytest.raises(cal.CorruptInput):
+            cal.check_resolution_rows([{**row, "outcome_token_ids": broken}])
+    with pytest.raises(cal.CorruptInput):  # a key that is in neither schema
+        cal.check_resolution_rows([{**row, "note": "x"}])
 
 
 def test_a_clean_join_scores_every_market():

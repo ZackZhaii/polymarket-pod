@@ -27,6 +27,7 @@ ROW_KEYS = {
     "snapshot_ts",
     "status",
     "uma_checked",
+    "outcome_token_ids",
 }
 
 
@@ -80,17 +81,33 @@ def _stored(
     closed_ts: str = CLOSED_49H,
     snapshot_ts: str = TS,
     uma_checked: bool = False,
+    tokens: list[str] | None = None,
 ) -> dict:
-    """One stored data/resolutions.jsonl row, exactly as src/resolutions.py writes it."""
+    """One stored data/resolutions.jsonl row, exactly as src/resolutions.py writes it.
+
+    issue #81: the row carries the market's outcome token mapping; ``tokens`` overrides it for the
+    tests that need a broken mapping.
+    """
+    final = list(prices)
+    if tokens is None:
+        tokens = [token if price == 1.0 else "tok-1-no" for price in final]
     return {
         "condition_id": condition_id,
         "winning_token_id": token,
-        "outcome_prices_final": list(prices),
+        "outcome_prices_final": final,
         "closed_ts": closed_ts,
         "snapshot_ts": snapshot_ts,
         "status": "resolved" if uma_checked else "closed",
         "uma_checked": uma_checked,
+        "outcome_token_ids": tokens,
     }
+
+
+def _legacy_stored(**kwargs: object) -> dict:
+    """One row as written before issue #81: seven fields, no outcome_token_ids."""
+    row = _stored(**kwargs)  # type: ignore[arg-type]
+    row.pop("outcome_token_ids")
+    return row
 
 
 def _line(row: dict) -> bytes:
@@ -429,6 +446,85 @@ def test_incomplete_paging_does_not_append_the_upgrade(tmp_path):
     assert code == resolutions.EXIT_INCOMPLETE == 3
     assert path.read_bytes() == before
     assert rows == [pending]
+
+
+# ---------------------------------------------------------------- issue #81: the outcome token map
+
+
+def test_a_new_row_saves_every_outcome_token_in_scanner_order(tmp_path):
+    code, _path, rows = _run(tmp_path, [_closed(1)])
+    row = rows[0]
+    assert code == 0 and set(row) == ROW_KEYS
+    assert row["outcome_token_ids"] == ["tok-1-yes", "tok-1-no"]
+    assert row["winning_token_id"] == row["outcome_token_ids"][0]
+
+
+def test_v2_position_ids_are_saved_in_order(tmp_path):
+    market = _closed(2, version="v2", positionIds=["111", "222"],
+                     clobTokenIds='["ignore-yes", "ignore-no"]', outcomePrices=["0", "1"])
+    _code, _path, rows = _run(tmp_path, [market])
+    assert rows[0]["outcome_token_ids"] == ["111", "222"]
+    assert rows[0]["winning_token_id"] == rows[0]["outcome_token_ids"][1]
+
+
+@pytest.mark.parametrize("tokens", [["tok-1-yes", "tok-1-yes"], ["tok-1-yes", " "], ["tok-1-yes", ""]])
+def test_a_mapping_the_producer_cannot_write_is_skipped(tmp_path, monkeypatch, tokens):
+    # the producer checks its own row, so a scanner regression cannot seal a bad mapping
+    monkeypatch.setattr(resolutions, "select_token_ids", lambda market: (list(tokens), "clobTokenIds", None))
+    row, skip = resolutions.classify_market(_closed(1), NOW, TS)
+    assert row is None and skip == "invalid_outcome_token_ids"
+
+
+def test_a_mapping_shorter_than_the_prices_is_skipped(tmp_path, monkeypatch):
+    monkeypatch.setattr(resolutions, "select_token_ids", lambda market: (["tok-1-yes"], "clobTokenIds", None))
+    row, skip = resolutions.classify_market(_closed(1), NOW, TS)
+    assert row is None and skip == "token_winner_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("name", "row"),
+    [
+        ("repeated_token", _stored(tokens=["tok-1-yes", "tok-1-yes"])),
+        ("empty_token", _stored(tokens=["tok-1-yes", ""])),
+        ("padded_token", _stored(tokens=["tok-1-yes", " tok-1-no "])),
+        ("short_mapping", _stored(tokens=["tok-1-yes"])),
+        ("not_a_list", _stored(tokens="tok-1-yes")),
+        ("winner_mismatch", _stored(tokens=["tok-1-no", "tok-1-yes"])),
+    ],
+)
+def test_a_stored_row_with_an_unusable_mapping_is_exit_3(tmp_path, capsys, name, row):
+    path = tmp_path / "resolutions.jsonl"
+    path.write_bytes(_line(row))
+    payload = path.read_bytes()
+    calls: list[str] = []
+    code, _, _rows = _run(
+        tmp_path,
+        [_closed(1)],
+        resolutions_path=path,
+        getter=lambda url: calls.append(url) or {"markets": [], "next_cursor": ""},
+    )
+    assert code == resolutions.EXIT_INCOMPLETE == 3
+    assert calls == [] and path.read_bytes() == payload
+    assert "history unusable" in capsys.readouterr().err, name
+
+
+def test_a_legacy_seven_field_row_is_still_read_and_kept_byte_for_byte(tmp_path):
+    path = tmp_path / "resolutions.jsonl"
+    legacy = _legacy_stored()
+    before = _write_history(path, [legacy])
+    code, _, rows = _run(tmp_path, [_closed(1)], resolutions_path=path)
+    assert code == resolutions.EXIT_OK and len(rows) == 2
+    assert rows[0] == legacy and rows[1]["outcome_token_ids"] == ["tok-1-yes", "tok-1-no"]
+    assert path.read_bytes()[: len(before)] == before
+
+
+def test_a_conflicting_mapping_refuses_the_upgrade_by_name(tmp_path, capsys):
+    path = tmp_path / "resolutions.jsonl"
+    before = _write_history(path, [_stored(tokens=["tok-1-yes", "other-no"])])
+    code, _, rows = _run(tmp_path, [_closed(1)], resolutions_path=path)
+    assert code == resolutions.EXIT_OK and len(rows) == 1  # no silent rewrite of the stored mapping
+    assert path.read_bytes() == before
+    assert "upgrade_token_mapping_conflict:1" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
