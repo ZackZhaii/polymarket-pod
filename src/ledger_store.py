@@ -42,6 +42,17 @@ nothing more. All of this is tightening only and fails closed. No orders, keys o
     ``booked_fee_usd(ledger_fee(...))`` recomputed from the row's own fee_rate, prices, notional and
     shares (src/fees.py, Task AE). A missing, non-finite or mismatching value is a problem.
     This runs on every load and on the candidate ledger before and after each write.
+
+(d) Risk-control fields (issue #68)
+    A modern fill (one with a ``fill_id``) must carry its risk-control fields exactly:
+    ``hypothetical`` and ``counts_toward_risk`` both present and JSON booleans, and only the two
+    legal combinations — a real fill (false/true) or a hypothetical fill (true/false); and
+    ``risk_decision`` must be the string ``allow`` (a fill is only ever booked on an allow).
+    A string like ``'false'``, a number, null or a missing key is never coerced into a valid value:
+    such a row is an integrity problem and is rejected before it is replayed into cash, positions
+    or anything else (the truthy string ``'false'`` used to drop a fill from every risk total while
+    its own conservation snapshot still verified). ``book`` refuses such a new row before it is
+    applied or written. Legacy rows (no ``fill_id``) predate these fields and keep their old meaning.
 """
 from __future__ import annotations
 
@@ -86,6 +97,35 @@ class LedgerRead:
 def counts(row: dict[str, Any]) -> bool:
     """A row that counts toward risk: not hypothetical and counts_toward_risk is not False."""
     return not row.get("hypothetical") and row.get("counts_toward_risk") is not False
+
+
+def control_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
+    """Issue #68: strict types for a modern fill's risk-control fields. Never coerces anything.
+
+    Both ``hypothetical`` and ``counts_toward_risk`` must be present and JSON booleans (a string,
+    a number, null or a missing key is a problem, never a valid value); the only legal combinations
+    are a real fill (hypothetical false / counts_toward_risk true) and a hypothetical fill
+    (true / false). ``risk_decision`` must be the string ``allow``. Call for modern rows only: a
+    legacy row (no ``fill_id``) predates these fields and keeps its old meaning (issue #68
+    acceptance: the legacy compatibility rules stay as they are).
+    """
+    problems: list[str] = []
+    values: dict[str, bool] = {}
+    for name in ("hypothetical", "counts_toward_risk"):
+        if name not in row:
+            problems.append(f"missing_{name}:{fill_id}")
+        elif not isinstance(row[name], bool):
+            problems.append(f"invalid_{name}:{fill_id}")
+        else:
+            values[name] = row[name]
+    if ("hypothetical" in values and "counts_toward_risk" in values
+            and values["hypothetical"] == values["counts_toward_risk"]):
+        problems.append(f"inconsistent_control_fields:{fill_id}")
+    if "risk_decision" not in row:
+        problems.append(f"missing_risk_decision:{fill_id}")
+    elif row["risk_decision"] != "allow":
+        problems.append(f"invalid_risk_decision:{fill_id}")
+    return problems
 
 
 def leg_key(market: object, token_id: object) -> tuple[str, str]:
@@ -235,8 +275,16 @@ def _fee_problems(row: dict[str, Any], fill_id: str) -> list[str]:
 def replay(rows: list[dict[str, Any]], ids: list[str]) -> tuple[float, dict[tuple[str, str], dict[str, float]], list[str]]:
     """Replay counted rows from PAPER_EQUITY_USD; returns (cash, legs, conservation problems).
 
-    Call only after non_finite_ledger_rows(rows) is empty.
+    Call only after non_finite_ledger_rows(rows) is empty. Issue #68: a modern row whose
+    risk-control fields are not provably valid is reported and nothing is replayed (the same
+    fail-closed rule as non-finite numbers).
     """
+    control: list[str] = []
+    for row, fill_id in zip(rows, ids):
+        if FILL_ID_FIELD in row:
+            control.extend(control_field_problems(row, fill_id))
+    if control:
+        return PAPER_EQUITY_USD, {}, control
     cash = PAPER_EQUITY_USD
     legs: dict[tuple[str, str], dict[str, float]] = {}
     problems: list[str] = []
@@ -260,7 +308,10 @@ def replay(rows: list[dict[str, Any]], ids: list[str]) -> tuple[float, dict[tupl
 
 
 def verify(read: LedgerRead) -> list[str]:
-    """Every integrity problem of a parsed ledger: parse, ids, Task U numbers, conservation."""
+    """Every integrity problem of a parsed ledger: parse, ids, Task U numbers, conservation.
+
+    Issue #68: every modern row's risk-control fields are checked before that row is replayed.
+    """
     problems = list(read.problems)
     bad = non_finite_ledger_rows(read.rows)
     if bad:
@@ -331,6 +382,10 @@ def book(path: Path, fill: dict[str, Any]) -> dict[str, Any]:
     row = dict(fill)
     if FILL_ID_FIELD not in row:
         row = {FILL_ID_FIELD: new_fill_id(), **row}
+    control = control_field_problems(row, row[FILL_ID_FIELD])  # issue #68
+    if control:
+        # Refused before the new row is replayed or written: the old ledger bytes stand.
+        raise LedgerIntegrityError(control)
     cash, legs, _ = replay(current.rows, current.ids)
     if counts(row):
         if non_finite_ledger_rows([row]):

@@ -107,6 +107,9 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     Task AF: rows come from the strict ledger reader, deduped by fill_id. Any integrity problem
     (parse, ids, Task U numbers, conservation) is listed in ledger_problems and gives the same
     invalid state as Task U, so RiskGate vetoes invalid_risk_state and nothing more is booked.
+    Issue #68: a modern fill whose risk-control fields (hypothetical, counts_toward_risk,
+    risk_decision) are not exactly valid is an integrity problem too, rejected before it is
+    replayed into cash, positions or the daily loss.
     """
     _, ledger = ledger_store.read_ledger(PAPER_PATH)
     rows = ledger.rows
