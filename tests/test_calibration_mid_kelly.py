@@ -20,12 +20,13 @@ import pytest
 
 from src import calibration as cal
 from src import calibration_ids as ci
-from src import intent_builder, paper_ledger, podlib
+from src import paper_ledger
 from src.podlib import load_risk, read_jsonl
 from src.risk_gate import NUMERIC_INTENT_FIELDS, evaluate
 from tests.test_calibration import build, fill, forecast, resolution, world
 from tests.test_calibration_ids import ROOT, STATE, _ok_intent, paths  # noqa: F401 - fixture
 from tests.test_intent_builder import build as build_oi
+from tests.test_intent_builder import fresh_intent
 
 TS = "2026-10-09T12:00:00Z"
 NEW = ("kelly_frac_raw", "fill_context")
@@ -41,8 +42,9 @@ def test_the_contexts():
 
 def test_the_intent_builder_path_is_stamped_and_records_both_kelly_values(paths):
     oi = build_oi().intent
-    intent = dataclasses.replace(intent_builder.to_risk_intent(oi), book_ts=podlib.utc_now(),
-                                 end_date="2027-01-01T00:00:00Z")
+    # Issue #76: one consistent clock stamps book_ts and the intent window (fresh_intent), so the
+    # commit at the real clock sees a fresh, unexpired intent instead of a 2026-09 book with one.
+    intent = fresh_intent(oi, end_date="2027-01-01T00:00:00Z")
     assert intent.fill_context == ci.FILL_CONTEXT_INTENT_BUILDER
     result = paper_ledger.commit_if_allowed(intent, load_risk())
     fill_row = result["fill"]
