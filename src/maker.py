@@ -4,6 +4,15 @@ Task AL (Sentinel design gap 1): no quote while a halt covers the market (market
 scope, a bad halt state file or logs/HALT). The halt is checked again after the append; if one
 landed in between, the Maker cancels its own quote atomically and refuses, so a Sentinel cancel
 can never be undone by a racing quote.
+
+Issue #125 (Task BN): no quote without a usable book for the quoted leg. The latest recorded book row
+for (market, token_id) (by the recorder's ts, book_staleness.latest_by_time) must exist and its exchange
+book_ts must pass book_staleness.book_age_problem at MAX_BOOK_AGE_S (the RiskGate / Sentinel rule, no new
+threshold); a missing, unreadable, future-dated or stale book refuses the quote (QuoteRefused, with the
+reason). Books come from ``books_path`` (default data/books.jsonl) or, with ``recording_dir``, from that M1
+run's rotated book files; then the market must also be in the run's manifest (paper_cycle.recording_markets:
+a missing / bad / empty manifest refuses every quote, an unlisted market is ``not_recorded``). Nothing is
+persisted for this; the scope is read from the manifest the run already writes.
 """
 from __future__ import annotations
 
@@ -11,7 +20,13 @@ import math
 from pathlib import Path
 
 from src import halt_store, sentinel
+from src.book_staleness import INVALID_BOOK_TS, MISSING_BOOK_TS, book_age_problem, latest_by_time
 from src.podlib import PAPER_EQUITY_USD, QUOTES_PATH, append_jsonl, bus, utc_now
+from src.podlib import BOOKS_PATH, read_jsonl
+from src.thresholds import MAX_BOOK_AGE_S
+
+MISSING_BOOK = "missing_book"  # no recorded book row for the quoted leg (same word as paper_cycle)
+BOOKS_UNREADABLE = "books_unreadable"
 
 
 class HaltActive(RuntimeError):
@@ -20,6 +35,45 @@ class HaltActive(RuntimeError):
     def __init__(self, market: str, reasons: list[str]) -> None:
         self.reasons = reasons
         super().__init__(f"halt active for {market!r}: {', '.join(reasons)}")
+
+
+class QuoteRefused(RuntimeError):
+    """Issue #125: no usable book (or not in the recording's scope) for this leg; no paper quote."""
+
+    def __init__(self, market: str, token_id: str, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"quote refused for {market!r} token {token_id!r}: {reason}")
+
+
+def book_problem(market: str, token_id: str, *, books_path: Path | None = None,
+                 recording_dir: Path | None = None) -> str | None:
+    """Issue #125: None when the leg's latest recorded book is fresh, else why the quote is refused."""
+    try:
+        if recording_dir is not None:
+            from src import paper_cycle  # local: paper_cycle is the heavier module
+
+            recorded, problem = paper_cycle.recording_markets(recording_dir)
+            if problem is not None:
+                return problem
+            if market not in recorded:
+                return paper_cycle.NOT_RECORDED
+            rows, problem = paper_cycle.read_books(Path(recording_dir), recording_dir)
+            if problem is not None:
+                return problem
+        else:
+            rows = read_jsonl(books_path if books_path is not None else BOOKS_PATH)
+    except Exception:  # noqa: BLE001 - books that cannot be read are no book (fail closed)
+        return BOOKS_UNREADABLE
+    leg = (str(market), str(token_id))
+    chosen, _ = latest_by_time(
+        rows, lambda row: "leg" if (str(row.get("market_id") or ""), str(row.get("token_id") or "")) == leg else None)
+    book = chosen.get("leg")
+    if book is None or not market or not token_id:
+        return MISSING_BOOK
+    if "book_ts_problem" in book and book["book_ts_problem"] is not None:
+        recorded_problem = book["book_ts_problem"]
+        return recorded_problem if recorded_problem in (MISSING_BOOK_TS, INVALID_BOOK_TS) else INVALID_BOOK_TS
+    return book_age_problem(book.get("book_ts"), None, MAX_BOOK_AGE_S)
 
 
 def quote(
@@ -31,6 +85,8 @@ def quote(
     size: float,
     bus_path: Path | None = None,
     quotes_path: Path | None = None,
+    books_path: Path | None = None,
+    recording_dir: Path | None = None,
 ) -> dict:
     if side not in {"buy", "sell"}:
         raise ValueError("side must be one paper leg")
@@ -48,6 +104,9 @@ def quote(
     notional = price * size
     if notional > PAPER_EQUITY_USD * 0.01 + 1e-9:
         raise ValueError("quote exceeds 1% clip")
+    refused = book_problem(market, token_id, books_path=books_path, recording_dir=recording_dir)
+    if refused is not None:
+        raise QuoteRefused(market, token_id, refused)  # Issue #125: fail closed, nothing written
     row = {
         "ts": utc_now(),
         "market": market,

@@ -22,7 +22,7 @@ def _write(path, rows):
 
 
 @pytest.fixture()
-def paths(tmp_path):
+def paths(tmp_path, fresh_book):
     paths = {name: tmp_path / f"{name}.jsonl" for name in ("markets", "books", "bus", "quotes")}
     paths["state"] = tmp_path / "state" / "sentinel_stale.json"
     _write(paths["markets"], [
@@ -32,6 +32,7 @@ def paths(tmp_path):
     # Task AL gap 10: a market with no book row is now a stale check (test_markets_without_any_book_*
     # adds "unbooked" to markets.jsonl itself); its paper quote stays here as a bystander.
     for market, token in (("fresh", "f1"), ("stale", "s1"), ("unbooked", "u1")):
+        fresh_book(market, token)  # Issue #125: the Maker quotes only a leg with a fresh book
         maker.quote(market=market, token_id=token, side="buy", price=0.40, size=5,
                     bus_path=paths["bus"], quotes_path=paths["quotes"])
     return paths
