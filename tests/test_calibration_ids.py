@@ -104,9 +104,11 @@ def test_a_legacy_call_is_flagged_not_filled_in(paths):
                                            "missing_token_id"]
     assert row["token_id"] is None and row["outcome_index"] is None and row["tags"] is None
     payload = message["payload"]
-    # absent, so intent_builder keeps its legacy outcome-0 reading of the signal
+    # absent; Issue #105: intent_builder no longer reads that as outcome 0, the signal is rejected
     assert not {"outcome_index", "token_id", "condition_id", "p_low", "p_high", "outcome"} & set(payload)
-    assert intent_builder.signal_from_bus(message).outcome_index == 0
+    signal = intent_builder.signal_from_bus(message)
+    assert signal.outcome_index is None and signal.token_id is None
+    assert intent_builder.outcome_index_problems(signal) == ["missing_outcome_index", "missing_token_id"]
 
 
 def test_the_signal_never_goes_out_unsealed(paths):
