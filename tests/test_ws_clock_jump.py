@@ -16,7 +16,9 @@ import pytest
 from src import m1_report
 from src import ws_recorder as w
 from src.thresholds import M1_MAX_RECONNECTS, WS_PING_INTERVAL_S, WS_PONG_TIMEOUT_S
-from tests.test_ws_recorder import A, TS, T0, ListSink, _book
+from tests.test_ws_recorder import A, TS, T0, ListSink, _book, _trade
+
+TRADE_EVERY_S = 20.0  # Task BI: a live market's business frames (a quiet one: under the 38.7 s healthy max)
 
 WAKE_BOUND_S = 30.0  # Poly指挥: a post-wake dead connection must be replaced within 30 s
 
@@ -54,6 +56,7 @@ class SuspendConnection:
         self.log = log
         self.dead = False
         self.pending: list[str] = []
+        self.next_trade = clocks.t + TRADE_EVERY_S
 
     def send(self, text):
         self.sent.append((self.clocks.t, text))
@@ -83,6 +86,10 @@ class SuspendConnection:
                 return None
             self.clocks.t += 0.01
             return step if isinstance(step, str) else json.dumps(step)
+        if not self.dead and self.next_trade <= self.clocks.t + timeout:  # live market data keeps coming
+            self.clocks.t = max(self.clocks.t, self.next_trade)
+            self.next_trade += TRADE_EVERY_S
+            return json.dumps(_trade(ts=T0 + int(self.clocks.t * 1000)))
         self.clocks.t += timeout
         return None
 
