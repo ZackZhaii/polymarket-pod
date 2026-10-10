@@ -152,10 +152,10 @@
       "Endgame>RiskGate:signal": 1,
       "Executor>Sentinel:fill": 2,
       "Executor>Sentinel:halt": 1,
-      "NewsForecaster>RiskGate:signal": 24,
+      "NewsForecaster>RiskGate:signal": 25,
       "Operator>Sentinel:resume": 2,
       "RiskGate>Executor:signal": 3,
-      "RiskGate>Executor:veto": 22,
+      "RiskGate>Executor:veto": 23,
       "Scanner>BookWatcher:signal": 7,
       "Sentinel>Executor:halt": 3
     },
@@ -245,7 +245,7 @@
     },
     "forecast_problems": [],
     "forecast_rows": 9,
-    "news_signals": 24,
+    "news_signals": 25,
     "unsealed_signals": 0
   },
   "clock": {
@@ -429,9 +429,9 @@
       "reasons": [],
       "state": {
         "daily_fees_usd": 0.0,
-        "daily_loss_usd": 29.0,
+        "daily_loss_usd": 19.0,
         "daily_realized_gain_usd": 0.0,
-        "daily_realized_loss_usd": 29.0,
+        "daily_realized_loss_usd": 19.0,
         "ledger_problems": []
       },
       "via": "evaluate"
@@ -480,6 +480,25 @@
         "ledger_problems": [
           "daily_loss_invalid_ts:e2e-dl-f-01"
         ]
+      },
+      "via": "commit_if_allowed"
+    },
+    "g_projected_over_cap": {
+      "allow": false,
+      "booked_rows": 0,
+      "expect": "veto_projected",
+      "global_halts": [],
+      "halted": false,
+      "ledger_unchanged": true,
+      "reasons": [
+        "max_daily_loss_projected"
+      ],
+      "state": {
+        "daily_fees_usd": 0.0,
+        "daily_loss_usd": 25.0,
+        "daily_realized_gain_usd": 0.0,
+        "daily_realized_loss_usd": 25.0,
+        "ledger_problems": []
       },
       "via": "commit_if_allowed"
     }
@@ -962,7 +981,7 @@
   },
   "invariants": {
     "booked_fill_ids": 2,
-    "live_checks": 41,
+    "live_checks": 42,
     "live_enabled": [
       "False"
     ],
