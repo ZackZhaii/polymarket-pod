@@ -380,3 +380,8 @@ def test_module_has_no_network_or_key_imports():
     assert not mods & {"urllib.request", "http.client", "socket", "ssl", "requests", "src.scanner", "src.book",
                        "src.public_get"}, mods
     assert math.isfinite(FORECAST_MAX_ASOF_LAG_S)
+
+
+def test_the_price_domain_comes_from_the_pinned_book_endpoint():
+    assert fi._PRICE_DOMAIN == "polymarket.com"
+    assert fi._leaks_prices("https://docs.polymarket.com/x") and not fi._leaks_prices("https://notpolymarket.com/x")

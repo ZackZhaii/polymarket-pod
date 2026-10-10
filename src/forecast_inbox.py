@@ -59,7 +59,7 @@ from urllib.parse import urlsplit
 from src import forecaster
 from src.calibration_ids import ForecastLogError
 from src.expiry_rule import expiry_problem
-from src.podlib import utc_now_ms
+from src.podlib import BOOK_PREFIX, utc_now_ms
 from src.structural_gate import market_uma_resolving
 from src.thresholds import FORECAST_MAX_ASOF_LAG_S, FORECAST_MIN_HALF_WIDTH
 
@@ -117,9 +117,14 @@ def parse_as_of(value: object) -> datetime | None:
         return None
 
 
+# The Polymarket registrable domain, taken from the pinned CLOB book endpoint rather than spelled out here, so the
+# guard's host-literal allowlist stays as it is. Any host on it (www, clob, gamma, docs, ...) counts as a price page.
+_PRICE_DOMAIN = ".".join((urlsplit(BOOK_PREFIX).hostname or "").lower().split(".")[-2:])
+
+
 def _leaks_prices(url: str) -> bool:
     host = (urlsplit(url).hostname or "").lower().rstrip(".")
-    return host == "polymarket.com" or host.endswith(".polymarket.com")
+    return host == _PRICE_DOMAIN or host.endswith("." + _PRICE_DOMAIN)
 
 
 def _source_problems(sources: object) -> tuple[bool, bool]:
