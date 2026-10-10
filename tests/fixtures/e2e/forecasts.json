@@ -85,6 +85,6 @@
   "fee_rate": 0.0,
   "assumed_slippage": 0.005,
   "strategy": "news-forecaster",
-  "note": "e2e fixture forecast (alpha-again)"
+  "note": "e2e fixture forecast (alpha-allow)"
  }
 ]

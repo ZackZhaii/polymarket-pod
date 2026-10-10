@@ -18,6 +18,10 @@ Rules (Poly反思 M3 design section 1.5, docs/M3_CALIBRATION.md "Step 2"):
 - A row that lacks an id the join needs is booked as before (no trading change) but carries
   ``calibration_problems`` (``missing_<field>`` ...). The calibration join must drop such rows and
   count them; it never repairs them.
+- ``append_forecast`` seals a forecast_id once (issue #77): a row whose id is already on file with other
+  content (category, note, end_date, ...) is refused with ``ForecastLogError`` and nothing is written,
+  instead of reporting a seal that did not happen. A damaged log refuses appends too; nothing is
+  repaired.
 """
 from __future__ import annotations
 
@@ -202,19 +206,80 @@ def forecast_problems(row: Mapping[str, Any]) -> list[str]:
     return sorted(set(problems))
 
 
+def _reject_constant(name: str) -> float:
+    """``json.loads`` hook: NaN / Infinity are not exact JSON (the same rule the write path enforces)."""
+    raise ValueError(f"non-finite JSON constant {name}")
+
+
+def _canonical(row: Mapping[str, Any]) -> str:
+    """One row as canonical JSON, for comparing content instead of bytes.
+
+    Sorting keys and dropping whitespace make formatting differences (key order, spaces) invisible, so
+    they never append a duplicate. Types stay apart: ``True`` dumps as ``true`` and ``1`` as ``1``, so
+    they are never read as the same content. Raises ValueError/TypeError on nan/inf or unexpected keys.
+    """
+    return json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _sealed_rows(data: bytes, name: str) -> list[tuple[int, str, str]]:
+    """(line number, forecast_id, canonical content) of every complete row already on file.
+
+    The whole file is read strictly (the reader, ``src.calibration.read_strict_jsonl``, is just as
+    strict): not UTF-8, a blank line, a line that is not exact JSON or not an object, a row without a
+    usable forecast_id, or a value JSON cannot re-encode exactly is refused (ForecastLogError) instead
+    of being skipped, so damaged bytes never keep taking new rows.
+    """
+    if not data:
+        return []
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ForecastLogError(f"{name} is not UTF-8: {exc}") from exc
+    rows: list[tuple[int, str, str]] = []
+    for number, line in enumerate(text.split("\n")[:-1], 1):
+        if not line.strip():
+            raise ForecastLogError(f"{name}:{number}: blank line; refusing to append")
+        try:
+            stored = json.loads(line, parse_constant=_reject_constant)
+        except ValueError as exc:
+            raise ForecastLogError(f"{name}:{number}: not JSON ({exc}); refusing to append") from exc
+        if not isinstance(stored, dict):
+            raise ForecastLogError(f"{name}:{number}: not a JSON object; refusing to append")
+        forecast_id = stored.get("forecast_id")
+        if not isinstance(forecast_id, str) or not forecast_id.strip():
+            raise ForecastLogError(f"{name}:{number}: no usable forecast_id; refusing to append")
+        try:
+            rows.append((number, forecast_id, _canonical(stored)))
+        except (TypeError, ValueError) as exc:
+            raise ForecastLogError(f"{name}:{number}: not exact JSON ({exc}); refusing to append") from exc
+    return rows
+
+
 def append_forecast(path: Path, row: Mapping[str, Any]) -> None:
     """Append one complete forecast row atomically (one O_APPEND write of the whole line, then fsync).
 
     Fails closed (ForecastLogError, nothing written): unknown or missing keys, a value JSON cannot
-    encode exactly (nan/inf), an existing file whose last byte is not a newline (torn tail), or an
-    OS error. A row with the same forecast_id is not written twice.
+    encode exactly (nan/inf), an existing file that is damaged (not UTF-8, a blank line, a complete
+    line that is not a JSON object, a row without a usable forecast_id, a torn last line), a
+    forecast_id already sealed with other content, or an OS error.
+
+    A row is not written twice, but the decision reads the rows, never the bytes: the top-level
+    forecast_id of every complete line is parsed and its canonical JSON compared with this row's, so
+    key order or whitespace on file does not append a duplicate while ``true`` and ``1`` stay different
+    content. Every line is read before that is decided, so a differing row later in the file is
+    refused (and nothing is written) even when an identical row comes first.
     """
     if tuple(row) != FORECAST_ROW_FIELDS:
         raise ForecastLogError("forecast row keys differ from FORECAST_ROW_FIELDS")
     try:
-        line = json.dumps(dict(row), ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n"
+        exact = dict(row)
+        line = json.dumps(exact, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n"
+        canonical = _canonical(exact)
     except (TypeError, ValueError) as exc:
         raise ForecastLogError(f"forecast row is not exact JSON: {exc}") from exc
+    forecast_id = exact["forecast_id"]
+    if not isinstance(forecast_id, str) or not forecast_id.strip():
+        raise ForecastLogError("forecast row has no usable forecast_id")
     path = Path(path)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -222,8 +287,15 @@ def append_forecast(path: Path, row: Mapping[str, Any]) -> None:
             data = path.read_bytes()
             if data and not data.endswith(b"\n"):
                 raise ForecastLogError(f"{path.name} has a torn last line; refusing to append")
-            needle = ('"forecast_id":' + json.dumps(row["forecast_id"])).encode("utf-8")
-            if needle in data:
+            sealed = False
+            for number, stored_id, stored in _sealed_rows(data, path.name):
+                if stored_id != forecast_id:
+                    continue
+                if stored != canonical:
+                    raise ForecastLogError(f"{path.name}:{number}: forecast_id {forecast_id} is already "
+                                           "sealed with different content; refusing to append")
+                sealed = True  # keep reading: a later row with this id may still conflict
+            if sealed:
                 return  # the same sealed forecast is already on file (idempotent)
         payload = line.encode("utf-8")
         fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
