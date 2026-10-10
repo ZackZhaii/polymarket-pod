@@ -651,15 +651,20 @@ def blocked(draft: Mapping[str, Any], existing: Sequence[Mapping[str, Any]], now
 
 
 def _append_line(path: Path, row: Mapping[str, Any]) -> None:
+    """One O_APPEND write + fsync under ``<file>.lock`` (issue #162). Raises OSError (a lock not taken
+    included): nothing is written."""
+    from src.podlib import append_lock
+
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = (json.dumps(row, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
-    try:
-        if os.write(fd, payload) != len(payload):
-            raise OSError("short write")
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    with append_lock(path):
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+        try:
+            if os.write(fd, payload) != len(payload):
+                raise OSError("short write")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 def summary(row: Mapping[str, Any]) -> str:

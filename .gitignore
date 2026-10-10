@@ -10,3 +10,5 @@ venv/
 .pytest_cache/
 reports/calibration/
 runs/
+# issue #162: per-file append mutexes beside multi-process JSONL files (never committed)
+*.jsonl.lock

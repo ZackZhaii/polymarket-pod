@@ -256,7 +256,10 @@ def _sealed_rows(data: bytes, name: str) -> list[tuple[int, str, str]]:
 
 
 def append_forecast(path: Path, row: Mapping[str, Any]) -> None:
-    """Append one complete forecast row atomically (one O_APPEND write of the whole line, then fsync).
+    """Append one complete forecast row: one O_APPEND write of the whole line, then fsync. Issue #162: a
+    single write call is not atomic across processes on every OS, and the duplicate check reads before it
+    appends, so the caller holds the file's ``<file>.lock`` (forecaster.log_forecast does, through
+    podlib.append_lock); this module stays stdlib-only.
 
     Fails closed (ForecastLogError, nothing written): unknown or missing keys, a value JSON cannot
     encode exactly (nan/inf), an existing file that is damaged (not UTF-8, a blank line, a complete
