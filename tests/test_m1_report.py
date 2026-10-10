@@ -453,7 +453,7 @@ def test_percentile_rounds_the_rank_up():
     assert rep.percentile(list(range(1, 11)), 99) == 10 and rep.percentile(list(range(1, 11)), 91) == 10
 
 
-# --- Task BT: an unfinished run's observed span and the 24 h duration note ---------------------------
+# --- Task BT: an unfinished run's observed span and the run-duration note -----------------------------
 
 
 def _killed(tmp_path, **extra):
@@ -506,12 +506,18 @@ def test_a_completed_run_has_no_observed_span_section(tmp_path):
 
 
 def test_a_rehearsal_shorter_than_m1_min_run_s_says_run_duration_cannot_pass(tmp_path):
-    from src.thresholds import M1_MIN_RUN_S
-    assert M1_MIN_RUN_S == 86340.0  # 24 h minus 60 s: unchanged by Task BT
-    report = rep.build_report(write_run(tmp_path, good_streams(elapsed=21600),
-                                        manifest(elapsed=21600, max_runtime_s=21600.0)))
+    from src.thresholds import M1_MIN_RUN_S, M1_RUN_TARGET_S
+    assert M1_MIN_RUN_S == 21540.0  # 6 h minus 60 s (KEY-approved 2026-10-11 家伟批准; was 86340)
+    report = rep.build_report(write_run(tmp_path, good_streams(elapsed=3600),
+                                        manifest(elapsed=3600, max_runtime_s=3600.0)))
     assert "run_duration" in report["failed"]
     assert any("run_duration cannot pass by design" in item for item in report["warnings"])
     assert "run_duration cannot pass by design" in rep.render_markdown(report)
-    full = rep.build_report(write_run(tmp_path, good_streams(), name="full"))
-    assert not any("cannot pass by design" in item for item in full["warnings"])
+    # the 6 h acceptance run itself: no such warning, and run_duration passes on its elapsed time
+    six = rep.build_report(write_run(tmp_path, good_streams(elapsed=21600),
+                                     manifest(elapsed=21600, max_runtime_s=M1_RUN_TARGET_S), name="six"))
+    assert not any("cannot pass by design" in item for item in six["warnings"])
+    assert six["criteria"]["run_duration"]["pass"] is True
+    edge = rep.build_report(write_run(tmp_path, good_streams(elapsed=21600),
+                                      manifest(elapsed=21600, max_runtime_s=M1_MIN_RUN_S - 1), name="edge"))
+    assert any("cannot pass by design" in item for item in edge["warnings"])
