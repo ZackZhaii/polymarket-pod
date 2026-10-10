@@ -111,8 +111,8 @@ def test_every_intent_starts_from_a_newsforecaster_signal(run):
     forecasts = [r for r in run["detail"]["bus"] if r["from"] == "NewsForecaster"]
     # 7 intents, the replay commit, two corrupted-ledger commits, two Task AL halt-consumer commits,
     # four Task AP heartbeat-halt commits (all vetoed), six Task AR daily-loss cases (one each),
-    # one Task AU slippage-floor signal (shared by its cases)
-    assert len(forecasts) == 23
+    # one Task AU slippage-floor signal (shared by its cases), one issue #129 never-started-Sentinel commit
+    assert len(forecasts) == 24
     assert all(r["to"] == "RiskGate" and r["payload"]["order"] is False for r in forecasts)
 
 

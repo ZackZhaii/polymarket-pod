@@ -152,10 +152,10 @@
       "Endgame>RiskGate:signal": 1,
       "Executor>Sentinel:fill": 3,
       "Executor>Sentinel:halt": 1,
-      "NewsForecaster>RiskGate:signal": 23,
+      "NewsForecaster>RiskGate:signal": 24,
       "Operator>Sentinel:resume": 2,
       "RiskGate>Executor:signal": 4,
-      "RiskGate>Executor:veto": 20,
+      "RiskGate>Executor:veto": 21,
       "Scanner>BookWatcher:signal": 7,
       "Sentinel>Executor:halt": 3
     },
@@ -271,7 +271,7 @@
     },
     "forecast_problems": [],
     "forecast_rows": 9,
-    "news_signals": 23,
+    "news_signals": 24,
     "unsealed_signals": 0
   },
   "clock": {
@@ -999,7 +999,7 @@
   },
   "invariants": {
     "booked_fill_ids": 3,
-    "live_checks": 40,
+    "live_checks": 41,
     "live_enabled": [
       "False"
     ],
@@ -1376,6 +1376,28 @@
         "write_problem": null
       },
       "same_as_books_file": true
+    },
+    "j_sentinel_never_seen": {
+      "active": [
+        {
+          "market": "",
+          "reason": "sentinel_heartbeat_never_seen",
+          "scope": "global",
+          "source": "halt_store"
+        }
+      ],
+      "after_first_beat": [],
+      "commit": {
+        "allow": false,
+        "ledger_unchanged": true,
+        "reasons": [
+          "sentinel_heartbeat_never_seen"
+        ]
+      },
+      "halt_state_written": false,
+      "reasons": [
+        "sentinel_heartbeat_never_seen"
+      ]
     }
   },
   "slippage_floor": {

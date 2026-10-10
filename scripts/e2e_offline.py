@@ -180,10 +180,12 @@ def offline_sandbox(work: Path, clock: Clock) -> Iterator[dict[str, Any]]:
     real_defaults = {name: Path(getattr(podlib, name)) for name in PATH_NAMES if hasattr(podlib, name)}
     paths = {"bus": work / "bus.jsonl", "paper": work / "paper.jsonl", "quotes": work / "quotes.jsonl",
              "halt": work / "halt" / "halt_state.json", "halt_file": work / "halt" / "HALT",
-             "forecasts": work / "forecasts.jsonl"}
+             "forecasts": work / "forecasts.jsonl", "heartbeat": work / "heartbeat"}
     explicit = {"BUS_PATH": paths["bus"], "PAPER_PATH": paths["paper"], "QUOTES_PATH": paths["quotes"],
                 "HALT_STATE_PATH": paths["halt"], "HALT_FALLBACK_PATH": paths["halt_file"],
-                "FORECASTS_PATH": paths["forecasts"]}
+                "FORECASTS_PATH": paths["forecasts"],
+                # Issue #129: the resident Sentinel's heartbeat lives here (no Sentinel at all is a global halt)
+                "HEARTBEAT_DIR": paths["heartbeat"]}
     patches: list[tuple[object, str, object]] = []
     for module in mods.values():
         for name in PATH_NAMES:
@@ -202,6 +204,7 @@ def offline_sandbox(work: Path, clock: Clock) -> Iterator[dict[str, Any]]:
     ]
     before = {name: _stat(path) for name, path in real_defaults.items()}
     with _patched(patches):
+        resident_sentinel(paths["heartbeat"])  # issue #129: the gate starts the Sentinel first, as in a real run
         yield {**paths, "attempts": attempts, "unused": unused, "real_defaults": real_defaults,
                "defaults_before": before}
 
@@ -920,9 +923,27 @@ def run_halt_scenarios(plan: dict[str, Any], work: Path, commit, paper_ledger, p
     return out
 
 
+def resident_sentinel(folder: Path) -> None:
+    """Issue #129: a fresh, running resident-Sentinel heartbeat at the (frozen) clock in ``folder``.
+
+    The gate provides it the way a real run does (Sentinel first); nothing in src/ is switched off.
+    """
+    from src import heartbeat
+    now = heartbeat.datetime.now(timezone.utc)
+    record = {"proc": "sentinel", "pid": 4242, "host": "e2e", "started_at": heartbeat.utc_stamp(now),
+              "ts": heartbeat.utc_stamp(now), "seq": 1, "git_sha": None, "risk_sha256": PINNED_RISK_SHA256,
+              "live_enabled": False, "mode": "paper", "state": "running", "exit_code": None, "progress": {}}
+    problem = heartbeat.write_record(heartbeat.beat_path("sentinel", folder), record)
+    if problem is not None:
+        raise RuntimeError(f"e2e could not write the resident Sentinel heartbeat: {problem}")
+
+
 @contextmanager
-def heartbeat_scope(folder: Path, quotes_start: bytes) -> Iterator[dict[str, Path]]:
-    """Task AP: halt_scope plus this scenario's own heartbeat folder, alerts and tick state."""
+def heartbeat_scope(folder: Path, quotes_start: bytes, *, sentinel: bool = True) -> Iterator[dict[str, Path]]:
+    """Task AP: halt_scope plus this scenario's own heartbeat folder, alerts and tick state.
+
+    Issue #129: the folder starts with a fresh resident-Sentinel heartbeat unless ``sentinel=False``.
+    """
     mods = _modules()
     with halt_scope(folder, quotes_start) as paths:
         extra = {"heartbeat": folder / "heartbeat", "alerts": folder / "alerts.jsonl",
@@ -930,6 +951,8 @@ def heartbeat_scope(folder: Path, quotes_start: bytes) -> Iterator[dict[str, Pat
         with _patched([(mods["heartbeat"], "HEARTBEAT_DIR", extra["heartbeat"]),
                        (mods["sentinel_tick"], "ALERTS_PATH", extra["alerts"]),
                        (mods["sentinel_tick"], "TICK_STATE_PATH", extra["tick_state"])]):
+            if sentinel:
+                resident_sentinel(extra["heartbeat"])
             yield {**paths, **extra}
 
 
@@ -1104,6 +1127,19 @@ def run_heartbeat_scenarios(plan: dict[str, Any], work: Path, commit, paper_ledg
         out["i_recording_dir"] = {"same_as_books_file": _cycle(from_dir) == _cycle(from_file),
                                   "from_dir": _cycle(from_dir), "empty_dir": _cycle(from_empty),
                                   "empty_problem": from_empty.get("books_problem")}
+
+    # (j) issue #129: the resident Sentinel never started here (no heartbeat, no .seen marker): every
+    # consumer is blocked by a global halt that is not stored, and the first fresh beat ends it
+    folder = work / "hb_sentinel_never_seen"
+    with heartbeat_scope(folder, quotes_start, sentinel=False) as scope:
+        never = halt_store.halt_problems(plan["storm_market"])
+        active = _halt_view(halt_store)
+        commit_j = vetoed(folder)
+        stored = scope["halt"].exists()
+        resident_sentinel(scope["heartbeat"])
+        out["j_sentinel_never_seen"] = {"reasons": never, "active": active, "commit": commit_j,
+                                        "halt_state_written": stored,
+                                        "after_first_beat": halt_store.halt_problems(plan["storm_market"])}
     paper_ledger.PAPER_PATH = work / "paper.jsonl"
     return out
 
@@ -1486,6 +1522,12 @@ def heartbeat_semantic_problems(actual: dict[str, Any]) -> list[str]:
     if d.get("fresh_reasons") != [] or "sentinel_heartbeat_stale" not in global_reasons(d) or not d.get("lost_reasons"):
         out.append("(d) a lost Sentinel was not a global halt for the consumers (or a fresh one was)")
     blocked(d, "(d)")
+    j = section.get("j_sentinel_never_seen") or {}
+    if j.get("reasons") != ["sentinel_heartbeat_never_seen"] or "sentinel_heartbeat_never_seen" not in global_reasons(j):
+        out.append("(j) a Sentinel that never started was not a global halt for the consumers")
+    if j.get("halt_state_written") is not False or j.get("after_first_beat") != []:
+        out.append("(j) the never-started halt was stored, or did not end with the first fresh beat")
+    blocked(j, "(j)")
     e = section.get("e_recorder_storm") or {}
     if "halt_market" not in (e.get("market_reasons") or []) or e.get("other_market_reasons") != []:
         out.append("(e) a gap-resync storm did not halt exactly its market")

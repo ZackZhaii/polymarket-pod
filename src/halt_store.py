@@ -169,13 +169,19 @@ def fallback_active(fallback: Path | None = None) -> bool:
 
 
 SENTINEL_LOST_PREFIX = "sentinel_heartbeat_"
+# Issue #129: no Sentinel heartbeat file and no ``.seen`` marker: the resident Sentinel has never run here.
+SENTINEL_NEVER_SEEN = SENTINEL_LOST_PREFIX + "never_seen"
 
 
 def sentinel_heartbeat_problem() -> str | None:
     """Task AP (design: "Sentinel 失联时 consumer 按 halt"): the halt reason when the resident Sentinel
-    is lost, else None. Only after the Sentinel has beaten once (its ``.seen`` marker): then a missing,
-    unreadable, corrupt, malformed, future-stamped or too-old (SENTINEL_HEARTBEAT_TIMEOUT_S) Sentinel
-    heartbeat, or a Sentinel that finished or crashed, is a global halt. Any error while checking is too.
+    is lost or absent, else None (only a fresh heartbeat of a Sentinel that has not stopped).
+
+    Issue #129: a Sentinel that has never run here (no heartbeat file and no ``.seen`` marker) is
+    ``sentinel_heartbeat_never_seen``, not "nothing to lose": start the Sentinel first. After it has
+    beaten once, a missing (marker but no file), unreadable, corrupt, malformed, future-stamped or
+    too-old (SENTINEL_HEARTBEAT_TIMEOUT_S) heartbeat, or a Sentinel that finished or crashed, is a
+    lost Sentinel. Any error while checking is too. There is no switch that turns this off.
     """
     try:
         from src import heartbeat  # local: heartbeat imports podlib only
@@ -185,7 +191,7 @@ def sentinel_heartbeat_problem() -> str | None:
         if problem is not None:
             return SENTINEL_LOST_PREFIX + problem.replace("heartbeat_", "")
         if record is None:
-            return None  # the Sentinel has never run here: nothing to lose yet
+            return SENTINEL_NEVER_SEEN  # issue #129: never started here is fail closed, not "no halt"
         if record["state"] in (heartbeat.STATE_FINISHED, heartbeat.STATE_CRASHED):
             return SENTINEL_LOST_PREFIX + "stopped"
         age = heartbeat.beat_age_s(record, heartbeat.datetime.now(heartbeat.timezone.utc))
@@ -202,15 +208,21 @@ def active_halts(path: Path | None = None, fallback: Path | None = None) -> list
     Task AP: a lost resident Sentinel (sentinel_heartbeat_problem) is persisted here as a global
     halt from source halt_store, so it too stays until the Operator resumes it (and is recorded
     again at once if the Sentinel is still lost after the resume).
+
+    Issue #129: a Sentinel that has never run here (sentinel_heartbeat_never_seen) is a global halt
+    too, but a synthetic one that is not stored: nothing has been lost yet, so it needs no Operator
+    resume and ends with the Sentinel's first fresh heartbeat. From then on a lost Sentinel is
+    stored as above.
     """
     records, problem = read_state(path)
     lost = sentinel_heartbeat_problem()
-    if lost is not None and problem is None:
+    if lost is not None and lost != SENTINEL_NEVER_SEEN and problem is None:
         record_halt(scope=SCOPE_GLOBAL, reason=lost, source="halt_store", path=path, fallback=fallback)
         records, problem = read_state(path)
     active = [record for record in records if record["active"]]
     if lost is not None and not any(r["scope"] == SCOPE_GLOBAL and r["reason"] == lost for r in active):
-        # the state file could not take it (already a global halt) or the write went to logs/HALT
+        # the state file could not take it (already a global halt), the write went to logs/HALT, or
+        # (issue #129) the Sentinel has never run here, which is never stored
         active.append({"id": SENTINEL_LOST_ID, "scope": SCOPE_GLOBAL, "market": "", "reason": lost,
                        "source": "halt_store", "active": True})
     if problem is not None:
