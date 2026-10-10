@@ -60,6 +60,10 @@ def signal(**kw) -> ib.ProbabilitySignal:
     base = dict(signal_id="sig-1", source="news", market_id="m1", outcome_index=0, p=0.47, signal_ts=NOW_S,
                 note="test forecast")
     base.update(kw)
+    # Issue #105: a news signal must name its token (missing_token_id); default to the outcome's own token.
+    index = base.get("outcome_index")
+    if isinstance(index, int) and not isinstance(index, bool) and index in (0, 1):
+        base.setdefault("token_id", ("t-yes", "t-no")[index])
     return ib.ProbabilitySignal(**base)
 
 
@@ -754,7 +758,9 @@ def test_adapters_from_bus_and_rows():
     row = {"ts": NOW_S, "from": "NewsForecaster", "to": "RiskGate", "type": "signal", "market": "m1",
            "payload": {"model_prob": 0.47, "order": False, "note": "n"}}
     sig = ib.signal_from_bus(row)
-    assert (sig.source, sig.p, sig.outcome_index, sig.signal_ts) == ("news", 0.47, 0, NOW_S)
+    # Issue #105: a legacy row without outcome_index / token_id is not read as outcome 0; it is rejected.
+    assert (sig.source, sig.p, sig.outcome_index, sig.token_id, sig.signal_ts) == ("news", 0.47, None, None, NOW_S)
+    assert {"missing_outcome_index", "missing_token_id"} <= set(build(sig=sig).reasons)
     assert sig.signal_id == ib.signal_id_for(row) and len(sig.signal_id) == 64
     endgame = ib.signal_from_bus({**row, "from": "Endgame", "payload": {"price": 0.985}})
     assert endgame.p is None and "missing_model_prob" in build(sig=endgame).reasons
