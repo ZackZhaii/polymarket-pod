@@ -5,5 +5,5 @@
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "BL (WS recorder telemetry: PING / PONG events, inbound frame counts, disconnect detail, backoff clock jumps; logging only) done by grok-bot. Next by Poly指挥's order: the M2 P0 issues (#128, #125, #133, #130), then the fail-open issues. No live gate."
+  "note": "BL (WS recorder telemetry: PING / PONG events, inbound frame counts, disconnect detail, backoff clock jumps; logging only) done by grok-bot (after BJ, #146, merged). Next by Poly指挥's order: the M2 P0 issues (#128, #125, #133, #130), then the fail-open issues. No live gate."
 }

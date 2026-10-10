@@ -169,14 +169,20 @@ def test_risk_gate_and_ledger_call_the_named_functions():
 def test_buy_edge_pays_the_fee_on_the_effective_price():
     decision = _eval(model_prob=0.70)
     assert decision.edge == pytest.approx(0.70 - 0.405 - 0.02 * 0.405)  # 0.2869 (was 0.287)
-    assert decision.fee_usd == pytest.approx(0.2)  # booked fee unchanged for a buy
+    # issue #104: 24.20 shares fit 10 USD all-in at 0.405 + 0.0081; the fee per share is unchanged
+    assert decision.shares == 24.20
+    assert decision.fee_usd == pytest.approx(24.20 * 0.02 * 0.405)  # = notional * fee_rate, as before
+    assert decision.notional_usd + decision.fee_usd <= 10.0
     assert decision.allow is True
 
 
 def test_sell_books_the_fee_on_the_market_price():
     decision = _eval(side="sell", model_prob=0.30)
     assert decision.edge == pytest.approx(0.395 - 0.30 - 0.02 * 0.40)  # 0.087, unchanged
-    assert decision.fee_usd == pytest.approx(0.2025316456)  # was 0.2
+    # issue #104: 24.81 shares fit 10 USD all-in at 0.395 + 0.008; the fee is still charged on market_price
+    assert decision.shares == 24.81
+    assert decision.fee_usd == pytest.approx(24.81 * 0.02 * 0.40)  # > notional * fee_rate
+    assert decision.fee_usd > decision.notional_usd * 0.02
     assert decision.allow is True
 
 
@@ -228,15 +234,16 @@ def test_ledger_books_the_higher_sell_fee(tmp_path, monkeypatch):
     _ledger(tmp_path, monkeypatch)
     result = paper_ledger.commit_if_allowed(_intent(side="sell", model_prob=0.30, book_ts=utc_now()), load_risk())
     assert result["allow"] is True
-    assert result["fill"]["fee_usd"] == 0.20253165  # was 0.2
+    assert result["fill"]["fee_usd"] == 0.19848  # 24.81 shares * 0.02 * 0.40 (issue #104 sizing)
     assert result["fill"]["edge_formula"] == risk_gate.EDGE_FORMULA_SELL
-    assert paper_ledger.load_state("ae", "t")["daily_loss_usd"] == 0.20253165
+    assert paper_ledger.load_state("ae", "t")["daily_loss_usd"] == 0.19848
 
 
 def test_ledger_buy_fee_is_unchanged(tmp_path, monkeypatch):
     _ledger(tmp_path, monkeypatch)
     result = paper_ledger.commit_if_allowed(_intent(book_ts=utc_now()), load_risk())
-    assert result["fill"]["fee_usd"] == 0.2
+    assert result["fill"]["fee_usd"] == 0.19602  # 24.20 shares * 0.02 * 0.405 (issue #104 sizing)
+    assert result["fill"]["fee_usd"] == round(result["fill"]["notional_usd"] * 0.02, 8)  # rate unchanged
 
 
 def test_ledger_still_fails_closed_on_a_non_finite_fee_row(tmp_path, monkeypatch):

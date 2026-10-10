@@ -801,8 +801,9 @@ def build_order_intent(signal: ProbabilitySignal | None, market: MarketContext, 
 
 
 def to_risk_intent(oi: OrderIntent) -> Intent:
-    """The risk_gate.Intent for this OrderIntent (never hypothetical, no counterparty). Size is not
-    passed: RiskGate books its own 1% clip until a size_usd field exists (KEY, backlog #7).
+    """The risk_gate.Intent for this OrderIntent (never hypothetical, no counterparty). Issue #104: the
+    intent's shares and limit price are passed; RiskGate books at most these shares, and only as many as
+    fit the all-in 1% cap (cost at max(effective, limit) plus fee).
     Issue #76: the intent's own validity window (created_at / expires_at) is passed exactly as
     built, never re-extended; RiskGate re-checks it at its decision clock and vetoes an expired
     or invalid window."""
@@ -842,6 +843,8 @@ def to_risk_intent(oi: OrderIntent) -> Intent:
         # the market's end); RiskGate re-checks it and vetoes once now >= expires_at.
         intent_created_at=oi.created_at,
         intent_expires_at=oi.expires_at,
+        shares=oi.shares,  # issue #104: RiskGate only shrinks this
+        limit_price=oi.limit_price,
     )
 
 

@@ -46,7 +46,9 @@ def test_clean_paper_intent_can_pass_and_risk_file_stays_put():
     decision = evaluate(_intent(), cfg, STATE)
     assert decision.allow is True
     assert decision.reasons == []
-    assert decision.notional_usd == 10.0
+    # issue #104: shares fit the all-in 1% clip (fee-free here): 24.69 * 0.405 <= 10
+    assert decision.shares == 24.69 and decision.notional_usd == pytest.approx(24.69 * 0.405)
+    assert decision.notional_usd + decision.fee_usd <= 10.0
     assert RISK_PATH.read_bytes() == before
     assert b'live_enabled = false' in before
     assert b'mode = "paper"' in before
