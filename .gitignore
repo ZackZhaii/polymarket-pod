@@ -10,3 +10,5 @@ venv/
 .pytest_cache/
 reports/calibration/
 runs/
+# issue #163: loop_claim state mutex (never committed)
+docs/loop/state.json.lock

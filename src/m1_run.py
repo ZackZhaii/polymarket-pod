@@ -54,6 +54,7 @@ import platform
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections import Counter
@@ -315,20 +316,31 @@ def websockets_version() -> str | None:
 
 
 def write_manifest(run_dir: Path, manifest: dict[str, Any]) -> None:
-    """Atomic: temp file in the run dir, fsync, os.replace."""
+    """Atomic: a unique temp file in the run dir (issue #163: never a fixed name two writers could share,
+    nor one a crashed write leaves in the way), fsync, os.replace; the temp file is removed on any failure."""
     path = run_dir / MANIFEST
-    temp = run_dir / f".{MANIFEST}.tmp"
     data = (json.dumps(manifest, ensure_ascii=False, allow_nan=False, indent=2) + "\n").encode("utf-8")
-    with open(temp, "wb") as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temp, path)
+    temp = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", dir=run_dir, prefix=f".{MANIFEST}.", suffix=".tmp",
+                                         delete=False) as handle:
+            temp = handle.name
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+        temp = None
+    finally:
+        if temp is not None:
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
 
 
 class ManifestWriter:
     """Task BT: every manifest.json write goes through one lock (the main path, the progress thread and
-    a console-close handler never interleave on the fixed temp file). ``final`` is set once a finished
+    a console-close handler never interleave). ``final`` is set once a finished
     manifest (status other than running) is on disk."""
 
     def __init__(self, run_dir: Path, manifest: dict[str, Any]) -> None:
