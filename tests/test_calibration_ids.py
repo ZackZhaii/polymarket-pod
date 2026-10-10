@@ -17,7 +17,7 @@ from src.podlib import load_risk, read_jsonl
 from src.risk_gate import Intent, evaluate
 
 ROOT = Path(__file__).resolve().parents[1]
-STATE = {"open_positions": 0, "leg_already_open": False, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
+STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 @pytest.fixture

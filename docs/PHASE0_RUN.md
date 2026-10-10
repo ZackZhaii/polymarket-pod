@@ -150,7 +150,7 @@ quotes, markets, books and Sentinel state; the `/book` getter; a concurrent-writ
 Scenarios: two allows (one fee-free, one with fees), a stale book (veto `stale_book`, no fill), a `NaN` ask from
 the recorder (veto `non_finite_market_price` ...), wash against a fill 2 minutes old (`wash_same_market`), edge
 0.015 (`edge_below_min`), a sixth leg (`max_open_positions`), a duplicate fill replay (deduped, cash and positions
-unchanged, the next fill books once), a ledger torn before the call (`invalid_risk_state`, nothing booked) and
+unchanged; the next intent re-buys the open alpha leg and vetoes `add_to_open_leg`, issue #123), a ledger torn before the call (`invalid_risk_state`, nothing booked) and
 during the call (Executor halt `ledger_integrity`, nothing booked), and two consecutive stale checks (Sentinel
 halt, that market's paper quote cancelled). Every run also checks: no network, every bus message
 `exchange_action` none and no order flag, fills only from a RiskGate allow, unique fill ids, risk.toml at the pin

@@ -200,6 +200,42 @@ def _as_float(value: object) -> float:
     return float(value) if isinstance(value, (int, float)) else math.nan
 
 
+# Issue #123: exposure inputs. RiskGate does not size against them yet (a same-direction add is
+# vetoed outright), but a missing, non-finite or negative value means the ledger view is unusable:
+# fail closed rather than read it as 0.
+EXPOSURE_STATE_FIELDS = ("exposure_usd", "leg_exposure_usd")
+
+
+def exposure_state_problems(state: dict) -> list[str]:
+    """Issue #123: invalid_<field> for each exposure field that is missing, non-finite or negative."""
+    problems: list[str] = []
+    for field in EXPOSURE_STATE_FIELDS:
+        value = _finite_number(state.get(field))
+        if value is None or value < 0:
+            problems.append(f"invalid_{field}")
+    return problems
+
+
+def open_leg_problems(side: object, state: dict) -> list[str]:
+    """Issue #123: a same-direction order on a leg that is already open vetoes add_to_open_leg.
+
+    Only state["leg_already_open"] is True counts as open (Task P: this exact market + token; the
+    other token of the same market is a new leg and is not affected). Its direction comes from
+    state["leg_net_shares"] (paper_ledger.load_state): > 0 is long, so a buy adds; < 0 is short, so
+    a sell adds. An open leg whose net shares are missing, non-finite or zero vetoes
+    invalid_leg_net_shares, because the order's direction cannot be told apart from an add.
+    An order that reduces the open leg (a sell of a long leg) is not affected.
+    """
+    if state.get("leg_already_open") is not True:
+        return []
+    net = _finite_number(state.get("leg_net_shares"))
+    if net is None or net == 0:
+        return ["invalid_leg_net_shares"]
+    if (side == "buy" and net > 0) or (side == "sell" and net < 0):
+        return ["add_to_open_leg"]
+    return []
+
+
 def _risk_state(state: dict) -> tuple[int, float] | None:
     """Return (open_positions, daily_loss_usd), or None when either is missing or invalid."""
     positions = _finite_number(state.get("open_positions"))
@@ -324,6 +360,11 @@ def evaluate(
     The position-cap exemption needs state["leg_already_open"] is True: this exact
     token is already held. Another open leg of the same market (the other side of
     an arb pair) does not exempt it; that is a new directional position (Task P).
+    Issue #123: the exemption no longer lets a leg grow. A same-direction order on an open leg
+    (a buy of a long leg) vetoes add_to_open_leg whatever the position count; only an order that
+    reduces the leg keeps the exemption. An open leg without usable leg_net_shares vetoes
+    invalid_leg_net_shares. exposure_usd / leg_exposure_usd missing, non-finite or negative veto
+    invalid_exposure_usd / invalid_leg_exposure_usd (fail closed).
 
     Wash / self-trade (Task S): besides the keyword ban, state must carry the paper
     history ``recent_fills`` and ``own_quotes`` (paper_ledger.load_state does). An
@@ -496,6 +537,10 @@ def evaluate(
             reasons.append("max_open_positions")
         if PAPER_EQUITY_USD <= 0 or daily_loss / PAPER_EQUITY_USD >= caps["max_daily_loss_pct"]:
             reasons.append("max_daily_loss")
+    # Issue #123: no same-direction add to an open leg, and no allow without usable exposure inputs.
+    reasons.extend(open_leg_problems(intent.side, state))
+    if current is not None:  # an unusable state already vetoes invalid_risk_state (and carries no exposure)
+        reasons.extend(exposure_state_problems(state))
 
     # Issue #104: size inside the all-in cap: shares * cost_price + fee <= cap_usd, never above the
     # intent's own shares. cost_price = max(effective, intent.limit_price): the fill may come at either.
