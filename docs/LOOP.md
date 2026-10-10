@@ -1478,8 +1478,30 @@ the window, 38.7 s of silence never trips it, the latency summary is checked, an
   pending), WS_LATENCY_SUMMARY_PINGS 60 (operational); checks WS_PONG_TIMEOUT_S < WS_SILENCE_TIMEOUT_S and
   38.7 < WS_SILENCE_TIMEOUT_S. Tests: `tests/test_ws_silence.py`; `tests/test_ws_clock_jump.py` updated.
 
+## Task BK — WS recorder: market-data silence window (Poly风控 F6)
+
+Status: done.
+
+Requested by Poly指挥 after #140 (Task BI) merged: a server that answers PONGs but sends no market data must be
+judged dead (Poly风控 F6). Done by grok-bot on dev@d5026a8.
+
+- Kept: BI's any-frame window (`silent`, WS_SILENCE_TIMEOUT_S 60 s, PONG counts) and AW's `pong_timeout`.
+- Added: a second window timed only by market business frames: a JSON event object with a non-empty
+  `event_type` (book, price_change, tick_size_change, last_trade_price, or an unknown type, which is market
+  traffic too). PONG, undecodable and malformed frames never count. None for WS_DATA_SILENCE_S disconnects with
+  `data_silent` (`disconnected` event, every asset resyncs `disconnect_data_silent`), then the normal backoff,
+  reconnect and full resync; counted in report.disconnects, the escalation and M1's reconnect cap.
+- Subscription-wide. M1 evidence: across 5 markets the healthy data silence peaked at 38.7 s; per market the row
+  gaps reached 84.9 s, so a one-market subscription could come close to 90 s.
+- New number: WS_DATA_SILENCE_S 90 (M2 pending); import-time check WS_SILENCE_TIMEOUT_S <= WS_DATA_SILENCE_S <=
+  MAX_BOOK_AGE_S. Deadline checks now use the same sum as the recv wait (a float rounding could spin a fake clock).
+- Tests: `tests/test_ws_silence.py` (PONGs but no data -> data_silent at ~90 s; market events restart it; 38.7 s
+  gaps never trip it; which frames count); live fakes in the clock-jump / recorder tests now send trades.
+
 ## Latest
 
+- 2026-10-10: Task BK: WS recorder `data_silent` after WS_DATA_SILENCE_S=90 s with no market event (PONG does
+  not count, Poly风控 F6); BI's any-frame `silent` (60 s) kept.
 - 2026-10-10: Task BI: WS recorder inbound-silence watchdog (`silent` after WS_SILENCE_TIMEOUT_S=60 s of no
   frame of any kind) and `ping_latency` summary events. AW's `pong_timeout` unchanged. Blocks the M1 rerun.
 - 2026-10-10: Task BH: WS recorder reconnects at once after a suspend / wake (`clock_jump`, `jump_s`); AW's

@@ -88,6 +88,11 @@ WS_SILENCE_TIMEOUT_S = 60.0
 # Task BI evidence, not a setting: the longest inbound data silence across all assets in the healthy
 # periods of M1 run m1-20261008T2259Z (Poly盘口's analysis). WS_SILENCE_TIMEOUT_S must stay above it.
 WS_SILENCE_OBSERVED_HEALTHY_MAX_S = 38.7
+# Task BK (Poly风控 F6): no market BUSINESS frame (book, price_change, tick_size_change, last_trade_price or
+# another event_type; PONG and other control frames do not count) for this long = a feed that answers PINGs
+# but sends no market data; the recorder reconnects (reason "data_silent", full resync), counted like any
+# disconnect. Must stay within WS_SILENCE_TIMEOUT_S <= WS_DATA_SILENCE_S <= MAX_BOOK_AGE_S. M2 pending.
+WS_DATA_SILENCE_S = 90.0
 # Task BI: the recorder writes a ping_latency event (PING / PONG round trips, unanswered PINGs) every this
 # many PINGs and at the end of each connection. Operational (logging only).
 WS_LATENCY_SUMMARY_PINGS = 60
@@ -316,6 +321,8 @@ def consistency_problems() -> list[str]:
         problems.append("WS_PONG_TIMEOUT_S must satisfy 0 < WS_PING_INTERVAL_S < WS_PONG_TIMEOUT_S")
     if not 0.0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S:
         problems.append("WS_STOP_POLL_S must satisfy 0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S")
+    if not WS_SILENCE_TIMEOUT_S <= WS_DATA_SILENCE_S <= MAX_BOOK_AGE_S:
+        problems.append("WS_DATA_SILENCE_S must satisfy WS_SILENCE_TIMEOUT_S <= WS_DATA_SILENCE_S <= MAX_BOOK_AGE_S")
     if not WS_PONG_TIMEOUT_S < WS_SILENCE_TIMEOUT_S:
         problems.append("WS_SILENCE_TIMEOUT_S must satisfy WS_PONG_TIMEOUT_S < WS_SILENCE_TIMEOUT_S")
     if not 0.0 < WS_SILENCE_OBSERVED_HEALTHY_MAX_S < WS_SILENCE_TIMEOUT_S:
