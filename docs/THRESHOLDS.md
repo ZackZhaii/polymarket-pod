@@ -48,6 +48,8 @@ proposals waiting for the user's decision at M2. Task AC moved no value and chan
 | `M1_ROTATE_S` | `3600.0` | s | ... or once it has been open this long (`--rotate-s`). | `src/thresholds.py` | Task AI | no (operational) |
 | `M1_REST_EVERY_S` | `600.0` | s | The M1 run reads the public CLOB `/book` for the REST-vs-WS comparison at start and then this often (`--rest-every`). | `src/thresholds.py` | Task AI | no (operational) |
 | `M1_REST_ASSETS` | `4` | assets | ... for the first N recorded assets (`--rest-assets`). | `src/thresholds.py` | Task AI | no (operational) |
+| `M1_MANIFEST_PROGRESS_S` | `60.0` | s | A running m1_run rewrites manifest.json with `progress` (`last_flush_at`, files, rows written) this often, so a run killed hard still shows the span it covered (m1_report reports that span, labelled). | `src/thresholds.py` | Task BT | yes |
+| `M1_CONSOLE_CLOSE_WAIT_S` | `2.0` | s | On a Windows console close / logoff / shutdown (about 5 s before the OS kills the process) m1_run waits at most this long for its normal finish, then writes the interrupted manifest itself. Must be in (0, 5). | `src/thresholds.py` | Task BT | yes |
 | `M1_REPORT_STEP_S` | `1.0` | s | `src.m1_report` timeline resolution: coverage and book age are evaluated at every step of the run window. Must be <= `WS_ROW_REFRESH_S`. | `src/thresholds.py` | Task AI | no (operational) |
 | `M1_MIN_RUN_S` | `86340.0` | s | M1 acceptance: the run lasted at least 24 h minus 1 min, ended by its deadline (not a signal) with exit 0. Conservative first value. | `src/thresholds.py` | Task AI | yes |
 | `M1_MIN_COVERAGE` | `0.99` | fraction of run | M1 acceptance: every asset had a fresh book (`0 <= t - book_ts <= MAX_BOOK_AGE_S`, the `book_age_problem` rule) for at least this share of the run. Each asset's p99 book age must also be <= `MAX_BOOK_AGE_S`. Conservative first value. | `src/thresholds.py` | Task AI | yes |
@@ -125,7 +127,7 @@ Relations checked when `src/thresholds.py` is imported (an explicit `RuntimeErro
 `0 < WS_BACKOFF_BASE_S <= WS_BACKOFF_CAP_S`, `0 < WS_PING_INTERVAL_S < WS_RESYNC_TIMEOUT_S`, `0 < WS_ROW_REFRESH_S < MAX_BOOK_AGE_S`,
 `0 < WS_STOP_POLL_S <= WS_PING_INTERVAL_S`, `0 < WS_PING_INTERVAL_S < WS_PONG_TIMEOUT_S` (Task AW), `0 < WS_RAW_BOOK_FILE_MAX_BYTES <= WS_RAW_BOOK_RUN_MAX_BYTES` whole numbers (Task AY); M1 (Task AI): `M1_TOP_MARKETS`, `M1_ROTATE_BYTES`, `M1_REST_ASSETS`,
 `M1_MIN_REST_MATCHED` whole numbers >= 1, `M1_MAX_RECONNECTS` and `M1_MAX_GAP_RESYNCS_PER_ASSET` whole numbers >= 0,
-`M1_ROTATE_S`, `M1_REST_EVERY_S`, `M1_MIN_RUN_S` > 0, `0 < M1_REPORT_STEP_S <= WS_ROW_REFRESH_S`, `0 < M1_MIN_COVERAGE <= 1`,
+`M1_ROTATE_S`, `M1_REST_EVERY_S`, `M1_MIN_RUN_S`, `M1_MANIFEST_PROGRESS_S` > 0, `0 < M1_CONSOLE_CLOSE_WAIT_S < 5` (Task BT), `0 < M1_REPORT_STEP_S <= WS_ROW_REFRESH_S`, `0 < M1_MIN_COVERAGE <= 1`,
 both M1 rates in `[0, 1)`, `0 < M1_REST_MATCH_WINDOW_S <= WS_ROW_REFRESH_S`, and a full run can collect enough REST
 samples: `M1_MIN_RUN_S / M1_REST_EVERY_S * M1_REST_ASSETS >= M1_MIN_REST_MATCHED`; reconcile (Task AK):
 `0 < RECONCILE_SHARES_TOL < DATA_API_TRADES_MIN_SHARES <= DATA_API_POSITIONS_DUST_SHARES` and

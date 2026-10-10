@@ -348,6 +348,12 @@ drift writes nothing (exit 4). Calibration consumers must filter `uma_checked=tr
 The 24-hour read-only WebSocket book run and its offline report are `python -m src.m1_run` and
 `python -m src.m1_report`. Commands, outputs and the M2-pending acceptance criteria: `docs/M1_ACCEPTANCE.md`.
 
+Operator step for long runs on Windows (Task BT, documentation only): make the scheduled task non-interactive
+("Run whether user is logged on or not", S4U) and start python in its own process group / detached console
+(`CREATE_NEW_PROCESS_GROUP`), so closing a console or logging off does not kill the run. m1_run finishes its
+manifest as `interrupted` on a console close and records `progress` every `M1_MANIFEST_PROGRESS_S`; details in
+`docs/M1_ACCEPTANCE.md`.
+
 ## Not in this phase
 
 No live trading, no key material, no CLOB authentication, no withdraw, no automatic size-up, and no geo-bypass steps. A single-leg fill is directional exposure, not risk-free arbitrage. Nothing here is a promise of profit.
