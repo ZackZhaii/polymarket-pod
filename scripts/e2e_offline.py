@@ -31,7 +31,8 @@ One run of the real pipeline on fixed, sanitised recordings in tests/fixtures/e2
     --slippage below the floor
     Task AR daily loss (golden key ``daily_loss``): today's (UTC) realized loss plus fees vetoes
     max_daily_loss, a loss closed before 00:00:00Z does not count, a gain does not offset, and a
-    counted ledger row with an unparseable ts is invalid_risk_state and a global halt
+    counted ledger row with an unparseable ts is invalid_risk_state and a global halt; issue #127 (Task CA):
+    a loss below the cap plus this order's worst case above it vetoes max_daily_loss_projected
 
 Nothing in src/ is replaced. Only the clock (a frozen ``datetime`` in podlib, book_staleness and
 wash_detect, which also freezes every ``utc_now``) and I/O paths (bus, ledger, quotes, markets,
@@ -1297,6 +1298,10 @@ def _daily_loss_case_problems(result: dict[str, Any]) -> list[str]:
             out.append(f"daily_loss_usd {total!r} is below fees + realized losses {parts!r}")
         if expect == "veto" and (result.get("allow") is not False or "max_daily_loss" not in reasons):
             out.append("today's realized loss did not veto max_daily_loss")
+        # Issue #127 (Task CA): below the cap today, but today's loss plus this order's worst case is above it.
+        if expect == "veto_projected" and (result.get("allow") is not False
+                                           or reasons != ["max_daily_loss_projected"]):
+            out.append(f"today's loss plus the order's worst case did not veto max_daily_loss_projected: {reasons}")
         if expect == "allow" and (result.get("allow") is not True or reasons):
             out.append(f"expected an allow, got {reasons}")
         if result["global_halts"]:

@@ -18,6 +18,11 @@ max(effective, intent.limit_price) plus the booked fee fits max_order_pct * PAPE
 INTENT_SHARE_STEP grid; notional_usd = shares * effective. RiskGate only ever books fewer shares than the
 intent asked for, never more; an invalid intent size or a size that cannot fit vetoes
 (invalid_intent_shares / invalid_intent_limit_price / order_cost_above_clip).
+Issue #127 (Task CA, F2c): a pre-trade daily-loss check. After sizing, this order's worst-case loss (buy:
+shares * cost_price + fee_usd, the #104 all-in cost; sell: shares * (1 - effective) + fee_usd) is added to
+today's loss; above max_daily_loss_pct * PAPER_EQUITY_USD vetoes max_daily_loss_projected (exactly the cap
+passes). A worst case that cannot be computed vetoes too. The existing max_daily_loss (already at the cap) is
+unchanged; hypothetical intents get the same check. Veto only, no new number.
 Does not place orders, sign messages, read secrets, or edit config/risk.toml.
 """
 from __future__ import annotations
@@ -235,6 +240,28 @@ def open_leg_problems(side: object, state: dict) -> list[str]:
     if (side == "buy" and net > 0) or (side == "sell" and net < 0):
         return ["add_to_open_leg"]
     return []
+
+
+def worst_case_loss(side: object, shares: object, cost_price: object, effective: object,
+                    fee_usd: object) -> float | None:
+    """Issue #127: the most this order can lose once filled, or None when it cannot be computed.
+
+    buy: shares * cost_price + fee_usd (the #104 all-in cost; the token can settle at 0).
+    sell: shares * (1 - effective) + fee_usd (the token can settle at 1).
+    """
+    values = [_finite_number(value) for value in (shares, cost_price, effective, fee_usd)]
+    if any(value is None for value in values):
+        return None
+    qty, cost, eff, fee = values  # type: ignore[misc]
+    if qty < 0 or fee < 0 or not 0.0 <= eff <= 1.0:  # type: ignore[operator]
+        return None
+    if side == "buy":
+        worst = qty * cost + fee  # type: ignore[operator]
+    elif side == "sell":
+        worst = qty * (1.0 - eff) + fee  # type: ignore[operator]
+    else:
+        return None
+    return worst if math.isfinite(worst) and worst >= 0 else None
 
 
 def _risk_state(state: dict) -> tuple[int, float] | None:
@@ -577,6 +604,15 @@ def evaluate(
     if cap_usd > 0 and not (shares > 0 and shares * cost_price + fee_usd <= cap_usd):
         if not reasons:
             reasons.append("order_cost_above_clip")  # issue #104: nothing fits, or the float guard tripped
+    # Issue #127 (F2c): today's loss plus this order's worst case must stay within the daily cap.
+    if caps is not None and current is not None and "max_daily_loss" not in reasons:
+        worst = worst_case_loss(intent.side, shares, cost_price, effective, fee_usd)
+        limit_usd = caps["max_daily_loss_pct"] * PAPER_EQUITY_USD
+        if worst is None or not math.isfinite(current[1] + worst):
+            if not reasons:  # an order already vetoed for another reason books nothing; never an allow without it
+                reasons.append("max_daily_loss_projected")
+        elif current[1] + worst > limit_usd:
+            reasons.append("max_daily_loss_projected")
     return Decision(
         allow=not reasons,
         reasons=reasons,
