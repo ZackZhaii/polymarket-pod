@@ -123,7 +123,7 @@ def _evaluate(side, model_prob, market_price, slippage, fee_rate, size, cfg=None
     cfg["max_order_pct"] = size
     intent = Intent(strategy="task-ae", market="ae", side=side, model_prob=model_prob,
                     market_price=market_price, assumed_slippage=slippage, fee_rate=fee_rate,
-                    liquidity_usd=20000.0, spread=0.01, token_id="t", book_ts=NOW)
+                    liquidity_usd=20000.0, spread=0.01, token_id="t", book_ts=NOW, tags=("test-market",))
     return evaluate(intent, cfg, STATE, now=NOW_DT)
 
 
@@ -223,7 +223,7 @@ def test_ledger_never_books_less_than_before(tmp_path, monkeypatch, point):
     side, p, m, s, f, size, _edge, fee_usd, _allow = point
     intent = Intent(strategy="task-ae", market="ae", side=side, model_prob=p, market_price=m,
                     assumed_slippage=s, fee_rate=f, liquidity_usd=20000.0, spread=0.01,
-                    token_id="t", book_ts=utc_now())
+                    token_id="t", book_ts=utc_now(), tags=("test-market",))
     result = paper_ledger.commit_if_allowed(intent, load_risk())
     assert result["allow"] is True
     fill = result["fill"]

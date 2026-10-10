@@ -36,6 +36,7 @@ def intent(slippage, side="buy", **kw):
                 market_price=0.4, assumed_slippage=slippage, fee_rate=0.02, liquidity_usd=20000.0,
                 spread=0.01, token_id="t", book_ts=NOW)
     base.update(kw)
+    base.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
     return Intent(**base)
 
 

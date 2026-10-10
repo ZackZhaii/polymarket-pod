@@ -36,6 +36,7 @@ def _intent(**overrides: object) -> Intent:
         "liquidity_usd": 20000.0, "spread": 0.01, "book_ts": NOW,
     }
     fields.update(overrides)
+    fields.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
     return Intent(**fields)  # type: ignore[arg-type]
 
 

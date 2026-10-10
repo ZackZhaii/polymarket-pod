@@ -68,6 +68,7 @@ def market(**kw) -> ib.MarketContext:
                 end_date="2026-10-15T00:00:00Z", liquidity_usd=52000.0, fee_rate=0.0, accepting_orders=True,
                 closed=False)
     base.update(kw)
+    base.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
     return ib.MarketContext(**base)
 
 
@@ -140,7 +141,7 @@ def test_to_risk_intent_matches_the_harness_shape():
         "hypothetical": False, "note": "test forecast", "book_ts": BOOK_TS, "counterparty": None,
         # Task AX: identity. The test signal is a legacy one (no forecast_id), so no decision_id is invented.
         "decision_id": None, "forecast_id": None, "forecast_ts": None, "condition_id": oi.condition_id,
-        "outcome_index": 0, "outcome": oi.outcome, "category": None, "tags": None, "end_date": oi.end_date,
+        "outcome_index": 0, "outcome": oi.outcome, "category": None, "tags": ("test-market",), "end_date": oi.end_date,
         "model_version": None,
         # Task BA: the chosen token's top of book and the shadow Kelly multiplier, recorded on the fill only.
         "best_bid": 0.39, "best_ask": 0.41, "kelly_fraction_used": 0.15,
@@ -693,7 +694,8 @@ def test_module_imports_only_the_allowed_modules():
                 mods |= {f"src.{alias.name}" for alias in node.names}
     allowed = {"__future__", "hashlib", "json", "math", "collections.abc", "dataclasses", "datetime", "src",
                "src.fees", "src.book_staleness", "src.expiry_rule", "src.podlib", "src.risk_gate", "src.thresholds",
-               "src.calibration_ids"}  # Task AX: stdlib-only id helpers
+               "src.calibration_ids",  # Task AX: stdlib-only id helpers
+               "src.category"}  # issue #131: tags -> category, fail closed
     assert mods <= allowed, mods - allowed
     text = (ROOT / "src" / "intent_builder.py").read_text(encoding="utf-8")
     for banned in ("datetime.now", "utcnow", "open(", "load_risk", "urlopen", "requests", "py_clob_client"):
@@ -825,7 +827,7 @@ def test_property_p3_riskgate_vetoes_imply_builder_rejects(tmp_path):
         harness = risk_gate.Intent(strategy="news-forecaster", market="m1", side="buy", model_prob=sig.p_low,
                                    market_price=bks["t-yes"].best_ask, assumed_slippage=0.005, fee_rate=mkt.fee_rate,
                                    liquidity_usd=mkt.liquidity_usd, spread=bks["t-yes"].spread, token_id="t-yes",
-                                   book_ts=BOOK_TS)
+                                   book_ts=BOOK_TS, tags=mkt.tags)
         decision = risk_gate.evaluate(harness, cfg, copy.deepcopy(STATE), now=NOW,
                                       halt_path=tmp_path / "h.json", halt_fallback_path=tmp_path / "HALT")
         result = ib.build_order_intent(sig, mkt, bks, cfg, now=NOW, strategy="news-forecaster")

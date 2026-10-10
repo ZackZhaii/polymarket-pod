@@ -49,8 +49,11 @@ python src/paper_ledger.py \
   --liquidity 20000 \
   --spread 0.02 \
   --slippage 0.005 \
-  --fee-rate 0
+  --fee-rate 0 \
+  --tags politics,elections
 ```
+
+`--tags` takes the market's Gamma tag slugs (comma-separated). Without them the intent is vetoed `missing_category` (issue #131: the category comes from the tags and fails closed; banned categories are listed in `src/category.py`).
 
 Edge for a buy is `model_prob - (market_price + assumed_slippage) - fee_rate * max(market_price, effective_price)` (`src/fees.py`). Non-positive edge is vetoed, and an edge below `MIN_EDGE` (0.02) too. The `--slippage` default is `ASSUMED_SLIPPAGE` (0.005, `src/thresholds.py`). Order notional is `1000 * max_order_pct` and is clipped at 1%. `kelly_fraction` is never used for size (only shadow-reported by `src/intent_builder.py`).
 
