@@ -255,7 +255,17 @@ def read_settlements() -> tuple[list[dict[str, Any]] | None, list[str]]:
         return None, [f"resolutions_unreadable:{type(exc).__name__}"]
 
 
-def apply_settlements(now: str | None = None) -> dict[str, Any]:
+def settlement_blocked_markets() -> frozenset[str]:
+    """PR #211: markets under a market halt whose reason says their own close / settlement data contradicts
+    itself (src/settlement.blocks_settlement). Other market halts do not block settlement."""
+    from src import halt_store, settlement
+
+    return frozenset(str(record.get("market")) for record in halt_store.active_halts()
+                     if record.get("scope") == halt_store.SCOPE_MARKET and record.get("market")
+                     and settlement.blocks_settlement(record.get("reason")))
+
+
+def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | None = None) -> dict[str, Any]:
     """Issue #126 (Task CG): book a settlement row for every open leg of a market with a confirmed settlement.
 
     Idempotent (the row's fill_id is derived from the settlement; a booked one is never booked again). A ledger
@@ -267,6 +277,12 @@ def apply_settlements(now: str | None = None) -> dict[str, Any]:
     from src import settlement
 
     out: dict[str, Any] = {"booked": [], "unsettled_closed_legs": [], "problems": []}
+    if skip_markets is None:  # PR #211: the commit path honours the same blocking market halts as the runner
+        try:
+            skip_markets = settlement_blocked_markets()
+        except Exception as exc:  # noqa: BLE001 - an unreadable halt state: settle nothing (the caller halts)
+            out["problems"] = [f"settlement_halt_state_unreadable:{type(exc).__name__}"]
+            return out
     snaps, problems = read_settlements()
     if problems:
         out["problems"] = problems
@@ -282,6 +298,10 @@ def apply_settlements(now: str | None = None) -> dict[str, Any]:
         out["problems"] = planned.problems
         return out
     for row in planned.rows:
+        if str(row.get("market")) in skip_markets:
+            # PR #211: the market's own close / settlement data is under a market halt (settlement.blocks_settlement)
+            out.setdefault("skipped_markets", []).append(str(row.get("market")))
+            continue
         try:
             out["booked"].append(ledger_store.book(PAPER_PATH, row))
         except LedgerIntegrityError as exc:

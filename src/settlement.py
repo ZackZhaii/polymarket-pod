@@ -40,6 +40,22 @@ from src.resolutions import content_conflict
 from src.thresholds import LEDGER_OPEN_EPS
 
 SETTLEMENT_ID_PREFIX = "settle-"
+
+# PR #211 review (Poly风控, issuecomment-6106764972): a MARKET-level halt does not block that market's settlement,
+# except when the halt says the market's own close / settlement data contradicts itself. Then the data that would
+# settle it is not trusted: no settlement for that market until the Operator resumes the halt. A halt is matched by
+# the start of its reason; every other market halt (a stale book, a cancelled quote, ...) settles as usual.
+SETTLEMENT_BLOCKING_HALT_PREFIXES = (
+    "closed_flag_contradiction_after_writeoff",  # #197 OQ-8: written off, then the market reads open again
+    "settlement_result_changed",                 # a booked settlement read again with another result
+    "settlement_conflict",                       # two confirmed results for one leg / condition
+    "invalid_settlement_payout",                 # a payout outside {0, 1}
+)
+
+
+def blocks_settlement(halt_reason: object) -> bool:
+    """True when a market halt with this reason must block that market's settlement (see above)."""
+    return isinstance(halt_reason, str) and halt_reason.strip().startswith(SETTLEMENT_BLOCKING_HALT_PREFIXES)
 STRATEGY = "settlement"
 
 
