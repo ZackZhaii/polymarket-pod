@@ -144,6 +144,17 @@ def _rest_getter(calls, bid="0.48", ask="0.52"):
     return get
 
 
+def _clock_getter(lead_ms=-200, calls=None):
+    """Task CM: the start-up clock check's /book reader (kept apart from the REST sampler's calls). The book's
+    timestamp is ``lead_ms`` from the fake clock's start (negative: local clock ahead of it, as on a synced host)."""
+    def get(url):
+        if calls is not None:
+            calls.append(url)
+        return {"bids": [{"price": "0.48", "size": "30"}], "asks": [{"price": "0.52", "size": "25"}],
+                "timestamp": str(BASE_MS + lead_ms), "market": M, "tick_size": "0.01"}
+    return get
+
+
 def _git():
     return {"sha": "f" * 40, "dirty": False}
 
@@ -154,6 +165,7 @@ def _main(tmp_path, sessions, argv=(), *, rest=None, clock=None, markets=None, *
     calls: list[str] = []
     out = tmp_path / "run"
     full = ["--out", str(out), "--markets", str(markets or _markets_file(tmp_path)), "--max-runtime", "60", *argv]
+    kwargs.setdefault("clock_getter", _clock_getter())  # Task CM
     code = r.main(full, transport=transport, rest_getter=rest or _rest_getter(calls), monotonic=clock.monotonic,
                   sleep=clock.sleep, now=clock.now, git=_git, **kwargs)
     return code, out, transport, calls, clock
