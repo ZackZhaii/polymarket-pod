@@ -100,6 +100,33 @@ def level(levels: Any, pick: str) -> tuple[float | None, float | None]:
     return price, size
 
 
+
+def fetch_depth(token_id: str, *, getter=None) -> dict[str, Any] | None:
+    """Issue #120 (Task CJ): the full public CLOB /book for one token (asks, bids, tick, min size, book_ts).
+
+    Returns the raw response dict plus normalised ``book_ts`` / ``book_ts_problem``, or None when the GET
+    failed or the body is not an object. Does not place orders. The caller (m2_runner) turns this into an
+    intent_builder.BookSnapshot via ``intent_builder.book_snapshot_from_clob``.
+    """
+    if not isinstance(token_id, str) or not token_id.strip():
+        return None
+    url = "https://clob.polymarket.com/book?" + urlencode({"token_id": token_id.strip()})
+    get = getter or public_get
+    try:
+        body = get(url)
+    except Exception:  # noqa: BLE001 - network / HTTP on one token: missing book
+        return None
+    if not isinstance(body, dict):
+        return None
+    book_ts, book_ts_problem = book_timestamp(body.get("timestamp"))
+    out = dict(body)
+    out["book_ts"] = book_ts
+    out["book_ts_problem"] = book_ts_problem
+    out["token_id"] = token_id.strip()
+    out["fetched"] = True
+    return out
+
+
 def snapshot(
     market: dict[str, Any],
     outcome: str,

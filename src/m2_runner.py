@@ -1,4 +1,4 @@
-"""Issue #119 (Task CE, M2-C1): the M2 paper runner skeleton. Paper only; there is no executor.
+"""Issue #119 (Task CE, M2-C1) + issue #120 (Task CJ, M2-C2): the M2 paper runner. Paper only; there is no executor.
 
     python -m src.m2_runner --run-dir runs/m2 [--max-runtime 604800] [--once]
 
@@ -49,9 +49,11 @@ RUNNER_PAUSED_ALERT_S an alert. Single instance: ``<run dir>/runner.lock`` (pid,
 OS byte lock for the process's life; a second runner exits 3. ``<run dir>/journal.jsonl`` (one fsynced line per
 step: sealed, rejected, built, committed, vetoed, skipped) and ``events.jsonl`` record what happened.
 
-NOT here (issue #120): restart recovery from the journal, unique-decision_id booking, suspend detection and clock
-skew. A runner restarted after a crash starts with no pending signals (files already sealed are not evaluated
-again), so it can miss a trade but never books one twice through this code. Brier backfill is #121.
+Issue #120 (Task CJ, M2-C2): restart recovery (``recover``: journal + ledger, ``seen_keys`` restored, built-but-
+not-committed reconciled to the ledger), ``unique_decision_id=True`` on every commit (one allow fill per
+``decision_id``), suspend/resume detection (wall gap or wall-vs-monotonic skew), clock-skew pause, and
+``book_before_resume`` / stale-book refusal on the decision-time REST /book read (``book.fetch_depth`` +
+``intent_builder.book_snapshot_from_clob``). Brier backfill is #121.
 
 Exit codes (docs/EXIT_CODES.md): 0 KILL or --max-runtime reached or --once done; 2 usage; 3 another runner holds
 the lock; 4 a journal / event / candidates write failed; 6 risk.toml off its pins or a live flag (global halt
@@ -97,14 +99,18 @@ from src import (  # noqa: E402
 )
 from src.daily_loss import daily_loss  # noqa: E402
 from src.thresholds import (  # noqa: E402
+    CLOCK_SKEW_MAX_S,
     DISK_MIN_FREE_GB,
     HEARTBEAT_RUNNER_EVERY_S,
+    MAX_BOOK_AGE_S,
     RUNNER_DISK_BUDGET_GB,
     RUNNER_LOOP_S,
     RUNNER_MAX_EVALS_PER_SIGNAL,
     RUNNER_MAX_INGEST_PER_ITER,
     RUNNER_SCAN_EVERY_S,
     RUNNER_SCAN_MAX_AGE_S,
+    RUNNER_SUSPEND_GAP_S,
+    RUNNER_WALL_MONO_SKEW_S,
 )
 
 PROC = "m2_runner"
@@ -245,6 +251,12 @@ class RunnerState:
     last_book_age_s_max: float | None = None
     disk_free_gb: float | None = None
     ledger_rows: int | None = None
+    # Issue #120 (Task CJ): suspend / resume tracking
+    last_iter_wall: datetime | None = None
+    last_iter_mono: float | None = None
+    last_resume_at: datetime | None = None  # books fetched before this are refused
+    resume_count: int = 0
+    force_rescan: bool = False
 
 
 @dataclass
@@ -395,42 +407,9 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
 
 # ---------------------------------------------------------------- books
 
-def _levels(raw: object, *, descending: bool) -> tuple[tuple[float, float], ...] | None:
-    if raw is None:
-        return ()
-    if not isinstance(raw, list):
-        return None
-    out = []
-    for level in raw:
-        if not isinstance(level, dict):
-            return None
-        price, size = podlib.as_float(level.get("price")), podlib.as_float(level.get("size"))
-        if price is None or size is None:
-            return None
-        out.append((price, size))
-    return tuple(sorted(out, key=lambda item: item[0], reverse=descending))
-
-
 def book_snapshot_from_clob(raw: object, market_id: str, token_id: str) -> intent_builder.BookSnapshot:
-    """A CLOB /book body as a full-depth BookSnapshot (asks ascending, bids descending).
-
-    Anything unusable (not an object, another asset, a level that is not a number pair) gives a snapshot that
-    intent_builder rejects (no levels; another token id): never a guessed book."""
-    body = raw if isinstance(raw, dict) else {}
-    asks = _levels(body.get("asks"), descending=False)
-    bids = _levels(body.get("bids"), descending=True)
-    asset = body.get("asset_id")
-    same_token = isinstance(raw, dict) and (asset is None or str(asset) == token_id)
-    if asks is None or bids is None or not same_token:
-        asks, bids = (), ()
-    best_ask = asks[0][0] if asks else None
-    best_bid = bids[0][0] if bids else None
-    spread = None if best_ask is None or best_bid is None else round(best_ask - best_bid, 6)
-    book_ts, _ = book.book_timestamp(body.get("timestamp"))
-    return intent_builder.BookSnapshot(
-        market_id=market_id, token_id=token_id if same_token else "", asks=asks, bids=bids, best_bid=best_bid,
-        best_ask=best_ask, spread=spread, book_ts=book_ts, tick_size=podlib.as_float(body.get("tick_size")),
-        min_order_size=podlib.as_float(body.get("min_order_size")))
+    """Issue #120: thin re-export of ``intent_builder.book_snapshot_from_clob`` (full-depth CLOB /book)."""
+    return intent_builder.book_snapshot_from_clob(raw, market_id, token_id)
 
 
 def book_url(token_id: str) -> str:
@@ -552,14 +531,49 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
             _skip(state, now, report, item, forecast_id, ["missing_fee_data", str(quote.problem)])
             continue
         books: dict[str, intent_builder.BookSnapshot] = {}
+        book_refused: list[str] | None = None
+        skew_pause = False
         for token in [str(t) for t in row.get("token_ids") or []]:
             try:
-                raw = book_get(book_url(token))
+                # Issue #120: full-depth REST /book via book.fetch_depth (getter injected / guarded).
+                raw = book.fetch_depth(token, getter=book_get)
             except RefusedURL:
                 raise
-            except Exception:  # noqa: BLE001 - an unreadable book is a missing book (intent_builder rejects)
+            except Exception:  # noqa: BLE001 - an unreadable book is a missing book
                 continue
-            books[token] = book_snapshot_from_clob(raw, market_id, token)
+            if raw is None:
+                continue
+            fetched_at = state.clock()
+            # book_before_resume: a fetch that started before the last resume is refused
+            if state.last_resume_at is not None and fetched_at < state.last_resume_at:
+                book_refused = ["book_before_resume"]
+                break
+            snap = book_snapshot_from_clob(raw, market_id, token)
+            age = _book_age_s(snap.book_ts, fetched_at)
+            if age is not None and age > MAX_BOOK_AGE_S:
+                book_refused = ["stale_book"]
+                break
+            skew = _book_skew_s(snap.book_ts, fetched_at)
+            if skew is not None and skew > CLOCK_SKEW_MAX_S:
+                skew_pause = True
+                break
+            books[token] = snap
+        if skew_pause:
+            state.paused_reason = "clock_skew"
+            state.paused_since = _stamp(now)
+            try:
+                event(state, "clock_skew", now, max_skew_s=CLOCK_SKEW_MAX_S)
+            except WriteFailed as exc:
+                report.action = ACT_WRITE_FAILED
+                report.reasons = [str(exc)]
+                return
+            report.action = ACT_PAUSE
+            report.paused_reason = "clock_skew"
+            report.reasons = ["clock_skew"]
+            return
+        if book_refused is not None:
+            _skip(state, now, report, item, forecast_id, book_refused)
+            continue
         decided_at = max(now, state.clock())
         ages = [age for age in (_book_age_s(b.book_ts, decided_at) for b in books.values()) if age is not None]
         if ages:
@@ -579,11 +593,11 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
         risk_intent = dataclasses.replace(intent_builder.to_risk_intent(oi), fee_source=quote.fee_source,
                                           fee_gamma_fetched_at=quote.fee_gamma_fetched_at,
                                           fee_schedule_sha=quote.fee_schedule_sha)
-        outcome = paper_ledger.commit_if_allowed(risk_intent, cfg)
+        outcome = paper_ledger.commit_if_allowed(risk_intent, cfg, unique_decision_id=True)
         fill = outcome.get("fill") if isinstance(outcome, dict) else None
         if outcome.get("allow") is True and isinstance(fill, dict) and fill.get("risk_decision") == "allow":
             journal(state, "committed", now, forecast_id=forecast_id, decision_id=oi.decision_id,
-                    fill_id=fill.get("fill_id"))
+                    fill_id=fill.get("fill_id"), already_booked=bool(outcome.get("already_booked")))
             state.counters["allows_total"] += 1
             report.allows += 1
             report.fills.append(fill)
@@ -616,6 +630,112 @@ def _book_age_s(book_ts: object, now: datetime) -> float | None:
     return None if parsed is None else round((now - parsed).total_seconds(), 3)
 
 
+def _book_skew_s(book_ts: object, now: datetime) -> float | None:
+    """Absolute |book_ts − local| in seconds (issue #120 clock skew)."""
+    parsed = heartbeat.parse_stamp(book_ts) if isinstance(book_ts, str) else None
+    return None if parsed is None else round(abs((now - parsed).total_seconds()), 3)
+
+
+
+def _read_journal(path: Path) -> list[dict[str, Any]]:
+    if not path.exists() or not path.is_file():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def recover(paths: RunnerPaths, ledger_path: Path, *, now: datetime | None = None,
+            clock: Callable[[], datetime] | None = None,
+            monotonic: Callable[[], float] | None = None,
+            risk_path: Path | None = None) -> RunnerState:
+    """Issue #120 (Task CJ): rebuild runner state from the journal and the ledger after a restart.
+
+    * ``seen_keys`` come from journal ``built`` / ``committed`` idempotency keys and from ledger fills.
+    * A journal ``built`` with no matching ``committed`` is reconciled to the ledger: if the
+      ``decision_id`` is already on the ledger, a ``committed`` line is appended; otherwise the build is
+      treated as never having happened (the next iteration may rebuild with a fresh book; the same
+      ``decision_id`` can still only book once via ``unique_decision_id``).
+    * Pending sealed signals are not re-hydrated here (already archived); the inbox is empty of them.
+    """
+    now = now or (clock or (lambda: datetime.now(timezone.utc)))()
+    state = RunnerState(paths=paths, risk_path=risk_path, clock=clock or (lambda: datetime.now(timezone.utc)),
+                        monotonic=monotonic or time.monotonic)
+    _, ledger = ledger_store.read_ledger(Path(ledger_path))
+    ledger_by_decision: dict[str, dict[str, Any]] = {}
+    for row in ledger.rows:
+        if not ledger_store.counts(row):
+            continue
+        decision_id = row.get("decision_id")
+        if isinstance(decision_id, str) and decision_id.strip():
+            ledger_by_decision.setdefault(decision_id, row)
+            # idempotency_key is not always on the fill; decision_id is the durable key
+        key = row.get("idempotency_key")
+        if isinstance(key, str) and key:
+            state.seen_keys.add(key)
+    journal_rows = _read_journal(paths.journal)
+    committed_ids = {row.get("decision_id") for row in journal_rows if row.get("step") == "committed"}
+    built_open: list[dict[str, Any]] = []
+    for row in journal_rows:
+        step = row.get("step")
+        if step == "built":
+            key = row.get("idempotency_key")
+            if isinstance(key, str) and key:
+                state.seen_keys.add(key)
+            decision_id = row.get("decision_id")
+            if decision_id not in committed_ids:
+                built_open.append(row)
+        elif step == "committed":
+            key = row.get("idempotency_key")
+            if isinstance(key, str) and key:
+                state.seen_keys.add(key)
+    for row in built_open:
+        decision_id = row.get("decision_id")
+        if not isinstance(decision_id, str) or not decision_id.strip():
+            continue
+        existing = ledger_by_decision.get(decision_id)
+        if existing is None:
+            continue  # never booked: leave it; next eval can rebuild (same decision_id, unique booking)
+        # ledger won: patch the journal so recover is idempotent next time
+        try:
+            journal(state, "committed", now, forecast_id=row.get("forecast_id"), decision_id=decision_id,
+                    fill_id=existing.get("fill_id"), recovered=True)
+        except WriteFailed:
+            pass
+        committed_ids.add(decision_id)
+    # resume_count from prior events (informational continuity)
+    if paths.events.exists():
+        for row in _read_journal(paths.events):
+            if row.get("event") == "resume_detected":
+                state.resume_count = max(state.resume_count, int(row.get("resume_count") or 0))
+    state.ledger_rows = len(ledger.rows)
+    return state
+
+
+def _suspend_detected(state: RunnerState, now: datetime) -> tuple[bool, float]:
+    """Issue #120: True when the wall gap or wall-vs-monotonic skew says the host suspended."""
+    if state.last_iter_wall is None or state.last_iter_mono is None:
+        return False, 0.0
+    wall_gap = (now - state.last_iter_wall).total_seconds()
+    mono_gap = state.monotonic() - state.last_iter_mono
+    skew = abs(wall_gap - mono_gap)
+    if wall_gap > RUNNER_SUSPEND_GAP_S or skew > RUNNER_WALL_MONO_SKEW_S:
+        return True, wall_gap
+    return False, wall_gap
+
+
 def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> IterationReport:
     """One loop step: the checks first; only when they all pass, scan / inbox / decisions."""
     state.iteration += 1
@@ -633,22 +753,61 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
                     return IterationReport(ACT_WRITE_FAILED, ["events_write_failed"])
             state.paused_reason = check.reasons[0]
             report.paused_reason = state.paused_reason
+        # still advance the suspend clocks so a long pause is not itself a false resume
+        state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return report
-    if state.paused_reason is not None:
+    if state.paused_reason is not None and state.paused_reason != "clock_skew":
         state.paused_reason = state.paused_since = None
+    elif state.paused_reason == "clock_skew":
+        # clear only when books look sane again (next successful decide); keep paused this pass
+        pass
+    # Issue #120: suspend / resume detection before any scan or decision
+    suspended, gap_s = _suspend_detected(state, now)
+    if suspended:
+        state.resume_count += 1
+        state.last_resume_at = now
+        state.force_rescan = True
+        if state.fee_cache is not None:
+            state.fee_cache.invalidate_all()
+        state.fee_cache = None
+        try:
+            event(state, "resume_detected", now, gap_s=round(gap_s, 3), resume_count=state.resume_count)
+        except WriteFailed as exc:
+            state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
+            return IterationReport(ACT_WRITE_FAILED, [str(exc)])
+        state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
+        report = IterationReport(ACT_RUN, ["resume_detected"])
+        report.reasons = ["resume_detected"]
+        # force rescan this iteration but build no intents (C.3: 本轮不出单)
+        gamma = GuardedGetter(getters.gamma)
+        try:
+            _scan(state, now, gamma)
+            state.force_rescan = False
+            _ingest(state, now, report)
+        except WriteFailed as exc:
+            return IterationReport(ACT_WRITE_FAILED, [str(exc)])
+        return report
     report = IterationReport(ACT_RUN)
     gamma, book_get = GuardedGetter(getters.gamma), GuardedGetter(getters.book)
     try:
         cfg = _risk_cfg(state.risk_path)
-        if state.scan_at is None or (now - state.scan_at).total_seconds() >= RUNNER_SCAN_EVERY_S:
+        if (state.force_rescan or state.scan_at is None
+                or (now - state.scan_at).total_seconds() >= RUNNER_SCAN_EVERY_S):
             _scan(state, now, gamma)
+            state.force_rescan = False
         if state.scan_at is None or (now - state.scan_at).total_seconds() > RUNNER_SCAN_MAX_AGE_S:
             report.reasons.append("scan_too_old")
+            state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
             return report
         _ingest(state, now, report)
         _decide(state, now, cfg, gamma, book_get, report)
     except WriteFailed as exc:
+        state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return IterationReport(ACT_WRITE_FAILED, [str(exc)])
+    state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
+    # clear clock_skew pause only after a decide that did not re-pause
+    if report.action == ACT_RUN and state.paused_reason == "clock_skew":
+        state.paused_reason = state.paused_since = None
     return report
 
 
@@ -656,7 +815,7 @@ def progress(state: RunnerState, now: datetime) -> dict[str, Any]:
     scan_age = None if state.scan_at is None else round((now - state.scan_at).total_seconds(), 3)
     return {"iteration": state.iteration, "last_scan_ts": None if state.scan_at is None else _stamp(state.scan_at),
             "scan_age_s": scan_age, **state.counters, "last_book_age_s_max": state.last_book_age_s_max,
-            "resume_count": 0, "paused_reason": state.paused_reason, "paused_since": state.paused_since,
+            "resume_count": state.resume_count, "paused_reason": state.paused_reason, "paused_since": state.paused_since,
             "disk_free_gb": None if state.disk_free_gb is None else round(state.disk_free_gb, 3),
             "ledger_rows": state.ledger_rows, "pending_signals": len(state.pending),
             "executor_enabled": EXECUTOR_ENABLED}
@@ -807,7 +966,9 @@ def _run(args: argparse.Namespace, paths: RunnerPaths, getters: Getters, now_fn:
          sleep: Callable[[float], None], monotonic: Callable[[], float], risk_path: Path | None) -> int:
     hb = heartbeat.Heartbeat(PROC, every_s=HEARTBEAT_RUNNER_EVERY_S, monotonic=monotonic, now=now_fn,
                              risk_path=risk_path)
-    state = RunnerState(paths=paths, risk_path=risk_path, clock=now_fn, monotonic=monotonic)
+    # Issue #120: recover seen_keys / journal before the first iteration
+    state = recover(paths, Path(paper_ledger.PAPER_PATH), now=now_fn(), clock=now_fn, monotonic=monotonic,
+                    risk_path=risk_path)
     started = monotonic()
     hb.beat(heartbeat.STATE_STARTING, progress(state, now_fn()), force=True)
     try:
