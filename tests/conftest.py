@@ -9,6 +9,7 @@ import src.halt_store as halt_store
 import src.heartbeat as heartbeat
 import src.maker as maker
 import src.paper_cycle as paper_cycle
+import src.paper_ledger as paper_ledger
 import src.sentinel as sentinel
 import src.sentinel_tick as sentinel_tick
 
@@ -32,6 +33,11 @@ def _isolate_sentinel_state(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(sentinel_tick, "TICK_STATE_PATH", base / "sentinel_tick.json")
     # Task AX: sealed forecasts (logs/forecasts.jsonl) stay in the test's folder too.
     monkeypatch.setattr(forecaster, "FORECASTS_PATH", base / "forecasts.jsonl")
+    # Task CF (#124): the start-of-day leg marks snapshots and the books open legs are valued from stay in the
+    # test's folder too (no books file: every open leg is worth 0); each test starts as a fresh process.
+    monkeypatch.setattr(paper_ledger, "DAILY_MARKS_DIR", base / "daily_marks")
+    monkeypatch.setattr(paper_ledger, "MARK_BOOKS_PATH", base / "mark_books.jsonl")
+    monkeypatch.setattr(paper_ledger, "_LAST_EVAL_DAY", None)
     # Issue #129: no Sentinel heartbeat at all is a global halt (sentinel_heartbeat_never_seen), so every
     # test starts with a resident Sentinel that has just beaten (a fixture, not a switch in the code).
     # A test about the Sentinel's absence removes it with the ``no_sentinel`` fixture.

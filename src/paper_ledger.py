@@ -64,6 +64,15 @@ from src.ledger_store import counts as _counts  # noqa: E402 - Task AF: moved, s
 from src.risk_gate import Decision, Intent, evaluate  # noqa: E402
 from src.daily_loss import daily_loss  # noqa: E402 - Task AR: fees + realized losses
 from src.expiry_rule import hours_to_expiry, parse_end_date  # noqa: E402 - Task BA: hours at entry
+from src import daily_marks, leg_marks  # noqa: E402 - Task CF (#124): unrealized loss in the daily loss
+
+# Task CF (#124): the start-of-day leg marks (one file per UTC day, never overwritten) and the books the
+# open legs are valued from (the recorder's books file; a leg without a fresh usable book is worth 0).
+DAILY_MARKS_DIR = ROOT / "runs" / "m2" / "daily_marks"
+MARK_BOOKS_PATH = BOOKS_PATH
+# The UTC day of this process's last risk evaluation. A day's snapshot is on time (late=False) only when
+# this process also evaluated on the previous UTC day, i.e. it was running at the day roll.
+_LAST_EVAL_DAY: str | None = None
 
 DIRECTIONAL = "Single-leg fill is directional exposure, not risk-free arbitrage."
 
@@ -153,6 +162,81 @@ def read_quotes(path: Path) -> tuple[list[dict[str, Any]] | None, list[str]]:
     return rows, []
 
 
+def mark_books(path: Path) -> dict[tuple[str, str], dict[str, Any]]:
+    """Task CF: the newest book row per leg (by the recorder's parsed ``ts``). Unreadable: no books (all 0)."""
+    try:
+        rows = read_jsonl(path)
+    except (OSError, UnicodeDecodeError):
+        return {}
+    latest, _ = latest_by_time(rows, lambda row: (str(row.get("market_id") or ""), str(row.get("token_id") or "")))
+    return {leg_key(key[0], key[1]): row for key, row in latest.items()}
+
+
+def _previous_day(day: str) -> str | None:
+    stamp = parse_book_ts(day + "T00:00:00Z")
+    if stamp is None:
+        return None
+    from datetime import timedelta
+
+    return (stamp - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
+                     books: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Task CF (#124): today's unrealized loss on open legs (Poly风控's ruling, src/leg_marks.py).
+
+    Reads (or, on the day's first evaluation, writes once) the start-of-day snapshot. Returns
+    ``{"loss_usd", "legs", "late", "problems"}``; any problem (positions, books cannot be valued, snapshot
+    corrupt or not writable, an exception) makes ``loss_usd`` None: the caller reports invalid_risk_state.
+    """
+    global _LAST_EVAL_DAY
+    result: dict[str, Any] = {"loss_usd": None, "legs": [], "late": None, "problems": []}
+    try:
+        today = now[:10]
+        now_dt = parse_book_ts(now)
+        if now_dt is None:
+            result["problems"] = ["leg_marks_invalid_now"]
+            return result
+        pos = leg_marks.positions(rows, today, ids)
+        if pos.problems:
+            result["problems"] = pos.problems
+            return result
+        book_map = mark_books(MARK_BOOKS_PATH) if books is None else books
+        snap, problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, today)
+        if problems:
+            result["problems"] = problems
+            return result
+        if snap is None:
+            start_marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt)
+                           for key, leg in pos.start.items()}
+            late = _LAST_EVAL_DAY is None or _LAST_EVAL_DAY != _previous_day(today)
+            try:
+                snap = daily_marks.create_snapshot(DAILY_MARKS_DIR, today, now, late,
+                                                   leg_marks.snapshot_legs(pos.start, start_marks))
+            except daily_marks.SnapshotExists:  # another process wrote it first: use that one
+                snap, problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, today)
+                if problems or snap is None:
+                    result["problems"] = problems or ["daily_marks_missing_after_create"]
+                    return result
+            except (OSError, ValueError) as exc:
+                result["problems"] = [f"daily_marks_write_failed:{type(exc).__name__}"]
+                return result
+        _LAST_EVAL_DAY = today
+        marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt) for key, leg in pos.now.items()}
+        unrealized = leg_marks.unrealized_loss(pos, marks, snap)
+        result["late"] = snap.get("late")
+        if unrealized.problems:
+            result["problems"] = unrealized.problems
+            return result
+        result["loss_usd"] = unrealized.loss_usd
+        result["legs"] = unrealized.legs
+        return result
+    except Exception as exc:  # noqa: BLE001 - a valuation that fails is an invalid risk state, never a pass
+        result["loss_usd"] = None
+        result["problems"] = [f"leg_marks_error:{type(exc).__name__}"]
+        return result
+
+
 def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     """Risk state for an intent on one leg (market + token_id).
 
@@ -199,7 +283,12 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     legs = leg_positions(rows)
     # Task AR (backlog #4): today's booked fees plus today's gross realized losses (UTC day).
     day = daily_loss(rows, utc_now()[:10], ledger.ids)
-    if day.problems:
+    # Task CF (#124): plus each open leg's loss since the start of the UTC day (liquidation value, no netting).
+    # Only when the realized part is valid: a bad row is reported once, by daily_loss, as before.
+    marks = (daily_unrealized(rows, list(ledger.ids), utc_now()) if not day.problems
+             else {"loss_usd": None, "legs": [], "late": None, "problems": []})
+    if day.problems or marks["problems"]:
+        problems_today = list(day.problems) + list(marks["problems"])
         return {
             "open_positions": None,
             "leg_already_open": False,
@@ -207,8 +296,9 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
             "leg_exposure_usd": None,
             "leg_net_shares": None,
             "daily_loss_usd": None,
-            "daily_loss_problems": day.problems,
-            "ledger_problems": list(day.problems),
+            "daily_loss_problems": problems_today,
+            "ledger_problems": list(problems_today),
+            "daily_marks": marks["legs"],
             "duplicate_fill_rows": ledger.duplicates_ignored,
             "recent_fills": rows,
             "own_quotes": own_quotes,
@@ -221,8 +311,11 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
         "exposure_usd": sum(leg["exposure_usd"] for leg in legs.values()),
         "leg_exposure_usd": 0.0 if own is None else own["exposure_usd"],
         "leg_net_shares": 0.0 if own is None else own["shares"],  # issue #123: the open leg's direction
-        "daily_loss_usd": day.total_usd,
+        "daily_loss_usd": None if day.total_usd is None else day.total_usd + marks["loss_usd"],
         "daily_fees_usd": day.fees_usd,
+        "daily_unrealized_loss_usd": marks["loss_usd"],  # Task CF: diagnosis (already in daily_loss_usd)
+        "daily_marks": marks["legs"],
+        "daily_marks_late": marks["late"],
         "daily_realized_loss_usd": day.realized_loss_usd,
         "daily_realized_gain_usd": day.realized_gain_usd,
         "ledger_problems": [],
@@ -243,6 +336,9 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
     state = load_state(intent.market, intent.token_id)
     decision = evaluate(intent, cfg, state)
     summary = _decision_payload(intent, decision)
+    # Task CF (#124): this evaluation's leg marks go on the RiskGate bus line (review only, not a risk input).
+    summary["daily_unrealized_loss_usd"] = state.get("daily_unrealized_loss_usd")
+    summary["daily_marks"] = state.get("daily_marks") or []
     if not decision.allow:
         bus("RiskGate", "Executor", "veto", intent.market, summary)
         if "invalid_risk_state" in decision.reasons:

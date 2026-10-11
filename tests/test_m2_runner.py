@@ -20,7 +20,7 @@ import src.halt_store as halt_store
 import src.heartbeat as heartbeat
 import src.ledger_store as ledger_store
 import src.sentinel_tick as sentinel_tick
-from src import forecast_inbox, m2_runner, podlib
+from src import forecast_inbox, m2_runner, paper_ledger, podlib
 from src.daily_loss import DailyLoss
 from src.thresholds import HEARTBEAT_RUNNER_TIMEOUT_S, RUNNER_PAUSED_ALERT_S
 from tests import m2_runner_rig as rig
@@ -73,6 +73,10 @@ def test_once_scans_seals_reads_books_builds_and_books_one_allowed_fill(env):
     assert all(m2_runner.url_allowed(url) for url in fake.gamma_urls + fake.book_urls)
     _, read = ledger_store.read_ledger(env["paper"])
     assert ledger_store.verify(read) == []
+    # Task CF (#124): RiskGate's start-of-day leg marks were written under the run dir, and the default restored
+    marks = list((env["run"] / "daily_marks").glob("*.json"))
+    assert len(marks) == 1 and json.loads(marks[0].read_text())["day"] == marks[0].stem
+    assert paper_ledger.DAILY_MARKS_DIR != env["run"] / "daily_marks"
     candidates = rig.read_jsonl(env["run"] / "candidates.jsonl")
     assert [row["market_id"] for row in candidates] == [rig.MARKET_ID]
     assert not set(candidates[0]) & set(forecast_inbox.PRICE_FIELDS)

@@ -288,7 +288,9 @@ def test_load_state_reports_the_parts(ledger):
     _book(ledger, [fill("buy", 100, 0.6, YESTERDAY, market="a"), fill("sell", 100, 0.29, market="a"),
                    fill("buy", 20, 0.5, rate=0.02, market="c")])
     state = paper_ledger.load_state("x", "t")
-    assert state["daily_loss_usd"] == pytest.approx(31.2)
+    # Task CF (#124): leg c (20 @ 0.50, opened today, no book) is worth 0, so its 10 USD cost is a loss too.
+    assert state["daily_unrealized_loss_usd"] == pytest.approx(10.0)
+    assert state["daily_loss_usd"] == pytest.approx(41.2)
     assert state["daily_fees_usd"] == pytest.approx(0.2)
     assert state["daily_realized_loss_usd"] == pytest.approx(31.0)
     assert state["daily_realized_gain_usd"] == 0.0
