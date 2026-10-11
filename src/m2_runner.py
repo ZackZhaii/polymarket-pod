@@ -94,6 +94,7 @@ from src import (  # noqa: E402
     paper_ledger,
     pins,
     podlib,
+    resolution_watch,
     scanner,
     sentinel,
 )
@@ -354,8 +355,15 @@ def live_flag_problems(risk_path: Path | None = None) -> list[str]:
 
 
 def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = None,
-              ledger_path: Path | None = None) -> Preflight:
-    """The C.2 checks, in order; the first failing one decides. Calls no getter and writes no fill."""
+              ledger_path: Path | None = None, settle: Callable[[], list[str]] | None = None) -> Preflight:
+    """The C.2 checks, in order; the first failing one decides. Writes no fill itself.
+
+    Issue #206 (Task CO): ``settle`` (the runner's settlement step, ``_settle_tick``) runs after the KILL / live /
+    pin / global-halt checks and a verified ledger (so never under a hard halt, a KILL file or
+    invalid_risk_state), and before the daily-loss breaker, which then reads the ledger again. It runs whether
+    or not the breaker or a later check pauses this tick. Its problems are a contradiction: invalid_risk_state
+    and a global halt. It never clears a pause or a halt; the checks after it decide this tick.
+    """
     if paths.kill_file.exists():
         return Preflight(ACT_FINISH, ["kill_file"])
     live = live_flag_problems(risk_path)
@@ -384,6 +392,21 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
     if problems or read is None:
         _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": [str(p) for p in problems[:10]]})
         return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]]])
+    if settle is not None:  # issue #206: settlement before the daily-loss breaker (see the docstring)
+        problems = [str(p) for p in settle()]
+        if not problems:
+            try:
+                _, read = ledger_store.read_ledger(ledger)
+                problems = ledger_store.verify(read)
+            except Exception as exc:  # noqa: BLE001 - fail closed
+                read, problems = None, [f"ledger_unreadable:{type(exc).__name__}"]
+            if not problems and read is not None:
+                day = daily_loss(read.rows, now.astimezone(timezone.utc).strftime("%Y-%m-%d"), read.ids)
+                problems = list(day.problems)
+        if problems or read is None:
+            _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": [str(p) for p in problems[:10]],
+                                                     "source": "settlement"})
+            return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]]])
     rows = len(read.rows)
     try:
         cap = float(_risk_cfg(risk_path)["max_daily_loss_pct"]) * podlib.PAPER_EQUITY_USD
@@ -736,10 +759,70 @@ def _suspend_detected(state: RunnerState, now: datetime) -> tuple[bool, float]:
     return False, wall_gap
 
 
+def _held_markets() -> list[str]:
+    """Markets with an open leg on the paper ledger (src/settlement.open_legs), sorted."""
+    from src import settlement
+
+    _, read = ledger_store.read_ledger(Path(paper_ledger.PAPER_PATH))
+    return sorted({market for market, _token in settlement.open_legs(read.rows) if market})
+
+
+def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter) -> list[str]:
+    """Issue #197 (Task CK) hook: close-then-write-off runs here, AFTER settlement and BEFORE the daily loss.
+
+    Poly风控's tick order (#197, issuecomment-6106669720): halted -> end; settle; write off the legs that are
+    neither settled nor written off; #124 daily loss; RiskGate. CK is not merged (it waits for 家伟), so this is
+    a no-op that returns no problems; CK replaces the body. Problems it returns are invalid_risk_state.
+    """
+    return []
+
+
+def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> list[str]:
+    """Issue #206 (Task CO): this tick's settlement step (called by ``preflight``, see its docstring).
+
+    1. Collect settlement snapshots from Gamma for the markets with an open leg only (src/resolution_watch).
+       A collection failure books nothing this tick and is not a halt (#197 ruling ②): an event, retry next tick.
+    2. ``paper_ledger.apply_settlements``: one settlement row per resolved open leg, keyed by leg + condition
+       (src/settlement.settlement_fill_id), written to the ledger and fsynced before any event. Booking the same
+       key again is a no-op; the same key with other content is refused (conflicting_fill_id): a problem.
+    3. ``_writeoff_hook`` (CK).
+    Returns problems (invalid_risk_state); WriteFailed (events) propagates to the iteration.
+    """
+    try:
+        held = _held_markets()
+    except Exception as exc:  # noqa: BLE001 - preflight verified the ledger; a re-read failure is a problem
+        return [f"settlement_ledger_unreadable:{type(exc).__name__}"]
+    if held:
+        collected = resolution_watch.collect(gamma, held, now, _stamp(now),
+                                             Path(paper_ledger.SETTLEMENT_RESOLUTIONS_PATH))
+        if not collected.ok:
+            event(state, "settlement_skipped", now, reasons=collected.failures[:10])
+        else:
+            if collected.written:
+                event(state, "resolutions_collected", now,
+                      condition_ids=[row["condition_id"] for row in collected.written])
+            out = paper_ledger.apply_settlements(_stamp(now))
+            if out["problems"]:
+                return [str(p) for p in out["problems"]]
+            if out["booked"]:  # the rows are on disk (ledger_store.book fsyncs) before this event
+                event(state, "settled", now, rows=[{"fill_id": row.get("fill_id"), "market": row.get("market"),
+                                                   "token_id": row.get("token_id"),
+                                                   "settlement_payout": row.get("settlement_payout")}
+                                                  for row in out["booked"]])
+    return _writeoff_hook(state, now, gamma)
+
+
 def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> IterationReport:
-    """One loop step: the checks first; only when they all pass, scan / inbox / decisions."""
+    """One loop step: the checks first (settlement inside them, issue #206); only when they all pass, scan /
+    inbox / decisions."""
     state.iteration += 1
-    check = preflight(state.paths, now=now, risk_path=state.risk_path)
+    gamma = GuardedGetter(getters.gamma)  # one guarded Gamma getter per tick: settlement, scan, fee
+    try:
+        check = preflight(state.paths, now=now, risk_path=state.risk_path,
+                          settle=lambda: _settle_tick(state, now, gamma))
+    except WriteFailed as exc:
+        state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
+        return IterationReport(ACT_WRITE_FAILED, [str(exc)])
     state.disk_free_gb = check.disk_free_gb if check.disk_free_gb is not None else state.disk_free_gb
     state.ledger_rows = check.ledger_rows if check.ledger_rows is not None else state.ledger_rows
     if check.action != ACT_RUN:
@@ -779,7 +862,6 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
         report = IterationReport(ACT_RUN, ["resume_detected"])
         report.reasons = ["resume_detected"]
         # force rescan this iteration but build no intents (C.3: 本轮不出单)
-        gamma = GuardedGetter(getters.gamma)
         try:
             _scan(state, now, gamma)
             state.force_rescan = False
@@ -788,7 +870,7 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
             return IterationReport(ACT_WRITE_FAILED, [str(exc)])
         return report
     report = IterationReport(ACT_RUN)
-    gamma, book_get = GuardedGetter(getters.gamma), GuardedGetter(getters.book)
+    book_get = GuardedGetter(getters.book)
     try:
         cfg = _risk_cfg(state.risk_path)
         if (state.force_rescan or state.scan_at is None
