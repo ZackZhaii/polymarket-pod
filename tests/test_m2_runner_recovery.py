@@ -191,6 +191,7 @@ def test_wall_gap_triggers_resume_detected_and_skips_orders(env):
     report1 = m2_runner.iteration(state, now=clock.now(), getters=fake.getters())
     assert report1.action == m2_runner.ACT_RUN and state.last_iter_wall is not None
     clock.advance_wall(3600)
+    fake.now = clock.now()  # the independent server clock advances through the simulated sleep too
     before_books = len(fake.book_urls)
     report2 = m2_runner.iteration(state, now=clock.now(), getters=fake.getters())
     assert "resume_detected" in report2.reasons
@@ -222,6 +223,9 @@ def test_clock_skew_pauses_the_runner(env):
 
     class Skewed(rig.FakeGetters):
         def book(self, url: str):
+            if url == m2_runner.podlib.TIME_URL:
+                self.time_calls.append(url)
+                return skewed.timestamp()
             body = dict(super().book(url))
             body["timestamp"] = str(int(skewed.timestamp() * 1000))
             return body
@@ -233,7 +237,8 @@ def test_clock_skew_pauses_the_runner(env):
     state = m2_runner.RunnerState(paths=paths, clock=clock.now, monotonic=clock.monotonic)
     report = m2_runner.iteration(state, now=clock.now(), getters=fake.getters())
     assert report.action == m2_runner.ACT_PAUSE and report.paused_reason == "clock_skew"
-    assert any(e.get("event") == "clock_skew" for e in _events(env))
+    assert any(e.get("event") == "paused" and e.get("reasons") == ["clock_skew"] for e in _events(env))
+    assert fake.book_urls == []
 
 
 # ---------------------------------------------------------------- issue #238: clock_skew keeps paused_since
@@ -340,6 +345,8 @@ def test_stale_book_is_skipped(env):
 
     class Stale(rig.FakeGetters):
         def book(self, url: str):
+            if url == m2_runner.podlib.TIME_URL:
+                return super().book(url)
             body = dict(super().book(url))
             body["timestamp"] = str(int(old.timestamp() * 1000))
             return body

@@ -44,13 +44,14 @@ def clob_book(token: str, now: datetime) -> dict:
 
 
 class FakeGetters:
-    """Records every URL. gamma: the keyset page and /markets?id=; book: /book?token_id=."""
+    """Records Gamma, independent /time and /book reads separately; no network."""
 
     def __init__(self, now: datetime, *, gamma_row_changes: dict | None = None, fail: bool = False) -> None:
         self.now = now
         self.row = gamma_row(now, **(gamma_row_changes or {}))
         self.gamma_urls: list[str] = []
         self.book_urls: list[str] = []
+        self.time_calls: list[str] = []
         self.fail = fail
 
     def gamma(self, url: str):
@@ -64,6 +65,11 @@ class FakeGetters:
         return [self.row] if ids == [MARKET_ID] else []
 
     def book(self, url: str):
+        if url == "https://clob.polymarket.com/time":
+            self.time_calls.append(url)
+            if self.fail:
+                raise AssertionError(f"time getter called: {url}")
+            return self.now.timestamp()
         self.book_urls.append(url)
         if self.fail:
             raise AssertionError(f"book getter called: {url}")
@@ -75,7 +81,7 @@ class FakeGetters:
 
     @property
     def calls(self) -> int:
-        return len(self.gamma_urls) + len(self.book_urls)
+        return len(self.gamma_urls) + len(self.book_urls) + len(self.time_calls)
 
 
 def isolate(monkeypatch, tmp_path: Path) -> dict[str, Path]:

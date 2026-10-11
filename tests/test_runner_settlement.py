@@ -63,7 +63,9 @@ class Gamma:
         return [u for u in self.urls if "id=" in u]
 
 
-def _no_book(url):
+def _no_book(url, now):
+    if url == m2_runner.podlib.TIME_URL:
+        return now.timestamp()
     raise AssertionError(f"no book read expected: {url}")
 
 
@@ -88,7 +90,9 @@ def _hold_loser(env):
 
 def _tick(env, getter, now=NOW):
     env["state"].monotonic = lambda: now.timestamp()  # wall and monotonic move together (no #120 resume)
-    return m2_runner.iteration(env["state"], now=now, getters=m2_runner.Getters(gamma=getter, book=_no_book))
+    env["state"].clock = lambda: now
+    return m2_runner.iteration(env["state"], now=now,
+                               getters=m2_runner.Getters(gamma=getter, book=lambda url: _no_book(url, now)))
 
 
 def _settlements(env):
@@ -300,7 +304,7 @@ def test_the_runner_loop_calls_apply_settlements_without_any_intent(env, monkeyp
         return [fake.row] if want_closed else []
 
     fake.gamma = gamma
-    assert rig.run_once(env["run"], fake) == m2_runner.EXIT_OK
+    assert rig.run_once(env["run"], fake, clock=lambda: NOW) == m2_runner.EXIT_OK
     assert len(calls) == 1 and len(_settlements(env)) == 1
 
 

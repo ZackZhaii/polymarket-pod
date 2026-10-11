@@ -110,7 +110,7 @@ It prints one `PASS`/`FAIL` line per check with the reason, then a summary line:
   order-capable package (`ORDER_CAPABLE` in `scripts/guard.py`, the single list) in `requirements*.txt` /
   `pyproject.toml`, or imported anywhere in `src/` or `scripts/`.
 - `url_allowlist`: every URL in `src/` code is an allowlisted public read-only endpoint (Gamma `/markets` and
-  `/markets/keyset`, CLOB `/book`, the WS market channel, and since Task AK only the Data API v2 `/v2/status`, `/v2/positions`
+  `/markets/keyset`, CLOB `/book` and exact `/time` (no query or fragment), the WS market channel, and since Task AK only the Data API v2 `/v2/status`, `/v2/positions`
   and `/v2/trades` reads of `src/reconcile.py`); the retired v1 Data API routes, other v2 routes, order/auth paths, the user channel, ports, credentials in
   the query and other hosts fail. Docstrings and comments may also link docs.polymarket.com and github.com.
 - `thresholds_doc`: `docs/THRESHOLDS.md` agrees with `src/thresholds.py` (Task AC table parser).
