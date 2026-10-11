@@ -65,6 +65,7 @@ from src.ledger_store import counts as _counts  # noqa: E402 - Task AF: moved, s
 from src.risk_gate import Decision, Intent, evaluate  # noqa: E402
 from src.daily_loss import daily_loss  # noqa: E402 - Task AR: fees + realized losses
 from src.expiry_rule import hours_to_expiry, parse_end_date  # noqa: E402 - Task BA: hours at entry
+from src import wash_detect  # noqa: E402 - Task CH (#145): the market's token pair
 from src import daily_marks, leg_marks  # noqa: E402 - Task CF (#124): unrealized loss in the daily loss
 
 # Task CF (#124): the start-of-day leg marks (one file per UTC day, never overwritten) and the books the
@@ -73,6 +74,8 @@ DAILY_MARKS_DIR = ROOT / "runs" / "m2" / "daily_marks"
 MARK_BOOKS_PATH = BOOKS_PATH
 # Issue #126 (Task CG): the confirmed settlement snapshots open legs are settled from (src/settlement.py).
 SETTLEMENT_RESOLUTIONS_PATH = RESOLUTIONS_PATH
+# Issue #145 (Task CH): the scanner rows the complementary-leg pair check reads a market's two tokens from.
+PAIR_MARKETS_PATH = MARKETS_PATH
 # The UTC day of this process's last risk evaluation. A day's snapshot is on time (late=False) only when
 # this process also evaluated on the previous UTC day, i.e. it was running at the day roll.
 _LAST_EVAL_DAY: str | None = None
@@ -300,6 +303,16 @@ def _unsettled_closed_legs(rows: list[dict[str, Any]]) -> list[str] | None:
     return settlement.plan(rows, [], snaps, utc_now()).unsettled_closed_legs
 
 
+def pair_of(market: str) -> tuple[str, str] | None:
+    """Issue #145: the two token ids of ``market`` from the newest scanner row (None: unknown -> fail closed)."""
+    try:
+        rows = read_jsonl(PAIR_MARKETS_PATH)
+    except (OSError, UnicodeDecodeError):
+        return None
+    found = [row for row in rows if isinstance(row, dict) and str(row.get("id")) == str(market)]
+    return wash_detect.binary_pair(found[-1]) if found else None
+
+
 def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     """Risk state for an intent on one leg (market + token_id).
 
@@ -325,6 +338,9 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     own_quotes, quote_problems = read_quotes(QUOTES_PATH)
     if quote_problems:
         own_quotes = None  # issue #56: a partial quote history is not this history (fail closed)
+    # Issue #145 (Task CH): the market's two tokens, read only when an own open quote rests on another token.
+    market_pair = pair_of(market) if own_quotes is not None and wash_detect.pair_quotes(market, token_id, own_quotes) \
+        else None
     bad_rows = non_finite_ledger_rows(rows)
     problems = ledger_store.verify(ledger)
     if bad_rows or problems:
@@ -341,6 +357,7 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
             "duplicate_fill_rows": ledger.duplicates_ignored,
             "recent_fills": rows,
             "own_quotes": own_quotes,
+            "market_pair": market_pair,  # issue #145
             "quote_problems": quote_problems,
         }
     legs = leg_positions(rows)
@@ -365,6 +382,7 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
             "duplicate_fill_rows": ledger.duplicates_ignored,
             "recent_fills": rows,
             "own_quotes": own_quotes,
+            "market_pair": market_pair,  # issue #145
             "quote_problems": quote_problems,
         }
     own = legs.get(leg_key(market, token_id))
@@ -386,6 +404,7 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
         "duplicate_fill_rows": ledger.duplicates_ignored,
         "recent_fills": rows,
         "own_quotes": own_quotes,
+        "market_pair": market_pair,  # issue #145
         "quote_problems": quote_problems,
     }
 

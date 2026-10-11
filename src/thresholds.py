@@ -33,6 +33,10 @@ SENTINEL_STALE_CONSECUTIVE = 2
 
 # --- Wash / self-trade (Task S, backlog #1) ------------------------------------------------
 WASH_WINDOW_S = 300.0
+# Issue #145 (Task CG): float allowance for the complementary-leg pairing test. A buy pairs (mints) with our own
+# resting buy on the other token when the prices sum to >= 1 - this; two sells pair (merge) at <= 1 + this.
+# The boundary itself counts as a pair (fail closed). M2 pending.
+PAIR_CROSS_TOLERANCE = 1e-9
 
 # --- Scanner -------------------------------------------------------------------------------
 # Task O (backlog #8): a market must end at least this many hours after now.
@@ -351,6 +355,8 @@ def consistency_problems() -> list[str]:
         problems.append("SENTINEL_STALE_S must equal MAX_BOOK_AGE_S (Sentinel and RiskGate share one per-check limit)")
     if PAPER_CYCLE_STALE_AFTER_S != MAX_BOOK_AGE_S:
         problems.append("PAPER_CYCLE_STALE_AFTER_S must equal MAX_BOOK_AGE_S")
+    if not 0.0 < PAIR_CROSS_TOLERANCE < MIN_EDGE:  # Task CG (#145): a float allowance, far below any edge
+        problems.append("PAIR_CROSS_TOLERANCE must satisfy 0 < PAIR_CROSS_TOLERANCE < MIN_EDGE")
     if not (isinstance(SENTINEL_STALE_CONSECUTIVE, int) and SENTINEL_STALE_CONSECUTIVE >= 1):
         problems.append("SENTINEL_STALE_CONSECUTIVE must be a whole number >= 1")
     if not 0.0 <= SCANNER_MIN_PRICE < SCANNER_MAX_PRICE <= 1.0:
