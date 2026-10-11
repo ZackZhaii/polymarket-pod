@@ -38,6 +38,9 @@ def _isolate_sentinel_state(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(paper_ledger, "DAILY_MARKS_DIR", base / "daily_marks")
     monkeypatch.setattr(paper_ledger, "MARK_BOOKS_PATH", base / "mark_books.jsonl")
     monkeypatch.setattr(paper_ledger, "_LAST_EVAL_DAY", None)
+    # Task CH (#145): the scanner rows the complementary-leg pair check reads stay in the test's folder too.
+    monkeypatch.setattr(paper_ledger, "PAIR_MARKETS_PATH", base / "pair_markets.jsonl")
+    monkeypatch.setattr(maker, "MARKETS_PATH", base / "maker_markets.jsonl")
     # Issue #129: no Sentinel heartbeat at all is a global halt (sentinel_heartbeat_never_seen), so every
     # test starts with a resident Sentinel that has just beaten (a fixture, not a switch in the code).
     # A test about the Sentinel's absence removes it with the ``no_sentinel`` fixture.

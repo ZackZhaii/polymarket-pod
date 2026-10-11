@@ -84,7 +84,9 @@ PATH_NAMES = ("BUS_PATH", "PAPER_PATH", "QUOTES_PATH", "MARKETS_PATH", "BOOKS_PA
               # Task AX: sealed forecasts (M3 calibration step 2)
               "FORECASTS_PATH",
               # Task CF (#124): start-of-day leg marks and the books open legs are valued from
-              "DAILY_MARKS_DIR", "MARK_BOOKS_PATH")
+              "DAILY_MARKS_DIR", "MARK_BOOKS_PATH",
+              # Task CH (#145): the scanner rows the complementary-leg pair check reads
+              "PAIR_MARKETS_PATH")
 BUS_KINDS = frozenset({"signal", "veto", "fill", "halt", "resume"})
 
 
@@ -592,6 +594,8 @@ def run_pipeline(fixtures: Path, work: Path, *, root: Path | None = None) -> dic
         for extra in scenario.get("mark_books", []):
             podlib.append_jsonl(mark_books_path, dict(extra, ts=now_s, book_ts=now_s))
         paper_ledger.MARK_BOOKS_PATH = mark_books_path
+        # Task CH (#145): RiskGate's pair check reads the market's two tokens from the run's scanner rows.
+        paper_ledger.PAIR_MARKETS_PATH = markets_path
         markets = {row["id"]: row for row in podlib.read_jsonl(markets_path)}
         # 3. paper cycle + Sentinel check 1
         cycle_1 = paper_cycle.run(markets_path=markets_path, books_path=books_path, bus_path=bus_path, now=now_s,

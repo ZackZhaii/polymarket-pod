@@ -451,6 +451,7 @@ def evaluate(
             counterparty=intent.counterparty,
             state=state,
             now=now,
+            price=intent.market_price,  # issue #145: the taker price that would pair with a resting own quote
         )
     )
     # Issue #131: RiskGate checks the category itself (not only intent_builder): tags that are missing,

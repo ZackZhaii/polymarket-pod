@@ -19,10 +19,10 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from src import halt_store, sentinel
+from src import halt_store, sentinel, wash_detect
 from src.book_staleness import INVALID_BOOK_TS, MISSING_BOOK_TS, book_age_problem, latest_by_time
 from src.podlib import PAPER_EQUITY_USD, QUOTES_PATH, append_jsonl, bus, utc_now
-from src.podlib import BOOKS_PATH, read_jsonl
+from src.podlib import BOOKS_PATH, MARKETS_PATH, read_jsonl
 from src.thresholds import MAX_BOOK_AGE_S
 
 MISSING_BOOK = "missing_book"  # no recorded book row for the quoted leg (same word as paper_cycle)
@@ -43,6 +43,32 @@ class QuoteRefused(RuntimeError):
     def __init__(self, market: str, token_id: str, reason: str) -> None:
         self.reason = reason
         super().__init__(f"quote refused for {market!r} token {token_id!r}: {reason}")
+
+
+def pair_problem(market: str, token_id: str, side: str, price: float, *, quotes_path: Path,
+                 markets_path: Path | None = None) -> str | None:
+    """Issue #145 (Task CH): the same complementary-leg check RiskGate runs (wash_detect.pair_cross_problems).
+
+    A new quote that would mint-pair (buy) or merge-pair (sell) with our own resting quote on the other token of
+    the market is refused, and so is one whose pairing cannot be decided (quotes not readable in full, the
+    market's two tokens unknown): fail closed, nothing written. Returns the reason or None.
+    """
+    from src import paper_ledger  # local: paper_ledger imports much more than the Maker needs at import time
+
+    quotes, problems = paper_ledger.read_quotes(Path(quotes_path))
+    if problems or quotes is None:
+        return wash_detect.WASH_INPUT_INVALID
+    pair = None
+    if wash_detect.pair_quotes(market, token_id, quotes):
+        try:
+            rows = read_jsonl(Path(markets_path) if markets_path is not None else MARKETS_PATH)
+        except (OSError, UnicodeDecodeError):
+            rows = []
+        found = [row for row in rows if isinstance(row, dict) and str(row.get("id")) == str(market)]
+        pair = wash_detect.binary_pair(found[-1]) if found else None
+    reasons = wash_detect.pair_cross_problems(market=market, token_id=token_id, side=side, price=price,
+                                             quotes=quotes, market_pair=pair)
+    return reasons[0] if reasons else None
 
 
 def book_problem(market: str, token_id: str, *, books_path: Path | None = None,
@@ -87,6 +113,7 @@ def quote(
     quotes_path: Path | None = None,
     books_path: Path | None = None,
     recording_dir: Path | None = None,
+    markets_path: Path | None = None,
 ) -> dict:
     if side not in {"buy", "sell"}:
         raise ValueError("side must be one paper leg")
@@ -107,6 +134,10 @@ def quote(
     refused = book_problem(market, token_id, books_path=books_path, recording_dir=recording_dir)
     if refused is not None:
         raise QuoteRefused(market, token_id, refused)  # Issue #125: fail closed, nothing written
+    path = quotes_path or QUOTES_PATH
+    paired = pair_problem(market, token_id, side, price, quotes_path=path, markets_path=markets_path)
+    if paired is not None:
+        raise QuoteRefused(market, token_id, paired)  # Issue #145: would pair with our own resting quote
     row = {
         "ts": utc_now(),
         "market": market,
@@ -119,7 +150,6 @@ def quote(
         "venue": "paper",
         "exchange_action": "none",
     }
-    path = quotes_path or QUOTES_PATH
     append_jsonl(path, row)
     halted = halt_store.halt_problems(market)
     if halted:
