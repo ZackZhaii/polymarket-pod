@@ -10,7 +10,7 @@ Acceptance (#105): every control vector and every #105 vector passes. Highlights
 - a NewsForecaster row without a ``token_id`` is rejected (``missing_token_id``);
 - half an interval is rejected (``incomplete_interval``).
 
-The same file also has the #106 / #108 vectors. #106 (Task CK) is fixed: its three former xfails are
+The same file also has the #106 / #108 vectors. #106 (Task CL) is fixed: its three former xfails are
 cleared. Remaining #108 vectors that still differ are strict xfails (``XFAIL_OPEN``); a strict xfail
 that starts passing fails the suite, so the list cannot go stale.
 
@@ -36,7 +36,7 @@ ACCEPT_FIELDS = ("p_side", "exec_price", "limit_price", "shares", "size_usd", "e
 
 # Vectors of other issues that this branch does not meet yet (open issue #108; not part of #105 / #106).
 XFAIL_OPEN = {
-    # Issue #106 cleared by Task CK (limit_price also checked against the source price band).
+    # Issue #106 cleared by Task CL (limit_price also checked against the source price band).
     "I108-02": "108", "I108-03": "108", "I108-05": "108", "I108-06": "108", "I108-20": "108", "I108-21": "108",
 }
 

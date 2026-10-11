@@ -744,7 +744,7 @@ def build_order_intent(signal: ProbabilitySignal | None, market: MarketContext, 
     else:
         tick = min_order = None
 
-    # E. price band (by source). Issue #106 (Task CK): both the walk average (exec_price) and the
+    # E. price band (by source). Issue #106 (Task CL): both the walk average (exec_price) and the
     # limit (worst touched ask, rounded up to the tick) must sit in the band (inclusive). The limit is
     # known only after sizing (G), so the limit half of the check runs there; exec is checked here.
     source = signal.source if signal is not None else ""
@@ -782,7 +782,7 @@ def build_order_intent(signal: ProbabilitySignal | None, market: MarketContext, 
             detail.update({"kelly_raw": size.kelly_raw, "kelly_frac": size.kelly_frac, "size_pct": size.size_pct,
                            "kelly_size_pct": size.kelly_size_pct, "size_usd": size.size_usd,
                            "shares": size.shares, "limit_price": size.limit_price})
-            # Issue #106 (Task CK): the limit (ceil of the worst touched ask to the tick) must also be in band.
+            # Issue #106 (Task CL): the limit (ceil of the worst touched ask to the tick) must also be in band.
             if _finite(size.limit_price) is not None and not band[0] <= size.limit_price <= band[1]:
                 if "price_out_of_band" not in reasons:
                     reasons.append("price_out_of_band")
