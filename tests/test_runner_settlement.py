@@ -310,3 +310,101 @@ def test_resolution_watch_reads_only_the_allowlisted_gamma_markets_path():
     assert failure is None and row["closed"] is True
     assert len(getter.urls) == 2 and all(m2_runner.url_allowed(u) for u in getter.urls)
     assert {urlsplit(u).hostname for u in getter.urls} == {urlsplit(m2_runner.podlib.GAMMA_PREFIX).hostname}
+
+
+# ---------------------------------------------------------------- PR #211 review (Poly风控 issuecomment-6106764972)
+
+def _spy_bus(monkeypatch):
+    sent = []
+    real_podlib_bus, real_ledger_bus = m2_runner.podlib.bus, paper_ledger.bus
+    monkeypatch.setattr(m2_runner.podlib, "bus", lambda *a, **k: sent.append(a) or real_podlib_bus(*a, **k))
+    monkeypatch.setattr(paper_ledger, "bus", lambda *a, **k: sent.append(a) or real_ledger_bus(*a, **k))
+    return sent
+
+
+def test_a_market_halt_unrelated_to_settlement_data_still_settles(env):
+    """A stale-book market halt does not block that market's settlement."""
+    _hold_loser(env)
+    halt_store.record_halt(scope=halt_store.SCOPE_MARKET, market=rig.MARKET_ID, reason="stale_book", source="Sentinel")
+    _tick(env, Gamma(resolved_row()))
+    assert len(_settlements(env)) == 1 and _events(env, "settlement_blocked") == []
+
+
+@pytest.mark.parametrize("reason", sorted(settlement.SETTLEMENT_BLOCKING_HALT_PREFIXES))
+def test_a_market_halt_for_its_own_settlement_data_blocks_that_market_only(env, reason):
+    """The market's own close / settlement data contradicts itself: that market does not settle; others do."""
+    _hold_loser(env)
+    _book(env, [fill("buy", 5.0, 0.5, (NOW - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                     market="m-other", token="o2")], prefix="o")
+    halt_store.record_halt(scope=halt_store.SCOPE_MARKET, market=rig.MARKET_ID, reason=f"{reason}:detail",
+                           source="RiskGate")
+    rows = {rig.MARKET_ID: resolved_row(),
+            "m-other": resolved_row(id="m-other", conditionId="0xother", clobTokenIds='["o1", "o2"]')}
+
+    def getter(url):
+        parts = urlsplit(url)
+        if parts.path.endswith("/keyset"):
+            return {"markets": [], "next_cursor": ""}
+        query = parse_qs(parts.query)
+        assert query.get("id") != [rig.MARKET_ID], "a blocked market is not even collected"
+        row = rows.get((query.get("id") or [""])[0])
+        return [row] if row is not None and query.get("closed") == ["true"] else []
+
+    _tick(env, getter)
+    booked = _settlements(env)
+    assert [row["market"] for row in booked] == ["m-other"] and not _global_halt()
+    assert _events(env, "settlement_blocked")[0]["markets"] == [rig.MARKET_ID]
+
+
+def test_blocking_is_decided_by_the_halt_reason():
+    assert settlement.blocks_settlement("closed_flag_contradiction_after_writeoff:m1")
+    assert settlement.blocks_settlement("invalid_settlement_payout")
+    for reason in ("stale_book", "quote_cancelled", "", None, "global_halt", "x_settlement_conflict"):
+        assert not settlement.blocks_settlement(reason)
+
+
+def test_a_blocked_market_with_a_stored_resolution_is_not_booked_by_apply_settlements(env):
+    _hold_loser(env)
+    _tick(env, Gamma(resolved_row(closed_hours_ago=72.0)), NOW)  # stores the snapshot and settles
+    assert len(_settlements(env)) == 1
+    # a second leg of the same market under a blocking halt: the stored snapshot is not used for it
+    _book(env, [fill("buy", 5.0, 0.5, NOW.strftime("%Y-%m-%dT%H:%M:%SZ"), token=WINNER)], prefix="w")
+    out = paper_ledger.apply_settlements(NOW.strftime("%Y-%m-%dT%H:%M:%SZ"), skip_markets=frozenset({rig.MARKET_ID}))
+    assert out["booked"] == [] and out["skipped_markets"] == [rig.MARKET_ID] and out["problems"] == []
+
+
+def test_the_settlement_step_puts_no_intent_order_or_quote_on_the_bus(env, monkeypatch):
+    """Settlement only books: no signal (intent), fill (order) or veto on the bus, no quote, no journal step."""
+    earlier = (NOW - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    today = NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+    _book(env, [fill("buy", 100.0, 0.5, earlier, market="lossy", token="lx"),
+                fill("sell", 100.0, 0.1, today, market="lossy", token="lx")], prefix="loss")
+    _hold_loser(env)
+    rig.deliver(env["run"], NOW)  # a pending forecast exists, but the breaker pauses before any decision
+    sent = _spy_bus(monkeypatch)
+    report = _tick(env, Gamma(resolved_row()))
+    assert report.reasons[0] == "daily_loss_breaker" and len(_settlements(env)) == 1
+    assert sent == []
+    assert rig.read_jsonl(env["bus"]) == [] and not env["quotes"].exists()
+    assert not (env["run"] / "journal.jsonl").exists()
+
+
+def test_a_settle_only_running_tick_adds_no_bus_message_for_the_settlement(env, monkeypatch):
+    _hold_loser(env)
+    sent = _spy_bus(monkeypatch)
+    _tick(env, Gamma(resolved_row()))  # no forecast in the inbox: only settlement can act
+    assert len(_settlements(env)) == 1 and sent == [] and rig.read_jsonl(env["bus"]) == []
+
+
+def test_the_commit_path_also_skips_a_blocked_market(env):
+    """commit_if_allowed's own apply_settlements() (no explicit skip) honours the same blocking halts."""
+    _hold_loser(env)
+    halt_store.record_halt(scope=halt_store.SCOPE_MARKET, market=rig.MARKET_ID,
+                           reason="settlement_result_changed:test", source="RiskGate")
+    env["res"].parent.mkdir(parents=True, exist_ok=True)
+    snap = {"condition_id": "0xm2alpha", "winning_token_id": WINNER, "outcome_prices_final": [1.0, 0.0],
+            "closed_ts": "2026-01-01T00:00:00Z", "snapshot_ts": "2026-01-03T00:00:00Z", "status": "resolved",
+            "uma_checked": True, "outcome_token_ids": list(rig.TOKENS)}
+    env["res"].write_text(json.dumps(snap) + "\n")
+    out = paper_ledger.apply_settlements()
+    assert out["booked"] == [] and out["skipped_markets"] == [rig.MARKET_ID]

@@ -792,6 +792,13 @@ def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> lis
         held = _held_markets()
     except Exception as exc:  # noqa: BLE001 - preflight verified the ledger; a re-read failure is a problem
         return [f"settlement_ledger_unreadable:{type(exc).__name__}"]
+    try:
+        blocked = paper_ledger.settlement_blocked_markets()
+    except Exception as exc:  # noqa: BLE001 - an unreadable halt state is a global halt at the next check
+        return [f"settlement_halt_state_unreadable:{type(exc).__name__}"]
+    if blocked:
+        event(state, "settlement_blocked", now, markets=sorted(blocked))
+    held = [market for market in held if market not in blocked]
     if held:
         collected = resolution_watch.collect(gamma, held, now, _stamp(now),
                                              Path(paper_ledger.SETTLEMENT_RESOLUTIONS_PATH))
@@ -801,7 +808,7 @@ def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> lis
             if collected.written:
                 event(state, "resolutions_collected", now,
                       condition_ids=[row["condition_id"] for row in collected.written])
-            out = paper_ledger.apply_settlements(_stamp(now))
+            out = paper_ledger.apply_settlements(_stamp(now), skip_markets=blocked)
             if out["problems"]:
                 return [str(p) for p in out["problems"]]
             if out["booked"]:  # the rows are on disk (ledger_store.book fsyncs) before this event
