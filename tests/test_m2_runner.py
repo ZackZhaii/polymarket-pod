@@ -285,7 +285,9 @@ def test_a_second_runner_exits_3_and_writes_no_heartbeat(env):
         assert rig.run_once(env["run"], fake) == m2_runner.EXIT_ALREADY_RUNNING
         assert fake.calls == 0
         assert not heartbeat.beat_path(m2_runner.PROC).exists()
-        info = json.loads(paths.lock_file.read_bytes()[1:].decode("utf-8"))
+        with paths.lock_file.open("rb", buffering=0) as handle:
+            handle.seek(1)  # Windows locks byte 0: skip it before any read, not after reading it.
+            info = json.loads(handle.read().decode("utf-8"))
         assert set(info) == {"pid", "host", "started_at"}
     finally:
         holder.release()
