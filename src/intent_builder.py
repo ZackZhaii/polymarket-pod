@@ -44,7 +44,7 @@ from src.category import category_problems  # issue #131
 from src.calibration_ids import event_value, make_decision_id
 from src.book_staleness import book_age_problem, parse_book_ts
 from src.expiry_rule import expiry_problem, parse_end_date
-from src.podlib import pin_problems
+from src.podlib import as_float, pin_problems
 from src.risk_gate import BANNED_STRATEGY_TOKENS, Intent, gate_thresholds
 from src.thresholds import (
     EDGE_TOLERANCE,
@@ -919,6 +919,62 @@ def signal_from_bus(row: Mapping[str, object]) -> ProbabilitySignal | None:
 
 def _id_or_none(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+
+def _clob_levels(raw: object, *, descending: bool) -> tuple[tuple[float, float], ...] | None:
+    """CLOB /book asks or bids: each level is {price, size}. None when the side is unusable."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        return None
+    out: list[tuple[float, float]] = []
+    for level in raw:
+        if not isinstance(level, dict):
+            return None
+        price, size = as_float(level.get("price")), as_float(level.get("size"))
+        if price is None or size is None:
+            return None
+        out.append((price, size))
+    return tuple(sorted(out, key=lambda item: item[0], reverse=descending))
+
+
+def book_snapshot_from_clob(raw: object, market_id: str, token_id: str) -> BookSnapshot:
+    """Issue #120 (Task CJ): a CLOB /book body (or ``book.fetch_depth`` result) as a full-depth BookSnapshot.
+
+    Asks ascending, bids descending. Anything unusable (not an object, another asset, a level that is not a
+    number pair) gives a snapshot that build_order_intent rejects (no levels / wrong token): never a guessed
+    book. ``book_ts`` is the exchange timestamp (ISO), never the local clock.
+    """
+    body = raw if isinstance(raw, dict) else {}
+    asks = _clob_levels(body.get("asks"), descending=False)
+    bids = _clob_levels(body.get("bids"), descending=True)
+    asset = body.get("asset_id")
+    same_token = isinstance(raw, dict) and (asset is None or str(asset) == token_id)
+    if asks is None or bids is None or not same_token:
+        asks, bids = (), ()
+    best_ask = asks[0][0] if asks else None
+    best_bid = bids[0][0] if bids else None
+    spread = None if best_ask is None or best_bid is None else round(best_ask - best_bid, 6)
+    # Prefer a normalised book_ts from fetch_depth; else parse ISO / leave None (RiskGate fails closed).
+    book_ts = body.get("book_ts") if isinstance(body.get("book_ts"), str) else None
+    if book_ts is None:
+        raw_ts = body.get("timestamp")
+        if isinstance(raw_ts, str) and "T" in raw_ts:
+            parsed = parse_book_ts(raw_ts)
+            book_ts = None if parsed is None else parsed.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        elif isinstance(raw_ts, (int, str)) and not isinstance(raw_ts, bool):
+            text = str(raw_ts).strip()
+            if text.isdigit():
+                try:
+                    stamp = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=int(text))
+                    book_ts = stamp.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                except (OverflowError, ValueError):
+                    book_ts = None
+    return BookSnapshot(
+        market_id=market_id, token_id=token_id if same_token else "", asks=asks, bids=bids, best_bid=best_bid,
+        best_ask=best_ask, spread=spread, book_ts=book_ts, tick_size=as_float(body.get("tick_size")),
+        min_order_size=as_float(body.get("min_order_size")))
 
 
 def book_snapshot_from_row(row: Mapping[str, object]) -> BookSnapshot:

@@ -76,6 +76,9 @@ EXPECTED = {
     "RUNNER_SCAN_MAX_AGE_S": 7200.0,  # Task CE #119 (M2 pending)
     "RUNNER_MAX_INGEST_PER_ITER": 20,  # Task CE #119 (M2 pending)
     "RUNNER_MAX_EVALS_PER_SIGNAL": 10,  # Task CE #119 (M2 pending)
+    "RUNNER_SUSPEND_GAP_S": 180.0,  # Task CJ #120 (M2 pending)
+    "RUNNER_WALL_MONO_SKEW_S": 30.0,  # Task CJ #120 (M2 pending)
+    "CLOCK_SKEW_MAX_S": 5.0,  # Task CJ #120 (M2 pending)
     "DISK_MIN_FREE_GB": 2.0,  # Task CE #119 (M2 pending)
     "RUNNER_DISK_BUDGET_GB": 5.0,  # Task CE #119 (M2 pending)
     "M1_RUN_TARGET_S": 21600.0,  # KEY-approved 2026-10-11 家伟批准
@@ -209,7 +212,8 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               # Task CE (#119, M2-C1): the paper runner.
               "RUNNER_LOOP_S", "HEARTBEAT_RUNNER_EVERY_S", "HEARTBEAT_RUNNER_TIMEOUT_S", "RUNNER_PAUSED_ALERT_S",
               "RUNNER_SCAN_EVERY_S", "RUNNER_SCAN_MAX_AGE_S", "RUNNER_MAX_INGEST_PER_ITER",
-              "RUNNER_MAX_EVALS_PER_SIGNAL", "DISK_MIN_FREE_GB", "RUNNER_DISK_BUDGET_GB",
+              "RUNNER_MAX_EVALS_PER_SIGNAL", "RUNNER_SUSPEND_GAP_S", "RUNNER_WALL_MONO_SKEW_S",
+              "CLOCK_SKEW_MAX_S", "DISK_MIN_FREE_GB", "RUNNER_DISK_BUDGET_GB",
               # Task AK: Data API v2 reconciliation.
               "RECONCILE_SHARES_TOL", "DATA_API_POSITIONS_DUST_SHARES", "DATA_API_TRADES_MIN_SHARES",
               "DATA_API_MAX_LAG_S", "DATA_API_IDENTITY_TOL_USDC",
@@ -414,6 +418,9 @@ def test_relations_hold():
         ("RUNNER_SCAN_MAX_AGE_S = 7200.0", "RUNNER_SCAN_MAX_AGE_S = 1800.0"),  # Task CE
         ("RUNNER_MAX_INGEST_PER_ITER = 20", "RUNNER_MAX_INGEST_PER_ITER = 0"),  # Task CE
         ("RUNNER_MAX_EVALS_PER_SIGNAL = 10", "RUNNER_MAX_EVALS_PER_SIGNAL = True"),  # Task CE
+        ("RUNNER_SUSPEND_GAP_S = 180.0", "RUNNER_SUSPEND_GAP_S = 30.0"),  # Task CJ: must stay above loop
+        ("RUNNER_WALL_MONO_SKEW_S = 30.0", "RUNNER_WALL_MONO_SKEW_S = 0.0"),  # Task CJ
+        ("CLOCK_SKEW_MAX_S = 5.0", "CLOCK_SKEW_MAX_S = 120.0"),  # Task CJ: must stay below MAX_BOOK_AGE_S
         ("DISK_MIN_FREE_GB = 2.0", "DISK_MIN_FREE_GB = -1.0"),  # Task CE
         ("RUNNER_DISK_BUDGET_GB = 5.0", "RUNNER_DISK_BUDGET_GB = float('nan')"),  # Task CE
         ("WS_GROUP_FLUSH_S = 0.25", "WS_GROUP_FLUSH_S = 0.0"),  # Task CC: must be > 0
