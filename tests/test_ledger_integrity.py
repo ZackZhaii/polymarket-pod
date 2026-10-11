@@ -793,6 +793,7 @@ def test_ledger_store_is_standard_library_only_and_adds_no_number():
         elif isinstance(node, ast.ImportFrom):
             modules.add(node.module or "")
     assert modules == {"__future__", "hashlib", "json", "math", "os", "uuid", "dataclasses", "pathlib", "typing",
+                       "datetime",  # issue #126 (PR #194 review): a settlement row's closed_ts must be zoned
                        "src.fees", "src.thresholds",
                        "src.halt_store"}  # issue #64: the issue #52 cross-process mutex (StateLock)
     numbers = {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
