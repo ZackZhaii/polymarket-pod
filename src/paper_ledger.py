@@ -296,9 +296,9 @@ def apply_settlements(now: str | None = None) -> dict[str, Any]:
 def apply_writeoffs(closes: list[Any], now: str | None = None) -> dict[str, Any]:
     """Issue #197 (Task CK, KEY-approved): book one write-off row per open leg of each confirmed closed market.
 
-    ``closes`` are src/market_close.Close values (confirmed by src/m2_runner's close watch). Idempotent: a leg
-    already written off is never written off again (the row's fill_id is derived from market, token and
-    closedTime), so a restart repeats nothing. Returns {"booked": [rows], "problems": [...]}; any problem (a
+    ``closes`` are src/market_close.Close values (confirmed by src/m2_runner._writeoff_hook). Idempotent: a leg
+    already written off is never written off again (the row's fill_id is the leg key, src/market_close.writeoff_fill_id),
+    so a restart repeats nothing. Returns {"booked": [rows], "problems": [...]}; any problem (a
     ledger that does not verify, a contradiction, a refused or failed write) must make the caller record
     invalid_risk_state as a global halt.
     """

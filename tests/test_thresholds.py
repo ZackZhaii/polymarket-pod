@@ -108,6 +108,7 @@ EXPECTED = {
     # Task AN: M3 settlement snapshot hold (not coupled to ENDGAME_WINDOW_HOURS).
     "RESOLUTION_HOLD_HOURS": 48.0,
     "MARKET_CLOSE_RECHECK_S": 30.0,  # Task CK (#197)
+    "MARKET_CLOSE_REOPEN_GRACE_S": 300.0,  # Task CK (#197), M2 pending
     # Task AQ: secret-string scan of the bus and logs (M2 pending).
     "SECRET_VALUE_MIN_LEN": 16,
     "MNEMONIC_MIN_WORDS": 12,
@@ -199,7 +200,8 @@ REEXPORTS = {
     "resolutions.RESOLUTION_HOLD_HOURS": "RESOLUTION_HOLD_HOURS",
 }
 
-M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
+M2_PENDING = {"MARKET_CLOSE_REOPEN_GRACE_S",  # Task CK (#197)
+              "MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
               "PAIR_CROSS_TOLERANCE",  # Task CG (#145)
               "MIN_HOURS_TO_EXPIRY", "WS_ROW_REFRESH_S",
               # Task AI: the M1 acceptance criteria (conservative first values for the user at M2).
@@ -460,6 +462,7 @@ def test_relations_hold():
         ("MAX_SOURCE_LOGIT_GAP = 1.0", "MAX_SOURCE_LOGIT_GAP = 0.0"),
         ("RESOLUTION_HOLD_HOURS = 48.0", "RESOLUTION_HOLD_HOURS = 0.0"),
         ("MARKET_CLOSE_RECHECK_S = 30.0", "MARKET_CLOSE_RECHECK_S = 90.0"),  # Task CK (#197)
+        ("MARKET_CLOSE_REOPEN_GRACE_S = 300.0", "MARKET_CLOSE_REOPEN_GRACE_S = 10.0"),
         ("SECRET_VALUE_MIN_LEN = 16", "SECRET_VALUE_MIN_LEN = 64"),
         ("SECRET_VALUE_MIN_LEN = 16", "SECRET_VALUE_MIN_LEN = 16.0"),
         ("MNEMONIC_MIN_WORDS = 12", "MNEMONIC_MIN_WORDS = 13"),

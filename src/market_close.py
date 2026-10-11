@@ -1,43 +1,46 @@
 """Issue #197 (Task CK, KEY-approved "close-then-write-off"): confirm that a held market closed; plan its write-offs.
 
-家伟 approved Poly风控's rule on 2026-10-11 09:47 (Beijing), issue #197 comment 6104331631, with Poly研究's
-trigger (/workspace/pod-bots/poly-research-closed-flag.md). Paper only; no risk.toml key changes.
+家伟 approved Poly风控's rule on 2026-10-11 09:47 (Beijing), issue #197 comment 6104331631, with Poly研究's trigger
+(/workspace/pod-bots/poly-research-closed-flag.md). Poly风控's rulings issuecomment-6106669720 and -6106700917 decide
+the failure handling below. Paper only; no risk.toml change.
 
-Trigger (``qualifies``), on one Gamma market row, all three:
+Read (``gamma_read``). Each held market is read from Gamma with an explicit ``/markets?id=<id>&closed=true`` (the
+default query without ``closed`` filters a closed market out, so it is never used to see a close; it is read only
+to see that a market is open). The market in neither list is **unknown** (``gamma_market_missing``), never "open"
+or "closed". The URL path is the allowlisted Gamma ``/markets``; no new host.
 
-* ``closed is True`` (a JSON boolean, nothing else),
-* ``acceptingOrders is False``,
-* ``closedTime`` a zoned timestamp (``expiry_rule.parse_end_date``: Gamma's ``2025-03-25 00:21:27+00`` too) that is
-  not in the future.
+Trigger (``predicate``), on one read, all of: ``closed is True``; ``acceptingOrders is False``; ``closedTime`` a
+zoned timestamp (Gamma's ``2025-03-25 00:21:27+00`` too) not in the future. ``closed`` that is not a JSON boolean,
+or ``acceptingOrders`` that is neither a boolean nor null, is ``close_read_invalid_type`` (no truth conversion).
+``endDate``, ``active``, ``uma*``, an empty list or a WebSocket message never trigger anything.
 
-Confirmation (``CloseTracker``): one qualifying read never writes anything off. A close is confirmed by
+Confirmation (``CloseTracker``, in memory: a restart re-confirms, #124 keeps the worst case meanwhile): a second
+read at least MARKET_CLOSE_RECHECK_S (30 s, no upper bound) after the first qualifying one, that qualifies too with
+the same closedTime. A second source (CLOB ``accepting_orders is False`` / Data ``tokens[].closed is True``) can
+confirm only once its endpoints are allowlisted (#155 / #115, KEY); until then the runner uses the re-read
+(``expected_reread_only``). **No halt before a write-off**: a read failure, an invalid type, a re-read that does
+not qualify, a changed closedTime or a disagreeing second source drops the pending read; nothing is written off
+this tick and the leg keeps its #124 worst-case unrealized loss.
 
-* a second qualifying Gamma read at least MARKET_CLOSE_RECHECK_S (30 s, in [30, 60]) after the first, with the
-  same closedTime (a read that does not qualify in between starts over), or
-* a second source after the first qualifying read: CLOB ``accepting_orders is False`` or Data API
-  ``tokens[].closed is True`` (``second_source_confirms``; the runner does not call either API today, its
-  allowlist has Gamma only, so it uses the re-read).
+After the write-off (``reopen_contradiction``): the market is still read on every tick until its settlement is
+booked, only to find a contradiction. ``closed is False`` or ``acceptingOrders is True`` is a halt
+(``closed_flag_contradiction_after_writeoff``, invalid_risk_state; the write-off is not rolled back, never
+repeated), except within MARKET_CLOSE_REOPEN_GRACE_S of the first closed read: Gamma's by-id view needs 33-309 s to
+settle on closed=true, so an early not-closed read is lag, not a contradiction. A read failure, an empty list,
+a non-boolean value or another closedTime is ignored.
 
-Never a trigger on its own: ``endDate``, ``active``, ``uma*`` (none is read here), an empty list (``gamma_read``
-reports it as a read failure, never as closed or open), a WebSocket ``market_resolved``.
-
-Held legs are queried actively (``gamma_read``): the scanner lists ``closed=false`` markets only, and Gamma's
-``/markets`` filters closed markets out unless ``closed=true`` is passed, so each held market is read by id
-twice, with and without ``closed=true``.
-
-Write-off (``plan_writeoffs``): for every open leg of a confirmed market one ledger row (src/ledger_store.py
-(f)) whose ``writeoff_usd`` is the leg's whole cost (src/daily_loss.writeoff_amount). The row's fill_id is
-derived from (market, token_id, closed_ts): booking it again is skipped, so a restart never writes a leg off
-twice. Any read failure or contradiction (a written-off market that reads open again or with another
-closedTime, a leg written off for another closedTime) is a problem: the caller records invalid_risk_state as a
-global halt.
+Write-off (``plan_writeoffs``): one ledger row per open leg of a confirmed market (YES and NO separately, never
+netted), keyed by leg_key: fill_id = ``writeoff-`` + sha256(market|token)[:32]. ``writeoff_usd`` is the leg's
+whole cost basis at average cost (a long: what it paid, fees excluded: they were counted on the fill day; a short:
+shares x 1 - sale proceeds). A leg already written off is skipped (restart-safe). Two different write-off rows for
+one key are a ledger integrity problem (src/ledger_store.py (f)): invalid_risk_state.
 """
 from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlencode
 
 from src import podlib
@@ -52,13 +55,23 @@ from src.ledger_store import (
     is_writeoff,
     leg_key,
 )
-from src.thresholds import LEDGER_OPEN_EPS, MARKET_CLOSE_RECHECK_S
+from src.thresholds import LEDGER_OPEN_EPS, MARKET_CLOSE_RECHECK_S, MARKET_CLOSE_REOPEN_GRACE_S
 
 WRITEOFF_ID_PREFIX = "writeoff-"
 STRATEGY = "writeoff"
 BY_REREAD = "gamma_reread"
 BY_CLOB = "clob_accepting_orders"
 BY_DATA = "data_tokens_closed"
+
+# close reasons (one per market per tick; the vector codes of /workspace/pod-bots/poly-forecast-197-vectors.json)
+CONFIRMED = "writeoff_confirmed_reread"
+AWAITING = "awaiting_confirmation"
+TOO_SOON = "reread_too_soon"
+TIME_CHANGED = "confirmation_failed_closed_time_changed"
+READ_FAILED = "close_read_failed"
+INVALID_TYPE = "close_read_invalid_type"
+ALREADY = "already_written_off"
+HALT_REOPENED = "closed_flag_contradiction_after_writeoff"
 
 
 @dataclass(frozen=True)
@@ -89,10 +102,28 @@ class Close:
         return self.closed_time.isoformat()
 
 
+def predicate(obs: Observation, now: datetime) -> str | None:
+    """None when the read qualifies (§A); else why not (a vector close-reason code)."""
+    if obs.problem is not None:
+        return READ_FAILED
+    if not isinstance(obs.closed, bool) or not (obs.accepting_orders is None or isinstance(obs.accepting_orders, bool)):
+        return INVALID_TYPE
+    if obs.closed is not True:
+        return "not_closed"
+    if obs.accepting_orders is not False:
+        return "accepting_orders_not_false"
+    raw = obs.raw_closed_time
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return "closed_time_missing"
+    if obs.closed_time is None:
+        return "closed_time_invalid"
+    if obs.closed_time > now:
+        return "closed_time_in_future"
+    return None
+
+
 def qualifies(obs: Observation, now: datetime) -> bool:
-    """The approved trigger on one read: closed is True, acceptingOrders is False, closedTime parseable, not future."""
-    return (obs.problem is None and obs.closed is True and obs.accepting_orders is False
-            and obs.closed_time is not None and obs.closed_time <= now)
+    return predicate(obs, now) is None
 
 
 def gamma_url(market_id: str, *, closed: bool) -> str:
@@ -109,41 +140,44 @@ def _match(data: object, market_id: str) -> tuple[dict[str, Any] | None, str | N
     return (found[0] if found else None), None
 
 
-def observation_from_row(market_id: str, row: dict[str, Any], now: datetime) -> Observation:
+def observation_from_row(market_id: str, row: Mapping[str, Any], now: datetime) -> Observation:
     raw = row.get("closedTime")
     return Observation(market=str(market_id), observed_at=now, closed=row.get("closed"),
                        accepting_orders=row.get("acceptingOrders"), closed_time=parse_end_date(raw),
                        raw_closed_time=raw)
 
 
-def gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime) -> Observation:
-    """Read one held market by id, with ``closed=true`` and without (the default filters closed markets out).
+def failed(market_id: str, now: datetime, problem: str) -> Observation:
+    return Observation(str(market_id), now, problem=problem)
 
-    Both lists empty is a read failure (never "open", never "closed"). A market in both lists with another
-    close state is read as not qualifying (Gamma's views can split for a minute or two around a close).
-    """
-    rows = []
+
+def gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime) -> Observation:
+    """Read one held market: ``closed=true`` first (the only read that can show a close), then the default query
+    (it can only show the market open). In neither list: unknown (a read failure). In both: unknown too (Gamma's
+    views split for a few minutes around a close)."""
+    rows: dict[bool, dict[str, Any]] = {}
     for closed in (True, False):
         try:
             data = getter(gamma_url(market_id, closed=closed))
-        except Exception as exc:  # noqa: BLE001 - any failed read is a read failure (the caller halts)
-            return Observation(str(market_id), now, problem=f"gamma_read_failed:{type(exc).__name__}")
+        except Exception as exc:  # noqa: BLE001 - any failed read is a read failure (never a halt by itself)
+            return failed(market_id, now, f"gamma_read_failed:{type(exc).__name__}")
         row, problem = _match(data, market_id)
         if problem:
-            return Observation(str(market_id), now, problem=problem)
+            return failed(market_id, now, problem)
         if row is not None:
-            rows.append(row)
+            rows[closed] = row
     if not rows:
-        return Observation(str(market_id), now, problem="gamma_market_missing")
-    views = [observation_from_row(market_id, row, now) for row in rows]
-    if len(views) == 2 and qualifies(views[0], now) != qualifies(views[1], now):
-        return Observation(str(market_id), now, closed=False, accepting_orders=None)  # split views: not closed
-    return views[0]
+        return failed(market_id, now, "gamma_market_missing")
+    if len(rows) == 2:
+        return failed(market_id, now, "gamma_views_disagree")
+    if False in rows and rows[False].get("closed") is True:
+        return failed(market_id, now, "gamma_default_view_closed")  # a close is only seen through closed=true
+    return observation_from_row(market_id, rows.get(True) or rows[False], now)
 
 
 def second_source_confirms(source: str, raw: object, token_ids: Iterable[str] = ()) -> bool:
     """CLOB ``/markets/{condition_id}``: ``accepting_orders is False``; Data ``/v2/tokens``: every held token
-    ``closed is True``. Anything else (missing, null, a string) confirms nothing."""
+    ``closed is True``. Anything else confirms nothing. Not wired: those endpoints are not allowlisted (KEY)."""
     if source == BY_CLOB:
         return isinstance(raw, dict) and raw.get("accepting_orders") is False
     if source == BY_DATA:
@@ -162,37 +196,51 @@ class CloseTracker:
 
     first: dict[str, Observation] = field(default_factory=dict)
 
-    def update(self, obs: Observation, now: datetime) -> Close | None:
-        """Feed one Gamma read; return the Close it confirms (re-read), else None."""
-        if obs.problem is not None:
-            return None  # the caller treats the failure; the pending first read stays as it was
-        if not qualifies(obs, now):
-            self.first.pop(obs.market, None)  # a read that does not qualify starts over
-            return None
-        first = self.first.get(obs.market)
-        if first is None or first.closed_time != obs.closed_time:
+    def step(self, obs: Observation, now: datetime) -> tuple[Close | None, str]:
+        """Feed one read of a market that is not written off; return (the Close it confirms, the close reason)."""
+        pending = self.first.get(obs.market)
+        reason = predicate(obs, now)
+        if reason is not None:
+            if pending is None:
+                return None, reason
+            del self.first[obs.market]  # rulings ① / N1: drop the pending read, no halt
+            if reason in (READ_FAILED, INVALID_TYPE):
+                return None, reason + "_pending_dropped"
+            return None, "confirmation_failed:" + reason
+        if pending is None:
             self.first[obs.market] = obs
-            return None
-        if (obs.observed_at - first.observed_at).total_seconds() < MARKET_CLOSE_RECHECK_S:
-            return None
-        return Close(obs.market, obs.closed_time, first.observed_at, obs.observed_at, BY_REREAD)  # type: ignore[arg-type]
+            return None, AWAITING
+        if pending.closed_time != obs.closed_time:
+            del self.first[obs.market]  # this read does not open a new pending either (WO-14)
+            return None, TIME_CHANGED
+        if (obs.observed_at - pending.observed_at).total_seconds() < MARKET_CLOSE_RECHECK_S:
+            return None, TOO_SOON
+        del self.first[obs.market]
+        return Close(obs.market, obs.closed_time, pending.observed_at, obs.observed_at, BY_REREAD), CONFIRMED  # type: ignore[arg-type]
+
+    def update(self, obs: Observation, now: datetime) -> Close | None:
+        return self.step(obs, now)[0]
 
     def confirm_by_second_source(self, market: str, source: str, raw: object, now: datetime,
                                  token_ids: Iterable[str] = ()) -> Close | None:
-        """A second source after a qualifying Gamma read confirms at once (never on its own)."""
+        """A second source after a qualifying Gamma read confirms at once (never on its own). Not wired (KEY)."""
         first = self.first.get(str(market))
         if first is None or first.observed_at > now or not second_source_confirms(source, raw, token_ids):
             return None
+        del self.first[str(market)]
         return Close(first.market, first.closed_time, first.observed_at, now, source)  # type: ignore[arg-type]
 
+    def drop(self, market: str) -> None:
+        self.first.pop(str(market), None)
 
-def writeoff_fill_id(market: str, token_id: str, closed_ts: str) -> str:
-    digest = hashlib.sha256(f"{market}|{token_id}|{closed_ts}".encode("utf-8")).hexdigest()
+
+def writeoff_fill_id(market: str, token_id: str) -> str:
+    """The write-off key is the leg (Poly风控: unique key leg_key)."""
+    digest = hashlib.sha256(f"{market}|{token_id}".encode("utf-8")).hexdigest()
     return WRITEOFF_ID_PREFIX + digest[:32]
 
 
-def held_markets(rows: Iterable[dict[str, Any]]) -> dict[str, list[str]]:
-    """Open legs per market (counted rows, ledger order): {market: [token_id, ...]}."""
+def open_legs(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], float]:
     legs: dict[tuple[str, str], float] = {}
     for row in rows:
         if not counts(row):
@@ -200,23 +248,28 @@ def held_markets(rows: Iterable[dict[str, Any]]) -> dict[str, list[str]]:
         qty = float(row.get("shares") or 0.0)
         key = leg_key(row.get("market"), row.get("token_id"))
         legs[key] = legs.get(key, 0.0) + (qty if row.get("side") == "buy" else -qty)
+    return {key: shares for key, shares in legs.items() if abs(shares) > LEDGER_OPEN_EPS}
+
+
+def held_markets(rows: Iterable[dict[str, Any]]) -> dict[str, list[str]]:
+    """Open legs per market (counted rows, ledger order): {market: [token_id, ...]}."""
     out: dict[str, list[str]] = {}
-    for (market, token), shares in sorted(legs.items()):
-        if abs(shares) > LEDGER_OPEN_EPS and market:
+    for market, token in sorted(open_legs(rows)):
+        if market:
             out.setdefault(market, []).append(token)
     return out
 
 
-def written_off_legs(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], str]:
-    """Open legs that carry a write-off row now: {(market, token): closed_ts}."""
+def written_off_legs(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Open legs that carry a write-off row now: {(market, token): the write-off row}."""
     shares: dict[tuple[str, str], float] = {}
-    out: dict[tuple[str, str], str] = {}
+    out: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
         if not counts(row):
             continue
         key = leg_key(row.get("market"), row.get("token_id"))
         if is_writeoff(row):
-            out[key] = str(row.get("closed_ts"))
+            out[key] = row
             continue
         qty = float(row.get("shares") or 0.0)
         shares[key] = shares.get(key, 0.0) + (qty if row.get("side") == "buy" else -qty)
@@ -225,15 +278,64 @@ def written_off_legs(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], st
     return out
 
 
-def contradiction(obs: Observation, closed_ts: str, now: datetime) -> str | None:
-    """A read of a market whose legs are written off must still qualify, with the same closedTime."""
+def reopen_contradiction(obs: Observation, first_closed_seen: datetime | None, now: datetime) -> str | None:
+    """A written-off market read again: the halt reason, or None (ignored). See the module docstring."""
     if obs.problem is not None:
-        return None  # a read failure is reported as such by the caller
-    if not qualifies(obs, now):
-        return "reads_open_after_writeoff"
-    if obs.closed_time is None or obs.closed_time != parse_end_date(closed_ts):
-        return "closed_time_changed"
+        return None
+    if obs.closed is False or obs.accepting_orders is True:
+        if first_closed_seen is not None and (now - first_closed_seen).total_seconds() < MARKET_CLOSE_REOPEN_GRACE_S:
+            return None  # Gamma's by-id lag right after a close, not a contradiction
+        return HALT_REOPENED
     return None
+
+
+def already_reason(obs: Observation, closed_ts: object) -> str:
+    if obs.problem is not None or not isinstance(obs.closed, bool) or not (
+            obs.accepting_orders is None or isinstance(obs.accepting_orders, bool)):
+        return ALREADY + "_read_failed"
+    if obs.closed_time is not None and obs.closed_time != parse_end_date(closed_ts):
+        return ALREADY + "_closed_time_changed"
+    return ALREADY
+
+
+@dataclass
+class Step:
+    """One tick's close detection (Poly风控 tick step 3)."""
+
+    closes: list[Close] = field(default_factory=list)
+    reasons: dict[str, str] = field(default_factory=dict)
+    halts: list[str] = field(default_factory=list)  # "closed_flag_contradiction_after_writeoff:<market>"
+
+
+def detect(tracker: CloseTracker, ledger_rows: list[dict[str, Any]], reads: Mapping[str, Observation],
+           now: datetime) -> Step:
+    """Feed this tick's reads of the held markets. Pure apart from the tracker's pending reads."""
+    out = Step()
+    held = held_markets(ledger_rows)
+    written = written_off_legs(ledger_rows)
+    for market in sorted(held):
+        obs = reads.get(market)
+        if obs is None:
+            continue
+        rows = [written[(market, token)] for token in held[market] if (market, token) in written]
+        if rows:  # written off: no new write-off, read only to find a contradiction (N3)
+            tracker.drop(market)
+            first_seen = min((parse_end_date(row.get("close_first_seen_ts")) for row in rows
+                              if parse_end_date(row.get("close_first_seen_ts")) is not None), default=None)
+            halt = reopen_contradiction(obs, first_seen, now)
+            if halt is not None:
+                out.halts.append(f"{halt}:{market}")
+            else:
+                out.reasons[market] = already_reason(obs, rows[0].get("closed_ts"))
+            continue
+        close, reason = tracker.step(obs, now)
+        out.reasons[market] = reason
+        if close is not None:
+            out.closes.append(close)
+    for market in list(tracker.first):
+        if market not in held:
+            tracker.drop(market)  # settled or flat: nothing left to confirm
+    return out
 
 
 @dataclass
@@ -250,27 +352,19 @@ def plan_writeoffs(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], clo
     if day.problems:
         result.problems = [f"writeoff_ledger_invalid:{problem}" for problem in day.problems]
         return result
-    booked = set(ledger_ids)
     already = written_off_legs(ledger_rows)
     held = held_markets(ledger_rows)
     for close in closes:
         for token in held.get(close.market, []):
             key = leg_key(close.market, token)
-            fill_id = writeoff_fill_id(close.market, token, close.closed_ts)
             if key in already:
-                if fill_id not in booked or parse_end_date(already[key]) != close.closed_time:
-                    result.problems.append(f"writeoff_conflict:{close.market}|{token}:closed_time_changed")
                 continue  # written off once: never again (restart-safe)
-            if fill_id in booked:
-                result.problems.append(f"writeoff_conflict:{close.market}|{token}:id_booked_leg_not_written_off")
-                continue
             leg = day.legs.get(key)
             amount = None if leg is None else writeoff_amount(leg)
             if leg is None or amount is None:
-                result.problems.append(f"writeoff_conflict:{close.market}|{token}:leg_not_open")
                 continue
             result.rows.append({
-                FILL_ID_FIELD: fill_id,
+                FILL_ID_FIELD: writeoff_fill_id(close.market, token),
                 "ts": now,
                 KIND_FIELD: WRITEOFF_KIND,
                 "strategy": STRATEGY,
@@ -295,6 +389,11 @@ def plan_writeoffs(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], clo
                 "note": "Paper write-off of a closed market's open leg at its full cost (#197, KEY-approved). "
                         "No exchange action; the leg holds its limits until it settles.",
             })
-    if result.problems:
-        result.rows = []  # any contradiction: write nothing off at all (the caller halts)
     return result
+
+
+def bus_events(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The write-off bus events for rows (at least once; consumers dedupe by ``key``, the leg's fill_id)."""
+    return [{"key": row.get(FILL_ID_FIELD), "leg_key": f"{row.get('market')}|{row.get('token_id')}",
+             "market": row.get("market"), "token_id": row.get("token_id"), "writeoff_usd": row.get("writeoff_usd"),
+             "closed_ts": row.get("closed_ts"), "ts": row.get("ts")} for row in rows]

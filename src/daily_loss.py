@@ -155,6 +155,7 @@ def daily_loss(rows: Iterable[dict[str, Any]], today: str, ids: Iterable[str] | 
         if leg["written_off"] and qty > 0 and (side == "buy") == (held > 0):
             result.problems.append(f"daily_loss_writeoff_leg_grew:{label}")
             continue
+        before = writeoff_amount(leg) if leg["written_off"] else None
         pnl = _apply(leg, side, qty, usd)
         if leg["written_off"] and abs(leg["shares"]) > LEDGER_OPEN_EPS and (leg["shares"] > 0) != (held > 0):
             result.problems.append(f"daily_loss_writeoff_leg_grew:{label}")  # flipped through flat
@@ -164,8 +165,19 @@ def daily_loss(rows: Iterable[dict[str, Any]], today: str, ids: Iterable[str] | 
             leg["written_off"] = 0.0
         if pnl is not None and is_today:
             result.closing_fills_today += 1
-            if pnl < 0 and written_off:
-                result.writeoff_settled_loss_usd += -pnl  # already realized by the write-off: never twice
+            if written_off:
+                # issue #197 (INV-3): the written-off cost is realized already. Measured from the write-off, the
+                # close is a gain of what it returns (a long: its proceeds, the payout; a short: shares - buy-back
+                # cost), never a second loss, and it offsets nothing.
+                after = writeoff_amount(leg) or 0.0
+                released = max(0.0, (before or 0.0) - after)
+                if pnl < 0:
+                    result.writeoff_settled_loss_usd += -pnl  # already realized by the write-off: never twice
+                outcome = pnl + released
+                if outcome >= 0:
+                    result.realized_gain_usd += outcome
+                else:  # cannot happen for a payout in [0, 1]; counted as a loss rather than lost
+                    result.realized_loss_usd += -outcome
             elif pnl < 0:
                 result.realized_loss_usd += -pnl
             else:

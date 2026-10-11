@@ -81,7 +81,7 @@ nothing more. All of this is tightening only and fails closed. No orders, keys o
     (finite, >= 0: the leg's full cost, checked by src/daily_loss.py against the average-cost replay) and
     ``closed_ts`` (the market's zoned closedTime). It must sit on an open leg with exactly those shares and the
     leg must not be written off already (``writeoff_not_open``); a damaged row is ``invalid_writeoff``. Its
-    fill_id is derived from (market, token_id, closed_ts) (src/market_close.py), so booking it twice is
+    fill_id is derived from the leg (market, token_id) (src/market_close.py: the write-off key is leg_key), so booking it twice is
     idempotent and a restart never writes the same leg off again.
 """
 from __future__ import annotations

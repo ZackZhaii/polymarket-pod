@@ -128,7 +128,8 @@ def test_settlement_after_writeoff_loser_books_nothing_winner_gain_never_offsets
     _book(env["ledger"], [settle("lose", "a", 20.0, 0.0, DAY2), settle("win", "b", 20.0, 1.0, DAY2)], prefix="st")
     state = paper_ledger.load_state("x", "t")
     assert state["daily_realized_loss_usd"] == 0.0  # the loser's 10 USD was written off on day 1
-    assert state["daily_realized_gain_usd"] == pytest.approx(10.0)  # reported, never netted
+    # INV-3 (Poly预测 v3): the winner's whole payout is its gain, measured from the write-off; reported, never netted
+    assert state["daily_realized_gain_usd"] == pytest.approx(20.0)
     assert state["daily_loss_usd"] == 0.0
     assert state["open_positions"] == 0 and state["exposure_usd"] == 0.0  # capacity released at settlement
     day = daily_loss.daily_loss(_rows(env["ledger"]), "2026-09-02")
@@ -156,7 +157,8 @@ def test_the_writeoff_row_moves_no_cash_or_shares_and_verifies(env):
     before = _rows(env["ledger"])[-1]
     row = paper_ledger.apply_writeoffs([close("m")])["booked"][0]
     assert (row["kind"], row["risk_decision"], row["shares"], row["notional_usd"]) == ("writeoff", "writeoff", 0.0, 0.0)
-    assert row["fill_id"] == market_close.writeoff_fill_id("m", "t", "2026-09-01T08:00:00+00:00")
+    assert row["fill_id"] == market_close.writeoff_fill_id("m", "t")  # the key is the leg (Poly风控 #197)
+    assert row["close_first_seen_ts"] and row["closed_ts"] == "2026-09-01T08:00:00+00:00"
     for name in (ledger_store.CASH_FIELD, ledger_store.LEG_SHARES_FIELD, ledger_store.LEG_COST_FIELD):
         assert row[name] == before[name]
     assert ledger_store.verify(ledger_store.read_ledger(env["ledger"])[1]) == []
@@ -218,11 +220,34 @@ def test_writeoff_is_idempotent_and_restart_safe(env):
     assert sum(1 for row in _rows(env["ledger"]) if ledger_store.is_writeoff(row)) == 1
 
 
-def test_a_second_close_time_for_a_written_off_leg_is_a_contradiction(env):
+def test_a_second_close_time_for_a_written_off_leg_writes_nothing_and_is_not_a_halt(env):
+    """Poly风控 (#197 ruling): another closedTime after the write-off is ignored; the leg is never written off twice."""
     _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
     paper_ledger.apply_writeoffs([close("m")])
-    out = paper_ledger.apply_writeoffs([close("m", "2026-09-01T09:00:00Z")])
-    assert out["booked"] == [] and out["problems"] == ["writeoff_conflict:m|t:closed_time_changed"]
+    assert paper_ledger.apply_writeoffs([close("m", "2026-09-01T09:00:00Z")]) == {"booked": [], "problems": []}
+    rows = _rows(env["ledger"])
+    obs = _obs(gamma(closed_time="2026-09-01T09:00:00Z"), T0)
+    step = market_close.detect(market_close.CloseTracker(), rows, {"m": obs}, T0)
+    assert step.halts == [] and step.reasons == {"m": "already_written_off_closed_time_changed"}
+
+
+def test_two_different_writeoff_rows_for_one_leg_key_are_invalid_risk_state(env):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    row = paper_ledger.apply_writeoffs([close("m")])["booked"][0]
+    with env["ledger"].open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({**row, "writeoff_usd": 9.0}) + "\n")
+    problems = ledger_store.verify(ledger_store.read_ledger(env["ledger"])[1])
+    assert any("conflicting_fill_id" in problem for problem in problems)
+
+
+def test_an_identical_writeoff_row_written_twice_counts_once(env):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    row = paper_ledger.apply_writeoffs([close("m")])["booked"][0]
+    with env["ledger"].open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+    _, read = ledger_store.read_ledger(env["ledger"])
+    assert ledger_store.verify(read) == []
+    assert sum(1 for r in read.rows if ledger_store.is_writeoff(r)) == 1
 
 
 def test_an_unverifiable_ledger_writes_nothing_off(env):
@@ -274,17 +299,56 @@ def test_one_read_never_confirms_a_reread_after_the_recheck_window_does():
     assert found.closed_ts == "2026-09-01T08:00:00+00:00"
 
 
-def test_a_read_that_does_not_qualify_starts_over_and_a_new_close_time_restarts():
+def test_a_read_that_does_not_qualify_drops_the_pending_read_and_a_new_close_time_does_not_restart():
     tracker = market_close.CloseTracker()
-    tracker.update(_obs(gamma()), T0)
+    assert tracker.step(_obs(gamma()), T0) == (None, "awaiting_confirmation")
     t1 = T0 + timedelta(seconds=40)
-    assert tracker.update(_obs(gamma(accepting=True), t1), t1) is None
+    assert tracker.step(_obs(gamma(accepting=True), t1), t1) == (None, "confirmation_failed:accepting_orders_not_false")
     t2 = T0 + timedelta(seconds=80)
-    assert tracker.update(_obs(gamma(), t2), t2) is None  # the first qualifying read again
-    t3 = T0 + timedelta(seconds=100)
-    assert tracker.update(_obs(gamma(closed_time="2026-09-01T08:05:00Z"), t3), t3) is None
-    t4 = T0 + timedelta(seconds=140)
-    assert tracker.update(_obs(gamma(closed_time="2026-09-01T08:05:00Z"), t4), t4) is not None
+    assert tracker.step(_obs(gamma(), t2), t2) == (None, "awaiting_confirmation")  # the first qualifying read again
+    t3 = T0 + timedelta(seconds=120)
+    other = gamma(closed_time="2026-09-01T08:05:00Z")
+    assert tracker.step(_obs(other, t3), t3) == (None, "confirmation_failed_closed_time_changed")
+    t4 = T0 + timedelta(seconds=160)
+    assert tracker.step(_obs(other, t4), t4) == (None, "awaiting_confirmation")
+    t5 = T0 + timedelta(seconds=200)
+    assert tracker.step(_obs(other, t5), t5)[1] == "writeoff_confirmed_reread"
+
+
+def test_a_failed_read_drops_the_pending_read_without_a_halt():
+    tracker = market_close.CloseTracker()
+    tracker.step(_obs(gamma()), T0)
+    t1 = T0 + timedelta(seconds=40)
+    assert tracker.step(market_close.failed("m", t1, "gamma_market_missing"), t1) == (
+        None, "close_read_failed_pending_dropped")
+    assert tracker.first == {}
+
+
+@pytest.mark.parametrize("after_s,halts", [(60, False), (299, False), (300, True), (3600, True)])
+def test_reading_open_after_the_writeoff_is_a_halt_only_after_the_gamma_lag_grace(env, after_s, halts):
+    """Gamma by-id needs 33-309 s to show closed=true: an open read within MARKET_CLOSE_REOPEN_GRACE_S of the first
+    closed read is lag, later it is the OQ-8 contradiction."""
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    paper_ledger.apply_writeoffs([close("m")])
+    first_seen = datetime.fromisoformat(_rows(env["ledger"])[-1]["close_first_seen_ts"])
+    at = first_seen + timedelta(seconds=after_s)
+    for row in (gamma(closed=False, accepting=True, closed_time=None), gamma(accepting=True)):
+        step = market_close.detect(market_close.CloseTracker(), _rows(env["ledger"]), {"m": _obs(row, at)}, at)
+        assert step.halts == (["closed_flag_contradiction_after_writeoff:m"] if halts else [])
+
+
+@pytest.mark.parametrize("obs", [
+    market_close.failed("m", T0, "gamma_read_failed:HTTPError"),
+    market_close.failed("m", T0, "gamma_market_missing"),  # an empty [] is unknown
+    market_close.Observation("m", T0, closed="true", accepting_orders=False),
+    market_close.Observation("m", T0, closed=None, accepting_orders=None),
+])
+def test_a_written_off_market_ignores_failed_empty_and_non_boolean_reads(env, obs):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    paper_ledger.apply_writeoffs([close("m")])
+    later = T0 + timedelta(hours=2)
+    step = market_close.detect(market_close.CloseTracker(), _rows(env["ledger"]), {"m": obs}, later)
+    assert step.halts == [] and step.closes == [] and step.reasons == {"m": "already_written_off_read_failed"}
 
 
 def test_a_second_source_confirms_only_after_a_qualifying_gamma_read():
@@ -293,9 +357,11 @@ def test_a_second_source_confirms_only_after_a_qualifying_gamma_read():
     tracker.update(_obs(gamma()), T0)
     assert tracker.confirm_by_second_source("m", market_close.BY_CLOB, {"accepting_orders": None}, T0) is None
     assert tracker.confirm_by_second_source("m", market_close.BY_CLOB, {"accepting_orders": False}, T0) is not None
+    assert tracker.first == {}  # a confirmed close is no longer pending
     data = {"tokens": [{"token_id": "a", "closed": True}, {"token_id": "b", "closed": False}]}
-    assert tracker.confirm_by_second_source("m", market_close.BY_DATA, data, T0, ["a"]) is not None
+    tracker.update(_obs(gamma()), T0)
     assert tracker.confirm_by_second_source("m", market_close.BY_DATA, data, T0, ["a", "b"]) is None
+    assert tracker.confirm_by_second_source("m", market_close.BY_DATA, data, T0, ["a"]) is not None
     assert tracker.confirm_by_second_source("m", "ws_market_resolved", {"closed": True}, T0) is None
 
 
@@ -311,17 +377,23 @@ class Gamma:
         return (self.closed if is_closed else self.default) or []
 
 
-def test_gamma_read_asks_with_and_without_closed_true_and_an_empty_answer_is_a_read_failure():
+def test_gamma_read_sees_a_close_only_through_closed_true_and_an_empty_answer_is_unknown():
     getter = Gamma(closed=[gamma()])
     obs = market_close.gamma_read(getter, "m", T0)
     assert market_close.qualifies(obs, T0)
     assert sorted(parse_qs(urlsplit(u).query).get("closed", [""])[0] for u in getter.urls) == ["", "true"]
     assert all(m2_runner.url_allowed(u) for u in getter.urls)
+    assert all(u != m2_runner.gamma_market_url("m") for u in getter.urls if "closed=true" in u)
     assert market_close.gamma_read(Gamma(), "m", T0).problem == "gamma_market_missing"
     assert market_close.gamma_read(Gamma(error=TimeoutError()), "m", T0).problem == "gamma_read_failed:TimeoutError"
     assert market_close.gamma_read(Gamma(default={"x": 1}), "m", T0).problem == "gamma_bad_response"
+    # Gamma's two views split around a close: unknown, not open and not closed
     split = market_close.gamma_read(Gamma(default=[gamma(closed=False, accepting=True)], closed=[gamma()]), "m", T0)
-    assert split.problem is None and not market_close.qualifies(split, T0)
+    assert split.problem == "gamma_views_disagree"
+    # the default view alone never shows a close
+    assert market_close.gamma_read(Gamma(default=[gamma()]), "m", T0).problem == "gamma_default_view_closed"
+    open_now = market_close.gamma_read(Gamma(default=[gamma(closed=False, accepting=True)]), "m", T0)
+    assert open_now.problem is None and open_now.closed is False
 
 
 # --- the runner: active query of held legs, write-off once, halt on failure or contradiction ------------
@@ -402,29 +474,50 @@ def test_the_runner_does_not_write_off_an_open_market(runner):
     assert _writeoffs(runner["paper"]) == []
 
 
-def test_a_failed_close_read_of_a_held_market_is_a_global_invalid_risk_state_halt(runner):
+def _halted():
+    return halt_store.has_active_halt(scope=halt_store.SCOPE_GLOBAL, reason_prefix="invalid_risk_state") is True
+
+
+def test_a_failed_close_read_of_a_held_market_is_not_a_halt_and_writes_nothing_off(runner):
     getter = RunnerGamma(gamma("held"))
     getter.error = TimeoutError()
-    report = _iterate(runner, getter, RUN_NOW)
-    assert "market_close_halt" in report.reasons
-    assert any(r.startswith("market_close_unreadable:held:gamma_read_failed") for r in report.reasons)
-    assert halt_store.has_active_halt(scope=halt_store.SCOPE_GLOBAL, reason_prefix="invalid_risk_state") is True
-    assert _writeoffs(runner["paper"]) == []
+    for seconds in (0, 60):
+        _iterate(runner, getter, RUN_NOW + timedelta(seconds=seconds))
+    assert not _halted() and _writeoffs(runner["paper"]) == []
+    events = [json.loads(line) for line in (runner["run"] / "events.jsonl").read_text().splitlines()]
+    assert any(e.get("event") == "close_read_skipped" for e in events)
 
 
-def test_an_empty_answer_for_a_held_market_is_a_read_failure_not_a_close(runner):
+def test_an_empty_answer_for_a_held_market_is_unknown_not_a_close(runner):
     getter = RunnerGamma({"id": "someone-else", "closed": True})
-    report = _iterate(runner, getter, RUN_NOW)
-    assert any(r.endswith("gamma_market_missing") for r in report.reasons)
-    assert _writeoffs(runner["paper"]) == []
+    for seconds in (0, 60):
+        _iterate(runner, getter, RUN_NOW + timedelta(seconds=seconds))
+    assert not _halted() and _writeoffs(runner["paper"]) == []
 
 
-def test_a_written_off_market_that_reads_open_again_is_a_contradiction_halt(runner):
+def test_a_written_off_market_that_reads_open_again_after_the_grace_is_a_contradiction_halt(runner):
     getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
     _iterate(runner, getter, RUN_NOW)
     _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
     assert len(_writeoffs(runner["paper"])) == 1
     getter.row = gamma("held", closed=False, accepting=True, closed_time=None)
-    report = _iterate(runner, getter, RUN_NOW + timedelta(seconds=120))
-    assert "market_close_contradiction:held:reads_open_after_writeoff" in report.reasons
-    assert halt_store.has_active_halt(scope=halt_store.SCOPE_GLOBAL, reason_prefix="invalid_risk_state") is True
+    _iterate(runner, getter, RUN_NOW + timedelta(seconds=120))  # Gamma lag: not a contradiction yet
+    assert not _halted()
+    report = _iterate(runner, getter, RUN_NOW + timedelta(seconds=600))
+    assert "closed_flag_contradiction_after_writeoff:held" in report.reasons and _halted()
+    assert len(_writeoffs(runner["paper"])) == 1  # no rollback
+    assert halt_store.has_active_halt(scope=halt_store.SCOPE_MARKET, market="held",
+                                      reason_prefix="closed_flag_contradiction_after_writeoff") is True
+
+
+def test_writeoff_events_follow_the_ledger_and_are_sent_again_after_a_restart(runner):
+    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _iterate(runner, getter, RUN_NOW)
+    _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
+    _iterate(runner, getter, RUN_NOW + timedelta(seconds=120))
+    runner["state"] = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(runner["run"]))
+    _iterate(runner, getter, RUN_NOW + timedelta(seconds=180))
+    events = [json.loads(line) for line in (runner["run"] / "events.jsonl").read_text().splitlines()]
+    sent = [(e["resent"], [x["key"] for x in e["events"]]) for e in events if e.get("event") == "writeoff"]
+    key = _writeoffs(runner["paper"])[0]["fill_id"]
+    assert sent == [(False, [key]), (True, [key])]  # once on booking, again after the restart; consumers dedupe

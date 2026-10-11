@@ -230,6 +230,10 @@ RESOLUTION_HOLD_HOURS = 48.0
 # at least this many seconds after the first one still shows closed / not accepting orders / the same closedTime
 # (the approved 30-60 s re-read; the runner re-reads on its next loop, RUNNER_LOOP_S later).
 MARKET_CLOSE_RECHECK_S = 30.0
+# M2 pending. #197 (Poly风控 on #197): Gamma's by-id view takes 33-309 s to show closed=true after a close, so a read
+# of a written-off market that shows it open within this many seconds of the first closed read is lag, not the
+# reopen contradiction (no halt). Later, closed=false / acceptingOrders=true is the halt.
+MARKET_CLOSE_REOPEN_GRACE_S = 300.0
 
 
 # --- Signal -> OrderIntent (Task AO, forecaster/SPEC_signal_to_intent.md) ------------------------
@@ -556,6 +560,8 @@ def consistency_problems() -> list[str]:
         problems.append("CALIBRATION_MAX_CLUSTER_SHARE must be in (0, 1]")
     if not 30.0 <= MARKET_CLOSE_RECHECK_S <= 60.0:  # issue #197: the approved 30-60 s re-read window
         problems.append("MARKET_CLOSE_RECHECK_S must be in [30, 60]")
+    if not MARKET_CLOSE_RECHECK_S < MARKET_CLOSE_REOPEN_GRACE_S <= 600.0:
+        problems.append("need MARKET_CLOSE_RECHECK_S < MARKET_CLOSE_REOPEN_GRACE_S <= 600")
     # Task BB: M3 Reflector proposal rules.
     if not 0 < REFLECTOR_DISABLE_SLOPE_MAX < REFLECTOR_TIGHTEN_SLOPE_MAX <= 1:
         problems.append("need 0 < REFLECTOR_DISABLE_SLOPE_MAX < REFLECTOR_TIGHTEN_SLOPE_MAX <= 1")

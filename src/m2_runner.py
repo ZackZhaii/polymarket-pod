@@ -254,6 +254,7 @@ class RunnerState:
     disk_free_gb: float | None = None
     ledger_rows: int | None = None
     close_tracker: market_close.CloseTracker = field(default_factory=market_close.CloseTracker)  # issue #197
+    writeoff_events_resent: bool = False  # issue #197: the first tick after a start re-sends write-off events
     # Issue #120 (Task CJ): suspend / resume tracking
     last_iter_wall: datetime | None = None
     last_iter_mono: float | None = None
@@ -655,52 +656,6 @@ def _book_age_s(book_ts: object, now: datetime) -> float | None:
     return None if parsed is None else round((now - parsed).total_seconds(), 3)
 
 
-def _watch_closes(state: RunnerState, now: datetime, gamma: GuardedGetter, report: IterationReport) -> bool:
-    """Issue #197 (Task CK, KEY-approved): read every held market's close state; write off confirmed closes.
-
-    Every market with an open leg is read from Gamma by id on every iteration (src/market_close.gamma_read; the
-    scanner lists closed=false only). A close is confirmed by a second qualifying read at least
-    MARKET_CLOSE_RECHECK_S later (src/market_close.CloseTracker); its open legs are then written off once
-    (paper_ledger.apply_writeoffs). A read that fails, a written-off market that reads open again or with another
-    closedTime, or a write-off that cannot be booked records invalid_risk_state as a global halt and nothing is
-    traded this iteration (the next one pauses on the halt). False: halted.
-    """
-    problems: list[str] = []
-    try:
-        _, ledger = ledger_store.read_ledger(Path(paper_ledger.PAPER_PATH))
-        held = market_close.held_markets(ledger.rows)
-        written = market_close.written_off_legs(ledger.rows)
-    except (OSError, TypeError, ValueError) as exc:
-        problems.append(f"market_close_ledger_unreadable:{type(exc).__name__}")
-        held, written = {}, {}
-    closes: list[market_close.Close] = []
-    for market in sorted(held):
-        obs = market_close.gamma_read(gamma, market, now)
-        if obs.problem is not None:
-            problems.append(f"market_close_unreadable:{market}:{obs.problem}")
-            continue
-        for closed_ts in sorted({ts for (leg_market, _), ts in written.items() if leg_market == market}):
-            found = market_close.contradiction(obs, closed_ts, now)
-            if found:
-                problems.append(f"market_close_contradiction:{market}:{found}")
-        close = state.close_tracker.update(obs, now)
-        if close is not None:
-            closes.append(close)
-    if not problems and closes:
-        out = paper_ledger.apply_writeoffs(closes, _stamp(now))
-        problems.extend(str(problem) for problem in out["problems"])
-        if out["booked"]:
-            event(state, "writeoff", now, rows=[{"fill_id": row.get("fill_id"), "market": row.get("market"),
-                                                 "token_id": row.get("token_id"),
-                                                 "writeoff_usd": row.get("writeoff_usd"),
-                                                 "closed_ts": row.get("closed_ts")} for row in out["booked"]])
-    if problems:
-        _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": problems[:10], "source": "market_close"})
-        report.reasons.extend(["market_close_halt", *problems[:10]])
-        return False
-    return True
-
-
 def _book_skew_s(book_ts: object, now: datetime) -> float | None:
     """Absolute |book_ts − local| in seconds (issue #120 clock skew)."""
     parsed = heartbeat.parse_stamp(book_ts) if isinstance(book_ts, str) else None
@@ -815,13 +770,52 @@ def _held_markets() -> list[str]:
     return sorted({market for market, _token in settlement.open_legs(read.rows) if market})
 
 
-def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter) -> list[str]:
-    """Issue #197 (Task CK) hook: close-then-write-off runs here, AFTER settlement and BEFORE the daily loss.
+def _writeoff_events(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return market_close.bus_events(rows)
 
-    Poly风控's tick order (#197, issuecomment-6106669720): halted -> end; settle; write off the legs that are
-    neither settled nor written off; #124 daily loss; RiskGate. CK is not merged (it waits for 家伟), so this is
-    a no-op that returns no problems; CK replaces the body. Problems it returns are invalid_risk_state.
+
+def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter) -> list[str]:
+    """Issue #197 (Task CK, KEY-approved): close-then-write-off, AFTER settlement and BEFORE the daily loss.
+
+    Poly风控's tick order (#197, issuecomment-6106669720): halted -> end; settle; write off; #124 daily loss;
+    RiskGate. Every market with an open leg (settled legs are gone already) is read from Gamma
+    (src/market_close.gamma_read: explicit closed=true; an empty result is unknown). A market that is not written
+    off is confirmed by a re-read MARKET_CLOSE_RECHECK_S later and its open legs are written off once
+    (paper_ledger.apply_writeoffs: ledger row + fsync first, then the ``writeoff`` event). A read failure, an
+    invalid type or a re-read that does not confirm writes nothing off and is NOT a halt (the leg keeps its #124
+    worst-case mark). A written-off market is read on until it settles, only to find a reopen
+    (src/market_close.reopen_contradiction): that, or a write-off the ledger refuses (two different rows for one
+    leg key), is returned as a problem: invalid_risk_state, global halt, nothing rolled back.
+
+    The write-off events are at least once (consumers dedupe by ``key``, the leg's write-off fill_id; nothing
+    tracks what was sent): after a restart the first tick sends them again for every written-off unsettled leg.
     """
+    try:
+        _, ledger = ledger_store.read_ledger(Path(paper_ledger.PAPER_PATH))
+    except Exception as exc:  # noqa: BLE001 - preflight verified the ledger; a re-read failure is a problem
+        return [f"writeoff_ledger_unreadable:{type(exc).__name__}"]
+    if not state.writeoff_events_resent:
+        pending = list(market_close.written_off_legs(ledger.rows).values())
+        if pending:
+            event(state, "writeoff", now, resent=True, events=_writeoff_events(pending))
+        state.writeoff_events_resent = True
+    held = market_close.held_markets(ledger.rows)
+    reads = {market: market_close.gamma_read(gamma, market, now) for market in sorted(held)}
+    step = market_close.detect(state.close_tracker, ledger.rows, reads, now)
+    unread = {market: obs.problem for market, obs in reads.items() if obs.problem is not None}
+    if unread:
+        event(state, "close_read_skipped", now, markets=unread)  # no write-off this tick, no halt
+    if step.halts:
+        for halt in step.halts:  # PR #211: this market's settlement stays blocked until the Operator resumes it
+            reason, _, market = halt.rpartition(":")
+            halt_store.record_halt(scope=halt_store.SCOPE_MARKET, market=market, reason=reason, source="m2_runner")
+        return step.halts
+    if step.closes:
+        out = paper_ledger.apply_writeoffs(step.closes, _stamp(now))
+        if out["problems"]:
+            return [str(problem) for problem in out["problems"]]
+        if out["booked"]:  # on disk and fsynced (ledger_store.book) before the event
+            event(state, "writeoff", now, resent=False, events=_writeoff_events(out["booked"]))
     return []
 
 
@@ -921,9 +915,6 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     book_get = GuardedGetter(getters.book)
     try:
         cfg = _risk_cfg(state.risk_path)
-        if not _watch_closes(state, now, gamma, report):
-            state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
-            return report  # issue #197: a close read failed or contradicts the ledger: halted, nothing traded
         if (state.force_rescan or state.scan_at is None
                 or (now - state.scan_at).total_seconds() >= RUNNER_SCAN_EVERY_S):
             _scan(state, now, gamma)
