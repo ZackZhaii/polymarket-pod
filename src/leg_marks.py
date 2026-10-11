@@ -13,10 +13,8 @@ Valuation (``liquidation_mark``), per open leg, never at mid:
 * settled: the payout (1 or 0 per share). Closed but not confirmed settled: 0 for a long (1 to buy back a
   short); settlement booking is #126.
 * the book is missing, its ``book_ts`` is missing, unparseable, in the future or older than
-  MAX_BOOK_AGE_S, the book is crossed (best bid >= best ask, both sides usable), or a level on the side the
-  leg trades into (bids for a long, asks for a short) has a price outside (0, 1) or a size that is not a
-  finite number > 0, or that side is empty: the leg is worth its worst case. The other side is never
-  required (#126 follow-up: an empty ask does not mark a long invalid) (long 0, short -1 per share) and is
+  MAX_BOOK_AGE_S, the book is crossed (best bid >= best ask), or a level's price is not inside (0, 1) or its
+  size is not a finite number > 0: the leg is worth its worst case (long 0, short -1 per share) and is
   marked ``mark_invalid``. That is not a whole veto: the loss counts and the daily-loss breaker stops
   trading at the cap.
 
@@ -152,19 +150,14 @@ def liquidation_mark(
     age = book_age_problem(book_ts, now, max_age_s)
     if age is not None:
         return Mark(worst_value(shares), SOURCE_INVALID, stamp, True, age)
-    # A long sells into the bids and a short buys from the asks: only that side must be usable. The other side
-    # matters only for the crossed check, and only when it is usable too (an empty or broken ask side never
-    # marks a long invalid, and the reverse for a short).
-    use, other = ("bids", "asks") if shares > 0 else ("asks", "bids")
-    levels, problem = _ladder(book, use)
-    if levels is None:
-        return Mark(worst_value(shares), SOURCE_INVALID, stamp, True, problem)
-    opposite, _ = _ladder(book, other)
-    if opposite is not None:
-        best = {use: _best(book, use, levels), other: _best(book, other, opposite)}
-        bid, ask = best["bids"], best["asks"]
-        if (bid is not None and ask is not None and 0.0 < bid < 1.0 and 0.0 < ask < 1.0 and bid >= ask):
-            return Mark(worst_value(shares), SOURCE_INVALID, stamp, True, CROSSED_BOOK)
+    bids, bid_problem = _ladder(book, "bids")
+    asks, ask_problem = _ladder(book, "asks")
+    if bids is None or asks is None:
+        return Mark(worst_value(shares), SOURCE_INVALID, stamp, True, bid_problem or ask_problem)
+    best_bid, best_ask = _best(book, "bids", bids), _best(book, "asks", asks)
+    if best_bid is not None and best_ask is not None and best_bid >= best_ask:
+        return Mark(worst_value(shares), SOURCE_INVALID, stamp, True, CROSSED_BOOK)
+    levels = bids if shares > 0 else asks
     if not levels:
         return Mark(worst_value(shares), SOURCE_INVALID, stamp, True, NO_LEVELS)
     left = abs(shares)
