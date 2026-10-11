@@ -41,6 +41,7 @@ from src.podlib import (  # noqa: E402
     PAPER_EQUITY_USD,
     PAPER_PATH,
     QUOTES_PATH,
+    RESOLUTIONS_PATH,
     RISK_PATH,
     bus,
     load_risk,
@@ -70,6 +71,8 @@ from src import daily_marks, leg_marks  # noqa: E402 - Task CF (#124): unrealize
 # open legs are valued from (the recorder's books file; a leg without a fresh usable book is worth 0).
 DAILY_MARKS_DIR = ROOT / "runs" / "m2" / "daily_marks"
 MARK_BOOKS_PATH = BOOKS_PATH
+# Issue #126 (Task CG): the confirmed settlement snapshots open legs are settled from (src/settlement.py).
+SETTLEMENT_RESOLUTIONS_PATH = RESOLUTIONS_PATH
 # The UTC day of this process's last risk evaluation. A day's snapshot is on time (late=False) only when
 # this process also evaluated on the previous UTC day, i.e. it was running at the day roll.
 _LAST_EVAL_DAY: str | None = None
@@ -237,6 +240,66 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
         return result
 
 
+def read_settlements() -> tuple[list[dict[str, Any]] | None, list[str]]:
+    """Issue #126: the settlement snapshots, read strictly (resolutions.read_history). Absent file: none."""
+    from src import resolutions  # local: keeps paper_ledger's import time unchanged
+
+    try:
+        return resolutions.read_history(Path(SETTLEMENT_RESOLUTIONS_PATH)), []
+    except resolutions.HistoryError as exc:
+        return None, [f"resolutions_unreadable:{type(exc).__name__}"]
+    except OSError as exc:
+        return None, [f"resolutions_unreadable:{type(exc).__name__}"]
+
+
+def apply_settlements(now: str | None = None) -> dict[str, Any]:
+    """Issue #126 (Task CG): book a settlement row for every open leg of a market with a confirmed settlement.
+
+    Idempotent (the row's fill_id is derived from the settlement; a booked one is never booked again). A ledger
+    that does not verify is left to load_state (invalid_risk_state, as before) and nothing is booked here.
+    Returns {"booked": [fill rows], "unsettled_closed_legs": [...], "problems": [...]}; any problem (an
+    unreadable resolutions file, two confirmed snapshots that disagree, a failed or refused write) must stop the
+    caller from booking anything else.
+    """
+    from src import settlement
+
+    out: dict[str, Any] = {"booked": [], "unsettled_closed_legs": [], "problems": []}
+    snaps, problems = read_settlements()
+    if problems:
+        out["problems"] = problems
+        return out
+    if not snaps:
+        return out  # nothing can settle: the ledger is not even read (the commit path reads it as before)
+    _, ledger = ledger_store.read_ledger(PAPER_PATH)
+    if ledger_store.verify(ledger) or non_finite_ledger_rows(ledger.rows):
+        return out
+    planned = settlement.plan(ledger.rows, list(ledger.ids), snaps or [], now or utc_now())
+    out["unsettled_closed_legs"] = planned.unsettled_closed_legs
+    if planned.problems:
+        out["problems"] = planned.problems
+        return out
+    for row in planned.rows:
+        try:
+            out["booked"].append(ledger_store.book(PAPER_PATH, row))
+        except LedgerIntegrityError as exc:
+            out["problems"] = [f"settlement_refused:{problem}" for problem in exc.problems]
+            return out
+        except OSError as exc:
+            out["problems"] = [f"settlement_write_failed:{type(exc).__name__}"]
+            return out
+    return out
+
+
+def _unsettled_closed_legs(rows: list[dict[str, Any]]) -> list[str] | None:
+    """Issue #126: open legs whose market closed but whose settlement is not confirmed (None: unreadable)."""
+    from src import settlement
+
+    snaps, problems = read_settlements()
+    if problems or not snaps:
+        return None if problems else []
+    return settlement.plan(rows, [], snaps, utc_now()).unsettled_closed_legs
+
+
 def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     """Risk state for an intent on one leg (market + token_id).
 
@@ -316,6 +379,7 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
         "daily_unrealized_loss_usd": marks["loss_usd"],  # Task CF: diagnosis (already in daily_loss_usd)
         "daily_marks": marks["legs"],
         "daily_marks_late": marks["late"],
+        "unsettled_closed_legs": _unsettled_closed_legs(rows),  # issue #126: diagnosis only
         "daily_realized_loss_usd": day.realized_loss_usd,
         "daily_realized_gain_usd": day.realized_gain_usd,
         "ledger_problems": [],
@@ -333,6 +397,18 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
     by ledger_store.book after the whole ledger is re-verified. An integrity problem halts (a halt
     bus message, allow False, nothing booked); a failed write leaves the old ledger intact.
     """
+    # Issue #126 (Task CG): settle resolved legs first, so a settled loss is realized once and the leg is gone.
+    settled = apply_settlements()
+    if settled["problems"]:
+        problems = [str(p) for p in settled["problems"]]
+        summary = {"forecast_id": intent.forecast_id, "strategy": intent.strategy, "reasons": ["invalid_risk_state"],
+                   "hypothetical": intent.hypothetical, "risk_decision": "veto", "decision": "halt",
+                   "settlement_problems": problems, "note": DIRECTIONAL}
+        sentinel.halt(reason="invalid_risk_state", market=intent.market, scope="global",
+                      quotes_path=QUOTES_PATH, emit=_emit,
+                      extra={"ledger_problems": problems, "strategy": intent.strategy, "token_id": intent.token_id})
+        return {"allow": False, "decision": summary, "halted": True, "halt_reason": "invalid_risk_state",
+                "ledger_problems": problems}
     state = load_state(intent.market, intent.token_id)
     decision = evaluate(intent, cfg, state)
     summary = _decision_payload(intent, decision)

@@ -380,6 +380,8 @@ def ledger_view(path: Path) -> LedgerView:
             continue
         if shares < DATA_API_TRADES_MIN_SHARES:
             view.problems.append(f"ledger_fill_below_data_api_trade_floor:{fill_id}")
+        if ledger_store.is_settlement(row):
+            continue  # issue #126: a paper settlement closes the position but is not a trade (no Data API row)
         side = "BUY" if row.get("side") == "buy" else "SELL"
         leg = view.flows.setdefault(token, {"BUY": 0.0, "SELL": 0.0})
         leg[side] += shares

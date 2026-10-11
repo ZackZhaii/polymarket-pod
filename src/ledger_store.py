@@ -58,6 +58,18 @@ nothing more. All of this is tightening only and fails closed. No orders, keys o
     or anything else (the truthy string ``'false'`` used to drop a fill from every risk total while
     its own conservation snapshot still verified). ``book`` refuses such a new row before it is
     applied or written. Legacy rows (no ``fill_id``) predate these fields and keep their old meaning.
+
+(e) Settlement rows (issue #126, Task CG)
+    A resolved market's open leg is closed by a settlement row: ``kind`` "settlement", ``risk_decision``
+    "settlement" (the only other legal value, and only on such a row), a real row (hypothetical false,
+    counts_toward_risk true), the closing side (a long is sold, a short bought back) at the payout (1 for
+    the winning token, 0 otherwise) as both ``market_price`` and ``effective_price``, ``notional_usd`` =
+    shares x payout, no fee (``fee_rate`` and ``fee_usd`` 0), and non-empty
+    ``condition_id`` / ``winning_token_id``. It must close the whole open leg exactly (no partial close,
+    no flip): ``settlement_not_closing``. Any other ``kind`` value, or a settlement field that is not
+    exactly valid, is an integrity problem (``invalid_settlement``), so a damaged row is never replayed.
+    Its fill_id is derived from the settlement (src/settlement.py), so booking it twice is idempotent.
+    Its ``ts`` is checked like every counted row's, by src/daily_loss.py (an unusable ts is invalid_risk_state).
 """
 from __future__ import annotations
 
@@ -82,6 +94,10 @@ LEG_COST_FIELD = "leg_cost_basis_after_usd"
 SNAPSHOT_FIELDS = (CASH_FIELD, LEG_SHARES_FIELD, LEG_COST_FIELD)
 LEDGER_NUMBER_FIELDS = ("shares", "notional_usd", "fee_usd")
 SIDES = ("buy", "sell")
+KIND_FIELD = "kind"  # issue #126: only settlement rows carry it
+SETTLEMENT_KIND = "settlement"
+SETTLEMENT_DECISION = "settlement"
+SETTLEMENT_PAYOUTS = (0.0, 1.0)
 
 
 class LedgerIntegrityError(RuntimeError):
@@ -127,11 +143,38 @@ def control_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
     if ("hypothetical" in values and "counts_toward_risk" in values
             and values["hypothetical"] == values["counts_toward_risk"]):
         problems.append(f"inconsistent_control_fields:{fill_id}")
+    settlement = KIND_FIELD in row
+    if settlement and row[KIND_FIELD] != SETTLEMENT_KIND:
+        problems.append(f"invalid_kind:{fill_id}")
     if "risk_decision" not in row:
         problems.append(f"missing_risk_decision:{fill_id}")
-    elif row["risk_decision"] != "allow":
+    elif row["risk_decision"] != (SETTLEMENT_DECISION if settlement else "allow"):
         problems.append(f"invalid_risk_decision:{fill_id}")
+    if settlement and row.get(KIND_FIELD) == SETTLEMENT_KIND:
+        problems.extend(settlement_field_problems(row, fill_id))
     return problems
+
+
+def is_settlement(row: dict[str, Any]) -> bool:
+    return row.get(KIND_FIELD) == SETTLEMENT_KIND
+
+
+def settlement_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
+    """Issue #126: a settlement row's own fields, exactly (see (e) in the module docstring)."""
+    def number(name: str) -> float | None:
+        return _finite(row.get(name))
+
+    shares, payout = number("shares"), number("market_price")
+    ok = (row.get("hypothetical") is False and row.get("counts_toward_risk") is True
+          and row.get("side") in SIDES and shares is not None and shares > 0
+          and payout in SETTLEMENT_PAYOUTS and number("effective_price") == payout
+          and number("fee_rate") == 0.0 and number("fee_usd") == 0.0
+          and number("notional_usd") is not None
+          and abs(number("notional_usd") - shares * payout) <= LEDGER_OPEN_EPS  # type: ignore[operator]
+          and all(isinstance(row.get(name), str) and row.get(name).strip()  # type: ignore[union-attr]
+                  for name in ("condition_id", "winning_token_id", "token_id"))
+          and (payout == 1.0) == (row.get("token_id") == row.get("winning_token_id")))
+    return [] if ok else [f"invalid_settlement:{fill_id}"]
 
 
 def leg_key(market: object, token_id: object) -> tuple[str, str]:
@@ -295,6 +338,12 @@ def replay(rows: list[dict[str, Any]], ids: list[str]) -> tuple[float, dict[tupl
     legs: dict[tuple[str, str], dict[str, float]] = {}
     problems: list[str] = []
     for row, fill_id in zip(rows, ids):
+        if counts(row) and is_settlement(row):  # issue #126: it closes the whole open leg, exactly
+            held = legs.get(leg_key(row.get("market"), row.get("token_id")), {"shares": 0.0})["shares"]
+            closing = "sell" if held > 0 else "buy"
+            if (abs(held) <= LEDGER_OPEN_EPS or row.get("side") != closing
+                    or abs(abs(held) - float(row.get("shares") or 0.0)) > LEDGER_OPEN_EPS):
+                problems.append(f"settlement_not_closing:{fill_id}")
         if counts(row):
             cash = _apply(cash, legs, row)
         if FILL_ID_FIELD not in row:

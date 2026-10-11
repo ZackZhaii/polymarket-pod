@@ -84,7 +84,9 @@ PATH_NAMES = ("BUS_PATH", "PAPER_PATH", "QUOTES_PATH", "MARKETS_PATH", "BOOKS_PA
               # Task AX: sealed forecasts (M3 calibration step 2)
               "FORECASTS_PATH",
               # Task CF (#124): start-of-day leg marks and the books open legs are valued from
-              "DAILY_MARKS_DIR", "MARK_BOOKS_PATH")
+              "DAILY_MARKS_DIR", "MARK_BOOKS_PATH",
+              # Task CG (#126): settlement snapshots (none in the gate: nothing settles)
+              "SETTLEMENT_RESOLUTIONS_PATH")
 BUS_KINDS = frozenset({"signal", "veto", "fill", "halt", "resume"})
 
 

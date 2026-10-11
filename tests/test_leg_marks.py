@@ -87,9 +87,35 @@ def test_a_short_buys_back_up_the_ask_ladder_and_the_rest_costs_one():
 def test_a_missing_stale_crossed_or_out_of_range_book_is_the_worst_case_and_marked_invalid(bad, reason):
     long = leg_marks.liquidation_mark(100.0, bad, NOW_DT)
     assert (long.value_usd, long.mark_invalid, long.source, long.reason) == (0.0, True, "invalid_book", reason)
-    if reason != "no_levels":
+    if reason != "no_levels" and not (isinstance(bad, dict) and bad.get("best_ask") == 0.1):
         short = leg_marks.liquidation_mark(-100.0, bad, NOW_DT)
         assert (short.value_usd, short.mark_invalid) == (-100.0, True)
+
+
+@pytest.mark.parametrize("asks", [[], None, "garbage", [[1.5, 10]], [[0.5, float("nan")]]])
+def test_a_long_needs_only_the_bid_side(asks):
+    """Task CG (#126 follow-up): an empty or unusable ask side never marks a long invalid."""
+    row = {"book_ts": FRESH, "bids": [[0.4, 1000]]}
+    if asks is not None:
+        row["asks"] = asks
+    mark = leg_marks.liquidation_mark(100.0, row, NOW_DT)
+    assert (mark.value_usd, mark.mark_invalid) == (pytest.approx(40.0), False)
+    top = leg_marks.liquidation_mark(100.0, book(0.4, 1000.0, None), NOW_DT)  # recorder row, no ask
+    assert (top.value_usd, top.mark_invalid) == (pytest.approx(40.0), False)
+
+
+@pytest.mark.parametrize("bids", [[], None, [[0.0, 10]], [[0.5, -1]]])
+def test_a_short_needs_only_the_ask_side(bids):
+    row = {"book_ts": FRESH, "asks": [[0.6, 1000]]}
+    if bids is not None:
+        row["bids"] = bids
+    mark = leg_marks.liquidation_mark(-100.0, row, NOW_DT)
+    assert (mark.value_usd, mark.mark_invalid) == (pytest.approx(-60.0), False)
+
+
+def test_a_long_with_an_empty_bid_side_is_still_invalid():
+    mark = leg_marks.liquidation_mark(100.0, {"book_ts": FRESH, "bids": [], "asks": [[0.5, 10]]}, NOW_DT)
+    assert (mark.value_usd, mark.mark_invalid, mark.reason) == (0.0, True, "no_levels")
 
 
 def test_the_age_limit_is_max_book_age_s_inclusive():
