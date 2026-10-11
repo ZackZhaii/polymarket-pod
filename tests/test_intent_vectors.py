@@ -10,9 +10,9 @@ Acceptance (#105): every control vector and every #105 vector passes. Highlights
 - a NewsForecaster row without a ``token_id`` is rejected (``missing_token_id``);
 - half an interval is rejected (``incomplete_interval``).
 
-The same file also has the #106 / #108 vectors. Those that dev still gets wrong are strict xfails
-here (``XFAIL_OPEN``); each one should be cleared by the fix for its own issue. A strict xfail that
-starts passing fails the suite, so the list cannot go stale.
+The same file also has the #106 / #108 vectors. #106 (Task CK) is fixed: its three former xfails are
+cleared. Remaining #108 vectors that still differ are strict xfails (``XFAIL_OPEN``); a strict xfail
+that starts passing fails the suite, so the list cannot go stale.
 
 Offline and pure: no clock read, no file write, no network, no order.
 """
@@ -34,9 +34,9 @@ CFG = parse_risk_toml(RISK_PATH.read_text(encoding="utf-8"))
 TOL = DOC["float_tolerance"]
 ACCEPT_FIELDS = ("p_side", "exec_price", "limit_price", "shares", "size_usd", "edge", "fee_per_share")
 
-# Vectors of other issues that dev does not meet yet (open issues #106 / #108; not part of #105).
+# Vectors of other issues that this branch does not meet yet (open issue #108; not part of #105 / #106).
 XFAIL_OPEN = {
-    "I106-01": "106", "I106-02": "106", "I106-09": "106",
+    # Issue #106 cleared by Task CK (limit_price also checked against the source price band).
     "I108-02": "108", "I108-03": "108", "I108-05": "108", "I108-06": "108", "I108-20": "108", "I108-21": "108",
 }
 
