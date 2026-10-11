@@ -26,6 +26,7 @@ EXPECTED = {
     "SENTINEL_STALE_S": 120.0,
     "SENTINEL_STALE_CONSECUTIVE": 2,
     "WASH_WINDOW_S": 300.0,
+    "PAIR_CROSS_TOLERANCE": 1e-9,  # Task CG (#145)
     "MIN_HOURS_TO_EXPIRY": 24.0,
     "SCANNER_MIN_PRICE": 0.03,
     "SCANNER_MAX_PRICE": 0.97,
@@ -176,6 +177,7 @@ REEXPORTS = {
     "sentinel.SENTINEL_STALE_S": "SENTINEL_STALE_S",
     "sentinel.SENTINEL_STALE_CONSECUTIVE": "SENTINEL_STALE_CONSECUTIVE",
     "wash_detect.WASH_WINDOW_S": "WASH_WINDOW_S",
+    "wash_detect.PAIR_CROSS_TOLERANCE": "PAIR_CROSS_TOLERANCE",
     "expiry_rule.MIN_HOURS_TO_EXPIRY": "MIN_HOURS_TO_EXPIRY",
     "scanner.MIN_HOURS_TO_EXPIRY": "MIN_HOURS_TO_EXPIRY",
     "endgame_scan.MIN_HOURS_TO_EXPIRY": "MIN_HOURS_TO_EXPIRY",
@@ -196,6 +198,7 @@ REEXPORTS = {
 }
 
 M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
+              "PAIR_CROSS_TOLERANCE",  # Task CG (#145)
               "MIN_HOURS_TO_EXPIRY", "WS_ROW_REFRESH_S",
               # Task AI: the M1 acceptance criteria (conservative first values for the user at M2).
               "M1_MIN_COVERAGE", "M1_MAX_RECONNECTS", "M1_MAX_GAP_RESYNCS_PER_ASSET",
@@ -485,6 +488,9 @@ def test_relations_hold():
         # issue #52: the halt-state mutex constants.
         ("HALT_STATE_LOCK_TIMEOUT_S = 5.0", "HALT_STATE_LOCK_TIMEOUT_S = 0.0"),
         ("HALT_STATE_LOCK_POLL_S = 0.05", "HALT_STATE_LOCK_POLL_S = 5.0"),
+        # Task CG (#145): the complementary-leg pairing allowance.
+        ("PAIR_CROSS_TOLERANCE = 1e-9", "PAIR_CROSS_TOLERANCE = 0.0"),
+        ("PAIR_CROSS_TOLERANCE = 1e-9", "PAIR_CROSS_TOLERANCE = 0.05"),
     ],
 )
 def test_an_inconsistent_edit_fails_at_import(line, replacement):
