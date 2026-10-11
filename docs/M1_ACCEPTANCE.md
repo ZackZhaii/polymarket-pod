@@ -101,7 +101,7 @@ less "$RUN/report.md"                             # report.json has the same dat
 
 | Path | Content |
 |---|---|
-| `manifest.json` | Written atomically at start (`status: running`) and at the end (`completed`, `interrupted`, `no_snapshot` or `failed`). Includes `started_at`/`ended_at` (UTC, ms), `elapsed_s`, the assets with market id, question and outcome, the selection (scan ts, skipped rows), settings, a snapshot of `src/thresholds.py`, versions (Python, websockets, schema `m1_run/1`), git sha and dirty flag, the `config/risk.toml` sha256 and `live_enabled` at start and end with the pin, the files written, the counts, the exit code, the stop signal and `stop_reason`. Task BT: rewritten every `M1_MANIFEST_PROGRESS_S` while running with `progress`; after a console close the handler may write it (`counts.partial: true`). |
+| `manifest.json` | Written atomically at start (`status: running`) and at the end (`completed`, `interrupted`, `no_snapshot` or `failed`). Includes `started_at`/`ended_at` (UTC, ms), `elapsed_s`, the assets with market id, question and outcome, the selection (scan ts, skipped rows), settings, a snapshot of `src/thresholds.py`, versions (Python, websockets, schema `m1_run/1`), git sha and dirty flag, the `config/risk.toml` sha256 and `live_enabled` at start and end with the pin, the files written, the counts, the exit code, the stop signal and `stop_reason`. Task CM: `clock_check` (the start-up clock measurement, see exit 7). Task BT: rewritten every `M1_MANIFEST_PROGRESS_S` while running with `progress`; after a console close the handler may write it (`counts.partial: true`). |
 | `books/books-NNNNNN.jsonl` | WS book rows, the same shape as `data/books.jsonl` plus `ws_state`. Includes the price-less invalidation rows on a resync or disconnect. |
 | `events/events-NNNNNN.jsonl` | `start`, `connected`, `connect_failed` (error type), `disconnected` (reason, healthy), `backoff`, `resync` (asset, reason), `resubscribe`, `live`, `rest_error`, `end`, `finish`. |
 | `rest/rest-NNNNNN.jsonl` | REST `/book` snapshots (book.py row shape plus `sample` and `received_at`). |
@@ -117,6 +117,12 @@ Exit codes of `m1_run`:
 - 3: websockets is missing (checked before anything is written).
 - 4: an output write failed.
 - 5: stopped by SIGINT, SIGTERM, SIGBREAK, Ctrl+C / Ctrl+Break, or (Windows) a console close, logoff or shutdown (heartbeat `crashed` in that case).
+- 6: `config/risk.toml` off its pins at start (no run dir) or while running.
+- 7 (Task CM): refused to start, nothing written: the local clock is behind the exchange by more than `M1_MAX_CLOCK_BEHIND_S`
+  (0.1 s), or no `/book` answer was usable to check it. Before the run dir exists, m1_run reads every selected asset's public
+  CLOB `/book` once (the REST sampler's reader and host) and takes max(`book_ts` - local receive time). A book's timestamp is its
+  last update, so this is a lower bound on the lag: it never refuses a correct clock. Sync the host clock (Windows:
+  `w32tm /resync /force`) and start again. A passed check is recorded in manifest `clock_check`.
 
 ## Acceptance criteria (M2 pending)
 
@@ -144,6 +150,9 @@ Definitions:
   book with `0 <= t - book_ts <= MAX_BOOK_AGE_S`. An invalidation row, a future `book_ts` or no row yet is
   not fresh. Book-age p50/p90/p99/max are over the points that have a live book; the share without one is
   reported too. Points use exact integer microseconds, so the 120 s boundary matches `book_age_problem`.
+  Task CM (reporting only): the per-asset table also shows "Future ts", the points whose latest live `book_ts` is
+  later than the point (`future_points` / `future_share` in report.json). They are already not fresh under this rule,
+  which is unchanged; the column says when a coverage shortfall comes from the recorder clock running behind.
 - REST vs WS: each REST sample is compared with the live WS row of the same token whose exchange
   `book_ts` is nearest. Prices are compared rounded to 6 decimals. A missing side compares as null.
   Mismatches are listed (up to `m1_report.MISMATCH_LIST_LIMIT`) with both prices and the time difference.
@@ -162,4 +171,8 @@ Definitions:
 - The REST comparison is approximate. REST and WS can legitimately differ for a few hundred ms around a change,
   which is why the mismatch rate is a threshold, not zero.
 - Coverage uses the recorder clock against exchange `book_ts`. A box clock that runs ahead or behind by
-  seconds shifts ages by that much; the manifest records the times so this can be checked.
+  seconds shifts ages by that much; the manifest records the times so this can be checked. A clock behind the
+  exchange by even a fraction of a second makes rows "future" (not fresh): the 6 h run m1-20261010T1907Z lost
+  1.2-2.4% coverage per asset this way (host clock ~0.25 s slow at start, drifting ~0.1 s/h). Task CM refuses a
+  start that is measurably behind (exit 7) and reports future points per asset; it cannot see drift during the run,
+  so keep the host clock synced (short NTP poll interval) for the whole run.
