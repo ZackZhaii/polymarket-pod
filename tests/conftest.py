@@ -38,6 +38,8 @@ def _isolate_sentinel_state(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(paper_ledger, "DAILY_MARKS_DIR", base / "daily_marks")
     monkeypatch.setattr(paper_ledger, "MARK_BOOKS_PATH", base / "mark_books.jsonl")
     monkeypatch.setattr(paper_ledger, "_LAST_EVAL_DAY", None)
+    # Task CG (#126): the settlement snapshots stay in the test's folder too (none: nothing settles).
+    monkeypatch.setattr(paper_ledger, "SETTLEMENT_RESOLUTIONS_PATH", base / "resolutions.jsonl")
     # Task CH (#145): the scanner rows the complementary-leg pair check reads stay in the test's folder too.
     monkeypatch.setattr(paper_ledger, "PAIR_MARKETS_PATH", base / "pair_markets.jsonl")
     monkeypatch.setattr(maker, "MARKETS_PATH", base / "maker_markets.jsonl")

@@ -85,6 +85,8 @@ PATH_NAMES = ("BUS_PATH", "PAPER_PATH", "QUOTES_PATH", "MARKETS_PATH", "BOOKS_PA
               "FORECASTS_PATH",
               # Task CF (#124): start-of-day leg marks and the books open legs are valued from
               "DAILY_MARKS_DIR", "MARK_BOOKS_PATH",
+              # Task CG (#126): settlement snapshots (none in the gate: nothing settles)
+              "SETTLEMENT_RESOLUTIONS_PATH",
               # Task CH (#145): the scanner rows the complementary-leg pair check reads
               "PAIR_MARKETS_PATH")
 BUS_KINDS = frozenset({"signal", "veto", "fill", "halt", "resume"})
