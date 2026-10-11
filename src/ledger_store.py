@@ -71,6 +71,18 @@ nothing more. All of this is tightening only and fails closed. No orders, keys o
     exactly valid, is an integrity problem (``invalid_settlement``), so a damaged row is never replayed.
     Its fill_id is derived from the settlement (src/settlement.py), so booking it twice is idempotent.
     Its ``ts`` is checked like every counted row's, by src/daily_loss.py (an unusable ts is invalid_risk_state).
+
+(f) Write-off rows (issue #197, Task CK, KEY-approved "close-then-write-off")
+    When a held market is confirmed closed (src/market_close.py), each of its open legs gets one write-off
+    row: ``kind`` "writeoff", ``risk_decision`` "writeoff", a real row (hypothetical false, counts_toward_risk
+    true) that moves nothing: ``shares``, ``notional_usd``, both prices, ``fee_rate`` and ``fee_usd`` are all 0,
+    so cash, shares and cost basis stay as they were (the leg still holds every limit until it settles). It
+    names the closing side of the leg, ``writeoff_shares`` (the whole open leg, exactly), ``writeoff_usd``
+    (finite, >= 0: the leg's full cost, checked by src/daily_loss.py against the average-cost replay) and
+    ``closed_ts`` (the market's zoned closedTime). It must sit on an open leg with exactly those shares and the
+    leg must not be written off already (``writeoff_not_open``); a damaged row is ``invalid_writeoff``. Its
+    fill_id is derived from (market, token_id, closed_ts) (src/market_close.py), so booking it twice is
+    idempotent and a restart never writes the same leg off again.
 """
 from __future__ import annotations
 
@@ -100,6 +112,9 @@ KIND_FIELD = "kind"  # issue #126: only settlement rows carry it
 SETTLEMENT_KIND = "settlement"
 SETTLEMENT_DECISION = "settlement"
 SETTLEMENT_PAYOUTS = (0.0, 1.0)
+WRITEOFF_KIND = "writeoff"  # issue #197 (Task CK)
+WRITEOFF_DECISION = "writeoff"
+KIND_DECISIONS = {SETTLEMENT_KIND: SETTLEMENT_DECISION, WRITEOFF_KIND: WRITEOFF_DECISION}
 
 
 class LedgerIntegrityError(RuntimeError):
@@ -145,15 +160,17 @@ def control_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
     if ("hypothetical" in values and "counts_toward_risk" in values
             and values["hypothetical"] == values["counts_toward_risk"]):
         problems.append(f"inconsistent_control_fields:{fill_id}")
-    settlement = KIND_FIELD in row
-    if settlement and row[KIND_FIELD] != SETTLEMENT_KIND:
+    kind = row.get(KIND_FIELD) if KIND_FIELD in row else None
+    if KIND_FIELD in row and (not isinstance(kind, str) or kind not in KIND_DECISIONS):
         problems.append(f"invalid_kind:{fill_id}")
     if "risk_decision" not in row:
         problems.append(f"missing_risk_decision:{fill_id}")
-    elif row["risk_decision"] != (SETTLEMENT_DECISION if settlement else "allow"):
+    elif row["risk_decision"] != (KIND_DECISIONS.get(kind, None) if KIND_FIELD in row else "allow"):  # type: ignore[arg-type]
         problems.append(f"invalid_risk_decision:{fill_id}")
-    if settlement and row.get(KIND_FIELD) == SETTLEMENT_KIND:
+    if kind == SETTLEMENT_KIND:
         problems.extend(settlement_field_problems(row, fill_id))
+    elif kind == WRITEOFF_KIND:
+        problems.extend(writeoff_field_problems(row, fill_id))
     return problems
 
 
@@ -181,6 +198,27 @@ def settlement_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
           and number("settlement_payout") == payout
           and _zoned_ts(row.get("closed_ts")))
     return [] if ok else [f"invalid_settlement:{fill_id}"]
+
+
+def is_writeoff(row: dict[str, Any]) -> bool:
+    return row.get(KIND_FIELD) == WRITEOFF_KIND
+
+
+def writeoff_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
+    """Issue #197: a write-off row's own fields, exactly (see (f) in the module docstring)."""
+    def number(name: str) -> float | None:
+        return _finite(row.get(name))
+
+    shares, amount = number("writeoff_shares"), number("writeoff_usd")
+    ok = (row.get("hypothetical") is False and row.get("counts_toward_risk") is True
+          and row.get("side") in SIDES
+          and all(number(name) == 0.0 for name in ("shares", "notional_usd", "market_price", "effective_price",
+                                                   "fee_rate", "fee_usd"))
+          and shares is not None and shares > LEDGER_OPEN_EPS and amount is not None and amount >= 0.0
+          and all(isinstance(row.get(name), str) and row.get(name).strip()  # type: ignore[union-attr]
+                  for name in ("market", "token_id"))
+          and _zoned_ts(row.get("closed_ts")))
+    return [] if ok else [f"invalid_writeoff:{fill_id}"]
 
 
 def _zoned_ts(value: object) -> bool:
@@ -357,7 +395,16 @@ def replay(rows: list[dict[str, Any]], ids: list[str]) -> tuple[float, dict[tupl
     cash = PAPER_EQUITY_USD
     legs: dict[tuple[str, str], dict[str, float]] = {}
     problems: list[str] = []
+    written_off: set[tuple[str, str]] = set()  # issue #197: open legs that already carry a write-off row
     for row, fill_id in zip(rows, ids):
+        key = leg_key(row.get("market"), row.get("token_id"))
+        if counts(row) and is_writeoff(row):  # issue #197: on an open leg, all of it, once
+            held = legs.get(key, {"shares": 0.0})["shares"]
+            closing = "sell" if held > 0 else "buy"
+            if (abs(held) <= LEDGER_OPEN_EPS or key in written_off or row.get("side") != closing
+                    or abs(abs(held) - float(row.get("writeoff_shares") or 0.0)) > LEDGER_OPEN_EPS):
+                problems.append(f"writeoff_not_open:{fill_id}")
+            written_off.add(key)
         if counts(row) and is_settlement(row):  # issue #126: it closes the whole open leg, exactly
             held = legs.get(leg_key(row.get("market"), row.get("token_id")), {"shares": 0.0})["shares"]
             closing = "sell" if held > 0 else "buy"
@@ -366,6 +413,8 @@ def replay(rows: list[dict[str, Any]], ids: list[str]) -> tuple[float, dict[tupl
                 problems.append(f"settlement_not_closing:{fill_id}")
         if counts(row):
             cash = _apply(cash, legs, row)
+            if abs(legs[key]["shares"]) <= LEDGER_OPEN_EPS:
+                written_off.discard(key)  # the leg is flat (settled): a write-off belongs to that position only
         if FILL_ID_FIELD not in row:
             continue  # legacy row: no stored state to compare
         if row.get("side") not in SIDES:

@@ -89,6 +89,7 @@ from src import (  # noqa: E402
     heartbeat,
     intent_builder,
     ledger_store,
+    market_close,
     paper_ledger,
     pins,
     podlib,
@@ -245,6 +246,7 @@ class RunnerState:
     last_book_age_s_max: float | None = None
     disk_free_gb: float | None = None
     ledger_rows: int | None = None
+    close_tracker: market_close.CloseTracker = field(default_factory=market_close.CloseTracker)  # issue #197
 
 
 @dataclass
@@ -616,6 +618,52 @@ def _book_age_s(book_ts: object, now: datetime) -> float | None:
     return None if parsed is None else round((now - parsed).total_seconds(), 3)
 
 
+def _watch_closes(state: RunnerState, now: datetime, gamma: GuardedGetter, report: IterationReport) -> bool:
+    """Issue #197 (Task CK, KEY-approved): read every held market's close state; write off confirmed closes.
+
+    Every market with an open leg is read from Gamma by id on every iteration (src/market_close.gamma_read; the
+    scanner lists closed=false only). A close is confirmed by a second qualifying read at least
+    MARKET_CLOSE_RECHECK_S later (src/market_close.CloseTracker); its open legs are then written off once
+    (paper_ledger.apply_writeoffs). A read that fails, a written-off market that reads open again or with another
+    closedTime, or a write-off that cannot be booked records invalid_risk_state as a global halt and nothing is
+    traded this iteration (the next one pauses on the halt). False: halted.
+    """
+    problems: list[str] = []
+    try:
+        _, ledger = ledger_store.read_ledger(Path(paper_ledger.PAPER_PATH))
+        held = market_close.held_markets(ledger.rows)
+        written = market_close.written_off_legs(ledger.rows)
+    except (OSError, TypeError, ValueError) as exc:
+        problems.append(f"market_close_ledger_unreadable:{type(exc).__name__}")
+        held, written = {}, {}
+    closes: list[market_close.Close] = []
+    for market in sorted(held):
+        obs = market_close.gamma_read(gamma, market, now)
+        if obs.problem is not None:
+            problems.append(f"market_close_unreadable:{market}:{obs.problem}")
+            continue
+        for closed_ts in sorted({ts for (leg_market, _), ts in written.items() if leg_market == market}):
+            found = market_close.contradiction(obs, closed_ts, now)
+            if found:
+                problems.append(f"market_close_contradiction:{market}:{found}")
+        close = state.close_tracker.update(obs, now)
+        if close is not None:
+            closes.append(close)
+    if not problems and closes:
+        out = paper_ledger.apply_writeoffs(closes, _stamp(now))
+        problems.extend(str(problem) for problem in out["problems"])
+        if out["booked"]:
+            event(state, "writeoff", now, rows=[{"fill_id": row.get("fill_id"), "market": row.get("market"),
+                                                 "token_id": row.get("token_id"),
+                                                 "writeoff_usd": row.get("writeoff_usd"),
+                                                 "closed_ts": row.get("closed_ts")} for row in out["booked"]])
+    if problems:
+        _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": problems[:10], "source": "market_close"})
+        report.reasons.extend(["market_close_halt", *problems[:10]])
+        return False
+    return True
+
+
 def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> IterationReport:
     """One loop step: the checks first; only when they all pass, scan / inbox / decisions."""
     state.iteration += 1
@@ -640,6 +688,8 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     gamma, book_get = GuardedGetter(getters.gamma), GuardedGetter(getters.book)
     try:
         cfg = _risk_cfg(state.risk_path)
+        if not _watch_closes(state, now, gamma, report):
+            return report  # issue #197: a close read failed or contradicts the ledger: halted, nothing traded
         if state.scan_at is None or (now - state.scan_at).total_seconds() >= RUNNER_SCAN_EVERY_S:
             _scan(state, now, gamma)
         if state.scan_at is None or (now - state.scan_at).total_seconds() > RUNNER_SCAN_MAX_AGE_S:

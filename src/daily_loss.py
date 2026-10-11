@@ -33,6 +33,16 @@ is not buy/sell, or whose shares, notional or fee is not a finite number >= 0 (r
 invalid (``problems`` non-empty). load_state then gives ``daily_loss_usd = None``, RiskGate vetoes
 ``invalid_risk_state`` and paper_ledger escalates that to a global halt (Task AL).
 
+Write-offs (issue #197, Task CK, KEY-approved "close-then-write-off"): a ``kind`` "writeoff" row
+(src/ledger_store.py (f)) on an open leg of a confirmed closed market books the leg's whole worst-case
+loss as realized, once, on the row's own UTC day: a long's average cost (``basis``), a short's
+``shares x 1 - basis`` (the buy-back at 1). Its ``writeoff_usd`` must be exactly that amount and its
+``writeoff_shares`` the whole open leg, else ``daily_loss_invalid_writeoff`` (invalid_risk_state). From
+then on the leg is written off until it is flat: a later close (the settlement) books no further loss
+(a losing leg's settlement pnl is the loss already written off; it is reported as
+``writeoff_settled_loss_usd`` only), a winning leg's gain is reported as a gain and never offsets
+anything, and a fill that would grow or flip a written-off leg is ``daily_loss_writeoff_leg_grew``.
+
 Pure: no clock (``today`` is passed in), no file, no bus. No new threshold.
 """
 from __future__ import annotations
@@ -42,7 +52,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from src.book_staleness import parse_book_ts
-from src.ledger_store import counts, leg_key
+from src.ledger_store import counts, is_writeoff, leg_key
 from src.thresholds import LEDGER_OPEN_EPS
 
 SIDES = ("buy", "sell")
@@ -57,6 +67,10 @@ class DailyLoss:
     realized_loss_usd: float = 0.0
     realized_gain_usd: float = 0.0
     closing_fills_today: int = 0
+    writeoff_usd: float = 0.0              # issue #197: today's write-offs (already in realized_loss_usd)
+    writeoffs_today: int = 0
+    writeoff_settled_loss_usd: float = 0.0  # today's closes of written-off legs: not counted again
+    legs: dict[tuple[str, str], dict[str, float]] = field(default_factory=dict)  # final average-cost state
     problems: list[str] = field(default_factory=list)
 
     @property
@@ -121,15 +135,55 @@ def daily_loss(rows: Iterable[dict[str, Any]], today: str, ids: Iterable[str] | 
             usd = qty * 1.0 if side == "buy" else 0.0
         if is_today:
             result.fees_usd += fee
-        pnl = _apply(legs.setdefault(leg_key(row.get("market"), row.get("token_id")), {"shares": 0.0, "basis": 0.0}),
-                     side, qty, usd)
+        leg = legs.setdefault(leg_key(row.get("market"), row.get("token_id")),
+                              {"shares": 0.0, "basis": 0.0, "written_off": 0.0})
+        if is_writeoff(row):  # issue #197: the leg's whole worst-case loss, realized once
+            amount = writeoff_amount(leg)
+            booked = _number(row.get("writeoff_usd"))
+            shares = _number(row.get("writeoff_shares"))
+            if (amount is None or leg["written_off"] or booked is None or shares is None
+                    or abs(shares - abs(leg["shares"])) > LEDGER_OPEN_EPS or abs(booked - amount) > LEDGER_OPEN_EPS):
+                result.problems.append(f"daily_loss_invalid_writeoff:{label}")
+                continue
+            leg["written_off"] = 1.0
+            if is_today:
+                result.writeoff_usd += amount
+                result.writeoffs_today += 1
+                result.realized_loss_usd += amount
+            continue
+        held = leg["shares"]
+        if leg["written_off"] and qty > 0 and (side == "buy") == (held > 0):
+            result.problems.append(f"daily_loss_writeoff_leg_grew:{label}")
+            continue
+        pnl = _apply(leg, side, qty, usd)
+        if leg["written_off"] and abs(leg["shares"]) > LEDGER_OPEN_EPS and (leg["shares"] > 0) != (held > 0):
+            result.problems.append(f"daily_loss_writeoff_leg_grew:{label}")  # flipped through flat
+            continue
+        written_off = bool(leg["written_off"])
+        if abs(leg["shares"]) <= LEDGER_OPEN_EPS:
+            leg["written_off"] = 0.0
         if pnl is not None and is_today:
             result.closing_fills_today += 1
-            if pnl < 0:
+            if pnl < 0 and written_off:
+                result.writeoff_settled_loss_usd += -pnl  # already realized by the write-off: never twice
+            elif pnl < 0:
                 result.realized_loss_usd += -pnl
             else:
                 result.realized_gain_usd += pnl
+    result.legs = legs
     return result
+
+
+def writeoff_amount(leg: dict[str, float]) -> float | None:
+    """Issue #197: an open leg's whole worst-case loss at average cost (None: the leg is flat).
+
+    A long is worth 0 at worst: its cost. A short costs 1 per share to buy back: shares - proceeds.
+    """
+    held = leg.get("shares", 0.0)
+    if abs(held) <= LEDGER_OPEN_EPS:
+        return None
+    basis = leg.get("basis", 0.0)
+    return max(0.0, basis) if held > 0 else max(0.0, abs(held) * 1.0 - basis)
 
 
 def _apply(leg: dict[str, float], side: str, qty: float, usd: float) -> float | None:

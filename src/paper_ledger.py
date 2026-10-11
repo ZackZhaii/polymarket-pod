@@ -293,6 +293,43 @@ def apply_settlements(now: str | None = None) -> dict[str, Any]:
     return out
 
 
+def apply_writeoffs(closes: list[Any], now: str | None = None) -> dict[str, Any]:
+    """Issue #197 (Task CK, KEY-approved): book one write-off row per open leg of each confirmed closed market.
+
+    ``closes`` are src/market_close.Close values (confirmed by src/m2_runner's close watch). Idempotent: a leg
+    already written off is never written off again (the row's fill_id is derived from market, token and
+    closedTime), so a restart repeats nothing. Returns {"booked": [rows], "problems": [...]}; any problem (a
+    ledger that does not verify, a contradiction, a refused or failed write) must make the caller record
+    invalid_risk_state as a global halt.
+    """
+    from src import market_close
+
+    out: dict[str, Any] = {"booked": [], "problems": []}
+    try:
+        _, ledger = ledger_store.read_ledger(PAPER_PATH)
+    except OSError as exc:
+        out["problems"] = [f"writeoff_ledger_unreadable:{type(exc).__name__}"]
+        return out
+    problems = ledger_store.verify(ledger)
+    if problems or non_finite_ledger_rows(ledger.rows):
+        out["problems"] = [f"writeoff_ledger_invalid:{problem}" for problem in problems] or ["writeoff_ledger_invalid"]
+        return out
+    planned = market_close.plan_writeoffs(ledger.rows, list(ledger.ids), list(closes), now or utc_now())
+    if planned.problems:
+        out["problems"] = planned.problems
+        return out
+    for row in planned.rows:
+        try:
+            out["booked"].append(ledger_store.book(PAPER_PATH, row))
+        except LedgerIntegrityError as exc:
+            out["problems"] = [f"writeoff_refused:{problem}" for problem in exc.problems]
+            return out
+        except OSError as exc:
+            out["problems"] = [f"writeoff_write_failed:{type(exc).__name__}"]
+            return out
+    return out
+
+
 def _unsettled_closed_legs(rows: list[dict[str, Any]]) -> list[str] | None:
     """Issue #126: open legs whose market closed but whose settlement is not confirmed (None: unreadable)."""
     from src import settlement
@@ -400,6 +437,7 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
         "unsettled_closed_legs": _unsettled_closed_legs(rows),  # issue #126: diagnosis only
         "daily_realized_loss_usd": day.realized_loss_usd,
         "daily_realized_gain_usd": day.realized_gain_usd,
+        "daily_writeoff_usd": day.writeoff_usd,  # issue #197: diagnosis (already in daily_realized_loss_usd)
         "ledger_problems": [],
         "duplicate_fill_rows": ledger.duplicates_ignored,
         "recent_fills": rows,

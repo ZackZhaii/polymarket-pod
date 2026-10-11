@@ -25,6 +25,11 @@ offsets another leg, the realized loss or the fees. ``ref`` is
   or its cost when the snapshot is late, its mark is 0 or ``mark_invalid``, or it has no mark;
 * for the part opened today: today's cost (notional, fees excluded: they are counted already).
 
+Written-off legs (issue #197, Task CK, KEY-approved): a leg with a write-off row (src/ledger_store.py (f))
+has its whole cost realized already (src/daily_loss.py), once. From then until it is flat it adds no
+unrealized loss on any day (``ref_source`` "written_off", ``loss_usd`` 0); it stays an open leg, so it
+still holds every limit until it settles.
+
 Pure: no clock, no file. Any position or snapshot problem is returned in ``problems``; the caller gives
 ``daily_loss_usd = None`` and RiskGate vetoes invalid_risk_state (Task AL: a global halt).
 """
@@ -37,7 +42,7 @@ from typing import Any, Iterable, Mapping
 
 from src.book_staleness import book_age_problem, parse_book_ts
 from src.daily_loss import SIDES, counts_today
-from src.ledger_store import counts, leg_key
+from src.ledger_store import counts, is_writeoff, leg_key
 from src.thresholds import LEDGER_OPEN_EPS, MAX_BOOK_AGE_S
 
 SOURCE_BID_LADDER = "bid_ladder"
@@ -182,6 +187,7 @@ class LegPosition:
     basis: float = 0.0        # USD paid for a long / received for a short (>= 0)
     carried: float = 0.0      # of abs(shares): held since the start of the day
     new_basis: float = 0.0    # USD of today's part (abs(shares) - carried)
+    written_off: bool = False  # issue #197: its whole cost is realized already (no unrealized loss)
 
 
 @dataclass
@@ -195,6 +201,7 @@ def _apply(leg: LegPosition, side: str, qty: float, usd: float, today: bool) -> 
     sign = 1.0 if side == "buy" else -1.0
     if abs(leg.shares) <= LEDGER_OPEN_EPS:
         leg.shares = leg.basis = leg.carried = leg.new_basis = 0.0
+        leg.written_off = False
     if qty <= 0:
         return
     held = leg.shares
@@ -249,7 +256,11 @@ def positions(rows: Iterable[dict[str, Any]], today: str, ids: Iterable[str] | N
             result.start = {key: LegPosition(leg.shares, leg.basis, abs(leg.shares), 0.0) for key, leg in legs.items()}
             for leg in legs.values():
                 leg.carried, leg.new_basis = abs(leg.shares), 0.0
-        _apply(legs.setdefault(leg_key(row.get("market"), row.get("token_id")), LegPosition()), side, qty, usd, bool(is_today))
+        leg = legs.setdefault(leg_key(row.get("market"), row.get("token_id")), LegPosition())
+        if is_writeoff(row):  # issue #197: moves nothing; the leg's cost is realized (src/daily_loss.py)
+            leg.written_off = abs(leg.shares) > LEDGER_OPEN_EPS
+            continue
+        _apply(leg, side, qty, usd, bool(is_today))
     if not started:
         result.start = {key: LegPosition(leg.shares, leg.basis, abs(leg.shares), 0.0) for key, leg in legs.items()}
     result.start = {key: leg for key, leg in result.start.items() if abs(leg.shares) > LEDGER_OPEN_EPS}
@@ -305,6 +316,10 @@ def unrealized_loss(
     for key in sorted(pos.now):
         leg = pos.now[key]
         mark = marks[key]
+        if leg.written_off:  # issue #197: realized once by the write-off; never an unrealized loss again
+            result.legs.append(dict(asdict(mark), leg_key=leg_id(key), shares=leg.shares, ref_usd=0.0,
+                                    ref_source="written_off", loss_usd=0.0))
+            continue
         sign = 1.0 if leg.shares > 0 else -1.0
         start = pos.start.get(key)
         carried_ref = 0.0

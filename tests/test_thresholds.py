@@ -103,6 +103,7 @@ EXPECTED = {
     "MAX_SOURCE_LOGIT_GAP": 1.0,
     # Task AN: M3 settlement snapshot hold (not coupled to ENDGAME_WINDOW_HOURS).
     "RESOLUTION_HOLD_HOURS": 48.0,
+    "MARKET_CLOSE_RECHECK_S": 30.0,  # Task CK (#197)
     # Task AQ: secret-string scan of the bus and logs (M2 pending).
     "SECRET_VALUE_MIN_LEN": 16,
     "MNEMONIC_MIN_WORDS": 12,
@@ -446,6 +447,7 @@ def test_relations_hold():
         ("MAX_SIGNAL_AGE_NEWS_S = 3600.0", "MAX_SIGNAL_AGE_NEWS_S = 0.0"),
         ("MAX_SOURCE_LOGIT_GAP = 1.0", "MAX_SOURCE_LOGIT_GAP = 0.0"),
         ("RESOLUTION_HOLD_HOURS = 48.0", "RESOLUTION_HOLD_HOURS = 0.0"),
+        ("MARKET_CLOSE_RECHECK_S = 30.0", "MARKET_CLOSE_RECHECK_S = 90.0"),  # Task CK (#197)
         ("SECRET_VALUE_MIN_LEN = 16", "SECRET_VALUE_MIN_LEN = 64"),
         ("SECRET_VALUE_MIN_LEN = 16", "SECRET_VALUE_MIN_LEN = 16.0"),
         ("MNEMONIC_MIN_WORDS = 12", "MNEMONIC_MIN_WORDS = 13"),

@@ -216,6 +216,10 @@ DATA_API_IDENTITY_TOL_USDC = 1e-6
 # Hours a market must stay closed (Gamma closedTime) before it is written to data/resolutions.jsonl.
 # Exactly 48 h passes. Same number as ENDGAME_WINDOW_HOURS by coincidence; they are not coupled.
 RESOLUTION_HOLD_HOURS = 48.0
+# Issue #197 (Task CK, KEY-approved): a held market counts as closed (write-off) only after a second Gamma read
+# at least this many seconds after the first one still shows closed / not accepting orders / the same closedTime
+# (the approved 30-60 s re-read; the runner re-reads on its next loop, RUNNER_LOOP_S later).
+MARKET_CLOSE_RECHECK_S = 30.0
 
 
 # --- Signal -> OrderIntent (Task AO, forecaster/SPEC_signal_to_intent.md) ------------------------
@@ -529,6 +533,8 @@ def consistency_problems() -> list[str]:
     if (isinstance(CALIBRATION_MAX_CLUSTER_SHARE, bool) or not isinstance(CALIBRATION_MAX_CLUSTER_SHARE, (int, float))
             or not 0 < CALIBRATION_MAX_CLUSTER_SHARE <= 1):
         problems.append("CALIBRATION_MAX_CLUSTER_SHARE must be in (0, 1]")
+    if not 30.0 <= MARKET_CLOSE_RECHECK_S <= 60.0:  # issue #197: the approved 30-60 s re-read window
+        problems.append("MARKET_CLOSE_RECHECK_S must be in [30, 60]")
     # Task BB: M3 Reflector proposal rules.
     if not 0 < REFLECTOR_DISABLE_SLOPE_MAX < REFLECTOR_TIGHTEN_SLOPE_MAX <= 1:
         problems.append("need 0 < REFLECTOR_DISABLE_SLOPE_MAX < REFLECTOR_TIGHTEN_SLOPE_MAX <= 1")
