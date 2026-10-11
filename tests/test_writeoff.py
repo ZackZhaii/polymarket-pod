@@ -364,6 +364,7 @@ def runner(tmp_path, monkeypatch):
 
 
 def _iterate(runner, getter, now):
+    runner["state"].monotonic = lambda: now.timestamp()  # wall and monotonic move together (#120: no "resume")
     return m2_runner.iteration(runner["state"], now=now, getters=m2_runner.Getters(gamma=getter, book=_no_book))
 
 

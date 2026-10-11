@@ -447,11 +447,13 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     }
 
 
-def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
+def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
     """Ask RiskGate. Append a paper fill only when the same call allows it.
 
     Task AF: the fill gets a fill_id and the post-fill cash / leg state, and is written atomically
-    by ledger_store.book after the whole ledger is re-verified. An integrity problem halts (a halt
+    by ledger_store.book after the whole ledger is re-verified. Issue #120: ``unique_decision_id`` is
+    passed through (default False); when True and the decision_id is already booked, returns
+    ``allow True`` with the existing fill and ``already_booked True``, without writing again. An integrity problem halts (a halt
     bus message, allow False, nothing booked); a failed write leaves the old ledger intact.
     """
     # Issue #126 (Task CG): settle resolved legs first, so a settled loss is realized once and the leg is gone.
@@ -556,11 +558,15 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
     fill["calibration_problems"] = sorted(set(calibration_ids.fill_problems(fill)) | set(market_problems)
                                           | set(context_problems))
     try:
-        fill = ledger_store.book(PAPER_PATH, fill)
+        booked = ledger_store.book(PAPER_PATH, fill, unique_decision_id=unique_decision_id)
     except LedgerIntegrityError as exc:
         return _halt(intent, summary, "ledger_integrity", exc.problems)
     except OSError as exc:
         return _halt(intent, summary, "ledger_write_failed", [f"{type(exc).__name__}: {exc}"])
+    if booked.get("already_booked") is True:  # issue #120: same decision_id already on the ledger
+        existing = booked["fill"]
+        return {"allow": True, "fill": existing, "already_booked": True}
+    fill = booked
     bus("Executor", "Sentinel", "fill", intent.market, fill)
     return {"allow": True, "fill": fill}
 
