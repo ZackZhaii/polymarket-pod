@@ -792,10 +792,14 @@ def main(argv: list[str] | None = None, *, getters: Getters | None = None,
     if not lock.acquire(_stamp(now_fn())):
         print(f"{PROC}: another m2_runner holds {paths.lock_file}; exiting", file=sys.stderr)
         return EXIT_ALREADY_RUNNING
+    # Task CF (#124): RiskGate's start-of-day leg marks live under this run dir (runs/m2/daily_marks by default).
+    marks_dir_before = paper_ledger.DAILY_MARKS_DIR
+    paper_ledger.DAILY_MARKS_DIR = paths.run_dir / "daily_marks"
     try:
         with network_guard():
             return _run(args, paths, getters or Getters(), now_fn, sleep, monotonic, risk_path)
     finally:
+        paper_ledger.DAILY_MARKS_DIR = marks_dir_before
         lock.release()
 
 

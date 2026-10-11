@@ -111,9 +111,14 @@ def test_legacy_fixture_loads_exactly_as_before(ledger, monkeypatch, expected, c
     name, market, token, positions, already, exposure, leg_exposure, loss, count = expected
     _legacy(ledger, name, monkeypatch, crlf=crlf)  # CRLF: what Windows text-mode appends wrote
     state = paper_ledger.load_state(market, token)
+    # Task CF (#124): the realized part (fees + realized losses) is exactly as before; the open legs (no books
+    # here, so worth their worst case) add their loss on top.
     assert (state["open_positions"], state["leg_already_open"], state["exposure_usd"],
-            state["leg_exposure_usd"], state["daily_loss_usd"], len(state["recent_fills"])) == (
-        positions, already, exposure, leg_exposure, loss, count)
+            state["leg_exposure_usd"], state["daily_fees_usd"] + state["daily_realized_loss_usd"],
+            len(state["recent_fills"])) == (positions, already, exposure, leg_exposure, loss, count)
+    assert state["daily_loss_usd"] == pytest.approx(loss + state["daily_unrealized_loss_usd"])
+    assert (state["daily_unrealized_loss_usd"] > 0) == (positions > 0)
+    assert len(state["daily_marks"]) == positions and all(m["mark_invalid"] for m in state["daily_marks"])
     assert state["ledger_problems"] == [] and state["duplicate_fill_rows"] == 0
 
 
