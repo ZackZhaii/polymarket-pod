@@ -58,6 +58,11 @@ What the protocol gives for integrity, and what this recorder does with it:
   resubscribes; when the exchange's own book recovered the asset first, the resubscribe snapshot can arrive
   older than deltas applied since: one such snapshot, not older than the recovery book and within
   WS_RESYNC_TIMEOUT_S, is dropped (``stale_resubscribe_snapshot``) instead of a timestamp_regression.
+- Task CM (M1 6h FAIL m1-20261010T1907Z): the exchange sends a match's level removal once per asset message
+  (YES-first and NO-first items), so the same zero-size removal can arrive twice in one same-timestamp group.
+  A removal of a level the book does not hold is skipped and counted (``duplicate_level_removal``) only when
+  that exact side + price was already removed at the SAME exchange timestamp (earlier item or frame, held or
+  applied). A level never held, or a repeat at a later timestamp, is still ``unknown_level_removed``.
 - Resync = if the asset was live, write one price-less invalidation row at once (see Rows below),
   then discard its local book and wait for a fresh ``book`` snapshot; deltas for it are ignored and
   no further row is written for it until then (the invalidation row is the only row a resyncing
@@ -310,6 +315,11 @@ class AssetBook:
     reported_top: tuple[float | None, float | None] | None = None
     # Issue #182 (C): after a gap resync the recorder resubscribes; {"since": mono, "floor": recovery ts or None}.
     resubscribe: dict[str, Any] | None = None
+    # Task CM: levels removed (size 0) at the book's newest exchange timestamp: (stamp_ms, {(side, price)}).
+    # The exchange sends a match's removal once per asset message (YES-first and NO-first items), so one removal
+    # can arrive twice in a same-ts group. Only that exact repeat is skipped (duplicate_level_removal); a level
+    # never held, or a repeat at a later timestamp, is still unknown_level_removed.
+    removed: tuple[int, set] | None = None
 
     def discard(self, since: float | None) -> None:
         """Resync: drop every piece of local book state and wait for a fresh snapshot.
@@ -331,6 +341,7 @@ class AssetBook:
         self.awaiting_since = since
         self.pending = None
         self.reported_top = None
+        self.removed = None
 
 
 @dataclass
@@ -649,6 +660,8 @@ class BookCore:
                 self._close_group(book, ts, mono, out)
                 out.counts["ignored_awaiting_snapshot"] += 1
                 continue
+            removed_now = book.removed[1] if book.removed is not None and book.removed[0] == stamp[0] else None
+            removed_add: set = set()
             try:
                 if group is not None:  # same timestamp: this frame continues the open group
                     bids, asks, reported = dict(group["bids"]), dict(group["asks"]), group["reported"]
@@ -673,13 +686,20 @@ class BookCore:
                     levels = bids if side == "BUY" else asks
                     if size == 0.0:
                         if price not in levels:
+                            key = (side, price)
+                            if key in removed_add or (removed_now is not None and key in removed_now):
+                                # Task CM: the same removal at the same exchange timestamp, already applied.
+                                out.counts["duplicate_level_removal"] += 1
+                                continue
                             raise _Reject("unknown_level_removed")
                         del levels[price]
+                        removed_add.add((side, price))
                     else:
                         levels[price] = size
             except _Reject as reject:
                 self._resync(asset, reject.reason, ts, mono, out)
                 continue
+            book.removed = (stamp[0], (removed_now or set()) | removed_add)
             problem = _disagreement(bids, asks, reported)
             if problem is not None:
                 # Issue #182 (A): the exchange splits one match into several frames with the same timestamp

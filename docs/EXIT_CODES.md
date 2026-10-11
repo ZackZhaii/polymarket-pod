@@ -107,6 +107,7 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 | 4 | `EXIT_WRITE_FAILED` | writing the run directory failed | global halt |
 | 5 | `EXIT_INTERRUPTED` | stopped by SIGINT/SIGTERM/SIGBREAK or Ctrl+C/Ctrl+Break (Operator stop). Task BT: a Windows console close / logoff / shutdown also finishes the manifest `interrupted` with exit_code 5, but the m1_run heartbeat ends `crashed` (global halt), not this log-only exit | log |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins at start (no run dir created) or while running (PIN_RECHECK_S); global halt recorded | global halt |
+| 7 | `EXIT_CLOCK_BEHIND` | Task CM: refused to start (no run dir): the local clock is behind the exchange by more than `M1_MAX_CLOCK_BEHIND_S` (max of `book_ts` - local receive time over one public `/book` read per asset), or no `/book` answer was usable to check it. Sync the host clock and start again | alert |
 
 ## `src/m2_start.py`
 
@@ -137,6 +138,19 @@ Heartbeat every HEARTBEAT_RUNNER_EVERY_S (`paused` while paused); single instanc
 | 4 | `EXIT_WRITE_FAILED` | a journal / events / candidates write failed | global halt |
 | 6 | `EXIT_PIN_OR_LIVE` | config/risk.toml off its pins or a live flag (`live_enabled` not false, `mode` not paper, `require_human_gate` not true); global halt recorded (`risk_toml_pin_drift` / `m2_live_flag`) | global halt |
 | 7 | `EXIT_SELF_CHECK` | the start self-check failed (run dir or inbox not writable) | alert |
+
+## `src/paper_audit.py`
+
+`python -m src.paper_audit --ledger PATH --bus PATH [--json]`: offline, read-only cross-check of the
+paper ledger against Executor bus fills, joined by explicit fill_id (issue #69, first acceptance
+item). Standard library only, no network, no halt, nothing written; the report goes to stdout. No
+heartbeat.
+
+| Code | Name | Meaning | Sentinel |
+|---|---|---|---|
+| 0 | `EXIT_OK` | at least one fill joined on both sides and neither side has an orphan | - |
+| 1 | `EXIT_MISMATCH` | no fill joined, or an orphan / join problem on either side (the two logs are not validated as agreeing) | - |
+| 2 | `EXIT_USAGE` | usage error, or an input that cannot be read in full (missing, unreadable, undecodable bytes, a malformed or non-object line, a torn last row) | - |
 
 ## `src/paper_cycle.py`
 

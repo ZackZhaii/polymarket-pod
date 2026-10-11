@@ -381,7 +381,7 @@ def test_t9_the_runner_reaches_getters_only_through_the_guard():
     assert direct == []
     wrapped = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                and getattr(node.func, "id", "") == "GuardedGetter"]
-    assert len(wrapped) == 3  # iteration: gamma+book; resume_detected path: gamma only (issue #120)
+    assert len(wrapped) == 2  # iteration: one gamma (settlement #206, scan, fee; also the resume path) + book
 
 
 # ---------------------------------------------------------------- T10 single writer of the paper ledger
