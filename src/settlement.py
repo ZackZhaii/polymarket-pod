@@ -9,7 +9,9 @@ each day. Settling it closes the leg once:
   nothing and is not read as a 0 loss; the leg is reported in ``unsettled_closed_legs``;
 * a leg matches a snapshot by token: the token is in the snapshot's ``outcome_token_ids``, or (a legacy
   snapshot without the mapping) it is the ``winning_token_id``. Payout: 1 for the winning token, else 0;
-* two confirmed snapshots that disagree about a token's payout settle nothing for it (a problem);
+* the confirmed snapshots of one condition must agree exactly (winner, final prices, closed_ts, token
+  mapping: ``resolutions.content_conflict``), and a token may belong to one condition only. Any
+  contradiction is a problem and nothing at all is settled (the caller halts: invalid_risk_state);
 * the row closes the whole open leg at the payout (src/ledger_store.py, (e)): a long is sold, a short
   bought back. Its realized P&L belongs to the row's ``ts``, the time it is booked (src/daily_loss.py), so a
   settled loss counts once, on the booking day, and the leg is gone on every later day. A gain never
@@ -34,6 +36,7 @@ from src.ledger_store import (
     counts,
     leg_key,
 )
+from src.resolutions import content_conflict
 from src.thresholds import LEDGER_OPEN_EPS
 
 SETTLEMENT_ID_PREFIX = "settle-"
@@ -82,20 +85,34 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
     booked = set(ledger_ids)
     final: dict[str, tuple[float, dict[str, Any]]] = {}
     pending: set[str] = set()
+    by_condition: dict[str, dict[str, Any]] = {}
     for snap in resolutions:
-        tokens = _tokens(snap)
+        if not confirmed(snap):
+            pending.update(_tokens(snap))
+            continue
+        # PR #194 review (P1): consistency is per condition, not per token. Two confirmed snapshots of one
+        # condition with another winner or token mapping ([a,b]->a vs [c,b]->c) are a contradiction.
+        condition = str(snap.get("condition_id"))
+        prior = by_condition.get(condition)
+        if prior is not None:
+            try:
+                conflict = content_conflict(prior, snap)
+            except (KeyError, TypeError, ValueError):
+                conflict = "unreadable"
+            if conflict is not None:
+                result.problems.append(f"settlement_conflict:{condition}:{conflict}")
+            continue
+        by_condition[condition] = snap
         winner = str(snap.get("winning_token_id"))
-        for token in tokens:
-            if not confirmed(snap):
-                pending.add(token)
-                continue
+        for token in _tokens(snap):
             payout = 1.0 if token == winner else 0.0
-            prior = final.get(token)
-            if prior is not None and (prior[0] != payout or prior[1].get("condition_id") != snap.get("condition_id")):
-                result.problems.append(f"settlement_conflict:{token}")
-                final[token] = (float("nan"), snap)
+            other = final.get(token)
+            if other is not None and other[1].get("condition_id") != snap.get("condition_id"):
+                result.problems.append(f"settlement_conflict:{token}:token_in_two_conditions")
                 continue
-            final.setdefault(token, (payout, snap))
+            final[token] = (payout, snap)
+    if result.problems:
+        return result  # any contradiction: settle nothing at all
     for (market, token), shares in sorted(open_legs(ledger_rows).items()):
         if not token:
             continue
@@ -105,8 +122,6 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
                 result.unsettled_closed_legs.append(f"{market}|{token}")
             continue
         payout, snap = hit
-        if payout != payout:  # conflict (NaN): settle nothing
-            continue
         fill_id = settlement_fill_id(str(snap["condition_id"]), market, token)
         if fill_id in booked:
             result.problems.append(f"settled_leg_still_open:{market}|{token}")

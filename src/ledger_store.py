@@ -65,7 +65,8 @@ nothing more. All of this is tightening only and fails closed. No orders, keys o
     counts_toward_risk true), the closing side (a long is sold, a short bought back) at the payout (1 for
     the winning token, 0 otherwise) as both ``market_price`` and ``effective_price``, ``notional_usd`` =
     shares x payout, no fee (``fee_rate`` and ``fee_usd`` 0), and non-empty
-    ``condition_id`` / ``winning_token_id``. It must close the whole open leg exactly (no partial close,
+    ``condition_id`` / ``winning_token_id``, ``settlement_payout`` the same finite number as the price, and
+    ``closed_ts`` an ISO timestamp with a date, a time and a zone. It must close the whole open leg exactly (no partial close,
     no flip): ``settlement_not_closing``. Any other ``kind`` value, or a settlement field that is not
     exactly valid, is an integrity problem (``invalid_settlement``), so a damaged row is never replayed.
     Its fill_id is derived from the settlement (src/settlement.py), so booking it twice is idempotent.
@@ -79,6 +80,7 @@ import math
 import os
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -173,8 +175,26 @@ def settlement_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
           and abs(number("notional_usd") - shares * payout) <= LEDGER_OPEN_EPS  # type: ignore[operator]
           and all(isinstance(row.get(name), str) and row.get(name).strip()  # type: ignore[union-attr]
                   for name in ("condition_id", "winning_token_id", "token_id"))
-          and (payout == 1.0) == (row.get("token_id") == row.get("winning_token_id")))
+          and (payout == 1.0) == (row.get("token_id") == row.get("winning_token_id"))
+          # PR #194 review: the payout is booked twice (market_price and settlement_payout); both must be the
+          # same finite number, and the market's close time must be a real zoned timestamp.
+          and number("settlement_payout") == payout
+          and _zoned_ts(row.get("closed_ts")))
     return [] if ok else [f"invalid_settlement:{fill_id}"]
+
+
+def _zoned_ts(value: object) -> bool:
+    """A settlement row's closed_ts: an ISO 8601 string with a date, a time and a zone (Z or an offset)."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    text = value.strip()
+    if text[-1] in "Zz":
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
 def leg_key(market: object, token_id: object) -> tuple[str, str]:

@@ -240,3 +240,82 @@ def test_the_reconciler_does_not_count_a_settlement_as_a_trade(env):
     view = reconcile.ledger_view(env["ledger"])
     assert view.problems == []
     assert view.flows["no"] == {"BUY": 20.0, "SELL": 0.0} and view.shares["no"] == 0.0
+
+
+# ---------------------------------------------------------------- PR #194 review fixes
+
+@pytest.mark.parametrize("other", [
+    snap(tokens=("c", "b"), winner="c"),    # the review's case: [a,b]->a vs [c,b]->c (another winner and mapping)
+    snap(tokens=("a", "c"), winner="a"),    # same winner, the mapping changed
+    dict(snap(tokens=("a", "b"), winner="a"), closed_ts="2026-08-30T00:00:00Z"),  # another close time
+])
+def test_contradicting_snapshots_of_one_condition_settle_nothing_and_halt(env, other):
+    """P1: consistency is checked per condition, not per token; any contradiction books nothing and halts."""
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, token="a"), fill("buy", 10.0, 0.5, token="b", market="m2")])
+    first = snap(tokens=("a", "b"), winner="a")
+    planned = settlement.plan(_rows(env["ledger"]), [], [first, other], DAY1)
+    assert planned.rows == [] and planned.problems and all(p.startswith("settlement_conflict:0xc:")
+                                                           for p in planned.problems)
+    _snaps(env["res"], first, other)
+    before = env["ledger"].read_bytes()
+    result = paper_ledger.commit_if_allowed(_intent(), load_risk())
+    assert result["allow"] is False and result["halted"] is True and result["halt_reason"] == "invalid_risk_state"
+    assert any(h["scope"] == "global" for h in halt_store.active_halts())
+    assert env["ledger"].read_bytes() == before
+
+
+def test_an_identical_repeat_of_a_confirmed_snapshot_is_not_a_contradiction():
+    planned = settlement.plan([dict(fill("buy", 20.0, 0.5, token="a"), fill_id="x")], [],
+                              [snap(tokens=("a", "b"), winner="a"), snap(tokens=("a", "b"), winner="a")], DAY1)
+    assert planned.problems == [] and [r["settlement_payout"] for r in planned.rows] == [1.0]
+
+
+def test_a_token_in_two_conditions_settles_nothing():
+    planned = settlement.plan([dict(fill("buy", 20.0, 0.5, token="a"), fill_id="x")], [],
+                              [snap(tokens=("a", "b"), winner="a"),
+                               snap(condition="0xd", tokens=("a", "z"), winner="z")], DAY1)
+    assert planned.rows == [] and planned.problems == ["settlement_conflict:a:token_in_two_conditions"]
+
+
+_MISSING = object()
+
+
+@pytest.mark.parametrize("name, value", [
+    ("settlement_payout", _MISSING), ("settlement_payout", None), ("settlement_payout", float("nan")),
+    ("settlement_payout", float("inf")), ("settlement_payout", "0.0"), ("settlement_payout", True),
+    ("settlement_payout", 1.0),  # contradicts market_price / effective_price 0.0
+    ("closed_ts", _MISSING), ("closed_ts", None), ("closed_ts", ""), ("closed_ts", "garbage"),
+    ("closed_ts", "2026-08-29"), ("closed_ts", "2026-08-29T00:00:00"), ("closed_ts", 1756425600),
+])
+def test_a_settlement_row_needs_a_matching_finite_payout_and_a_zoned_close_time(env, name, value):
+    """P2 (ledger_store): settlement_payout and closed_ts are validated, not just carried."""
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, token="no")])
+    row = settlement.plan(_rows(env["ledger"]), [], [snap()], DAY1).rows[0]
+    assert row["settlement_payout"] == 0.0
+    bad = dict(row)
+    if value is _MISSING:
+        del bad[name]
+    else:
+        bad[name] = value
+    with pytest.raises(ledger_store.LedgerIntegrityError) as caught:
+        ledger_store.book(env["ledger"], bad)
+    assert f"invalid_settlement:{row['fill_id']}" in caught.value.problems
+
+
+@pytest.mark.parametrize("closed_ts", ["2026-08-29T00:00:00Z", "2026-08-29T08:00:00+08:00"])
+def test_a_zoned_close_time_is_accepted(env, closed_ts):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, token="no")])
+    row = settlement.plan(_rows(env["ledger"]), [], [snap()], DAY1).rows[0]
+    ledger_store.book(env["ledger"], dict(row, closed_ts=closed_ts))
+    assert ledger_store.verify(ledger_store.read_ledger(env["ledger"])[1]) == []
+
+
+def test_a_settlement_after_a_partial_close_is_not_below_the_data_api_trade_floor(env):
+    """P2 (reconcile): the trade floor applies to trades only; a settlement of 0.0099... shares is fine."""
+    _book(env["ledger"], [fill("buy", 0.03, 0.5, token="no"), fill("sell", 0.02, 0.5, token="no")])
+    _snaps(env["res"], snap())
+    out = paper_ledger.apply_settlements()
+    assert out["problems"] == [] and out["booked"][0]["shares"] < 0.01
+    view = reconcile.ledger_view(env["ledger"])
+    assert view.problems == []
+    assert view.flows["no"] == {"BUY": 0.03, "SELL": 0.02} and abs(view.shares["no"]) < 1e-12
