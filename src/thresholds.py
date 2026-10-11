@@ -200,6 +200,10 @@ M1_MIN_REST_MATCHED = 50
 M1_MAX_TOP_MISMATCH_RATE = 0.02
 # REST samples with no live WS row within the window (or an unusable REST book_ts)
 M1_MAX_REST_UNMATCHED_RATE = 0.10
+# Task CM (M2 pending, tightening): m1_run refuses to start when the local clock is behind the exchange by more
+# than this (lower bound from one public /book read per asset: max(book_ts - local receive time)). The failed
+# 6 h run started about 0.25 s slow and drifted ~0.1 s/h; any lag turns rows "future" (not fresh) in m1_report.
+M1_MAX_CLOCK_BEHIND_S = 0.1
 
 # --- Data API v2 reconciliation (Task AK) ------------------------------------------------------
 # M2 pending. Ledger vs Data API share amounts may differ by at most this (1e-6 = one on-chain base
@@ -445,6 +449,10 @@ def consistency_problems() -> list[str]:
         problems.append("M1_ROTATE_S, M1_REST_EVERY_S and M1_MIN_RUN_S must be > 0")
     if not 0.0 < M1_REPORT_STEP_S <= WS_ROW_REFRESH_S:
         problems.append("M1_REPORT_STEP_S must satisfy 0 < M1_REPORT_STEP_S <= WS_ROW_REFRESH_S")
+    if not (isinstance(M1_MAX_CLOCK_BEHIND_S, float) and 0.0 < M1_MAX_CLOCK_BEHIND_S < M1_REPORT_STEP_S
+            and M1_MAX_CLOCK_BEHIND_S < CLOCK_SKEW_MAX_S):
+        problems.append("M1_MAX_CLOCK_BEHIND_S must be a float with 0 < M1_MAX_CLOCK_BEHIND_S < M1_REPORT_STEP_S "
+                        "and < CLOCK_SKEW_MAX_S (Task CM)")
     if not 0.0 < M1_MIN_COVERAGE <= 1.0:
         problems.append("M1_MIN_COVERAGE must satisfy 0 < M1_MIN_COVERAGE <= 1")
     if not (0.0 <= M1_MAX_TOP_MISMATCH_RATE < 1.0 and 0.0 <= M1_MAX_REST_UNMATCHED_RATE < 1.0):
