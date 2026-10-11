@@ -454,11 +454,17 @@ def atomic_append(path: Path, expected: bytes, line: bytes) -> None:
     _fsync_dir(path.parent)
 
 
-def book(path: Path, fill: dict[str, Any]) -> dict[str, Any]:
+def book(path: Path, fill: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
     """Verify the ledger, stamp the fill's id and post-fill state, write it atomically, re-verify.
 
     Raises LedgerIntegrityError (halt; nothing booked unless the problem is post_write) or OSError
     (write failed; old ledger intact). Returns the row as written.
+
+    Issue #120 (Task CJ): when ``unique_decision_id`` is True (M2 runner only), the same ``decision_id``
+    is booked at most once. An existing counted row with that id returns
+    ``{"already_booked": True, "fill": <existing row>}`` without writing and without raising. A missing
+    or blank ``decision_id`` is refused (M2 fills must be joinable). Default False keeps every older
+    call path and the e2e golden unchanged.
     """
     data, current = read_ledger(path)
     problems = verify(current)
@@ -467,6 +473,13 @@ def book(path: Path, fill: dict[str, Any]) -> dict[str, Any]:
     row = dict(fill)
     if FILL_ID_FIELD not in row:
         row = {FILL_ID_FIELD: new_fill_id(), **row}
+    if unique_decision_id:
+        decision_id = row.get("decision_id")
+        if not (isinstance(decision_id, str) and decision_id.strip()):
+            raise LedgerIntegrityError([f"missing_decision_id:{row[FILL_ID_FIELD]}"])
+        for existing in current.rows:
+            if counts(existing) and existing.get("decision_id") == decision_id:
+                return {"already_booked": True, "fill": existing}
     control = control_field_problems(row, row[FILL_ID_FIELD])  # issue #68
     if control:
         # Refused before the new row is replayed or written: the old ledger bytes stand.

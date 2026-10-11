@@ -167,6 +167,12 @@ RUNNER_SCAN_MAX_AGE_S = 7200.0
 # At most this many inbox files are checked per iteration, and a sealed signal is evaluated at most this often.
 RUNNER_MAX_INGEST_PER_ITER = 20
 RUNNER_MAX_EVALS_PER_SIGNAL = 10
+# Issue #120 (Task CJ, M2-C2): wall-clock gap between iterations that counts as a suspend/resume.
+RUNNER_SUSPEND_GAP_S = 180.0
+# Wall vs monotonic delta above this also counts as a suspend (host slept).
+RUNNER_WALL_MONO_SKEW_S = 30.0
+# |book_ts − local clock| above this pauses the runner (clock_skew).
+CLOCK_SKEW_MAX_S = 5.0
 # Disk: the runner pauses with less than DISK_MIN_FREE_GB free on the run dir's volume, or when the run dir
 # holds more than RUNNER_DISK_BUDGET_GB.
 DISK_MIN_FREE_GB = 2.0
@@ -405,7 +411,8 @@ def consistency_problems() -> list[str]:
     if not (isinstance(FORECAST_MIN_HALF_WIDTH, float) and 0.0 < FORECAST_MIN_HALF_WIDTH < 0.5):
         problems.append("FORECAST_MIN_HALF_WIDTH must be a float in (0, 0.5)")
     runner_floats = ("RUNNER_LOOP_S", "HEARTBEAT_RUNNER_EVERY_S", "HEARTBEAT_RUNNER_TIMEOUT_S", "RUNNER_PAUSED_ALERT_S",
-                     "RUNNER_SCAN_EVERY_S", "RUNNER_SCAN_MAX_AGE_S", "DISK_MIN_FREE_GB", "RUNNER_DISK_BUDGET_GB")
+                     "RUNNER_SCAN_EVERY_S", "RUNNER_SCAN_MAX_AGE_S", "DISK_MIN_FREE_GB", "RUNNER_DISK_BUDGET_GB",
+                     "RUNNER_SUSPEND_GAP_S", "RUNNER_WALL_MONO_SKEW_S", "CLOCK_SKEW_MAX_S")
     for name in runner_floats:  # Task CE (#119)
         value = globals()[name]
         if not (isinstance(value, float) and 0.0 < value < float("inf")):
@@ -416,6 +423,12 @@ def consistency_problems() -> list[str]:
         problems.append("need RUNNER_LOOP_S < HEARTBEAT_RUNNER_TIMEOUT_S")
     if not RUNNER_SCAN_EVERY_S < RUNNER_SCAN_MAX_AGE_S:
         problems.append("need RUNNER_SCAN_EVERY_S < RUNNER_SCAN_MAX_AGE_S")
+    if not RUNNER_LOOP_S < RUNNER_SUSPEND_GAP_S:
+        problems.append("need RUNNER_LOOP_S < RUNNER_SUSPEND_GAP_S")
+    if not 0.0 < RUNNER_WALL_MONO_SKEW_S < RUNNER_SUSPEND_GAP_S:
+        problems.append("need 0 < RUNNER_WALL_MONO_SKEW_S < RUNNER_SUSPEND_GAP_S")
+    if not 0.0 < CLOCK_SKEW_MAX_S < MAX_BOOK_AGE_S:
+        problems.append("need 0 < CLOCK_SKEW_MAX_S < MAX_BOOK_AGE_S")
     for name in ("RUNNER_MAX_INGEST_PER_ITER", "RUNNER_MAX_EVALS_PER_SIGNAL"):
         value = globals()[name]
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
