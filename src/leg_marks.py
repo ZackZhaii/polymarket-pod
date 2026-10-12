@@ -365,6 +365,38 @@ def writeoff_sod_uplift(pos: Positions, snapshot: Mapping[str, Any] | None, key:
     return max(0.0, carried_mark - carried_cost) if leg.shares > 0 else max(0.0, carried_cost - carried_mark)
 
 
+def writeoff_uplift_problems(rows: list[dict[str, Any]], ids: list[str] | None, today: str,
+                             snapshot: Mapping[str, Any] | None) -> list[str]:
+    """Issue #255: recompute each write-off-today row's ``writeoff_sod_uplift_usd`` from the day's snapshot.
+
+    Fail closed: a different uplift is ``writeoff_sod_uplift_mismatch``; a leg with shares held since the start of
+    the day written off before the day's snapshot existed is ``writeoff_before_daily_marks``; a missing snapshot is
+    ``writeoff_daily_marks_missing``. Write-offs of earlier days are checked on their own day only.
+    """
+    labels = list(ids) if ids is not None else [str(i) for i in range(len(rows))]
+    problems: list[str] = []
+    for index, row in enumerate(rows):
+        if not is_writeoff(row) or not counts(row) or counts_today(row.get("ts"), today) is not True:
+            continue
+        label = labels[index]
+        key = leg_key(row.get("market"), row.get("token_id"))
+        pos = positions(rows[:index], today, labels[:index])
+        leg, start = pos.now.get(key), pos.start.get(key)
+        carried = leg is not None and start is not None and leg.carried > LEDGER_OPEN_EPS
+        if snapshot is None:
+            problems.append(f"writeoff_daily_marks_missing:{label}")
+            continue
+        created, booked_at = parse_book_ts(snapshot.get("created_at")), parse_book_ts(row.get("ts"))
+        if carried and (created is None or booked_at is None or created > booked_at):
+            problems.append(f"writeoff_before_daily_marks:{label}")
+            continue
+        expected = writeoff_sod_uplift(pos, snapshot, key)
+        booked = _finite(row.get("writeoff_sod_uplift_usd") if row.get("writeoff_sod_uplift_usd") is not None else 0.0)
+        if booked is None or abs(booked - expected) > LEDGER_OPEN_EPS:
+            problems.append(f"writeoff_sod_uplift_mismatch:{label}")
+    return problems
+
+
 @dataclass
 class Unrealized:
     loss_usd: float = 0.0

@@ -187,6 +187,27 @@ def _previous_day(day: str) -> str | None:
     return (stamp - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
+def ensure_daily_snapshot(pos: leg_marks.Positions, today: str, now: str, now_dt: Any,
+                          book_map: dict[tuple[str, str], dict[str, Any]]) -> tuple[dict[str, Any] | None, list[str]]:
+    """The day's start-of-day snapshot: read it, or write it once (Task CF #124). Shared by daily_unrealized and,
+    issue #255, apply_writeoffs (a write-off on the day's first tick must not book its uplift before the snapshot).
+    Returns (snapshot, problems); any problem is fail closed for the caller."""
+    snap, problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, today)
+    if problems or snap is not None:
+        return snap, problems
+    start_marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt)
+                   for key, leg in pos.start.items()}
+    late = _LAST_EVAL_DAY is None or _LAST_EVAL_DAY != _previous_day(today)
+    try:
+        return daily_marks.create_snapshot(DAILY_MARKS_DIR, today, now, late,
+                                           leg_marks.snapshot_legs(pos.start, start_marks)), []
+    except daily_marks.SnapshotExists:  # another process wrote it first: use that one
+        snap, problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, today)
+        return snap, problems or ([] if snap is not None else ["daily_marks_missing_after_create"])
+    except (OSError, ValueError) as exc:
+        return None, [f"daily_marks_write_failed:{type(exc).__name__}"]
+
+
 def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
                      books: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
     """Task CF (#124): today's unrealized loss on open legs (Poly风控's ruling, src/leg_marks.py).
@@ -208,26 +229,12 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
             result["problems"] = pos.problems
             return result
         book_map = mark_books(MARK_BOOKS_PATH) if books is None else books
-        snap, problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, today)
-        if problems:
-            result["problems"] = problems
+        snap, problems = ensure_daily_snapshot(pos, today, now, now_dt, book_map)
+        if problems or snap is None:
+            result["problems"] = problems or ["daily_marks_missing_after_create"]
             return result
-        if snap is None:
-            start_marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt)
-                           for key, leg in pos.start.items()}
-            late = _LAST_EVAL_DAY is None or _LAST_EVAL_DAY != _previous_day(today)
-            try:
-                snap = daily_marks.create_snapshot(DAILY_MARKS_DIR, today, now, late,
-                                                   leg_marks.snapshot_legs(pos.start, start_marks))
-            except daily_marks.SnapshotExists:  # another process wrote it first: use that one
-                snap, problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, today)
-                if problems or snap is None:
-                    result["problems"] = problems or ["daily_marks_missing_after_create"]
-                    return result
-            except (OSError, ValueError) as exc:
-                result["problems"] = [f"daily_marks_write_failed:{type(exc).__name__}"]
-                return result
         _LAST_EVAL_DAY = today
+        result["snapshot"] = snap
         marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt) for key, leg in pos.now.items()}
         unrealized = leg_marks.unrealized_loss(pos, marks, snap)
         result["late"] = snap.get("late")
@@ -250,6 +257,8 @@ def daily_risk_loss(rows: list[dict[str, Any]], ids: list[str], now: str) -> dic
     marks = (daily_unrealized(rows, ids, now) if not day.problems
              else {"loss_usd": None, "realized_topup_usd": None, "legs": [], "late": None, "problems": []})
     problems = list(day.problems) + list(marks["problems"])
+    if not problems:  # issue #255: every write-off booked today, its uplift recomputed from the day's snapshot
+        problems = leg_marks.writeoff_uplift_problems(rows, ids, now[:10], marks.get("snapshot"))
     total = None if problems else day.total_usd + marks["realized_topup_usd"] + marks["loss_usd"]
     return {"loss_usd": total, "day": day, "marks": marks, "problems": problems}
 
@@ -324,7 +333,8 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
     return out
 
 
-def apply_writeoffs(closes: list[Any], now: str | None = None) -> dict[str, Any]:
+def apply_writeoffs(closes: list[Any], now: str | None = None,
+                    books: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
     """Issue #197 (Task CK, KEY-approved): book one write-off row per open leg of each confirmed closed market.
 
     ``closes`` are src/market_close.Close values (confirmed by src/m2_runner._writeoff_hook). Idempotent: a leg
@@ -346,10 +356,18 @@ def apply_writeoffs(closes: list[Any], now: str | None = None) -> dict[str, Any]
         out["problems"] = [f"writeoff_ledger_invalid:{problem}" for problem in problems] or ["writeoff_ledger_invalid"]
         return out
     now = now or utc_now()
-    # #197 correction (issuecomment-6109537257): start-of-day shares at max(cost, start-of-day mark). Read only:
-    # no snapshot yet today means the cost (as #124's ref); a damaged one is a problem (fail closed).
-    snap, snap_problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, now[:10])
-    if snap_problems:
+    # #197 correction (issuecomment-6109537257): start-of-day shares at max(cost, start-of-day mark). Issue #255:
+    # on the day's first tick the snapshot is written here first (the same code path as #124's daily_unrealized),
+    # never an uplift of 0 for want of it; a damaged or unwritable one books nothing (fail closed).
+    now_dt = parse_book_ts(now)
+    pos = leg_marks.positions(ledger.rows, now[:10], list(ledger.ids))
+    if now_dt is None or pos.problems:
+        out["problems"] = [f"writeoff_daily_marks_invalid:{p}" for p in (pos.problems or ["invalid_now"])]
+        return out
+    snap, snap_problems = ensure_daily_snapshot(pos, now[:10], now, now_dt,
+                                                mark_books(MARK_BOOKS_PATH) if books is None else books)
+    if snap_problems or snap is None:
+        snap_problems = snap_problems or ["daily_marks_missing_after_create"]
         out["problems"] = [f"writeoff_daily_marks_invalid:{problem}" for problem in snap_problems]
         return out
     planned = market_close.plan_writeoffs(ledger.rows, list(ledger.ids), list(closes), now, snap)

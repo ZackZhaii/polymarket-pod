@@ -180,7 +180,7 @@ def test_poly_forecast_197_vector(env, vector):
             continue
         assert exp["risk_state"] == "ok", (label, exp.get("halt_reason"))
         if found.closes:
-            out = paper_ledger.apply_writeoffs(found.closes, t)
+            out = paper_ledger.apply_writeoffs(found.closes, t, books)
             assert out["problems"] == [], (label, out["problems"])
             if not step.get("crash_after_ledger_write"):
                 bus_legs |= {f"{r['market']}|{r['token_id']}" for r in out["booked"]}
