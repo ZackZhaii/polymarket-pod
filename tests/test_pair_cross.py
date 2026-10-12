@@ -41,7 +41,8 @@ def _intent(**overrides: object) -> Intent:
     fields: dict[str, object] = {"strategy": CLEAN, "market": MARKET, "token_id": NO, "side": "buy",
                                  "model_prob": 0.80, "market_price": 0.41, "assumed_slippage": 0.005,
                                  "fee_rate": 0.0, "liquidity_usd": 20000.0, "spread": 0.01, "hypothetical": False,
-                                 "book_ts": _iso(NOW), "tags": ("test-market",)}
+                                 "book_ts": _iso(NOW), "tags": ("test-market",),
+                                 "min_order_size": 5.0}  # issue #226
     fields.update(overrides)
     return Intent(**fields)  # type: ignore[arg-type]
 

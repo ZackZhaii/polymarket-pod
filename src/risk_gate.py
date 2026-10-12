@@ -23,6 +23,12 @@ shares * cost_price + fee_usd, the #104 all-in cost; sell: shares * (1 - effecti
 today's loss; above max_daily_loss_pct * PAPER_EQUITY_USD vetoes max_daily_loss_projected (exactly the cap
 passes). A worst case that cannot be computed vetoes too. The existing max_daily_loss (already at the cap) is
 unchanged; hypothetical intents get the same check. Veto only, no new number.
+Issue #226 (Task CT, Poly指挥 D1-D5, tightening only, no new number): a reducing order on an open leg is capped at
+the leg's |leg_net_shares| rounded DOWN to INTENT_SHARE_STEP, so it can never cross zero; a cap below
+Intent.min_order_size vetoes reduce_exceeds_position. Intent.min_order_size is required (None, or not a finite
+number >= 0, vetoes missing_min_order_size) and is re-checked on the FINAL booked shares (after the 1% clip,
+intent.shares and the reduce cap): below it vetoes size_below_min_order. A sell with no open position on that
+leg (opening a short) vetoes sell_requires_position: on Polymarket a short is a buy of the other token.
 Does not place orders, sign messages, read secrets, or edit config/risk.toml.
 """
 from __future__ import annotations
@@ -115,6 +121,10 @@ class Intent:
     fee_source: str | None = None
     fee_gamma_fetched_at: str | None = None
     fee_schedule_sha: str | None = None
+    # Issue #226 (Task CT, D2): the book's minimum order size in shares (intent_builder passes BookSnapshot
+    # .min_order_size). Required: None, or anything but a finite number >= 0, vetoes missing_min_order_size.
+    # RiskGate re-checks it on the final booked shares (D3), after every shrink.
+    min_order_size: float | None = None
 
 
 @dataclass
@@ -235,16 +245,43 @@ def open_leg_problems(side: object, state: dict) -> list[str]:
     state["leg_net_shares"] (paper_ledger.load_state): > 0 is long, so a buy adds; < 0 is short, so
     a sell adds. An open leg whose net shares are missing, non-finite or zero vetoes
     invalid_leg_net_shares, because the order's direction cannot be told apart from an add.
-    An order that reduces the open leg (a sell of a long leg) is not affected.
+    An order that reduces the open leg (a sell of a long leg) is not affected here; evaluate caps its size at
+    the leg (issue #226, reduce_cap).
+    Issue #226 (D4): a sell on a leg that is not open (no position, i.e. opening a short) vetoes
+    sell_requires_position. On Polymarket a short is a buy of the other token.
     """
     if state.get("leg_already_open") is not True:
-        return []
+        return ["sell_requires_position"] if side == "sell" else []
     net = _finite_number(state.get("leg_net_shares"))
     if net is None or net == 0:
         return ["invalid_leg_net_shares"]
     if (side == "buy" and net > 0) or (side == "sell" and net < 0):
         return ["add_to_open_leg"]
     return []
+
+
+def reduce_cap(side: object, state: dict) -> float | None:
+    """Issue #226 (D1/D5): the most shares an order reducing an open leg may book, or None (not a reduce).
+
+    Only an open leg (state["leg_already_open"] is True) with finite, non-zero leg_net_shares and an order of
+    the opposite direction (a sell of a long leg, a buy of a short leg) is a reduce. Its cap is |leg_net_shares|
+    rounded DOWN to INTENT_SHARE_STEP (never up), so a booked reduce never crosses zero. A same-direction
+    order or an unusable net is already vetoed by open_leg_problems.
+    """
+    if state.get("leg_already_open") is not True:
+        return None
+    net = _finite_number(state.get("leg_net_shares"))
+    if net is None or net == 0:
+        return None
+    if (side == "sell" and net > 0) or (side == "buy" and net < 0):
+        return _floor_to_step(abs(net))
+    return None
+
+
+def min_order_size_value(value: object) -> float | None:
+    """Issue #226 (D2): the intent's min_order_size as a finite number >= 0, or None (vetoes)."""
+    number = _finite_number(value)
+    return number if number is not None and number >= 0 else None
 
 
 def worst_case_loss(side: object, shares: object, cost_price: object, effective: object,
@@ -429,6 +466,10 @@ def evaluate(
 
     Size is the 1% clip, all-in (issue #104): shares * max(effective, intent.limit_price) + fee <= the clip,
     and never more than intent.shares. kelly_fraction is not applied and cannot increase size.
+    Issue #226: a reduce of an open leg books at most |leg_net_shares| (rounded down to 0.01); below
+    min_order_size after that cap vetoes reduce_exceeds_position. min_order_size is required
+    (missing_min_order_size) and checked on the final shares (size_below_min_order). A sell with no open
+    position vetoes sell_requires_position.
     A single-leg fill is directional exposure, not risk-free arbitrage.
     """
     reasons: list[str] = []
@@ -588,6 +629,10 @@ def evaluate(
     # intent's own shares. cost_price = max(effective, intent.limit_price): the fill may come at either.
     intent_shares, size_problems = _intent_size(intent)
     reasons.extend(size_problems)
+    # Issue #226 (D2): no allow without the book's minimum order size.
+    min_order = min_order_size_value(intent.min_order_size)
+    if min_order is None:
+        reasons.append("missing_min_order_size")
     cost_price = effective
     limit_price = _finite_number(intent.limit_price) if intent.limit_price is not None else None
     if limit_price is not None and not size_problems and limit_price > cost_price:
@@ -599,6 +644,17 @@ def evaluate(
         shares = _floor_to_step(cap_usd / (cost_price + per_share))
         if intent_shares is not None:
             shares = min(shares, intent_shares)
+    # Issue #226 (D1/D5): a reduce never books more than the open leg holds (rounded down to 0.01 shares).
+    cap_shares = reduce_cap(intent.side, state)
+    reduce_capped = cap_shares is not None and shares > cap_shares
+    if reduce_capped:
+        shares = cap_shares  # type: ignore[assignment]
+    # Issue #226 (D3): the FINAL size is re-checked against the minimum order size, after every shrink.
+    if min_order is not None:
+        if reduce_capped and (shares <= 0 or shares < min_order):
+            reasons.append("reduce_exceeds_position")
+        elif shares > 0 and shares < min_order:
+            reasons.append("size_below_min_order")
     notional = shares * effective if shares > 0 else 0.0
     # Task AE: the booked fee comes from the same module; never below notional * fee_rate.
     booked = fees.ledger_fee(intent.fee_rate, intent.market_price, effective, notional, shares)

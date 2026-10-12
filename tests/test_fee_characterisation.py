@@ -20,6 +20,7 @@ Offline, no credentials.
 from __future__ import annotations
 
 import itertools
+import json
 import math
 from datetime import datetime, timezone
 
@@ -35,6 +36,8 @@ NOW = "2026-10-08T08:00:00Z"
 NOW_DT = datetime(2026, 10, 8, 8, tzinfo=timezone.utc)
 STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
          "recent_fills": [], "own_quotes": []}
+# Issue #226 (D4): a sell needs an open long leg (no naked short); the net is large so it never caps the size.
+HELD = dict(STATE, open_positions=1, leg_already_open=True, leg_net_shares=1_000_000.0)
 NAN, INF = float("nan"), float("inf")
 
 # (side, model_prob, market_price, assumed_slippage, fee_rate, max_order_pct, edge, fee_usd, allow)
@@ -123,8 +126,8 @@ def _evaluate(side, model_prob, market_price, slippage, fee_rate, size, cfg=None
     cfg["max_order_pct"] = size
     intent = Intent(strategy="task-ae", market="ae", side=side, model_prob=model_prob,
                     market_price=market_price, assumed_slippage=slippage, fee_rate=fee_rate,
-                    liquidity_usd=20000.0, spread=0.01, token_id="t", book_ts=NOW, tags=("test-market",))
-    return evaluate(intent, cfg, STATE, now=NOW_DT)
+                    liquidity_usd=20000.0, spread=0.01, token_id="t", book_ts=NOW, tags=("test-market",), min_order_size=0.0)
+    return evaluate(intent, cfg, HELD if side == "sell" else STATE, now=NOW_DT)
 
 
 def _old_notional(size: object) -> float:
@@ -223,7 +226,12 @@ def test_ledger_never_books_less_than_before(tmp_path, monkeypatch, point):
     side, p, m, s, f, size, _edge, fee_usd, _allow = point
     intent = Intent(strategy="task-ae", market="ae", side=side, model_prob=p, market_price=m,
                     assumed_slippage=s, fee_rate=f, liquidity_usd=20000.0, spread=0.01,
-                    token_id="t", book_ts=utc_now(), tags=("test-market",))
+                    token_id="t", book_ts=utc_now(), tags=("test-market",), min_order_size=0.0)
+    if side == "sell":  # issue #226 (D4): the sell reduces an old long leg (100 @ 0.05) instead of opening a short
+        (tmp_path / "paper.jsonl").write_text(json.dumps({
+            "ts": "2026-01-01T00:00:00Z", "market": "ae", "token_id": "t", "side": "buy", "shares": 100.0,
+            "notional_usd": 5.0, "fee_usd": 0.0, "hypothetical": False, "counts_toward_risk": True}) + "\n",
+            encoding="utf-8")
     result = paper_ledger.commit_if_allowed(intent, load_risk())
     assert result["allow"] is True
     fill = result["fill"]
