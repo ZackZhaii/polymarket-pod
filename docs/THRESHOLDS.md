@@ -108,7 +108,7 @@ proposals waiting for the user's decision at M2. Task AC moved no value and chan
 | `HEARTBEAT_PAPER_CYCLE_EVERY_S` | `60.0` | s | `paper_cycle --loop` cadence (one cycle and one heartbeat); `--every` may only be shorter. | `src/thresholds.py` (used by `src/paper_cycle.py`) | Task AP, Poly哨兵 design | yes |
 | `HEARTBEAT_PAPER_CYCLE_TIMEOUT_S` | `180.0` | s | A running paper_cycle heartbeat older than this: alert. | `src/thresholds.py` (used by `src/sentinel_tick.py`) | Task AP, Poly哨兵 design | yes |
 | `HEARTBEAT_PAPER_CYCLE_HALT_FACTOR` | `2` | x timeout | ... and older than this many timeouts (360 s): global halt. | `src/thresholds.py` (used by `src/sentinel_tick.py`) | Task AP, Poly哨兵 design | yes |
-| `HEARTBEAT_CONSUMER_EVERY_S` | `5.0` | s | A polling halt consumer writes its heartbeat this often (no such process yet; monitored once it has beaten). | `src/thresholds.py` (used by `src/sentinel_tick.py`) | Task AP, Poly哨兵 design | yes |
+| `HEARTBEAT_CONSUMER_EVERY_S` | `5.0` | s | Unused. Defined for a future polling halt consumer (write heartbeat this often); no process reads it today (only the import-time consistency check in `src/thresholds.py`). Do not delete yet. | `src/thresholds.py` | Task AP, Poly哨兵 design | yes |
 | `HEARTBEAT_CONSUMER_TIMEOUT_S` | `30.0` | s | A halt-consumer heartbeat older than this: global halt. | `src/thresholds.py` (used by `src/sentinel_tick.py`) | Task AP, Poly哨兵 design | yes |
 | `SENTINEL_TICK_S` | `30.0` | s | The resident Sentinel (`python -m src.sentinel_tick`) ticks and beats this often. | `src/thresholds.py` (used by `src/sentinel_tick.py`) | Task AP, Poly哨兵 design | yes |
 | `SENTINEL_HEARTBEAT_TIMEOUT_S` | `90.0` | s | A Sentinel heartbeat older than this (or missing, corrupt, stopped) is a global halt for every consumer (RiskGate, Maker, paper_cycle). Issue #129: a Sentinel that has never run here (no heartbeat, no `.seen` marker) is a global halt too (`sentinel_heartbeat_never_seen`, not stored; it ends with the first fresh beat), so **start the Sentinel first**. | `src/thresholds.py` (used by `src/halt_store.py`) | Task AP, Poly哨兵 design | yes |
@@ -130,6 +130,9 @@ proposals waiting for the user's decision at M2. Task AC moved no value and chan
 | `CALIBRATION_BOOTSTRAP_SEED` | `20261009` | seed | M3 pending. Fixed seed so a report is reproducible byte for byte. | `src/thresholds.py` (used by `src/calibration.py`) | Task AZ, Poly反思 M3 calibration design §3 | yes |
 | `CALIBRATION_CI_LEVEL` | `0.95` | fraction | M3 pending. Level of the bootstrap percentile and Wilson intervals. | `src/thresholds.py` (used by `src/calibration.py`) | Task AZ, Poly反思 M3 calibration design §3 | yes |
 | `CALIBRATION_LOGLOSS_CLIP` | `0.01` | probability | M3 pending. p is clipped to [0.01, 0.99] for log loss and for the logit in the calibration slope fit. | `src/thresholds.py` (used by `src/calibration.py`) | Task AZ, Poly反思 M3 calibration design §3 | yes |
+| `CALIBRATION_BIN_EDGES` | `(0.0, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 1.0)` | edges | M3 pending; not used in M2. Fixed reliability-bin edges (design 2.3): finer at both ends. Used when samples >= `CALIBRATION_FIXED_BINS_MIN_SAMPLES`. | `src/thresholds.py` (used by `src/calibration.py`) | Task AZ, Poly反思 M3 calibration design §2.3 | yes |
+| `CALIBRATION_EDGE_TIERS` | `(0.02, 0.04, 0.08)` | edge | M3 pending; not used in M2. Trade-sample edge grouping labels [0.02, 0.04) [0.04, 0.08) [0.08, ...); nothing is filtered by them. | `src/thresholds.py` (used by `src/calibration.py`) | Task AZ, Poly反思 M3 calibration design §2.5 | yes |
+| `CALIBRATION_EXPIRY_TIERS_H` | `(24.0, 72.0, 336.0)` | h | M3 pending; not used in M2. Trade-sample hours-to-expiry grouping labels at first fill [24, 72) [72, 336) [336, ...); nothing is filtered by them. | `src/thresholds.py` (used by `src/calibration.py`) | Task AZ, Poly反思 M3 calibration design §2.6 | yes |
 | `CALIBRATION_MAX_CLUSTER_SHARE` | `0.30` | fraction | M3 pending. A sufficient calibration section is flagged `concentrated` when its largest event cluster holds more than this share of the samples (design §3: at most 30%). Reported only; nothing is gated on it yet. Task BF: the cluster is the sample's event_id when recorded, else its market (condition_id). | `src/thresholds.py` (used by `src/calibration.py`) | Task BD, Poly反思 M3 calibration design §3 | yes |
 | `REFLECTOR_DISABLE_REALIZATION_MAX` | `0.25` | ratio | M3 pending. Disable proposal: the trade sample's realized P&L interval is below 0 and realization (ΣR/ΣE) is below this. | `src/thresholds.py` (used by `src/reflector_proposals.py`) | Task BB, Poly反思 M3 calibration design §4 | yes |
 | `REFLECTOR_DISABLE_SLOPE_MAX` | `0.5` | slope | M3 pending. Disable proposal: the calibration slope is below this ... | `src/thresholds.py` (used by `src/reflector_proposals.py`) | Task BB, Poly反思 M3 calibration design §4 | yes |
@@ -186,15 +189,17 @@ and the e2e fixtures' `assumed_slippage` is fixture data (a test pins it to `ASS
 
 Listed for completeness. These values are governed by `config/risk.toml` itself and its pinned sha256
 (`0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04`), not by this table or by code; nothing here
-is copied into `src/thresholds.py`. `mode`, `live_enabled`, `require_human_gate`, `max_order_pct` and
-`max_daily_loss_pct` are also pinned by `podlib.PINS`: any drift stops the run.
+is copied into `src/thresholds.py`. `src/pins.py` pins all 9 keys of `config/risk.toml` (`RISK_FILE_PINS`: the five
+`podlib.PINS` — `mode`, `live_enabled`, `require_human_gate`, `max_order_pct`,
+`max_daily_loss_pct` — plus `max_open_positions`, `min_liquidity_usd`, `max_spread`,
+`kelly_fraction`) and the file sha256 (`PINNED_RISK_SHA256`); any drift stops the run.
 
 | Name | Value | Unit | Meaning | Where | Source | M2 pending |
 |---|---|---|---|---|---|---|
 | `mode` | `"paper"` | — | Phase 0 runs paper only. Pinned. | `risk.toml: mode` | config/risk.toml | file-governed |
 | `live_enabled` | `false` | — | No live trading. Pinned. | `risk.toml: live_enabled` | config/risk.toml | file-governed |
 | `max_order_pct` | `0.01` | fraction of equity | Order size cap (1% clip). Pinned. | `risk.toml: max_order_pct` | config/risk.toml | file-governed |
-| `max_daily_loss_pct` | `0.03` | fraction of equity | Daily loss cap; reaching it vetoes. Pinned. Since Task AR the daily loss is today's (UTC) booked fees plus gross realized losses; gains never offset (`src/daily_loss.py`). | `risk.toml: max_daily_loss_pct` | config/risk.toml | file-governed |
+| `max_daily_loss_pct` | `0.03` | fraction of equity | Daily loss cap; reaching it vetoes. Pinned. Since Task AR the daily loss is today's (UTC) booked fees plus gross realized losses; gains never offset (`src/daily_loss.py`). Since Task CF (#124 / #192) it also includes unrealized loss on open legs valued at the conservative liquidation price (`src/leg_marks.py`). Settlement booking (#126) closes a resolved market's open leg into the ledger so the settled outcome is booked; gains never offset. | `risk.toml: max_daily_loss_pct` | config/risk.toml | file-governed |
 | `max_open_positions` | `5` | legs | Open legs (market + token) cap. | `risk.toml: max_open_positions` | config/risk.toml | file-governed |
 | `min_liquidity_usd` | `10000` | USD | Scanner and RiskGate liquidity floor (and the Gamma pre-filter). | `risk.toml: min_liquidity_usd` | config/risk.toml | file-governed |
 | `max_spread` | `0.04` | price | Scanner and RiskGate spread ceiling. | `risk.toml: max_spread` | config/risk.toml | file-governed |

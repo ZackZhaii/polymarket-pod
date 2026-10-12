@@ -538,7 +538,7 @@ def number_constants(module_vars: dict[str, object]) -> dict[str, object]:
         name: value
         for name, value in module_vars.items()
         if name.isupper() and not name.startswith("_")
-        and isinstance(value, (int, float)) and not isinstance(value, bool)
+        and isinstance(value, (int, float, tuple)) and not isinstance(value, bool)
     }
 
 

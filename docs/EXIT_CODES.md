@@ -142,15 +142,19 @@ Heartbeat every HEARTBEAT_RUNNER_EVERY_S (`paused` while paused); single instanc
 ## `src/paper_audit.py`
 
 `python -m src.paper_audit --ledger PATH --bus PATH [--json]`: offline, read-only cross-check of the
-paper ledger against Executor bus fills, joined by explicit fill_id (issue #69, first acceptance
-item). Standard library only, no network, no halt, nothing written; the report goes to stdout. No
-heartbeat.
+paper ledger against Executor bus fills, joined by explicit fill_id (issue #69). Standard library
+and first-party `src` only, no network, no halt, nothing written; the report goes to stdout. No
+heartbeat. Acceptance 2: the ledger must pass `ledger_store.verify` first (only then is it joined),
+and the bus is parsed strictly — bad JSON, non-object rows, a torn tail and unreadable files are
+named failures. Review P1 on PR #202: the deep equality checks (payload, roles, duplicate /
+conflict copies, UNKNOWN markers, SHA256) are later acceptance items, so the tool never reports
+PASS — a problem-free run ends verdict `unknown`.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | at least one fill joined on both sides and neither side has an orphan | - |
-| 1 | `EXIT_MISMATCH` | no fill joined, or an orphan / join problem on either side (the two logs are not validated as agreeing) | - |
-| 2 | `EXIT_USAGE` | usage error, or an input that cannot be read in full (missing, unreadable, undecodable bytes, a malformed or non-object line, a torn last row) | - |
+| 0 | `EXIT_OK` | reserved for the fully checked pass (every #69 check, payload equality included); not reachable before those acceptance items land | - |
+| 1 | `EXIT_MISMATCH` | a problem (the ledger failed `ledger_store.verify`, an orphan / join problem on either side), or no problem but verdict `unknown` (the two logs are not validated as agreeing) | - |
+| 2 | `EXIT_USAGE` | usage error, or an input that cannot be read in full (missing, unreadable, undecodable bytes, a malformed or non-object line, a torn last row, a conflicting fill_id) | - |
 
 ## `src/paper_cycle.py`
 

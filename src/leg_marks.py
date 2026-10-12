@@ -31,6 +31,11 @@ its start-of-day part at max(cost, start-of-day mark), ``writeoff_sod_uplift``, 
 below, so the write-off day's loss never drops below this module's loss). From then until it is flat it adds no
 unrealized loss on any day (``ref_source`` "written_off", ``loss_usd`` 0); it stays an open leg, so it
 still holds every limit until it settles.
+Closed parts retain the same reference through ``closed_loss_topup``: add only the amount by which each
+reference loss exceeds its already-counted average-cost loss. A part closed by settlement keeps its
+conservative (zero) valuation for the rest of the UTC day: a confirmed winner credits nothing back.
+A written-off leg's closed part adds no top-up (issue #197): its write-off, cost + ``writeoff_sod_uplift``, is
+already at least this reference loss, and src/daily_loss.py books no further loss on its close.
 
 Pure: no clock, no file. Any position or snapshot problem is returned in ``problems``; the caller gives
 ``daily_loss_usd = None`` and RiskGate vetoes invalid_risk_state (Task AL: a global halt).
@@ -44,7 +49,7 @@ from typing import Any, Iterable, Mapping
 
 from src.book_staleness import book_age_problem, parse_book_ts
 from src.daily_loss import SIDES, counts_today
-from src.ledger_store import counts, is_writeoff, leg_key
+from src.ledger_store import KIND_FIELD, SETTLEMENT_KIND, counts, is_writeoff, leg_key
 from src.thresholds import LEDGER_OPEN_EPS, MAX_BOOK_AGE_S
 
 SOURCE_BID_LADDER = "bid_ladder"
@@ -193,10 +198,20 @@ class LegPosition:
 
 
 @dataclass
+class Closing:
+    key: tuple[str, str]
+    part: LegPosition
+    proceeds_usd: float      # signed: long sale / negative short buy-back
+    settlement: bool = False  # closed by a settlement row (a market with no live book)
+    written_off: bool = False  # issue #197: the leg's loss is realized by its write-off already
+
+
+@dataclass
 class Positions:
     start: dict[tuple[str, str], LegPosition] = field(default_factory=dict)
     now: dict[tuple[str, str], LegPosition] = field(default_factory=dict)
     problems: list[str] = field(default_factory=list)
+    closed: list[Closing] = field(default_factory=list)
 
 
 def _apply(leg: LegPosition, side: str, qty: float, usd: float, today: bool) -> None:
@@ -258,10 +273,18 @@ def positions(rows: Iterable[dict[str, Any]], today: str, ids: Iterable[str] | N
             result.start = {key: LegPosition(leg.shares, leg.basis, abs(leg.shares), 0.0) for key, leg in legs.items()}
             for leg in legs.values():
                 leg.carried, leg.new_basis = abs(leg.shares), 0.0
-        leg = legs.setdefault(leg_key(row.get("market"), row.get("token_id")), LegPosition())
+        key = leg_key(row.get("market"), row.get("token_id"))
+        leg = legs.setdefault(key, LegPosition())
         if is_writeoff(row):  # issue #197: moves nothing; the leg's cost is realized (src/daily_loss.py)
             leg.written_off = abs(leg.shares) > LEDGER_OPEN_EPS
             continue
+        if is_today and qty > 0 and abs(leg.shares) > LEDGER_OPEN_EPS and (leg.shares > 0) != (side == "buy"):
+            closed = min(qty, abs(leg.shares))
+            fraction = closed / abs(leg.shares)
+            part = LegPosition(leg.shares * fraction, leg.basis * fraction,
+                               leg.carried * fraction, leg.new_basis * fraction)
+            proceeds = (1.0 if leg.shares > 0 else -1.0) * usd * closed / qty
+            result.closed.append(Closing(key, part, proceeds, row.get(KIND_FIELD) == SETTLEMENT_KIND, leg.written_off))
         _apply(leg, side, qty, usd, bool(is_today))
     if not started:
         result.start = {key: LegPosition(leg.shares, leg.basis, abs(leg.shares), 0.0) for key, leg in legs.items()}
@@ -349,6 +372,43 @@ class Unrealized:
     problems: list[str] = field(default_factory=list)
 
 
+def _reference(leg: LegPosition, start: LegPosition | None, entry: Mapping[str, Any] | None,
+               late: bool) -> tuple[float, str]:
+    carried_ref = 0.0
+    source = "cost"
+    if leg.carried > LEDGER_OPEN_EPS and start is not None and (start.shares > 0) == (leg.shares > 0):
+        snap_mark = _usable_start_mark(entry, late)  # the same rule as writeoff_sod_uplift (issue #197)
+        if snap_mark is not None:
+            carried_ref = abs(snap_mark) / abs(start.shares) * leg.carried
+            source = "start_mark"
+        else:
+            carried_ref = start.basis / abs(start.shares) * leg.carried
+    elif leg.carried > LEDGER_OPEN_EPS:
+        carried_ref = leg.basis - leg.new_basis
+    return (1.0 if leg.shares > 0 else -1.0) * (carried_ref + leg.new_basis), source
+
+
+def closed_loss_topup(pos: Positions, snapshot: Mapping[str, Any] | None) -> float:
+    """Extra loss for today's closed parts; caller validates the snapshot with ``unrealized_loss`` first."""
+    entries = {str(entry.get("leg_key")): entry for entry in (snapshot or {}).get("legs") or []}
+    late = snapshot is None or snapshot.get("late") is not False
+    total = 0.0
+    for close in pos.closed:
+        if close.written_off:  # issue #197: the write-off (>= this reference loss) is realized; never twice
+            continue
+        ref, _ = _reference(close.part, pos.start.get(close.key), entries.get(leg_id(close.key)), late)
+        cost = (1.0 if close.part.shares > 0 else -1.0) * close.part.basis
+        # Codex回迁 (Owner 2026-10-13, tightening only): a part closed by a settlement row had no live book, so
+        # today it was valued conservatively (zero liquidation value). A confirmed winner does NOT credit that
+        # back within the UTC day: its reference loss is kept as if it exited at the worst no-book value. The winner's gain is
+        # still booked as a realized gain (never netted against losses); the next UTC day starts from zero.
+        # Worst exit with no book: a long is worth 0, a short is bought back at 1 per share.
+        worst = 0.0 if close.part.shares > 0 else -abs(close.part.shares)
+        exit_value = min(close.proceeds_usd, worst) if close.settlement else close.proceeds_usd
+        total += max(0.0, max(0.0, ref - exit_value) - max(0.0, cost - close.proceeds_usd))
+    return total
+
+
 def unrealized_loss(
     pos: Positions,
     marks: Mapping[tuple[str, str], Mark],
@@ -367,21 +427,7 @@ def unrealized_loss(
             result.legs.append(dict(asdict(mark), leg_key=leg_id(key), shares=leg.shares, ref_usd=0.0,
                                     ref_source="written_off", loss_usd=0.0))
             continue
-        sign = 1.0 if leg.shares > 0 else -1.0
-        start = pos.start.get(key)
-        carried_ref = 0.0
-        ref_source = "cost"
-        if leg.carried > LEDGER_OPEN_EPS and start is not None and (start.shares > 0) == (leg.shares > 0):
-            per_share_cost = start.basis / abs(start.shares)
-            snap_mark = _usable_start_mark(snap_legs.get(leg_id(key)), late)
-            if snap_mark is not None:
-                carried_ref = abs(snap_mark) / abs(start.shares) * leg.carried
-                ref_source = "start_mark"
-            else:
-                carried_ref = per_share_cost * leg.carried
-        elif leg.carried > LEDGER_OPEN_EPS:  # should not happen: carried part without a start leg
-            carried_ref = leg.basis - leg.new_basis
-        ref = sign * (carried_ref + leg.new_basis)
+        ref, ref_source = _reference(leg, pos.start.get(key), snap_legs.get(leg_id(key)), late)
         loss = max(0.0, ref - mark.value_usd)
         result.loss_usd += loss
         result.legs.append(dict(asdict(mark), leg_key=leg_id(key), shares=leg.shares, ref_usd=ref,

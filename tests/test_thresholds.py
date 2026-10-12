@@ -147,6 +147,10 @@ EXPECTED = {
     "CALIBRATION_BOOTSTRAP_SEED": 20261009,
     "CALIBRATION_CI_LEVEL": 0.95,
     "CALIBRATION_LOGLOSS_CLIP": 0.01,
+    # Task AZ: M3 calibration bin / group-tier tuples (M3 pending; not used in M2).
+    "CALIBRATION_BIN_EDGES": (0.0, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 1.0),
+    "CALIBRATION_EDGE_TIERS": (0.02, 0.04, 0.08),
+    "CALIBRATION_EXPIRY_TIERS_H": (24.0, 72.0, 336.0),
     # Task BD: largest event-cluster share (M3 pending).
     "CALIBRATION_MAX_CLUSTER_SHARE": 0.30,
     # Task BB: M3 Reflector proposal rules (M3 pending).
@@ -254,6 +258,8 @@ M2_PENDING = {"MARKET_CLOSE_REOPEN_GRACE_S",  # Task CK (#197)
               "CALIBRATION_EQUAL_FREQ_BINS", "CALIBRATION_EQUAL_FREQ_MIN_PER_BIN", "CALIBRATION_BOOTSTRAP_RESAMPLES",
               "CALIBRATION_MAX_DECISIONS_PER_MARKET",
               "CALIBRATION_BOOTSTRAP_SEED", "CALIBRATION_CI_LEVEL", "CALIBRATION_LOGLOSS_CLIP",
+              # Task AZ: M3 calibration bin / group-tier tuples (not used in M2).
+              "CALIBRATION_BIN_EDGES", "CALIBRATION_EDGE_TIERS", "CALIBRATION_EXPIRY_TIERS_H",
               # Task BD: largest event-cluster share.
               "CALIBRATION_MAX_CLUSTER_SHARE",
               # Task BB: M3 Reflector proposals; the daily cap is now M3 pending too.
@@ -300,7 +306,7 @@ def _module_constants() -> dict[str, object]:
         name: value
         for name, value in vars(thresholds).items()
         if name.isupper() and not name.startswith("_")
-        and isinstance(value, (int, float)) and not isinstance(value, bool)
+        and isinstance(value, (int, float, tuple)) and not isinstance(value, bool)
     }
 
 

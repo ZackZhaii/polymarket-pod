@@ -191,12 +191,12 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
                      books: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
     """Task CF (#124): today's unrealized loss on open legs (Poly风控's ruling, src/leg_marks.py).
 
-    Reads (or, on the day's first evaluation, writes once) the start-of-day snapshot. Returns
-    ``{"loss_usd", "legs", "late", "problems"}``; any problem (positions, books cannot be valued, snapshot
-    corrupt or not writable, an exception) makes ``loss_usd`` None: the caller reports invalid_risk_state.
+    Reads (or, on the day's first evaluation, writes once) the start-of-day snapshot, also for closed parts.
+    Returns ``{"loss_usd", "realized_topup_usd", "legs", "late", "problems"}``; any problem (positions,
+    valuation, corrupt or unwritable snapshot, an exception) makes the loss unavailable: invalid_risk_state.
     """
     global _LAST_EVAL_DAY
-    result: dict[str, Any] = {"loss_usd": None, "legs": [], "late": None, "problems": []}
+    result: dict[str, Any] = {"loss_usd": None, "realized_topup_usd": None, "legs": [], "late": None, "problems": []}
     try:
         today = now[:10]
         now_dt = parse_book_ts(now)
@@ -234,6 +234,7 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
         if unrealized.problems:
             result["problems"] = unrealized.problems
             return result
+        result["realized_topup_usd"] = leg_marks.closed_loss_topup(pos, snap)
         result["loss_usd"] = unrealized.loss_usd
         result["legs"] = unrealized.legs
         return result
@@ -241,6 +242,16 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
         result["loss_usd"] = None
         result["problems"] = [f"leg_marks_error:{type(exc).__name__}"]
         return result
+
+
+def daily_risk_loss(rows: list[dict[str, Any]], ids: list[str], now: str) -> dict[str, Any]:
+    """One UTC evaluation: fees + gross cost losses + closed reference topups + open-leg losses."""
+    day = daily_loss(rows, now[:10], ids)
+    marks = (daily_unrealized(rows, ids, now) if not day.problems
+             else {"loss_usd": None, "realized_topup_usd": None, "legs": [], "late": None, "problems": []})
+    problems = list(day.problems) + list(marks["problems"])
+    total = None if problems else day.total_usd + marks["realized_topup_usd"] + marks["loss_usd"]
+    return {"loss_usd": total, "day": day, "marks": marks, "problems": problems}
 
 
 def read_settlements() -> tuple[list[dict[str, Any]] | None, list[str]]:
@@ -425,14 +436,10 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
             "quote_problems": quote_problems,
         }
     legs = leg_positions(rows)
-    # Task AR (backlog #4): today's booked fees plus today's gross realized losses (UTC day).
-    day = daily_loss(rows, utc_now()[:10], ledger.ids)
-    # Task CF (#124): plus each open leg's loss since the start of the UTC day (liquidation value, no netting).
-    # Only when the realized part is valid: a bad row is reported once, by daily_loss, as before.
-    marks = (daily_unrealized(rows, list(ledger.ids), utc_now()) if not day.problems
-             else {"loss_usd": None, "legs": [], "late": None, "problems": []})
-    if day.problems or marks["problems"]:
-        problems_today = list(day.problems) + list(marks["problems"])
+    risk = daily_risk_loss(rows, list(ledger.ids), utc_now())
+    day, marks = risk["day"], risk["marks"]
+    if risk["problems"]:
+        problems_today = risk["problems"]
         return {
             "open_positions": None,
             "leg_already_open": False,
@@ -456,7 +463,7 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
         "exposure_usd": sum(leg["exposure_usd"] for leg in legs.values()),
         "leg_exposure_usd": 0.0 if own is None else own["exposure_usd"],
         "leg_net_shares": 0.0 if own is None else own["shares"],  # issue #123: the open leg's direction
-        "daily_loss_usd": None if day.total_usd is None else day.total_usd + marks["loss_usd"],
+        "daily_loss_usd": risk["loss_usd"],
         "daily_fees_usd": day.fees_usd,
         "daily_unrealized_loss_usd": marks["loss_usd"],  # Task CF: diagnosis (already in daily_loss_usd)
         "daily_marks": marks["legs"],

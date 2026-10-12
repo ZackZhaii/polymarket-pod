@@ -22,6 +22,7 @@ from tests import m2_runner_rig as rig
 def env(tmp_path, monkeypatch):
     paths = rig.isolate(monkeypatch, tmp_path)
     now = datetime.now(timezone.utc)
+    monkeypatch.setattr(m2_runner.forecaster, "utc_now", lambda: rig.stamp(now))
     return {**paths, "now": now, "tmp": tmp_path}
 
 
@@ -234,6 +235,104 @@ def test_clock_skew_pauses_the_runner(env):
     report = m2_runner.iteration(state, now=clock.now(), getters=fake.getters())
     assert report.action == m2_runner.ACT_PAUSE and report.paused_reason == "clock_skew"
     assert any(e.get("event") == "clock_skew" for e in _events(env))
+
+
+# ---------------------------------------------------------------- issue #238: clock_skew keeps paused_since
+
+
+class _Skewing(rig.FakeGetters):
+    """Books stamped ``skew_s`` ahead of the runner clock (``None`` = a sane, fresh book)."""
+
+    def __init__(self, now: datetime, clock: _Clock) -> None:
+        super().__init__(now)
+        self.clock = clock
+        self.skew_s: float | None = CLOCK_SKEW_MAX_S + 30
+
+    def book(self, url: str):
+        body = dict(super().book(url))
+        moment = self.clock.now() + timedelta(seconds=self.skew_s or 0.0)
+        body["timestamp"] = str(int(moment.timestamp() * 1000))
+        return body
+
+
+def _skew_rig(env) -> tuple[_Clock, _Skewing, m2_runner.RunnerState]:
+    clock = _Clock(env["now"])
+    fake = _Skewing(env["now"], clock)
+    rig.deliver(env["run"], env["now"])
+    paths = m2_runner.RunnerPaths.under(env["run"])
+    paths.run_dir.mkdir(parents=True, exist_ok=True)
+    return clock, fake, m2_runner.RunnerState(paths=paths, clock=clock.now, monotonic=clock.monotonic)
+
+
+def _tick(state: m2_runner.RunnerState, clock: _Clock, fake: _Skewing, seconds: float = 0.0):
+    """One iteration ``seconds`` later on both clocks (no suspend: wall and monotonic move together)."""
+    clock.advance_wall(seconds)
+    clock.mono += seconds
+    return m2_runner.iteration(state, now=clock.now(), getters=fake.getters())
+
+
+def test_clock_skew_keeps_paused_since_while_the_skew_holds(env):
+    clock, fake, state = _skew_rig(env)
+    report = _tick(state, clock, fake)
+    assert report.action == m2_runner.ACT_PAUSE and report.paused_reason == "clock_skew"
+    first = state.paused_since
+    assert first is not None
+    for _ in range(4):
+        report = _tick(state, clock, fake, 60.0)
+        assert report.action == m2_runner.ACT_PAUSE and report.paused_reason == "clock_skew"
+        assert state.paused_since == first and state.paused_reason == "clock_skew"
+        assert m2_runner.progress(state, clock.now())["paused_since"] == first
+    # one clock_skew event per pause, like the preflight "paused" event (not one per tick)
+    assert sum(1 for e in _events(env) if e.get("event") == "clock_skew") == 1
+
+
+def test_a_clock_skew_pause_held_past_the_alert_window_alerts_the_sentinel(env):
+    import src.heartbeat as heartbeat
+    import src.sentinel_tick as sentinel_tick
+    from src.thresholds import RUNNER_PAUSED_ALERT_S, RUNNER_SUSPEND_GAP_S
+
+    clock, fake, state = _skew_rig(env)
+    _tick(state, clock, fake)
+    first = state.paused_since
+    step = RUNNER_SUSPEND_GAP_S - 10  # below the suspend gap, so no tick is a resume
+    held = 0.0
+    while held <= RUNNER_PAUSED_ALERT_S + 60:
+        report = _tick(state, clock, fake, step)
+        held += step
+        assert report.action == m2_runner.ACT_PAUSE and report.paused_reason == "clock_skew", report
+    assert state.paused_since == first
+    now = clock.now()
+    hb = heartbeat.Heartbeat(m2_runner.PROC, every_s=30.0, now=lambda: now)
+    hb.beat(heartbeat.STATE_PAUSED, m2_runner.progress(state, now), force=True)
+    result = sentinel_tick.tick(now=now, bus_path=env["tmp"] / "sentinel-bus.jsonl",
+                                ledger_path=env["tmp"] / "sentinel-paper.jsonl")
+    assert "runner_paused_too_long" in result["alerts"]
+
+
+def test_clock_skew_paused_since_clears_on_a_sane_book_and_restamps_on_a_new_pause_or_reason(env):
+    import src.halt_store as halt_store
+
+    clock, fake, state = _skew_rig(env)
+    _tick(state, clock, fake)
+    first = state.paused_since
+    assert first is not None
+    # a sane book: the decide runs, the clock_skew pause clears
+    fake.skew_s = None
+    report = _tick(state, clock, fake, 60.0)
+    assert report.action == m2_runner.ACT_RUN
+    assert state.paused_reason is None and state.paused_since is None
+    # a fresh skew pause gets a fresh stamp
+    rig.deliver(env["run"], clock.now(), name="0002.json", as_of=rig.stamp(clock.now() - timedelta(minutes=5)))
+    fake.skew_s = CLOCK_SKEW_MAX_S + 30
+    report = _tick(state, clock, fake, 60.0)
+    assert report.action == m2_runner.ACT_PAUSE and state.paused_reason == "clock_skew"
+    second = state.paused_since
+    assert second is not None and second != first
+    # a different pause reason (preflight global halt) restamps paused_since
+    halt_store.record_halt(scope=halt_store.SCOPE_GLOBAL, reason="test_global", source="Sentinel")
+    report = _tick(state, clock, fake, 60.0)
+    assert report.action == m2_runner.ACT_PAUSE and state.paused_reason == "global_halt"
+    assert state.paused_since is not None and state.paused_since not in (first, second)
 
 
 def test_stale_book_is_skipped(env):
