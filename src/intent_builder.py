@@ -259,6 +259,9 @@ class OrderIntent:
     # Task BF: the market's Polymarket event (MarketContext), copied onto the risk Intent and the fill only.
     event_id: str | None = None
     event_slug: str | None = None
+    # Issue #226 (Task CT): the chosen book's min_order_size, passed to the risk Intent; RiskGate re-checks it on
+    # its final (possibly shrunk) shares. None reaches RiskGate as missing_min_order_size (veto).
+    min_order_size: float | None = None
 
 
 @dataclass(frozen=True)
@@ -824,6 +827,7 @@ def build_order_intent(signal: ProbabilitySignal | None, market: MarketContext, 
         category=market.category if market.category is not None else market.gamma_category, tags=market.tags,
         end_date=market.end_date or None,
         event_id=market.event_id, event_slug=market.event_slug,  # Task BF: recorded only
+        min_order_size=min_order,  # issue #226: RiskGate re-checks it after its own shrink
     )
     return IntentResult(intent, (), None, detail)
 
@@ -873,6 +877,7 @@ def to_risk_intent(oi: OrderIntent) -> Intent:
         intent_expires_at=oi.expires_at,
         shares=oi.shares,  # issue #104: RiskGate only shrinks this
         limit_price=oi.limit_price,
+        min_order_size=oi.min_order_size,  # issue #226: re-checked on RiskGate's final shares
     )
 
 
