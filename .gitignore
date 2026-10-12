@@ -8,3 +8,9 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+reports/calibration/
+runs/
+# issue #163: loop_claim state mutex (never committed)
+docs/loop/state.json.lock
+# issue #162: per-file append mutexes beside multi-process JSONL files (never committed)
+*.jsonl.lock

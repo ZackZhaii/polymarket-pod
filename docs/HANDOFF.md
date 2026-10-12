@@ -33,7 +33,7 @@ or Osaka VPS:
 2. Keep scanner read-only (Gamma public API).
 3. Add a JSONL bus at `logs/bus.jsonl` per `docs/PROTOCOL.md`.
 4. Add a paper ledger at `logs/paper.jsonl` (simulated fills, no SDK signing).
-5. Role stubs only: Scanner, BookWatcher, ArbBinary, Maker, Forecaster, RiskGate, Sentinel, Reflector.
+5. Role stubs only: Scanner, BookWatcher, ArbBinary, Maker, NewsForecaster, RiskGate, Sentinel, Reflector.
 6. RiskGate must reject before any paper fill. Caps from `config/risk.toml`.
 7. Reflector writes proposals to `playbook/proposals.md`. It must not edit risk.toml.
 8. Tests for sum-to-one arb math and risk veto. No live client.

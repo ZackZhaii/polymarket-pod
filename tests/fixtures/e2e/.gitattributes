@@ -1,0 +1,2 @@
+# Task AJ: the gate replays these bytes; keep LF on every checkout (core.autocrlf would add CR on Windows).
+* text eol=lf

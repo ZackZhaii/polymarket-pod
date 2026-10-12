@@ -3,9 +3,21 @@
 Walks public Gamma /markets/keyset, filters by config/risk.toml
 (min_liquidity_usd, max_spread) plus long-tail and expiry rules,
 and ranks survivors by 24h volume. Signals only; never edits risk.toml.
+Outcome IDs come from positionIds for V2 markets and clobTokenIds for V1, chosen
+by Gamma's `version` (select_token_ids); a missing or unknown version rejects the market.
+A market needs a zoned end date at least MIN_HOURS_TO_EXPIRY (24 h, a code
+constant in src/expiry_rule.py) away; otherwise it fails closed.
+Any parsed number that is NaN or +/-inf (Gamma text such as "NaN" or "-Infinity")
+rejects the market as non_finite_<field> (Task Y); comparisons with NaN are always
+False, so without this a NaN spread, liquidity or bid/ask slipped through.
+Issue #141 (Task BX): a market in UMA resolution (``umaResolutionStatus`` non-empty, or
+``umaResolutionStatuses`` a non-empty JSON list; unparseable counts as non-empty) is rejected as
+market_expired_or_resolving on every scan (src/structural_gate.py, the predicate src/paper_cycle.py
+also applies). A past end date stays ``expired``; both are listed when both apply.
 """
 from __future__ import annotations
 
+import json
 import math
 import sys
 from collections import Counter
@@ -31,8 +43,11 @@ from src.podlib import (  # noqa: E402
     public_get,
     utc_now,
 )
+from src.expiry_rule import expiry_problem  # noqa: E402
+from src.structural_gate import MARKET_EXPIRED_OR_RESOLVING, market_uma_resolving  # noqa: E402 - Task BX
+from src.thresholds import MIN_HOURS_TO_EXPIRY, MIN_SCANNED_MARKETS  # noqa: E402 - Task AC
 
-# Legacy single page. Still used by paper_session (top 20 by liquidity, unfiltered).
+# Legacy single page (top 20 by liquidity, unfiltered). No caller since Task AB moved paper_session to scan().
 GAMMA = (
     "https://gamma-api.polymarket.com/markets"
     "?closed=false&limit=20&order=liquidityNum&ascending=false"
@@ -41,6 +56,9 @@ GAMMA = (
 GAMMA_KEYSET = (
     "https://gamma-api.polymarket.com/markets/keyset"
     "?closed=false&active=true&order=volume24hr&ascending=false"
+    # Task AX (M3 step 2): Gamma adds each market's tags only with include_tag=true. Same host and
+    # path; read-only. The tags are stored (row "tags"), never used to filter or rank.
+    "&include_tag=true"
 )
 PAGE_LIMIT = 100
 MAX_MARKETS = 50000
@@ -50,21 +68,46 @@ MAX_PAGES = 1000
 BUS_TOP_N = 50
 
 # Long-tail band. Optional risk.toml overrides: scanner_min_price, scanner_max_price.
-MIN_PRICE = 0.03
-MAX_PRICE = 0.97
+from src.calibration_ids import scanner_category, scanner_event, scanner_tags  # noqa: E402 - Task AX / BF
+from src.thresholds import SCANNER_MAX_PRICE as MAX_PRICE  # noqa: E402 - Task AC
+from src.thresholds import SCANNER_MIN_PRICE as MIN_PRICE  # noqa: E402 - Task AC
 
 # main() exit codes. 3 also covers a page that still fails after public_get's retries.
 EXIT_OK = 0
 EXIT_TOO_FEW_SCANNED = 1
 EXIT_NONE_PASSED = 2
 EXIT_INCOMPLETE = 3
+EXIT_PIN_DRIFT = 6  # Task AS: config/risk.toml off its pins at start (global halt recorded; nothing fetched)
+
+# Task Y: a NaN or +/-inf in any parsed number rejects the market. Ranked after the
+# structural reasons (closed, version, expiry, accepting orders) and before the ordinary
+# bid/ask, liquidity, spread and price filters, which cannot judge a non-finite value.
+NON_FINITE_FIELDS = (
+    ("best_bid", "non_finite_best_bid"),
+    ("best_ask", "non_finite_best_ask"),
+    ("spread", "non_finite_spread"),
+    ("liquidity_usd", "non_finite_liquidity_usd"),
+    ("volume_usd", "non_finite_volume_usd"),
+    ("volume_24h_usd", "non_finite_volume_24h_usd"),
+    ("outcome_prices", "non_finite_outcome_prices"),
+    ("price", "non_finite_price"),
+)
+NON_FINITE_REASONS = tuple(reason for _, reason in NON_FINITE_FIELDS)
 
 # Order matters: the first entry that fails is the market's "first" reason.
 REASONS = (
     "closed",
+    "missing_version",
+    "unsupported_version",
     "expired",
     "missing_end_date",
+    "invalid_end_date",
+    "near_expiry",
+    "invalid_min_hours_to_expiry",
+    "invalid_now",
+    MARKET_EXPIRED_OR_RESOLVING,  # Task BX (#141): after the end-date reasons, before accepting orders
     "not_accepting_orders",
+    *NON_FINITE_REASONS,
     "missing_bid_ask",
     "low_liquidity",
     "wide_spread",
@@ -90,6 +133,7 @@ def fetch_all_markets(
     page_limit: int = PAGE_LIMIT,
     max_pages: int = MAX_PAGES,
     server_min_liquidity: float | None = None,
+    base_url: str | None = None,
 ) -> tuple[list[dict], dict[str, Any]]:
     """Walk Gamma keyset pages until next_cursor is empty, a cap is hit, or paging stalls.
 
@@ -99,6 +143,8 @@ def fetch_all_markets(
     are reported as incomplete instead of spinning up to max_pages requests.
     A page that still fails after public_get's retries stops the walk with
     stop_reason "network_error" (incomplete, so main() exits 3 and writes nothing).
+    base_url defaults to GAMMA_KEYSET (closed=false). The resolution snapshot passes
+    a closed=true keyset; the scanner's own callers still omit it.
     """
     get = getter or public_get
     rows: list[dict] = []
@@ -108,7 +154,8 @@ def fetch_all_markets(
     pages = 0
     stop = "exhausted"
     error = ""
-    base = f"{GAMMA_KEYSET}&limit={int(page_limit)}"
+    keyset = base_url or GAMMA_KEYSET
+    base = f"{keyset}&limit={int(page_limit)}"
     if server_min_liquidity is not None:
         base += f"&liquidity_num_min={float(server_min_liquidity):g}"
     while True:
@@ -168,6 +215,7 @@ def fetch_all_markets(
         "complete": stop == "exhausted",
         "max_markets": max_markets,
         "server_min_liquidity": server_min_liquidity,
+        "base_url": keyset,
     }
     if error:
         meta["error"] = error
@@ -234,7 +282,9 @@ def yes_price(market: dict[str, Any]) -> tuple[float | None, str]:
     if bid is not None and ask is not None and 0 < bid <= ask < 1:
         return (bid + ask) / 2.0, "mid"
     last = as_float(market.get("lastTradePrice"))
-    if last is not None and last > 0:
+    # A non-finite last trade is returned as-is so the row fails non_finite_price (Task Y)
+    # instead of silently falling through to outcomePrices.
+    if last is not None and (last > 0 or not math.isfinite(last)):
         return last, "last_trade"
     prices = json_list(market.get("outcomePrices"))
     first = as_float(prices[0]) if prices else None
@@ -243,8 +293,84 @@ def yes_price(market: dict[str, Any]) -> tuple[float | None, str]:
     return None, "none"
 
 
+# Outcome IDs (docs.polymarket.com, Polymarket Protocol V2 migration): Gamma's market-level
+# `version` selects the field even when both are present. "v2" -> positionIds (array of
+# decimal strings); "v1" -> clobTokenIds (JSON-encoded array). A missing version
+# (missing_version) or any other value (unsupported_version) rejects the market; no field
+# is guessed from presence. With a valid version, bad or absent IDs leave token_ids empty
+# (token_ids_problem), so no book is fetched downstream; that is not a filter reason.
+TOKEN_FIELD_BY_VERSION = {"v1": "clobTokenIds", "v2": "positionIds"}
+VERSION_REASONS = ("missing_version", "unsupported_version")
+
+
+def _decode_ids(value: Any, *, decimal: bool) -> list[str] | None:
+    """Decode a list, or a JSON-encoded list, of outcome IDs.
+
+    Returns [] when absent or empty and None when malformed: not a list, or any
+    element that is not a non-empty string or an int (bools, floats, None and nested
+    values are malformed). With decimal=True every ID must be ASCII digits.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(value, list):
+        return None
+    ids: list[str] = []
+    for item in value:
+        if isinstance(item, bool):
+            return None
+        if isinstance(item, int):
+            text = str(item)
+        elif isinstance(item, str):
+            text = item.strip()
+        else:
+            return None
+        if not text or (decimal and not (text.isascii() and text.isdigit())):
+            return None
+        ids.append(text)
+    return ids
+
+
+def select_token_ids(market: dict[str, Any]) -> tuple[list[str], str | None, str | None]:
+    """Return (token_ids, source_field, problem) for one raw Gamma market.
+
+    problem is None, missing_version, unsupported_version, missing_token_ids,
+    invalid_token_ids or token_count_mismatch; token_ids is [] whenever problem is set.
+    missing_version and unsupported_version also reject the market (rejection_reasons).
+    """
+    version = market.get("version")
+    if version is None or version == "":
+        return [], None, "missing_version"
+    # Exact strings only (docs: "Treat versions other than v1 and v2 as unsupported").
+    if not isinstance(version, str) or version not in TOKEN_FIELD_BY_VERSION:
+        return [], None, "unsupported_version"
+    field = TOKEN_FIELD_BY_VERSION[version]
+    ids = _decode_ids(market.get(field), decimal=version == "v2")
+    if ids is None:
+        return [], field, "invalid_token_ids"
+    if not ids:
+        return [], field, "missing_token_ids"
+    outcomes = json_list(market.get("outcomes"))
+    if outcomes and len(outcomes) != len(ids):
+        return [], field, "token_count_mismatch"
+    return ids, field, None
+
+
+def fees_enabled(value: Any) -> bool | None:
+    """Issue #116 (Task BY): Gamma's ``feesEnabled`` only when it is a real bool.
+
+    Missing, null or any non-bool (``"true"``, ``1``, ...) is None: unknown, which no reader may treat as a
+    free market (fail closed; bool(None) used to read as False, i.e. "no fees").
+    """
+    return value if isinstance(value, bool) else None
+
+
 def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
-    tokens = [str(item) for item in json_list(market.get("clobTokenIds"))]
+    tokens, token_source, token_problem = select_token_ids(market)
     outcomes = [str(item) for item in json_list(market.get("outcomes"))]
     prices = [as_float(item) for item in json_list(market.get("outcomePrices"))]
     best_bid = as_float(market.get("bestBid"))
@@ -254,6 +380,7 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
         spread = best_ask - best_bid
     price, price_source = yes_price(market)
     accepting = market.get("acceptingOrders")
+    event_id, event_slug = scanner_event(market)  # Task BF
     return {
         "ts": ts,
         "id": str(market.get("id") or ""),
@@ -261,36 +388,78 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
         "slug": market.get("slug") or "",
         "condition_id": market.get("conditionId") or "",
         "token_ids": tokens,
+        "version": market.get("version") if isinstance(market.get("version"), str) else None,
+        "token_id_source": token_source,
+        "token_ids_problem": token_problem,
         "outcomes": outcomes,
         "outcome_prices": prices,
         "liquidity_usd": as_float(market.get("liquidityNum") if market.get("liquidityNum") is not None else market.get("liquidity")),
         "volume_usd": as_float(market.get("volumeNum") if market.get("volumeNum") is not None else market.get("volume")),
         "volume_24h_usd": as_float(market.get("volume24hr")) or 0.0,
         "end_date": market.get("endDate") or "",
+        # Task BX (#141): Gamma's UMA resolution state, kept as given (None when absent).
+        "uma_resolution_status": market.get("umaResolutionStatus"),
+        "uma_resolution_statuses": market.get("umaResolutionStatuses"),
         "best_bid": best_bid,
         "best_ask": best_ask,
         "spread": spread,
         "price": price,
         "price_source": price_source,
         "accepting_orders": None if accepting is None else bool(accepting),
-        "fees_enabled": bool(market.get("feesEnabled")),
+        "fees_enabled": fees_enabled(market.get("feesEnabled")),  # issue #116: unknown is None, never free
         "closed": bool(market.get("closed")),
+        # Task AX (M3 step 2): grouping labels for calibration. Gamma's own values or None/[]; not guessed.
+        "category": scanner_category(market),
+        "tags": scanner_tags(market),
+        # Task BF: the market's Polymarket event (Gamma ``events``), for calibration clustering only.
+        "event_id": event_id,
+        "event_slug": event_slug,
         "source": "gamma_public",
     }
 
 
-def rejection_reasons(row: dict[str, Any], limits: dict[str, float], now: datetime) -> list[str]:
-    """Every failed rule for one normalized row, in REASONS order."""
+def _non_finite(value: Any) -> bool:
+    return isinstance(value, float) and not math.isfinite(value)
+
+
+def non_finite_reasons(row: dict[str, Any]) -> list[str]:
+    """non_finite_<field> for every parsed number in a normalized row that is NaN or +/-inf."""
+    reasons = []
+    for key, reason in NON_FINITE_FIELDS:
+        value = row.get(key)
+        if key == "outcome_prices":
+            bad = isinstance(value, list) and any(_non_finite(item) for item in value)
+        else:
+            bad = _non_finite(value)
+        if bad:
+            reasons.append(reason)
+    return reasons
+
+
+def rejection_reasons(
+    row: dict[str, Any],
+    limits: dict[str, float],
+    now: datetime,
+    min_hours_to_expiry: float = MIN_HOURS_TO_EXPIRY,
+) -> list[str]:
+    """Every failed rule for one normalized row, in REASONS order.
+
+    End dates go through expiry_problem: missing, unparseable, naive, date-only,
+    non-string, past, or closer than min_hours_to_expiry all fail closed.
+    """
     reasons: list[str] = []
     if row["closed"]:
         reasons.append("closed")
-    end = parse_utc(row["end_date"])
-    if end is None:
-        reasons.append("missing_end_date")
-    elif end <= now:
-        reasons.append("expired")
+    if row["token_ids_problem"] in VERSION_REASONS:
+        reasons.append(row["token_ids_problem"])
+    expiry = expiry_problem(row["end_date"], now, min_hours_to_expiry)
+    if expiry is not None:
+        reasons.append(expiry)
+    if market_uma_resolving(row):  # Task BX (#141): proposed / disputed / resolved, unreadable fails closed
+        reasons.append(MARKET_EXPIRED_OR_RESOLVING)
     if row["accepting_orders"] is False:
         reasons.append("not_accepting_orders")
+    reasons.extend(non_finite_reasons(row))
     bid, ask = row["best_bid"], row["best_ask"]
     # Gamma reports a one-sided book as bestBid 0 or bestAsk 1; treat that as missing.
     if bid is None or ask is None or bid <= 0 or ask >= 1:
@@ -321,19 +490,27 @@ def filter_markets(
     limits: dict[str, float],
     ts: str,
     now: datetime | None = None,
+    min_hours_to_expiry: float = MIN_HOURS_TO_EXPIRY,
 ) -> dict[str, Any]:
-    """Split raw Gamma rows into passing rows (24h volume desc) and rejection counts."""
+    """Split raw Gamma rows into passing rows (24h volume desc) and rejection counts.
+
+    now defaults to the scan timestamp. min_hours_to_expiry is a code default, not a
+    risk.toml key; a bad value rejects every market (invalid_min_hours_to_expiry).
+    """
     now_dt = now or parse_utc(ts) or datetime.now(timezone.utc)
     passing: list[dict[str, Any]] = []
     first_reason: Counter = Counter()
     any_reason: Counter = Counter()
+    token_problems: Counter = Counter()
     scanned = 0
     for market in raw_markets:
         row = normalize(market, ts)
         if not (row["question"] or row["slug"] or row["id"]):
             continue
         scanned += 1
-        reasons = rejection_reasons(row, limits, now_dt)
+        if row["token_ids_problem"] and row["token_ids_problem"] not in VERSION_REASONS:
+            token_problems[row["token_ids_problem"]] += 1
+        reasons = rejection_reasons(row, limits, now_dt, min_hours_to_expiry)
         if reasons:
             first_reason[reasons[0]] += 1
             any_reason.update(reasons)
@@ -348,7 +525,9 @@ def filter_markets(
         "rows": passing,
         "first_reason": dict(first_reason),
         "any_reason": dict(any_reason),
+        "token_id_problems": dict(token_problems),
         "limits": dict(limits),
+        "min_hours_to_expiry": min_hours_to_expiry,
     }
 
 
@@ -369,7 +548,7 @@ def persist_markets(
 ) -> int:
     """Append every row to markets_path; emit a bus signal for the first bus_limit rows.
 
-    bus_limit=None keeps the old one-signal-per-row behaviour (paper_session, 20 rows).
+    bus_limit=None keeps the old one-signal-per-row behaviour; paper_session and main() pass BUS_TOP_N.
     """
     for index, row in enumerate(rows):
         append_jsonl(markets_path, row)
@@ -401,6 +580,8 @@ def scan(
     ts: str | None = None,
     max_markets: int = MAX_MARKETS,
     server_prefilter: bool = True,
+    now: datetime | None = None,
+    min_hours_to_expiry: float = MIN_HOURS_TO_EXPIRY,
 ) -> dict[str, Any]:
     """Fetch (or take) raw markets and filter them. No writes."""
     limits = limits if limits is not None else load_thresholds(risk_path)
@@ -421,7 +602,7 @@ def scan(
             "max_markets": None,
             "server_min_liquidity": None,
         }
-    result = filter_markets(raw_markets, limits, stamp)
+    result = filter_markets(raw_markets, limits, stamp, now=now, min_hours_to_expiry=min_hours_to_expiry)
     result["fetch"] = meta
     return result
 
@@ -434,9 +615,20 @@ def main(
     max_markets: int = MAX_MARKETS,
     bus_top_n: int = BUS_TOP_N,
     ts: str | None = None,
+    min_hours_to_expiry: float = MIN_HOURS_TO_EXPIRY,
 ) -> int:
+    from src.pins import refuse_start  # Task AS (gap 5): runtime pin check at start
+
+    if refuse_start("scanner", bus_path=bus_path):
+        return EXIT_PIN_DRIFT
     cfg = load_risk()
-    result = scan(getter=getter, limits=thresholds_from(cfg), max_markets=max_markets, ts=ts)
+    result = scan(
+        getter=getter,
+        limits=thresholds_from(cfg),
+        max_markets=max_markets,
+        ts=ts,
+        min_hours_to_expiry=min_hours_to_expiry,
+    )
     rows = result["rows"]
     fetch = result["fetch"]
     mode = cfg.get("mode")
@@ -444,17 +636,21 @@ def main(
     print(
         f"scanned={result['scanned']} passed={result['passed']} "
         f"stop={fetch['stop_reason']} cap_hit={str(fetch['cap_hit']).lower()} "
-        f"server_min_liquidity={fetch['server_min_liquidity']} mode={mode} "
+        f"server_min_liquidity={fetch['server_min_liquidity']} "
+        f"min_hours_to_expiry={result['min_hours_to_expiry']:g} mode={mode} "
         f"live_enabled={str(live).lower()} keys=none orders=none"
     )
     print("rejected_first=" + ", ".join(f"{k}:{v}" for k, v in sorted(result["first_reason"].items())))
+    if result.get("token_id_problems"):
+        # Not a rejection: these rows pass but carry no outcome IDs, so no book is fetched.
+        print("token_id_problems=" + ", ".join(f"{k}:{v}" for k, v in sorted(result["token_id_problems"].items())))
     if not fetch["complete"]:
         print(f"scanner failed: pagination incomplete ({fetch['stop_reason']}); nothing written", file=sys.stderr)
         if fetch.get("error"):
             print(f"scanner network error: {fetch['error']}", file=sys.stderr)
         return EXIT_INCOMPLETE
-    if result["scanned"] < 5:
-        print("scanner failed: fewer than 5 public markets", file=sys.stderr)
+    if result["scanned"] < MIN_SCANNED_MARKETS:
+        print(f"scanner failed: fewer than {MIN_SCANNED_MARKETS} public markets", file=sys.stderr)
         return EXIT_TOO_FEW_SCANNED
     if not rows:
         print("scanner failed: zero markets passed the filters", file=sys.stderr)
@@ -470,4 +666,7 @@ def main(
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Task AP: start/finish heartbeat (logs/heartbeat/scanner.json) for the resident Sentinel.
+    from src.heartbeat import run_main
+
+    raise SystemExit(run_main("scanner", main))

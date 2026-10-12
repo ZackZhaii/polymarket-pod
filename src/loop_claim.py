@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -22,6 +24,10 @@ SURFACES = frozenset({"grok-build-local", "grok-web", "grok-bot"})
 EXIT_PIN = 2
 EXIT_BUSY = 3
 EXIT_CLOSED = 4
+EXIT_OK = 0
+# Task AS (gap 4): a usage error was argparse's 2, the same code as EXIT_PIN (a global halt for the
+# resident Sentinel). It is now its own code.
+EXIT_USAGE = 5
 
 
 def utc_stamp(moment: datetime | None = None) -> str:
@@ -40,11 +46,34 @@ def load_state(path: Path) -> dict:
 
 
 def save_state(path: Path, state: dict) -> None:
+    """Issue #163: a unique temp file beside the state file, flush + fsync, then os.replace. On any
+    failure the temp file is removed and the old state file is left as it was."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(state, ensure_ascii=False, indent=2) + "\n"
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(payload, encoding="utf-8")
-    temporary.replace(path)
+    payload = (json.dumps(state, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", dir=path.parent, prefix=path.name + ".", suffix=".tmp",
+                                         delete=False) as handle:
+            temporary = handle.name
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+
+def state_lock(path: Path):
+    """Issue #163: the cross-process mutex over a claim/release read-check-write: halt_store's StateLock
+    (platform byte lock, HALT_STATE_LOCK_TIMEOUT_S) on ``<state file>.lock``."""
+    from src.halt_store import StateLock
+
+    return StateLock(path)
 
 
 def next_todo(state: dict) -> dict | None:
@@ -108,7 +137,17 @@ def _expired(claim: dict, now: datetime) -> bool:
 
 
 def pins_ok() -> bool:
-    return not pin_problems(load_risk())
+    """podlib.PINS on the parsed config and (Task AS) the risk file pins: sha256 and every key."""
+    from src.pins import record_drift, risk_file_problems
+
+    drift = risk_file_problems()
+    if drift:
+        record_drift("loop_claim", drift, phase="start")  # one global halt, deduped (src/pins.py)
+        return False
+    try:
+        return not pin_problems(load_risk())
+    except Exception:  # noqa: BLE001 - unreadable config: refuse (fail closed)
+        return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,24 +159,42 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--todo", action="store_true")
     parser.add_argument("--state", type=Path, default=STATE_PATH)
     parser.add_argument("--now")
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return EXIT_OK if exc.code == 0 else EXIT_USAGE
     if not pins_ok():
         print("live_enabled must stay false; queue not changed")
         return EXIT_PIN
-    state = load_state(args.state)
     now = parse_stamp(args.now) if args.now else datetime.now(timezone.utc)
+    if args.action == "status":
+        state = load_state(args.state)
+        waiting = next_todo(state)
+        print(json.dumps({"claim": state.get("claim"), "next": None if waiting is None else waiting.get("id")}, ensure_ascii=False))
+        return EXIT_OK
+    if args.action == "claim" and (not args.surface or not args.task):
+        print("usage error: claim needs --surface and --task", file=sys.stderr)
+        return EXIT_USAGE
+    if args.action == "release" and (not args.surface or args.done == args.todo):
+        print("usage error: release needs --surface and exactly one of --done or --todo", file=sys.stderr)
+        return EXIT_USAGE
+    # Issue #163: the whole read-check-write under the state lock; no lock means busy (fail closed).
+    lock = state_lock(args.state)
+    if not lock.acquire():
+        print("claim busy (state lock held)")
+        return EXIT_BUSY
     try:
-        if args.action == "status":
-            waiting = next_todo(state)
-            print(json.dumps({"claim": state.get("claim"), "next": None if waiting is None else waiting.get("id")}, ensure_ascii=False))
-            return 0
+        return _change(args, now)
+    finally:
+        lock.release()
+
+
+def _change(args: argparse.Namespace, now: datetime) -> int:
+    state = load_state(args.state)
+    try:
         if args.action == "claim":
-            if not args.surface or not args.task:
-                parser.error("claim needs --surface and --task")
             claim_state(state, args.surface, args.task, now)
         else:
-            if not args.surface or args.done == args.todo:
-                parser.error("release needs --surface and exactly one of --done or --todo")
             release_state(state, args.surface, args.done, now)
     except RuntimeError:
         print("claim busy")
@@ -147,8 +204,11 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CLOSED
     save_state(args.state, state)
     print(json.dumps(state["claim"], ensure_ascii=False))
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Task AP: start/finish heartbeat (logs/heartbeat/loop_claim.json) for the resident Sentinel.
+    from src.heartbeat import run_main
+
+    raise SystemExit(run_main("loop_claim", main))

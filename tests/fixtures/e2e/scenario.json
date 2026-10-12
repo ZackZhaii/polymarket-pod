@@ -1,0 +1,289 @@
+{
+ "now": "2026-09-01T12:00:00Z",
+ "second_check_after_s": 60,
+ "mark_books": [
+  {"market_id": "e2e-hist-one", "token_id": "70101", "best_bid": 0.51, "best_bid_size": 1000, "best_ask": 0.53, "best_ask_size": 1000},
+  {"market_id": "e2e-hist-two", "token_id": "70201", "best_bid": 0.26, "best_bid_size": 1000, "best_ask": 0.28, "best_ask_size": 1000},
+  {"market_id": "e2e-dl-c", "token_id": "e2e-dl-c-yes", "best_bid": 0.5, "best_bid_size": 1000, "best_ask": 0.52, "best_ask_size": 1000}
+ ],
+ "intents": [
+  "charlie-stale",
+  "delta-nan",
+  "echo-wash",
+  "foxtrot-thin-edge",
+  "alpha-allow",
+  "bravo-allow",
+  "golf-cap"
+ ],
+ "duplicate_replay": {
+  "fill_of": "alpha-allow",
+  "then_commit": "alpha-again"
+ },
+ "corrupt_ledger": {
+  "torn_tail": "{\"fill_id\":\"e2e-torn-write\",\"ts\":\"2026-09-01T12:00:0",
+  "commit": "alpha-allow"
+ },
+ "halt": {
+  "blocked_market": "e2e-charlie",
+  "blocked_commit": "charlie-stale",
+  "maker_token": "e2e-maker-probe",
+  "other_market": "e2e-bravo",
+  "corrupt_halt_text": "{\"version\": 1, \"halts\": [",
+  "corrupt_commit": "bravo-allow",
+  "global_reason": "e2e drill: global halt",
+  "market_reason": "e2e drill: market halt",
+  "approved_by": "e2e-operator"
+ },
+ "heartbeat": {
+  "commit": "bravo-allow",
+  "recorder_stale_after_s": 121,
+  "sentinel_stale_after_s": 91,
+  "corrupt_text": "{\"proc\": \"scanner\", ",
+  "storm_asset": "e2e-storm-asset",
+  "storm_market": "e2e-bravo",
+  "storm_gap_resyncs": 3,
+  "storm_reconnects": 4,
+  "all_stale_after_s": 600,
+  "approved_by": "e2e-operator"
+ },
+ "daily_loss": {
+  "commit": "bravo-allow",
+  "cases": [
+   {
+    "name": "a_loss_closed_today",
+    "expect": "veto",
+    "fills": [
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T00:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.29,
+      "fee_rate": 0.0
+     }
+    ]
+   },
+   {
+    "name": "b_loss_closed_yesterday",
+    "expect": "allow",
+    "fills": [
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-08-31T23:59:59Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.29,
+      "fee_rate": 0.0
+     }
+    ]
+   },
+   {
+    "name": "c_gain_does_not_offset",
+    "expect": "veto",
+    "fills": [
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T06:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.29,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-b",
+      "token_id": "e2e-dl-b-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.2,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T08:00:00Z",
+      "market": "e2e-dl-b",
+      "token_id": "e2e-dl-b-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     }
+    ]
+   },
+   {
+    "name": "d_below_cap",
+    "expect": "allow",
+    "fills": [
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T06:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.41,
+      "fee_rate": 0.0
+     }
+    ]
+   },
+   {
+    "name": "e_fees_plus_loss",
+    "expect": "veto",
+    "fills": [
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T06:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.301,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T07:00:00Z",
+      "market": "e2e-dl-c",
+      "token_id": "e2e-dl-c-yes",
+      "side": "buy",
+      "shares": 20,
+      "price": 0.5,
+      "fee_rate": 0.02
+     }
+    ]
+   },
+   {
+    "name": "f_unparseable_ts",
+    "expect": "halt",
+    "fills": [
+     {
+      "ts": "not-a-timestamp",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 10,
+      "price": 0.5,
+      "fee_rate": 0.0
+     }
+    ]
+   },
+   {
+    "name": "g_projected_over_cap",
+    "expect": "veto_projected",
+    "fills": [
+     {
+      "ts": "2026-08-31T20:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "buy",
+      "shares": 100,
+      "price": 0.6,
+      "fee_rate": 0.0
+     },
+     {
+      "ts": "2026-09-01T06:00:00Z",
+      "market": "e2e-dl-a",
+      "token_id": "e2e-dl-a-yes",
+      "side": "sell",
+      "shares": 100,
+      "price": 0.35,
+      "fee_rate": 0.0
+     }
+    ]
+   }
+  ]
+ },
+ "slippage_floor": {
+  "forecast": "bravo-allow",
+  "cases": [
+   {
+    "name": "a_zero",
+    "assumed_slippage": 0.0,
+    "expect": "veto",
+    "reason": "slippage_below_floor"
+   },
+   {
+    "name": "b_just_below",
+    "assumed_slippage": 0.0049,
+    "expect": "veto",
+    "reason": "slippage_below_floor"
+   },
+   {
+    "name": "c_at_floor",
+    "assumed_slippage": 0.005,
+    "expect": "allow",
+    "reason": null
+   },
+   {
+    "name": "d_above",
+    "assumed_slippage": 0.01,
+    "expect": "allow",
+    "reason": null
+   },
+   {
+    "name": "e_nan",
+    "assumed_slippage": "nan",
+    "expect": "veto",
+    "reason": "non_finite_assumed_slippage"
+   },
+   {
+    "name": "f_missing",
+    "assumed_slippage": null,
+    "expect": "veto",
+    "reason": "invalid_assumed_slippage"
+   }
+  ],
+  "cli_args": [
+   "0",
+   "0.0049",
+   "nan",
+   "-0.01",
+   "0.005",
+   "0.01"
+  ]
+ }
+}

@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-08T17:47:34Z",
+  "ts": "2026-10-10T14:40:00Z",
   "live_enabled": false,
-  "last_done": "M",
+  "last_done": "BL",
   "next": null,
   "claim": null,
   "cadence_minutes": 30,
-  "note": "M (hypothetical intents no longer skip max_open_positions / max_daily_loss; missing or invalid cap or state vetoes) done by grok-bot in its PR. F-L done on main. No open todo. No live gate."
+  "note": "BL (WS recorder telemetry: PING / PONG events, inbound frame counts, disconnect detail, backoff clock jumps; logging only) done by grok-bot (after BJ, #146, merged). Next by Poly指挥's order: the M2 P0 issues (#128, #125, #133, #130), then the fail-open issues. No live gate."
 }

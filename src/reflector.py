@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
 from src.podlib import RISK_PATH, bus, utc_now  # noqa: E402
 
 PROPOSALS_PATH = ROOT / "playbook" / "proposals.md"
-MAX_PER_UTC_DAY = 3
+from src.thresholds import REFLECTOR_MAX_PER_UTC_DAY as MAX_PER_UTC_DAY  # noqa: E402 - Task AC
 HEADER = (
     "# Proposals\n\n"
     "Reflector only. These notes do not change config/risk.toml or any size cap.\n"
@@ -31,10 +31,15 @@ def propose(
     proposals_path: Path = PROPOSALS_PATH,
     bus_path: Path | None = None,
     now: str | None = None,
+    payload: dict | None = None,
 ) -> dict:
-    """Append one proposal and a bus `proposal` line. Never emits a fill."""
-    if proposals_path.resolve() == RISK_PATH.resolve():
-        raise RuntimeError("refusing to write risk.toml")
+    """Append one proposal and a bus `proposal` line. Never emits a fill.
+
+    Task BB: ``payload`` is an optional structured proposal (src/reflector_proposals.py schema); it rides in the
+    bus payload under ``proposal``. Every Reflector bus proposal says ``exchange_action: none``.
+    """
+    if refused_path(proposals_path):
+        raise RuntimeError("refusing to write risk.toml, config/ or src/thresholds.py")
     cleaned = " ".join(text.split())
     if not cleaned:
         return {"accepted": False, "reason": "empty"}
@@ -66,15 +71,29 @@ def propose(
             "effect": "proposal_only",
             "changes_risk_toml": False,
             "changes_size_caps": False,
+            "exchange_action": "none",
+            **({"proposal": payload} if payload is not None else {}),
         },
         path=bus_path,
     )
     return {"accepted": True, "reason": "written", "ts": message["ts"], "bus_type": message["type"]}
 
 
+def refused_path(path: Path) -> bool:
+    """Task BB: the Reflector never writes config/ (risk.toml, a strategy switch), any .toml, or thresholds.py."""
+    resolved = Path(path).resolve()
+    config = (ROOT / "config").resolve()
+    return (resolved == RISK_PATH.resolve() or resolved == (ROOT / "src" / "thresholds.py").resolve()
+            or resolved.suffix.lower() == ".toml" or config == resolved or config in resolved.parents)
+
+
 def _count_day(text: str, day: str) -> int:
     prefix = f"## {day}"
     return sum(1 for line in text.splitlines() if line.startswith(prefix))
+
+
+EXIT_OK = 0
+EXIT_REFUSED = 1  # the proposal was not accepted, or risk.toml changed during the run
 
 
 def main() -> int:
@@ -86,12 +105,12 @@ def main() -> int:
     )
     if RISK_PATH.read_bytes() != before:
         print("risk.toml changed; refusing", file=sys.stderr)
-        return 1
+        return EXIT_REFUSED
     print(
         f"accepted={str(result['accepted']).lower()} reason={result['reason']} "
         "changes_risk_toml=false"
     )
-    return 0 if result["accepted"] else 1
+    return EXIT_OK if result["accepted"] else EXIT_REFUSED
 
 
 if __name__ == "__main__":

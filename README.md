@@ -27,9 +27,14 @@ Windows, if this machine has no `D:` drive, use `%USERPROFILE%\projects\polymark
 
 `python src/book.py` reads the public CLOB `/book` endpoint and records best bid, best ask, and spread in `data/books.jsonl`.
 
+Optional (M1): `python -m src.ws_recorder --assets TOKEN_ID ... --max-runtime 300` records the public CLOB
+WebSocket market channel into the same `data/books.jsonl` row format (read-only, no auth, no orders).
+It needs the optional `websockets` package: `pip install -r requirements-ws.txt`. Exit codes: 0 ok,
+1 no book recorded, 2 usage error, 3 `websockets` not installed, 4 output write failed.
+
 `python src/paper_cycle.py` reads those local files only. It emits YES+NO or multi-outcome gap signals and a staleness signal. It does not use the network, does not write a paper fill, and does not place an order. A gap is not locked profit.
 
-`python src/paper_session.py` is one observation pass: public Gamma, public CLOB `/book` for the first five markets, then `paper_cycle`. It appends `logs/sessions.jsonl` and does not write a paper fill. Run it when you want another paper sample. It does not start live trading.
+`python src/paper_session.py` is one observation pass: the scanner's filtered public Gamma walk (`scanner.scan`, same rules and fail-closed exits), public CLOB `/book` for the first five passing markets, then `paper_cycle`, which judges book age from the CLOB timestamp at a clock read after the books. It appends `logs/sessions.jsonl` and does not write a paper fill. Run it when you want another paper sample. It does not start live trading.
 
 `python src/paper_ledger.py` with no arguments runs a local gate self-check. A simulated fill is written only after `RiskGate` returns allow. The default check does not invent an edge on a real market: a public price compared with the same price is vetoed. The one allow path is labeled `phase0-gate-test` and is not a forecast.
 
@@ -44,10 +49,13 @@ python src/paper_ledger.py \
   --liquidity 20000 \
   --spread 0.02 \
   --slippage 0.005 \
-  --fee-rate 0
+  --fee-rate 0 \
+  --tags politics,elections
 ```
 
-Edge for a buy is `model_prob - (market_price + assumed_slippage) - fee_rate * market_price`. Non-positive edge is vetoed. Order notional is `1000 * max_order_pct` and is clipped at 1%. `kelly_fraction` is not used to increase size.
+`--tags` takes the market's Gamma tag slugs (comma-separated). Without them the intent is vetoed `missing_category` (issue #131: the category comes from the tags and fails closed; banned categories are listed in `src/category.py`).
+
+Edge for a buy is `model_prob - (market_price + assumed_slippage) - fee_rate * max(market_price, effective_price)` (`src/fees.py`). Non-positive edge is vetoed, and an edge below `MIN_EDGE` (0.02) too. The `--slippage` default is `ASSUMED_SLIPPAGE` (0.005, `src/thresholds.py`). Order notional is `1000 * max_order_pct` and is clipped at 1%. `kelly_fraction` is never used for size (only shadow-reported by `src/intent_builder.py`).
 
 ## Confirm live trading is off
 

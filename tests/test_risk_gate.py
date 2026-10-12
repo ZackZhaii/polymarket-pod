@@ -10,7 +10,7 @@ import src.risk_gate as risk_gate
 from src.podlib import RISK_PATH, load_risk, utc_now
 from src.risk_gate import Intent, evaluate, gate_thresholds
 
-STATE = {"open_positions": 0, "market_already_open": False, "daily_loss_usd": 0.0}
+STATE = {"open_positions": 0, "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 def _intent(**overrides: object) -> Intent:
@@ -28,6 +28,7 @@ def _intent(**overrides: object) -> Intent:
         "book_ts": utc_now(),
     }
     fields.update(overrides)
+    fields.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
     return Intent(**fields)  # type: ignore[arg-type]
 
 
@@ -46,7 +47,9 @@ def test_clean_paper_intent_can_pass_and_risk_file_stays_put():
     decision = evaluate(_intent(), cfg, STATE)
     assert decision.allow is True
     assert decision.reasons == []
-    assert decision.notional_usd == 10.0
+    # issue #104: shares fit the all-in 1% clip (fee-free here): 24.69 * 0.405 <= 10
+    assert decision.shares == 24.69 and decision.notional_usd == pytest.approx(24.69 * 0.405)
+    assert decision.notional_usd + decision.fee_usd <= 10.0
     assert RISK_PATH.read_bytes() == before
     assert b'live_enabled = false' in before
     assert b'mode = "paper"' in before

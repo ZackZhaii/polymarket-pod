@@ -78,6 +78,465 @@
       "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 4. No new threshold; the existing risk.toml caps now apply to hypothetical intents too.",
       "done_at": "2026-10-08T17:47:34Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "N",
+      "status": "done",
+      "title": "Forecaster bus name matches ROSTER (NewsForecaster)",
+      "finish": "src/forecaster.py emits from=NewsForecaster (forecaster.BUS_NAME), the docs/ROSTER.md name. podlib.ROLE_ALIASES maps the legacy Forecaster name and canonical_role(name) returns the ROSTER name; bus() writes the canonical from/to so older callers keep working. Old logs/bus.jsonl lines are not rewritten; readers compare via canonical_role. NewsForecaster still cannot emit a fill. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 12. Pure code; no risk parameter.",
+      "done_at": "2026-10-08T18:43:58Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "O",
+      "status": "done",
+      "title": "scanner minimum time-to-expiry; markets closer than 24 h do not pass",
+      "finish": "src/expiry_rule.py expiry_problem(end_date, now, min_hours) is pure and offline and returns near_expiry when the market ends in less than MIN_HOURS_TO_EXPIRY = 24 h (the boundary passes), expired when it has ended, missing_end_date when absent, and invalid_end_date when the end date is not an ISO 8601 string with a time and a zone (naive, date-only, numeric, bool and other non-strings fail closed); a bad min_hours or now is a reason too. scanner.filter_markets / scan / main apply it with an injectable min_hours_to_expiry and now; exit codes are unchanged. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 8. The threshold is a code constant; moving it into config/risk.toml is a proposal for the Operator.",
+      "done_at": "2026-10-08T18:56:46Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "P",
+      "status": "done",
+      "title": "single-leg arb fill counts as directional exposure; positions net per leg, never per pair",
+      "finish": "src/paper_ledger.py nets paper fills per leg (market + token_id): only a buy and a sell of the same token offset each other, the two tokens of an arb pair never do, and a row without token_id is its own unknown leg. load_state(market, token_id) reports open_positions as open legs, leg_already_open for that exact token, and exposure_usd / leg_exposure_usd at each leg's average fill price (1 USD per share when notional is missing). risk_gate.evaluate exempts the max_open_positions cap only when state leg_already_open is True; another open leg of the same market does not exempt. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold is added.",
+      "note": "Self-picked by grok-bot (Poly指挥 dispatch). Risk-gap backlog item 5. Pure code; only tightens risk.",
+      "done_at": "2026-10-08T19:11:34Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "Q",
+      "status": "done",
+      "title": "scanner picks outcome IDs by Gamma version (v2 positionIds, v1 clobTokenIds); missing or unknown version rejects the market",
+      "finish": "src/scanner.py select_token_ids(market) is pure and offline: version v2 reads positionIds and v1 reads clobTokenIds (each as a list or a JSON-encoded list), even when both fields are present and differ. A missing version (missing_version) or any value other than exactly v1/v2 (unsupported_version) is a scanner rejection reason; no field is guessed from presence. With a valid version, missing or malformed IDs, non-decimal V2 IDs and an ID count that does not match outcomes leave token_ids empty with a token_ids_problem, so no book is fetched downstream. normalize records version, token_id_source and token_ids_problem; filter_markets counts token_id_problems; exit codes are unchanged. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Queued by Poly指挥; done by grok-bot. Not a risk-gap backlog item. Rule follows docs.polymarket.com (Polymarket Protocol V2 migration: choose the ID field by version, even when both fields are present; reject missing or unsupported versions). Poly指挥 spec: fail closed on missing or unrecognized version.",
+      "done_at": "2026-10-08T19:34:24Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "R",
+      "status": "done",
+      "title": "book timestamps read one way: paper_cycle judges book age with book_staleness; book.record puts the book's own book_ts on the bus",
+      "finish": "src/paper_cycle.py drops _age_seconds; _book_problem calls book_staleness.book_age_problem, so fresh means 0 <= age <= 120 s (exactly 120 s fresh, 121 s stale) and a future, missing or unparseable ts, an unparseable now (no wall-clock fallback) or a broken limit counts as stale; the stale signal adds stale_reasons. src/book.py book_timestamp normalises the /book timestamp (Unix ms string or non-negative int, or aware ISO) to ISO 8601 UTC; snapshot rows and the book.record bus payload carry book_ts and book_ts_problem, never the recorder clock. With no usable timestamp book_ts is null with missing_book_ts or invalid_book_ts, and RiskGate vetoes it. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold changes.",
+      "note": "Assigned by Poly指挥; done by grok-bot. Doc/code conflicts 2 and 3 from the batch 2+3 skills PR. Only tightens: a future book is no longer fresh in paper_cycle.",
+      "done_at": "2026-10-08T19:53:50Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "S",
+      "status": "done",
+      "title": "structured wash/self-trade detection beyond strategy-name keywords",
+      "finish": "src/wash_detect.py wash_problems is pure and offline; risk_gate.evaluate calls it on top of the BANNED_STRATEGY_TOKENS keyword ban (either fires = veto). On the same market and the same leg (market + token_id; a missing token_id is treated as possibly the same token): an uncancelled own paper quote (quotes.jsonl status open) on the opposite side vetoes cross_side_same_leg (no time window); an own paper fill on the opposite side within WASH_WINDOW_S = 300 s (future-stamped counts as inside) vetoes wash_same_market; Intent.counterparty naming our own account, pod role (Maker/Executor) or one of our strategies vetoes self_trade_structure. Fail closed: missing recent_fills/own_quotes vetoes wash_input_missing; malformed history, unknown quote status, bad now/market or an unusable counterparty vetoes wash_input_invalid. paper_ledger.load_state supplies recent_fills and own_quotes. The two tokens of an arb pair are not flagged. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Assigned by Poly指挥; done by grok-bot. Risk-gap backlog item 1. WASH_WINDOW_S = 300 s is a new code constant, not a risk.toml key; flagged for Operator review. Only tightens: no existing check is loosened.",
+      "done_at": "2026-10-08T20:13:15Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "T",
+      "status": "done",
+      "title": "Task R follow-ups: book age by the exchange book_ts; no gap signal for stale markets; latest row by parsed time",
+      "finish": "src/paper_cycle.py judges book age by the row's exchange book_ts (book_ts_problem when recorded), never the recorder ts; a missing book_ts key is missing_book_ts and any non-null book_ts_problem is stale; 120 s unchanged (exactly 120 s fresh). A stale market emits no ArbBinary/NegRiskArb gap signal; its BookWatcher stale signal carries gap_signal=skipped and skip_reason=stale_book and run() returns a skip record. book_staleness.latest_by_time picks the latest market/book row by parsed recorder ts (ties keep the later row); missing or unparseable ts rows are skipped as missing_row_ts / invalid_row_ts and recorded (BookWatcher skipped_row signal plus skips). paper_ledger.realistic_no_edge uses the same selection, passes book_ts (not ts) to RiskGate and returns skipped_rows. Historical Forecaster mentions in docs unchanged. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold changes.",
+      "note": "Approved by Poly指挥 (Task R follow-ups); done by grok-bot. Only tightens: a fresh recorder ts can no longer hide a stale or missing exchange book_ts, and a stale market no longer emits a gap signal.",
+      "done_at": "2026-10-08T20:20:07Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "U",
+      "status": "done",
+      "title": "Non-finite numeric inputs (NaN, +inf, -inf) veto in RiskGate, the edge math and paper_ledger fee/position math",
+      "finish": "risk_gate.evaluate vetoes non_finite_<field> (NaN/inf) or invalid_<field> (non-number) for model_prob, market_price, assumed_slippage and fee_rate, and the edge then fails closed (-1.0, non_positive_edge); fee_rate=NaN no longer skips the edge check. A non-finite or non-numeric max_order_pct vetoes invalid_max_order_pct with zero notional. paper_ledger.load_state returns an invalid risk state (open_positions None, so invalid_risk_state) when any counted row has non-finite or non-numeric shares, notional_usd or fee_usd, so a NaN row can no longer hide an open leg. maker.quote raises on non-finite price/size; sports_devig rejects non-finite odds, price or slippage. Rejection tests per parameter (fee_rate NaN and inf included). pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold changes.",
+      "note": "Approved by Poly指挥 (security fix, queued before Endgame #10); done by grok-bot. Pure tightening: every check that vetoed before still vetoes; finite inputs behave exactly as before.",
+      "done_at": "2026-10-08T20:25:02Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "V",
+      "status": "done",
+      "title": "Skill security auditor: resolved-path containment (no string prefix), outside entries skipped and reported, any read/decode error is FAIL",
+      "finish": ".grok/skills/cx-skill-security-auditor/scripts/skill_security_auditor.py checks containment by resolved path components (os.path.commonpath on resolved, normcased paths), never a string prefix, so target-evil/.env is not inside target. It walks without following directory links; an entry that resolves outside the target (symlink or junction) is never read or descended into, is listed under skipped and is a CRITICAL finding. Any read, decode (strict UTF-8), stat or walk error is listed under errors and makes the verdict FAIL (exit 1). Offline tests: prefix sibling, symlink escapes (skipped cleanly where symlinks are unavailable), read/decode/stat errors to FAIL, CLI exit codes. Existing skills' findings and verdicts unchanged. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold changes.",
+      "note": "Approved by Poly指挥 (security fix, ahead of Endgame #10); done by grok-bot. Pure tightening: an outside entry or an error can only add a finding or turn the verdict to FAIL.",
+      "done_at": "2026-10-08T20:28:55Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "W",
+      "status": "done",
+      "title": "Endgame unfiltered path (backlog #10): read-only, fail-closed endgame_scan hands Endgame the 0.98-0.99 band",
+      "finish": "src/endgame_scan.py fetches the same public Gamma keyset pages as the scanner (GET only, no keys), applies every scanner rule except long_tail_price (closed, version, 24 h expiry, accepting orders, bid/ask, liquidity, spread, price), fails closed on non-finite price/bid/ask/spread/liquidity, keeps only first-outcome prices inside endgame.PRICE_MIN..PRICE_MAX (inclusive) and hands them to endgame.emit (signal to RiskGate only, 48 h window; no fill, order or ledger write). Incomplete fetch exits 3 and writes nothing, fewer than 5 markets exit 1, drifted paper pins exit 4 before any fetch. The scanner's default output, filters, exit codes and data/markets.jsonl are unchanged. Backlog #10 struck through in COORDINATION.md. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold changes.",
+      "note": "Approved by Poly指挥 (Endgame backlog #10); done by grok-bot. Paper only: a new read-only second path; nothing in the scanner or RiskGate is loosened or bypassed.",
+      "done_at": "2026-10-08T20:33:13Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "X",
+      "status": "done",
+      "title": "RiskGate minimum edge (backlog #6): MIN_EDGE = 0.02 code constant, edge_below_min veto; non_positive_edge kept",
+      "finish": "src/risk_gate.py has MIN_EDGE = 0.02 (code constant, not a risk.toml key; threshold proposal for the user at M2). 0 < edge < MIN_EDGE vetoes edge_below_min; edge <= 0 still vetoes non_positive_edge (not doubled); 0.02 is inclusive with a 1e-12 float tolerance; a config min_edge cannot lower it; non-finite or missing inputs fail closed as in Task U. Offline tests at 0.0199, 0.02 and 0.05 (buy and sell), fee counted, NaN/inf/None. No existing fixture had 0 < edge < 0.02, so none changed. Backlog #6 struck through in COORDINATION.md. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Approved by Poly指挥 (backlog #6); done by grok-bot. Pure tightening. MIN_EDGE 0.02 awaits the user's decision at M2 (like MIN_HOURS_TO_EXPIRY and WASH_WINDOW_S).",
+      "done_at": "2026-10-08T20:36:23Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "Y",
+      "status": "done",
+      "title": "Scanner rejects any non-finite parsed number (NaN, +inf, -inf) as non_finite_<field>",
+      "finish": "src/scanner.py rejection_reasons rejects a market whose parsed best_bid, best_ask, spread, liquidity_usd, volume_usd, volume_24h_usd, price or any outcomePrices element is NaN or +/-inf (Gamma text such as \"NaN\", \"nan\", \"inf\", \"-Infinity\", or a float NaN) with non_finite_<field>. The non_finite_* reasons rank after the structural reasons (closed ... not_accepting_orders) and before missing_bid_ask, low_liquidity, wide_spread, missing_price and long_tail_price. A non-finite lastTradePrice gives non_finite_price instead of falling through to outcomePrices. Exit codes, the summary line format and the markets.jsonl row keys are unchanged; only the new reasons appear. Offline tests per field with 'NaN', 'nan', 'inf', '-Infinity' and float('nan'). endgame_scan (PR #25) gets the same names through scanner.rejection_reasons. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and no threshold changes.",
+      "note": "Approved by Poly指挥 (after X, before backlog #9); done by grok-bot. Pure tightening: every market rejected before is still rejected; finite markets get the same reasons as before.",
+      "done_at": "2026-10-08T20:46:44Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "Z",
+      "status": "done",
+      "title": "Sentinel stale-book alarm (backlog #9): 120 s per check, paper halt after 2 consecutive stale or failed checks",
+      "finish": "src/sentinel.py has code constants SENTINEL_STALE_S = 120 (equal to book_staleness.MAX_BOOK_AGE_S) and SENTINEL_STALE_CONSECUTIVE = 2, not risk.toml keys (M2 proposals). StaleWatch.check counts consecutive stale or failed checks per market (book_age_problem: missing, unparseable, non-finite or future book_ts, a broken now, or failed=True all count as stale), calls sentinel.halt once when the streak reaches 2 (paper quotes of that market cancelled, exchange_action none), and resets on a fresh check. Limits can only be made stricter; a malformed saved state raises. Every per-check block is unchanged: RiskGate still vetoes a single stale book and paper_cycle still makes no gap signal from it. Before Z nothing raised a Sentinel alarm automatically, so nothing is loosened. Offline tests. COORDINATION #9 struck through. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Approved by Poly指挥 (backlog #9, after Y); done by grok-bot. Pure addition: a new alarm only. SENTINEL_STALE_S and SENTINEL_STALE_CONSECUTIVE await the user's decision at M2.",
+      "done_at": "2026-10-08T20:55:25Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AA",
+      "status": "done",
+      "title": "Sentinel StaleWatch wired into paper_cycle (backlog #15): the stale streak persists in logs/sentinel_stale.json",
+      "finish": "paper_cycle.run checks every market with at least one booked token once per run at SENTINEL_STALE_S (120 s; a looser stale_after_s cannot reset it) and keeps the StaleWatch streak in podlib.SENTINEL_STATE_PATH (logs/sentinel_stale.json; sentinel_state_path and quotes_path are injectable). An unreadable, corrupt or malformed state file, a state file missing after a prior run (.seen marker) or a failed save counts as a stale check (fail closed); a first run with no file and no marker starts at 0. Writes are atomic (temp file in the same folder, fsync, os.replace). Two stale checks in a row call sentinel.halt once (that market's paper quotes only, exchange_action none); a fresh check resets. Per-check stale signals, skipped gaps and RiskGate vetoes are unchanged. Task letters after Z are AA, AB, AC. Offline tests. COORDINATION #15 struck through. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Approved by Poly指挥 (after #25 W merged); done by grok-bot. Tightening only: every new path fails closed and no per-check block changes. No new threshold.",
+      "done_at": "2026-10-08T21:05:01Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AB",
+      "status": "done",
+      "title": "paper_session uses the current scanner path; book age from the CLOB book_ts at an evaluation clock (backlog #16)",
+      "finish": "src/paper_session.py calls scanner.scan with scanner.thresholds_from(cfg) (keyset paging, liquidity pre-filter, version-aware outcome IDs, non_finite_*, expiry, spread, liquidity and long-tail rules) instead of fetch_markets + visible_rows. Only passing rows are persisted (bus signals for the top BUS_TOP_N) and only the first 5 passing markets with outcome IDs are booked. A bad threshold, a failed read, incomplete paging, fewer than 5 scanned or nothing passing writes nothing (fail closed). paper_cycle judges book age from each row's CLOB book_ts (never the recorder ts) at clock() (default eval_clock, UTC milliseconds) read once after the books are recorded; missing, unparseable or future book_ts and a broken clock stay stale; exactly 120 s is fresh. Offline tests. COORDINATION #16 struck through. pytest passes offline. No network and no credentials. config/risk.toml is unchanged.",
+      "note": "Approved by Poly指挥 (astra's review finding); done by grok-bot. Tightening only: the session now applies every scanner rejection and fail-closed exit, and book age is measured after the reads. No new threshold.",
+      "done_at": "2026-10-08T21:08:47Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AC",
+      "status": "done",
+      "title": "One module for the risk and threshold code constants (src/thresholds.py) and docs/THRESHOLDS.md (backlog #17)",
+      "finish": "src/thresholds.py holds every risk and threshold code constant with unchanged values (MAX_BOOK_AGE_S, MIN_EDGE, EDGE_TOLERANCE, PAPER_EQUITY_USD, PAPER_CYCLE_STALE_AFTER_S, SENTINEL_STALE_S, SENTINEL_STALE_CONSECUTIVE, WASH_WINDOW_S, MIN_HOURS_TO_EXPIRY, SCANNER_MIN_PRICE, SCANNER_MAX_PRICE, MIN_SCANNED_MARKETS, ENDGAME_PRICE_MIN, ENDGAME_PRICE_MAX, ENDGAME_WINDOW_HOURS, SPORTS_DEVIG_ASSUMED_SLIPPAGE, LEDGER_OPEN_EPS, REFLECTOR_MAX_PER_UTC_DAY). Modules import them and keep their old names as the same objects. Import-time relation checks (SENTINEL_STALE_S == MAX_BOOK_AGE_S and others); sentinel keeps its own guard. docs/THRESHOLDS.md lists every threshold (name, value, unit, meaning, where, source, M2 pending), the operational limits, and the risk.toml values read-only. tests/test_thresholds.py keeps doc, module, old names and risk.toml in sync. COORDINATION #17 struck through. pytest passes offline. No network and no credentials. config/risk.toml is unchanged and none of its parameters moves into code.",
+      "note": "Approved by Poly指挥 (task 3, threshold module); done by grok-bot. Refactor only: no value or behaviour changes. M2 pending list unchanged.",
+      "done_at": "2026-10-08T21:18:32Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AD",
+      "status": "done",
+      "title": "endgame_scan also selects a market when its second outcome is in the Endgame band (backlog #18)",
+      "finish": "endgame_scan selects a market when exactly one of its two outcomes is inside ENDGAME_PRICE_MIN..ENDGAME_PRICE_MAX (src/thresholds.py, inclusive; no new numbers). Outcome 0 is scanner.yes_price, outcome 1 is Gamma outcomePrices[1]; both are needed (missing -> missing_price, non-finite -> non_finite_price / non_finite_outcome_prices). Both in the band -> both_outcomes_in_band; one in the band and the other above it -> other_outcome_above_band. The selected outcome needs its own token id (version-aware), else the scanner's token problem name. Signals to RiskGate name outcome_index, outcome and token_id. Same scanner rules, 24-48 h window, MIN_SCANNED_MARKETS and exit codes. COORDINATION #18 struck through. pytest passes offline. No network and no credentials. config/risk.toml unchanged.",
+      "note": "Approved by Poly指挥 (Endgame second outcome); done by grok-bot. Tightening only: no new thresholds, M2 pending list unchanged.",
+      "done_at": "2026-10-08T21:24:17Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AE",
+      "status": "done",
+      "title": "One fee module (src/fees.py): stress_fee for the RiskGate edge, ledger_fee for simulated booking; no fee goes down (backlog #19)",
+      "finish": "src/fees.py is the one place fees are computed: fee_per_share = max(fee_rate * market_price, fee_rate * effective_price, 0); stress_fee is the RiskGate edge stress per share, ledger_fee = max(notional_usd * fee_rate, shares * fee_per_share) is Decision.fee_usd, booked_fee_usd is the ledger's 8-decimal rounding. risk_gate and paper_ledger do no fee arithmetic of their own. tests/test_fee_characterisation.py recorded the old fees (first commit: equality) and now asserts every path is >= its old value on a 24,624-point grid, every edge <= its old value and nothing newly allows. Non-finite or non-number inputs stay fail-closed (edge -1, fee 0.0; ledger invalid state). No new threshold, no fee constant in code, config/risk.toml unchanged. COORDINATION #19 struck through. pytest passes offline.",
+      "note": "Approved by Poly指挥 (fee unification); done by grok-bot. More conservative: buy edge lower by fee_rate * slippage; sell booked fee higher by market/effective; negative fee_rate no longer a rebate. M2 pending list unchanged.",
+      "done_at": "2026-10-08T21:34:13Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AF",
+      "status": "done",
+      "title": "Paper ledger integrity (src/ledger_store.py): fill ids with idempotent dedupe, atomic writes, cash/position/cost-basis conservation check; mismatch halts (backlog #20)",
+      "finish": "Fills carry fill_id; an identical repeat counts once, a different row under the same id (conflicting_fill_id) or an id-less row after id'd rows (missing_fill_id) is invalid state; legacy id-less rows get legacy:<line>:<sha256> ids. Writes are atomic (same-dir temp file, fsync, os.replace; any failure leaves the old ledger intact, tested by simulated crashes). Torn or malformed lines are invalid state. Cash = PAPER_EQUITY_USD - buys + sells - fees and per-leg shares and cost basis are stored per fill and checked within LEDGER_OPEN_EPS on load and before/after each write; fee_usd >= booked_fee_usd(ledger_fee(...)). Any problem: RiskGate vetoes invalid_risk_state, commit_if_allowed halts and books nothing. Legacy fixtures load exactly as before. No new threshold, config/risk.toml unchanged. COORDINATION #20 struck through. pytest passes offline.",
+      "note": "Approved by Poly指挥 (ledger integrity); done by grok-bot. Tightening: strict ledger reader; booked fee is max(decision fee, fee recomputed from stored values), +1e-8 USD on ~0.14% of fills. M2 pending list unchanged.",
+      "done_at": "2026-10-08T21:44:08Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AG",
+      "status": "done",
+      "title": "Read-only WebSocket order-book recorder for the public CLOB market channel (src/ws_recorder.py): pure core + injectable transport, gap/inconsistency resync, append-safe JSONL rows for book_staleness / paper_cycle / StaleWatch; websockets optional and pinned (backlog #21)",
+      "finish": "BookCore applies book snapshots and price_change deltas per asset, book_ts is the exchange ms timestamp (book.book_timestamp), never receive time. Invalid or non-finite values, timestamp regression, crossed book, unknown level removal, best_bid/best_ask mismatch, tick mismatch, market mismatch or malformed messages mark the asset for resync: its state is discarded, one price-less invalidation row (book_ts null, book_ts_problem invalid_book_ts) is written at once if it was live, and after it nothing more is written for the asset (no priced row) until a fresh snapshot. Any disconnect invalidates every asset; reconnect uses exponential backoff with a cap. URL allowlist (wss + exact host + /ws/market) and outgoing-frame allowlist enforced in code; no auth, no headers, no user channel, no order-capable package. websockets==17.2.0 only in requirements-ws.txt, imported lazily in the adapter. CLI python -m src.ws_recorder --assets ... --max-runtime ... with exit codes 0-4. New timing constants in src/thresholds.py and THRESHOLDS.md. config/risk.toml unchanged. COORDINATION #21 struck through. pytest passes offline (fake transport, no network).",
+      "note": "Approved by Poly指挥 (websockets ruled a non-trading dependency, mergeable routinely with checks (a)-(d)); done by grok-bot. Tightening: invalidation rows make consumers fail closed at once. WS_ROW_REFRESH_S is staleness-relevant and joins the M2 pending list; the other WS_* constants are operational.",
+      "done_at": "2026-10-08T21:56:10Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AH",
+      "status": "done",
+      "title": "Local M0 guard script (scripts/guard.py, standard library only): risk.toml sha pin (working tree + HEAD), live_enabled=false, banned order-capable dependencies and imports, src URL allowlist, THRESHOLDS.md vs src/thresholds.py (backlog #22)",
+      "finish": "python scripts/guard.py runs offline from any cwd inside the repo and prints one PASS/FAIL line per check: risk_sha_worktree (CRLF normalised) and risk_sha_head (git show HEAD:config/risk.toml; SKIP without git unless --require-git) equal 0aea23af...bc04; live_enabled is the bool false and the other podlib.PINS hold; no ORDER_CAPABLE or clob package in requirements*.txt / pyproject.toml and none imported in src/ or scripts/ (also literal importlib.import_module / __import__); every URL in src/ is an allowlisted public read-only endpoint (Gamma /markets, /markets/keyset, CLOB /book, WS /ws/market; docstrings and comments may link docs.polymarket.com and github.com); THRESHOLDS.md agrees with src/thresholds.py via the Task AC parser. Exit 0 all pass, 1 a check failed, 2 usage/no root. ORDER_CAPABLE and the doc parser live in the guard and AG's and AC's tests use them. No CI config added. Tests: each check fails on a bad temp copy and the real repo passes. Also fixes AG's doc sentences to describe the invalidation row. config/risk.toml unchanged. COORDINATION #22 struck through. pytest passes offline.",
+      "note": "Approved by Poly指挥 (M0 guard); done by grok-bot. Not wired into CI (CI is KEY and stays with the user). Data API is not allowlisted because src/ does not use it today. M2 pending list unchanged.",
+      "done_at": "2026-10-08T22:11:50Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AI",
+      "status": "done",
+      "title": "M1 24-hour acceptance tooling: read-only long-run recorder entry (python -m src.m1_run: assets from the latest scanner batch, rotation, graceful SIGINT/SIGTERM, run manifest, REST /book samples, reconnect/resync events) and offline report (python -m src.m1_report: coverage, book-age percentiles, resyncs, reconnects, REST-vs-WS match, PASS/FAIL) (backlog #23)",
+      "finish": "src.m1_run records the public WS market channel through the unchanged ws_recorder rules (new optional stop and on_event hooks only) for --max-runtime seconds into rotated append-only JSONL (books/, events/, rest/) under a new run dir, samples the public CLOB /book via book.snapshot every M1_REST_EVERY_S for the first M1_REST_ASSETS assets, and writes manifest.json atomically at start and end (times, assets, versions, git sha, risk.toml sha256 at start and end, live_enabled, files, counts, exit code). Assets come from data/markets.jsonl only (latest batch by parsed ts, version-aware token_ids, top N). SIGINT/SIGTERM stop within WS_STOP_POLL_S, exit 5. src.m1_report reads only the run dir and writes report.md and report.json with per-asset coverage (book_age_problem rule on a 1 s grid), book-age p50/p90/p99/max, resyncs by reason, reconnects, REST-vs-WS best bid/ask match by nearest exchange book_ts, and a PASS/FAIL verdict against M2-pending criteria in src/thresholds.py and THRESHOLDS.md. docs/M1_ACCEPTANCE.md has the box commands. config/risk.toml unchanged. COORDINATION #23 struck through. pytest passes offline (fake transport, fake clock, synthetic run dirs).",
+      "note": "Requested by Poly指挥 (Poly指挥 runs the 24 h on the box); done by grok-bot. The eight M1 criteria (M1_MIN_RUN_S, M1_MIN_COVERAGE, M1_MAX_RECONNECTS, M1_MAX_GAP_RESYNCS_PER_ASSET, M1_REST_MATCH_WINDOW_S, M1_MIN_REST_MATCHED, M1_MAX_TOP_MISMATCH_RATE, M1_MAX_REST_UNMATCHED_RATE) are conservative first values and join the M2 pending list; run defaults and WS_STOP_POLL_S are operational. No new URL, no order code.",
+      "done_at": "2026-10-08T22:30:57Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AJ",
+      "status": "done",
+      "title": "End-to-end offline hard gate: the real pipeline (scanner rows -> /book recorder -> paper cycle and Sentinel -> Endgame / NewsForecaster signals -> Intent -> RiskGate -> paper fill -> ledger_store -> conservation -> Sentinel halt) on fixed sanitised recordings in tests/fixtures/e2e/, exact golden.json, guard check e2e (backlog #24)",
+      "finish": "scripts/e2e_offline.py runs the real modules on tests/fixtures/e2e/ (Gamma rows, CLOB /book bodies, forecasts, ledger and quote start state, scenario) with only the clock (frozen datetime in podlib, book_staleness, wash_detect) and I/O paths (temp bus, ledger, quotes, markets, books, Sentinel state; the /book getter; a concurrent-writer ledger path) replaced, socket/urllib/http.client/podlib.urlopen as tripwires. The run matches golden.json exactly (every allow/veto with reasons, fills, cash, positions, Sentinel halts, bus counts) and breaks no invariant (no network, exchange_action none, fills only from an allow, unique fill ids, conservation, risk.toml pinned and byte-identical, live_enabled false at every stage, no default data path written). Scenarios: two allows, stale book, NaN ask, wash, edge below MIN_EDGE, position cap, duplicate fill replay, ledger torn before and during the call, two consecutive stale checks. tests/test_e2e_offline.py; guard check e2e (8 checks); golden changes only with pytest --update-golden (off by default, tested). docs/PHASE0_RUN.md section. No new threshold, no new URL. config/risk.toml unchanged. COORDINATION #24 struck through.",
+      "note": "by Poly指挥; done by grok-bot. Not connected in src yet (the gate glues or stops): no module turns a NewsForecaster signal into an Intent (build_intent in the harness; fee_rate and slippage are fixture inputs), Endgame signals carry no model probability, nothing consumes a Sentinel or Executor halt. The guard runs the gate in-process (stdlib + src, ~0.1 s) instead of spawning pytest, so it also works in the M1 venv without pytest.",
+      "done_at": "2026-10-08T22:51:21Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AK",
+      "status": "done",
+      "title": "Data API v2 reconciliation: read-only Reconciler (src/reconcile.py) on GET /v2/status (first, lag limit), GET /v2/positions and GET /v2/trades only, before Data API v1 retires on 2026-10-24; every missing or malformed field fails closed (backlog #25)",
+      "finish": "src/reconcile.py reads /v2/status first every round (age_seconds + serving.lag_seconds <= DATA_API_MAX_LAG_S, network polygon / chain_id 137, null fails), then walks /v2/positions (user, status=OPEN, filter_type=TOKENS, filter_amount=0.1) and /v2/trades (user, taker_only=false, start=1, same filters every page) by pagination.next_cursor until null, validates the {data, pagination} envelope (data null, has_more vs next_cursor, cursor loop, MAX_PAGES) and every used row field strictly (no coercion: strings, bools, null, NaN, inf are malformed), checks the four documented position identities within DATA_API_IDENTITY_TOL_USDC, dedupes exact trade repeats on transaction_hash + token_id + side, and compares per token the ledger_store replay (open shares, buy/sell shares) with current_size and BUY/SELL trade sizes within RECONCILE_SHARES_TOL. Sub-floor legs/fills (0.1 / 0.01 shares) are unverifiable and fail. Exit 0 / 1 mismatch / 2 usage / 3 Data API unusable / 4 ledger invalid; 1/3/4 write one Reconciler halt (exchange_action none). podlib.public_get and guard url_allowlist admit exactly the three v2 paths. Offline tests on sanitised recorded-shape fixtures with every network path raising. New M2-pending numbers RECONCILE_SHARES_TOL, DATA_API_POSITIONS_DUST_SHARES, DATA_API_TRADES_MIN_SHARES, DATA_API_MAX_LAG_S, DATA_API_IDENTITY_TOL_USDC; operational reconcile.PAGE_LIMIT / MAX_PAGES. docs/RECONCILE.md. config/risk.toml unchanged, live_enabled false.",
+      "note": "by Poly指挥 (queue item 4); done by grok-bot. Not on the paper pipeline or the e2e gate: in Phase 0 the ledger is paper, so against a real wallet it reports mismatches by design; it is the M2 tool. Doc ambiguities resolved fail-closed in docs/RECONCILE.md (filter_amount=0 vs the 0.1 dust floor; trades are fills only, so redeem/merge/split/transfer show as mismatches). Sources include Poly研究's research_dataapi_ws_m2.md (Data API part); its dedupe key is not unique per fill on live data, so only exact repeats are deduped.",
+      "done_at": "2026-10-09T06:45:35Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AL",
+      "status": "done",
+      "title": "Halt consumer: persisted Sentinel/Executor halts (src/halt_store.py) that RiskGate, the Maker and paper_cycle obey per market or globally, fail closed on a bad halt file; Operator-only resume bus type; invalid_risk_state and Executor ledger halts escalate to a global halt; atomic halt write order with logs/HALT fallback; markets without a book row are stale; e2e halt scenarios and guard check halt (Sentinel design gaps 1, 3, 7, 8, 10; backlog #26)",
+      "finish": "src/halt_store.py persists every halt atomically in logs/halt_state.json (scope market or global) and RiskGate.evaluate, maker.quote and paper_cycle.run veto everything in an active halt's scope; an unreadable, corrupt, malformed or lost halt file, logs/HALT or a failed check is a global halt. sentinel.halt writes the halt record first, then cancels paper quotes with an atomic rewrite, then writes the bus; any failure writes logs/HALT and nothing is raised into paper_cycle; the Maker re-checks after its append and cancels a racing quote. invalid_risk_state (paper_ledger) and the Executor's ledger_integrity / ledger_write_failed halts are global halts. podlib.BUS_TYPES gains resume, only from=Operator to=Sentinel with approved_by and halt_ref; Operator may send nothing else; a market resume cannot lift a global halt; python -m src.halt_store resume (Operator command line, logged on the bus before release) is the only release, never automatic. paper_cycle counts a leg or market with no book row as stale (missing_book). tests/fixtures/e2e golden gains halt_consumer (halt blocks later intents and the Maker, corrupt halt file blocks globally, market resume cannot lift global, non-Operator resume rejected); scripts/guard.py check halt; golden only via --update-golden. PROTOCOL.md, COORDINATION (Operator bus exception, backlog #26), PHASE0_RUN, LOOP updated. No new threshold; config/risk.toml unchanged; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (ruling on Poly哨兵's halt/heartbeat design review of dev@f760e51); done by grok-bot. Heartbeat (gap 2), exit-code table (gap 4), runtime pin checks (gap 5/6), bus sensitive-string filter (gap 9), M1 books path (gap 11), scheduler (gap 12), recorder escalation (gap 13) and the all-stale global escalation (gap 14) are later tasks. Behaviour now stricter: a halt (including a StaleWatch market halt and a torn-ledger invalid_risk_state) stays until the Operator resumes it.",
+      "done_at": "2026-10-09T06:57:34Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AM",
+      "status": "done",
+      "title": "GitHub Actions CI: guard --require-git and full pytest on PRs and pushes to dev/main; docs/DECISIONS.md records the five roadmap decisions",
+      "finish": ".github/workflows/ci.yml runs python scripts/guard.py --require-git and full python -m pytest only on pull_request and push to dev/main. permissions: contents: read. persist-credentials: false. No secrets. actions/checkout pinned to 3d3c42e5aac5ba805825da76410c181273ba90b1 (v7.0.1) and actions/setup-python to 5fda3b95a4ea91299a34e894583c3862153e4b97 (v7.0.0). docs/DECISIONS.md records five Operator/Poly指挥 roadmap decisions (paper-only Phase 0; daily truth origin/dev; pinned risk.toml; CI is KEY; M2 thresholds stay code constants). tests/test_ci_workflow.py. pytest passes offline. config/risk.toml unchanged.",
+      "note": "Assigned by Operator 2026-10-09; done by grok-build-local. Task AH left CI with the user. AK landed as PR #39 and AL as PR #40 while this worktree was open. AN is the unpublished local worktree task-an/m3-resolution-snapshot. AM is the next letter unused on origin/dev, origin/main, unclosed PRs, and remaining local/remote branches.",
+      "done_at": "2026-10-09T07:00:39Z",
+      "surface": "grok-build-local"
+    },
+    {
+      "id": "AN",
+      "status": "done",
+      "title": "M3 calibration step 1: read-only settlement snapshot (docs/M3_CALIBRATION.md, src/resolutions.py); Gamma closed markets held 48 h, fail-closed fields, data/resolutions.jsonl",
+      "finish": "src/resolutions.py walks public Gamma /markets/keyset?closed=true (scanner.fetch_all_markets base_url; no new host), writes data/resolutions.jsonl only when closedTime is a zoned ISO time at least RESOLUTION_HOLD_HOURS=48 h ago (boundary passes) and every required field is present: condition_id, winning_token_id (unique 1.0/0.0 outcomePrices, version-aware token ids), outcome_prices_final, closed_ts, snapshot_ts, status, uma_checked. Missing umaResolutionStatus skips the row; uma_checked is true only for exact resolved. Incomplete paging writes nothing (exit 3). Paper-pin drift writes nothing (exit 4) and does not fetch. Dedup by condition_id. No bus, no fill, no order. docs/M3_CALIBRATION.md. pytest passes offline. config/risk.toml unchanged.",
+      "note": "Requested by Poly指挥 (M3 calibration prerequisite step 1); done by grok-build-local. Poly指挥 design draft was not in the OpenClaw workspace; this PR records the dispatch. Letter AL is merged (PR #40). Letter AM is a local in-progress worktree so this PR uses AN. COORDINATION #27. RESOLUTION_HOLD_HOURS is not M2 pending and is not coupled to ENDGAME_WINDOW_HOURS. Later Brier/join/proposals are out of scope.",
+      "done_at": "2026-10-09T12:00:00Z",
+      "surface": "grok-build-local"
+    },
+    {
+      "id": "AO",
+      "status": "done",
+      "title": "Signal -> OrderIntent: pure, tightening-only src/intent_builder.py (SPEC_signal_to_intent) producing an OrderIntent or canonical reason codes, edge bit-for-bit RiskGate's via fees.stress_fee, Kelly in shadow mode only, run in the e2e gate in shadow mode (phase 1)",
+      "finish": "src/intent_builder.py (stdlib + fees, book_staleness, expiry_rule, thresholds, podlib.pin_problems, risk_gate) builds an OrderIntent from a ProbabilitySignal, MarketContext, both outcome BookSnapshots and the parsed risk config with an injected aware now: no clock, file, bus or network; inputs never mutated. Per-side buy edge with the conservative interval end, the book-walk price, INTENT_ASSUMED_SLIPPAGE and fees.stress_fee unchanged (equal to RiskGate's edge bit for bit), better side wins (tie outcome 0), MIN_EDGE inclusive, price band by source (a risk.toml band override only narrows), every SPEC section 5 reason in canonical order, any reason means no intent. Size is RiskGate's 1% clip, shares rounded down at the tick-rounded limit, below min_order_size rejected. Kelly is shadow only (kelly_raw, kelly_frac, Kelly size reported; kelly_not_enforced_by_riskgate marks). to_risk_intent gives the risk_gate.Intent; combine_probability does override / log-odds blend / source_conflict. e2e phase 1: golden gains intent_builder per decision (only additions); the run fails if the builder's Intent differs from build_intent's on the same token or the builder allows what RiskGate vetoes for an edge/price/spread/liquidity/staleness reason. New M2-pending INTENT_ASSUMED_SLIPPAGE, INTENT_TTL_S, MAX_SIGNAL_AGE_NEWS_S, MAX_SIGNAL_AGE_SPORTS_DEVIG_S, MAX_SIGNAL_AGE_ENDGAME_CONFIRM_S, MAX_SOURCE_LOGIT_GAP and rounding INTENT_SHARE_STEP. tests/test_intent_builder.py (T-* plan, properties P1-P5 with fixed seeds). config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (queue: signal->intent after AK/AL); done by grok-bot from Poly预测's forecaster/SPEC_signal_to_intent.md. AM (CI workflow) and AN (M3 resolution snapshot) are the user's Grok Build sessions. Kelly enforcement and phase 2 (builder decides what RiskGate sees) need RiskGate Intent.size_usd (KEY, backlog #7). Deviations: open-only (sell -> sell_requires_position / sell_not_supported), extra fail-closed codes (invalid_outcome_index, market_mismatch, not_binary_market, invalid_book_levels), accepting_orders None rejects, blend freshness is the strictest source limit. Later: per-market fee_rate derivation (SPEC 7-3), book depth beyond top of book, a runner writing logs/intents.jsonl, a category data source (backlog #3).",
+      "done_at": "2026-10-09T07:41:29Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AQ",
+      "status": "done",
+      "title": "Secret-string scan of the bus and logs (Sentinel design gap 9): src/secret_scan.py with key-name context, PEM private-key and BIP39 mnemonic rules (never a bare 0x+64hex), bus() refuses and halts globally, python -m src.secret_scan Sentinel halt, guard check secret_scan; matched text never echoed",
+      "finish": "src/secret_scan.py (stdlib + thresholds): rules key_context:<word> (credential key name from scripts/guard.py CREDENTIAL_WORDS plus private/secret key, mnemonic, seed/recovery phrase, password, access/auth/refresh token, authorization; then : or =, quotes, JSON escaping or Bearer; value >= SECRET_VALUE_MIN_LEN token chars with a letter and a digit), pem_private_key (BEGIN <type> PRIVATE KEY armour), bip39_mnemonic (>= MNEMONIC_MIN_WORDS consecutive words of the pinned BIP39 English list src/bip39_english.txt on one line). Never a bare 0x+64hex. A Finding holds only location:line, rule, length and a SECRET_HASH_PREFIX_CHARS sha256 prefix. podlib.bus() scans every message first: a hit (or a scan that cannot run) is not written, a global halt is recorded (halt_store, source Sentinel) and SecretRefused raised. python -m src.secret_scan [--path P] [--no-halt] scans logs/: a hit or unreadable file is a global sentinel.halt; exit 0/1 secret/2 scan error/3 usage. .env files are never opened. scripts/guard.py check 10 secret_scan scans tracked files (git ls-files, else a filtered walk) and logs/ read-only, plus a self-test on fresh random canaries. New M2-pending SECRET_VALUE_MIN_LEN=16, MNEMONIC_MIN_WORDS=12, SECRET_HASH_PREFIX_CHARS=8. tests/test_secret_scan.py and tests/test_guard.py generate every fake secret at run time. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (queue after AO: heartbeat -> EXIT_CODES/pins -> private-key string scan); done by grok-bot from Poly哨兵's sentinel_design.md (event matrix SEV-1 row, gap 9). AP is reserved for the parallel heartbeat task. Not done here: bus() write-error handling and ts monotonicity (rest of gap 9; heartbeat/bus task), a resident Sentinel tick calling the scan (gap 2/12), scanning data/ or M1 RUN dirs by default (use --path). A missing or changed word list fails closed: every bus write is refused and halted.",
+      "done_at": "2026-10-09T08:16:45Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AP",
+      "status": "done",
+      "title": "Sentinel heartbeat: per-process heartbeat files, a resident Sentinel tick with the design's event matrix (stale = halt, fail closed), scanner exit-code alerts, paper_cycle --recording-dir, Reconciler halts in halt_store, stale-resume re-alarm (Poly哨兵 design gaps 2, 4, 11, 12, 13, 14)",
+      "finish": "src/heartbeat.py writes logs/heartbeat/<proc>.json atomically (tmp + fsync + os.replace, .seen marker) for ws_recorder, m1_run, m1_rest, scanner, endgame_scan, loop_claim, paper_cycle and the Sentinel; unreadable / corrupt / malformed / lost-after-marker / future-stamped counts as stale. src/sentinel_tick.py (resident, every SENTINEL_TICK_S) beats first, checks risk.toml pins, every heartbeat (liveness, pin fields, exit-code matrix by (module, code), recorder reconnect / gap-resync window) and ledger_store.verify; halts via sentinel.halt into halt_store (deduped by active halt, re-halted after an Operator resume while the condition holds), alerts to logs/alerts.jsonl + a Sentinel->Operator signal (bus failure writes logs/HALT). Consumers treat a lost resident Sentinel (SENTINEL_HEARTBEAT_TIMEOUT_S) as a stored global halt. Reconciler exits 1/3/4 are a global halt in halt_store. A resumed stale-book market halt re-alarms on the next stale check. paper_cycle --recording-dir reads rotated books-*.jsonl, --loop beats every <= 60 s, all checked markets stale ALL_STALE_CONSECUTIVE_CYCLES cycles = global halt. e2e gate scenarios (golden sentinel_heartbeat, only via --update-golden), guard check 11 heartbeat. New M2-pending numbers in src/thresholds.py and docs/THRESHOLDS.md. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (ruling on Poly哨兵's sentinel design; queue: heartbeat after AK/AL/AO); done by grok-bot. AQ (private-key scan, #44) ran in parallel and was merged into this branch before the PR. Behaviour changes: once the resident Sentinel has run, stopping it halts every consumer until an Operator resume; a Reconciler failure is now a global halt; a dead process's stale heartbeat re-halts after each resume until it is restarted or the Operator removes its heartbeat file and marker. No halt_consumer process exists yet (its spec is checked only if it beats). Later: resume precondition signal, WS hash/tick resync, the Sentinel tick running the secret scan.",
+      "done_at": "2026-10-09T08:31:11Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AR",
+      "status": "done",
+      "title": "daily_loss counts realized losses: RiskGate's max_daily_loss compares today's (UTC) booked fees plus gross realized losses with the cap, tightening only (backlog #4, SPEC_signal_to_intent inconsistency 12)",
+      "finish": "src/daily_loss.py replays the counted ledger rows per leg (market + token_id) at average cost in ledger order; a closing fill's realized loss belongs to the UTC day of its ts; daily_loss_usd = today's fees + today's gross realized losses (gains reported, never offset); a missing notional is valued at the worst price; a counted row with an unparseable ts, a bad side or a non-finite / negative shares, notional or fee fails closed (invalid_risk_state, global halt). paper_ledger.load_state uses it and also returns daily_fees_usd, daily_realized_loss_usd, daily_realized_gain_usd. e2e gate cases (golden daily_loss, only via --update-golden). No new threshold; max_daily_loss_pct and config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (backlog #4); done by grok-bot. Policy left to the Operator: netting realized gains against losses (not done: counting losses only is the tighter default). Newly fail-closed: counted rows with an unparseable ts, a side other than buy/sell, or negative shares / notional / fee (they used to be ignored or, for a negative fee, lowered the sum).",
+      "done_at": "2026-10-09T09:00:57Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AT",
+      "status": "done",
+      "title": "One assumed slippage: ASSUMED_SLIPPAGE in src/thresholds.py is the single source (SPORTS_DEVIG_/INTENT_ASSUMED_SLIPPAGE aliases, paper_ledger literals removed, drift fails at import) and docs/ROLES.md matches RiskGate (no Kelly sizing; Kelly shadow-only in intent_builder)",
+      "finish": "src/thresholds.py: ASSUMED_SLIPPAGE = 0.005 (M2 pending) is the only slippage literal; SPORTS_DEVIG_ASSUMED_SLIPPAGE and INTENT_ASSUMED_SLIPPAGE are aliases and consistency_problems fails the import if either differs; src/paper_ledger.py CLI --slippage default, self-check intents and the no-edge touch filter read it. Every copy was 0.005, so no number, veto or golden moved. tests/test_slippage_unified.py (no float 0.005 literal in src/ or scripts/ outside thresholds.py, e2e fixtures equal the constant, ROLES row, RiskGate never reads kelly_fraction); tests/test_thresholds.py and docs/THRESHOLDS.md updated. docs/ROLES.md RiskGate row: hard 1% cap and the veto checks, Kelly only in shadow mode in src/intent_builder.py, never used for size. README edge formula follows src/fees.py. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (queue after EXIT_CODES and daily_loss-realized; SPEC_signal_to_intent inconsistencies 1 and 2); done by grok-bot. AS (EXIT_CODES + runtime pins) ran in parallel. Not done: a RiskGate floor vetoing assumed_slippage below ASSUMED_SLIPPAGE (new veto; callers such as the paper_ledger CLI can still pass a lower value). Kelly enforcement stays KEY (backlog #7).",
+      "done_at": "2026-10-09T09:29:18Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AS",
+      "status": "done",
+      "title": "Exit-code registry and runtime pin checks (Poly哨兵 design gaps 4, 5, 6): docs/EXIT_CODES.md for every src/ and scripts/ entry point, kept in sync by tests and guard check exit_codes; config/risk.toml checked as a file (sha256 + every key, value and type, no unknown key) at process start and while running, drift = refuse + global halt",
+      "finish": "docs/EXIT_CODES.md lists all 18 entry points (src/ and scripts/ files with a __main__ block) with every EXIT_* code, its meaning and the resident Sentinel's action (EXIT_EVENTS). src/exit_codes.py (stdlib, ast only) checks both directions: an undocumented or wrong constant, a documented code the module lacks, a literal exit code in main/_main or sys.exit, parser.error or parse_args outside try/except SystemExit (argparse's own 2), a Sentinel column that disagrees with src/sentinel_tick.py, an EXIT_EVENTS entry without a row; tests/test_exit_codes.py and guard check 12 exit_codes run it. src/pins.py: RISK_FILE_PINS (all 9 risk.toml keys, typed) plus PINNED_RISK_SHA256 (CRLF normalised); refuse_start at start of scanner, book, ws_recorder, m1_run (exit 6), endgame_scan, resolutions (4), loop_claim (2) and before every paper_cycle cycle (1); PinWatch re-checks ws_recorder and m1_run every PIN_RECHECK_S while running (stop, exit 6, m1 manifest status pin_drift). Drift or a check that cannot run records one global Sentinel halt (risk_toml_pin_drift, shared with the Sentinel tick, deduped; logs/HALT if that fails). The Sentinel tick checks the same file pins. New M2-pending PIN_RECHECK_S = 60. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (queue: heartbeat -> EXIT_CODES/pins); done by grok-bot from Poly哨兵's sentinel_design.md gaps 4-6. AR (#46, daily_loss) landed on dev first and was merged into this branch. Behaviour changes: loop_claim usage errors exit 5 (was argparse's 2 = EXIT_PIN, a global halt); paper_cycle exit 1 is now a Sentinel global halt (was an alert); new exit 6 for scanner, book, ws_recorder, m1_run; processes record the global halt themselves on drift. podlib.PINS stays at 5 keys (tests vary the in-memory config); the file pins are separate. Left: resolutions exit 4 still covers both pin drift and a bad snapshot clock (documented).",
+      "done_at": "2026-10-09T09:34:19Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AU",
+      "status": "done",
+      "title": "RiskGate slippage floor: veto any intent whose assumed_slippage is below ASSUMED_SLIPPAGE (Task AT's one slippage, 0.005, inclusive); missing / non-finite slippage vetoes; the paper_ledger CLI refuses --slippage below the floor",
+      "finish": "risk_gate.evaluate adds slippage_below_floor when a finite assumed_slippage < ASSUMED_SLIPPAGE (missing / non-number / non-finite already veto invalid_ / non_finite_assumed_slippage); paper_ledger --slippage uses slippage_arg (finite, >= ASSUMED_SLIPPAGE, else argparse error exit 2 before any read or write); the intent builder's INTENT_ASSUMED_SLIPPAGE intents still pass. e2e gate cases (golden slippage_floor, only via --update-golden); unit tests. No new number; config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Approved by Poly指挥 as tightening; done by grok-bot. Behaviour change: a recorded Task AE characterisation point (sell, slippage 0.0) that used to allow now vetoes; an Operator CLI intent with --slippage below 0.005 is refused. sports_devig's slippage argument only shapes its signal edge (RiskGate re-checks the intent).",
+      "done_at": "2026-10-09T10:06:10Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AV",
+      "status": "done",
+      "title": "Split resolutions exit 4 (pin drift or bad snapshot clock): pin drift = 6 (scanner's EXIT_PIN_DRIFT), bad snapshot clock = 5 (EXIT_BAD_CLOCK), both Sentinel global halts; resolutions gets a start/finish heartbeat",
+      "finish": "src/resolutions.py: EXIT_PIN (4) retired; EXIT_PIN_DRIFT = 6 (risk file pins via refuse_start, global halt recorded, or the in-memory podlib PINS) and EXIT_BAD_CLOCK = 5 (snapshot clock not a zoned ISO timestamp); nothing fetched or written on either. __main__ runs through heartbeat.run_main('resolutions'). src/sentinel_tick.py: PROC_SPECS resolutions (SCANNER_HANG_S, started_at clock, hang = alert); EXIT_EVENTS (resolutions, 6) and (resolutions, 5) = GLOBAL (no design row for the clock: the stricter action, like heartbeat_bad_time). docs/EXIT_CODES.md section (3 now alert, 5 and 6 global halt, no 4), checked by tests/test_exit_codes.py and guard check 12 exit_codes. Tests: test_resolutions (exit 5 for a bad / unzoned clock, no fetch; 4 retired; heartbeat in __main__), test_pins (6), test_sentinel_tick (matrix rows), test_exit_codes. No new number. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (follow-up left open by AS); done by grok-bot. Behaviour changes: resolutions pin drift exits 6 (was 4); a bad snapshot clock exits 5 (was 4) and is a global halt once the Sentinel reads the new heartbeat; resolutions exit 3 is now an alert (it had no heartbeat before). AU (RiskGate slippage floor, #49) runs in parallel.",
+      "done_at": "2026-10-09T10:39:01Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AW",
+      "status": "done",
+      "title": "WS recorder resync hardening (market channel): tick_size_change re-snapshots the asset, no PONG within 30 s reconnects, unknown events for a subscribed asset resync it, snapshot hash computed and recorded (not enforced: unvalidated on WS snapshots)",
+      "finish": "src/ws_recorder.py: a valid tick_size_change resyncs the asset (reason tick_size_change, invalidation row + resubscribe; not a gap for the escalation); a PING unanswered for WS_PONG_TIMEOUT_S (30 s, src/thresholds.py, M2 pending) disconnects (pong_timeout, every asset resyncs, counted toward the reconnect escalation); an unknown event_type naming a subscribed asset or its market, or naming nothing, resyncs (unknown_event, a gap resync); book_hash_check(): SHA-1 of compact JSON of market, asset_id, timestamp, hash=\"\", bids, asks, min_order_size, tick_size, neg_risk, last_trade_price (Poly研究's notes from old clients/Nautilus), recorded per row (book_hash_check) and counted, never acted on (BOOK_HASH_ENFORCED = False per Poly指挥: the M1 recording had 0 snapshots with levels to validate against; enforced path tested). No new URL, dependency or frame. docs/THRESHOLDS.md row and relation. Tests offline with synthetic frames. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (Poly研究's research_dataapi_ws_m2.md WS part); hash ruling by Poly指挥: record, do not verify, unless every tested real snapshot matches. Done by grok-bot. Behaviour changes: a tick change, an unknown event for a subscribed asset and a silent server now invalidate books (more resync rows); rows gain book_hash_check.",
+      "done_at": "2026-10-09T11:10:40Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AX",
+      "status": "done",
+      "title": "M3 calibration step 2 (prerequisite): identity fields on forecasts, scanner rows and paper fills, plus the sealed forecast log logs/forecasts.jsonl, so forecasts and fills can be joined to data/resolutions.jsonl",
+      "finish": "src/calibration_ids.py (stdlib): forecast_id = fc_ + sha256 of the forecast's content (minted once by forecaster.emit_probability), decision_id = dc_ + sha256(strategy, market, token_id, forecast_id) (derived, None when any part is missing), FORECAST_ROW_FIELDS, fill_problems / forecast_problems, append_forecast (one O_APPEND write + fsync; refuses wrong keys, nan/inf, a torn tail; idempotent by forecast_id). forecaster.emit_probability seals the row in logs/forecasts.jsonl before the bus signal (no signal if that fails); payload adds forecast_id, forecast_ts, model_version and, when given, outcome_index, outcome, token_id, condition_id, p_low, p_high. Scanner rows add category and tags (keyset URL include_tag=true; never filter). risk_gate.Intent, intent_builder ProbabilitySignal / MarketContext (gamma_category, tags) / OrderIntent / to_risk_intent carry the identity; paper_ledger fills add decision_id, forecast_id, forecast_ts, condition_id, outcome_index, outcome, category, tags, end_date, model_version and calibration_problems (missing join ids flagged, fill still booked; never invented). e2e gate: new golden section calibration_ids only (every signal sealed, every fill joins its forecast). docs/M3_CALIBRATION.md Step 2. No new number, config/strategies.toml not created, config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (Poly反思's M3 calibration design 1.5, prerequisite 2; signal->intent ruling for the NewsForecaster payload); done by grok-bot. No RiskGate decision, threshold, size or existing golden value moved. Not yet: market_mid / best_bid / best_ask, hours_to_expiry_at_entry, kelly_fraction_used on fills; the join and Brier report (step 3). AW (#51) ran in parallel.",
+      "done_at": "2026-10-09T12:21:43Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AY",
+      "status": "done",
+      "title": "Opt-in raw full-depth WS book snapshots (m1_run --raw-books) and an offline read-only hash check (python -m src.ws_hash_check) to validate the Task AW snapshot hash later",
+      "finish": "src/ws_recorder.py: Recorder(raw_books=callable) hands over {ts, asset_id, frame} for every book frame of a subscribed asset as received (all levels, hash, min_order_size / tick_size when sent), applied or not; no row, resync or freshness change. src/m1_run.py --raw-books (default off): RawBookSink writes raw_books/raw_books-NNNNNN.jsonl through RotatingJsonl/JsonlAppender (one whole line per write), no file past min(--rotate-mb, WS_RAW_BOOK_FILE_MAX_BYTES = 16 MiB), nothing past WS_RAW_BOOK_RUN_MAX_BYTES = 256 MiB per run (dropped and counted, one raw_books_capped event), strict-JSON-only (NaN dropped); manifest settings.raw_books and a raw_books summary. src/ws_hash_check.py: read-only recomputation with ws_recorder.book_hash_check, counts match/mismatch/incomplete/absent/uncomputable/unreadable overall and per asset, exit 0 all match / 1 not validated / 2 usage (docs/EXIT_CODES.md, 19 entry points); BOOK_HASH_ENFORCED untouched. Both caps M2 pending in src/thresholds.py and docs/THRESHOLDS.md. Secret scan clean on raw files. No new URL, dependency or outgoing frame. Tests with synthetic frames only. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 after AW (#51): the hash could not be validated because M1 kept no levels. Done by grok-bot. Default behaviour unchanged (flag off); with the flag a run uses up to 256 MiB more disk.",
+      "done_at": "2026-10-09T12:45:25Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "AZ",
+      "status": "done",
+      "title": "M3 calibration step 3: offline calibration report src/calibration.py (forecasts and fills joined to data/resolutions.jsonl; Brier, reliability, ECE, slope, vs-market, edge realization; drops counted, never imputed)",
+      "finish": "python -m src.calibration writes reports/calibration/<UTC date>/ report.json, report.md, samples.jsonl. B sample: first sealed forecast per condition_id; A sample: counted allow fills by decision_id (<= CALIBRATION_MAX_DECISIONS_PER_MARKET per market), p = model_prob, q = market_price. Labels only from status=resolved, uma_checked=true rows with one 1.0 price whose index and winning token agree with the forecast. Every drop (calibration_problems, missing identity, forecast not found, pending, not UMA-resolved, ambiguous status, disputed, void, outcome/token mismatch, duplicate forecast, re-entry cap, excluded strategy/market) counted by reason and listed in samples.jsonl. Corrupt forecasts/resolutions = exit 3, ledger failing verify = exit 4, nothing written; write failure = 5. Below CALIBRATION_MIN_SAMPLES/MARKETS/RESOLUTION_DAYS (30/20/5; groups 10/5) the verdict is 'insufficient'. New numbers CALIBRATION_* (M3 pending) in thresholds.py + THRESHOLDS.md; exit codes in EXIT_CODES.md (20 entry points with AY's ws_hash_check). pytest + guard --require-git pass.",
+      "note": "Requested by Poly指挥 (Poly反思's M3 calibration design, step 3); done by grok-bot. Read-only, no network, no bus/halt, no proposal (step 4), no trading or risk change, config/strategies.toml not created. AY (#59) ran in parallel and was merged in from dev. Not yet: mid price on fills (q is market_price), event-cluster share, Reflector proposals.",
+      "done_at": "2026-10-09T14:00:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "BA",
+      "status": "done",
+      "title": "M3 fill market context (market_mid, best_bid, best_ask, hours_to_expiry_at_entry, kelly_fraction_used; recorded only, null + calibration_problems when not computable) and ws_recorder --raw-books DIR",
+      "finish": "risk_gate.Intent gains best_bid, best_ask, kelly_fraction_used (None default; RiskGate never reads them, tested by source and by identical decisions). intent_builder.to_risk_intent passes the chosen token's BookSnapshot best_bid/best_ask and its shadow Kelly multiplier (kelly_fraction); the e2e harness intent and the paper_ledger no-edge check pass their book row's top. paper_ledger.market_fields computes calibration_ids.FILL_MARKET_FIELDS at commit: prices finite in (0,1), mid = (bid+ask)/2 only when both usable and bid <= ask, hours = end_date - fill ts, kelly in (0,1]; anything else None plus missing_<field>/invalid_<field> in the stored calibration_problems (fill_problems unchanged). e2e golden: only the new calibration fills market_fields (--update-golden). RotatingJsonl/RawBookSink moved to src/ws_recorder.py (m1_run re-exports); python -m src.ws_recorder --raw-books DIR (new or empty, else exit 2) uses the same writer and caps. docs/M3_CALIBRATION.md Step 2b, EXIT_CODES, THRESHOLDS wording. src/calibration.py untouched. No new number, no decision or size moved; config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (rest of m3_calibration_design.md 1.5 after AX; AY left the ws_recorder CLI without --raw-books). AZ (#60, src/calibration.py) runs in parallel; switching calibration to market_mid is a later step. Done by grok-bot. Note: AZ's report drops fills with non-empty stored calibration_problems, so fills without market context (operator CLI, gate checks, old rows) are not calibration samples.",
+      "done_at": "2026-10-09T13:40:44Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "BB",
+      "status": "done",
+      "title": "M3 calibration step 4: structured Reflector proposals from the calibration report.json (proposal only; never applied)",
+      "finish": "src/reflector_proposals.py reads report.json read-only (default newest reports/calibration/<date>/) and writes PROPOSAL_FIELDS rows (proposal_id, type disable|param_change, target, current/proposed value, direction, loosens_risk_check, approval, evidence with report sha and section refs and sample counts, confidence intervals, rationale, expected_impact, risk, rollback, scope paper, status proposed, exchange_action none, applied_by_code false) to playbook/proposals.jsonl, a summary block to playbook/proposals.md via reflector.propose (daily cap REFLECTOR_MAX_PER_UTC_DAY = 3) and a Reflector->Operator proposal bus message with exchange_action none. Rules tighten only and read intervals only; insufficient sections give nothing; loosening is marked required_from KEY; open targets are not repeated and rejected ones wait REFLECTOR_REJECT_COOLDOWN_DAYS. No write to config/, any .toml or src/thresholds.py; config/strategies.toml stays nonexistent. Exit 3 missing report, 4 corrupt report, 5 corrupt proposals.jsonl, 6 write failed (EXIT_CODES.md, 21 entry points). New numbers REFLECTOR_* (M3 pending). pytest + guard --require-git pass.",
+      "note": "Requested by Poly指挥 (Poly反思's M3 calibration design sections 4-5, step 4); done by grok-bot. BA (#62) ran in parallel and was merged in from dev. Not yet: per-tier / per-category / intercept / Kelly / cumulative-loss / cluster rules (the report has no interval for them). PR #61 (pod-flash) used the title 'Task AZ' for a test-only change without a queue entry.",
+      "done_at": "2026-10-09T15:00:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "BC",
+      "status": "done",
+      "title": "M3 calibration: market_mid as the market probability, kelly_frac_raw recorded next to kelly_fraction_used, fill_context and the no_book_context drop reason",
+      "finish": "src/calibration.py scores the trade sample at the first fill's market_mid (price_source noted; market_price only for a pre-Task BA fill with no market_mid key, per design 3; a recorded but unusable mid is dropped and counted, never replaced). risk_gate.Intent gains kelly_frac_raw (intent_builder kelly_raw) and fill_context (intent_builder / operator_cli / gate_check), recorded on the fill; null + missing_/invalid_ in calibration_problems; RiskGate and order size never read them (source scan + identical decisions and fill sizes). The report drops operator_cli / gate_check fills as no_book_context, stamped at fill time, apart from missing-data reasons. report.json schema_version 1, keys only added (trades.price_sources, sample price_source / fill_context). e2e golden only via --update-golden for the new fields. No new number; no decision, threshold or size moved; config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 after BA (#62) merged. BB (#66, src/reflector_proposals.py) reads report.json in parallel, so report changes are additive only. Done by grok-bot. Choice: design 3 allows the market_price fallback with price_source noted, so it is kept only for pre-Task BA fills (no market_mid key); a recorded null mid is a drop. kelly_frac_raw = intent_builder kelly_raw (unscaled); kelly_frac = kelly_fraction_used x kelly_frac_raw.",
+      "done_at": "2026-10-09T14:35:19Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "BD",
+      "status": "done",
+      "title": "M3 calibration report: bootstrap intervals per edge tier and category, calibration intercept CI, event-cluster share",
+      "finish": "src/calibration.py: forecasts.by_category, trades.by_category and trades.by_edge_tier groups at the group minimums carry intervals (Brier, ECE, slope, intercept with market-clustered bootstrap intervals, fixed seed; trades add brier_market, delta_brier and realization with intervals); groups below them carry intervals null. A sufficient forecast section adds calibration.intercept_ci, ece_ci and verdict calibration_intercept. Both sections report event_cluster (largest cluster share): insufficient below the section minimums, else concentrated above CALIBRATION_MAX_CLUSTER_SHARE (0.30, M3 pending, src/thresholds.py and docs only), else ok. report.json schema_version 1, keys only added. No decision, threshold, size or proposal moved; config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 after BC (#67) merged. Done by grok-bot. No event id is recorded on forecasts or fills, so event_cluster uses condition_id (one market per cluster), a lower bound on event concentration; recording an event id and the six missing Reflector rules are later tasks.",
+      "done_at": "2026-10-09T15:48:52Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "BE",
+      "status": "done",
+      "title": "M3 Reflector rules after BB: per-category delta Brier disable, per-edge-tier realization MIN_EDGE tightening, calibration intercept, event-cluster share on proposal evidence",
+      "finish": "src/reflector_proposals.py: a judged trades.by_category group whose delta_brier_ci lies wholly above 0 proposes disabling that category (target.category); the trade edge tiers from the one holding MIN_EDGE up whose realization_ci lies wholly below REFLECTOR_EDGE_TIER_REALIZATION_MAX (0.25, M3 pending, src/thresholds.py and docs only) propose MIN_EDGE at the top of the highest such bounded tier (target.edge_tier); a forecast calibration intercept_ci wholly off 0 joins the MIN_EDGE + step proposal; every proposal carries its section's event_cluster in evidence and a concentrated section is stated in risk and observations. Tightening only, proposals only, never applied; corrupt new fields fail closed (exit 4); reports before BD give no new proposal. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 after BD (#71) merged. Done by grok-bot. Not done: the design's two-batch Kelly rule (kelly_fraction lives in config/risk.toml, which no proposal may name, and the rule is about raising Kelly) and the cumulative-loss disable (its threshold is not in the repo); both need Poly反思's numbers and a decision on where they live.",
+      "done_at": "2026-10-09T16:42:20Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "BF",
+      "status": "done",
+      "title": "Polymarket event id on forecasts and fills; event_id as the calibration event_cluster key (per-sample condition_id fallback)",
+      "finish": "src/calibration_ids.py scanner_event reads Gamma's market events list into (event_id, event_slug) (missing, malformed or conflicting -> None, never guessed); scanner rows, MarketContext, OrderIntent, risk_gate.Intent, paper fills (FILL_EVENT_FIELDS) and logs/forecasts.jsonl rows (FORECAST_EVENT_FIELDS appended to FORECAST_ROW_FIELDS) record them; never a calibration problem, never in forecast_id or the signal payload; RiskGate never reads them (source scan + identical decisions). src/calibration.py clusters event_cluster by event_id, else condition_id per sample (trades: fill event, else joined forecast event; conflicting -> condition_id), with cluster_key event_id / condition_id / mixed and event_id_samples / condition_id_fallback_samples; forecast rows from before BF and malformed event values stay valid. Bootstrap intervals unchanged. No new number; report.json schema_version 1, keys only added; reflector_proposals unchanged. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 as the follow-up flagged in Task BD (#71). Done by grok-bot on the box (NoisePC fallback). Bootstrap intervals stay market-clustered (condition_id); clustering them by event is a possible later task.",
+      "done_at": "2026-10-09T17:28:46Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "BG",
+      "status": "done",
+      "title": "M3 calibration: bootstrap intervals resample by event (event_id, else condition_id per sample), the event_cluster key",
+      "finish": "src/calibration.py cluster_bootstrap resamples the event_cluster clusters (cluster_name: event_id when usable, else condition_id per sample; the kind is part of the cluster so an event id never merges with a condition id of the same text), so markets of one event are drawn together, for every interval (overall Brier, ECE, slope, intercept; trade delta Brier, skill, R, mean(R-E); by_category / by_edge_tier group intervals). forecasts.metrics, trades.metrics and every judged group's intervals gain bootstrap_cluster_key (event_id / condition_id / mixed, BF's convention) and bootstrap_clusters; the markdown cluster line names them. Same CALIBRATION_BOOTSTRAP_SEED and _RESAMPLES; samples without an event id give exactly the pre-BG intervals. No new number; report.json schema_version 1, keys only added; reflector_proposals unchanged. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 as the open point Task BF (#74) left. Done by grok-bot on the box (NoisePC fallback). With condition_id or mixed keys, markets of one event without an event id are still drawn apart, so those intervals can be too narrow; live Gamma events id / slug still unverified.",
+      "done_at": "2026-10-09T18:21:32Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "BH",
+      "status": "done",
+      "title": "WS recorder: reconnect at once after a host suspend / wake (clock_jump, jump_s); the post-wake dead connection replaced within 30 s",
+      "finish": "src/ws_recorder.py compares each session-loop pass's wall-clock step (Recorder wall, default time.time) with its monotonic step; a wall clock ahead by more than WS_PING_INTERVAL_S disconnects with reason clock_jump (event disconnected with jump_s, every asset resyncs disconnect_clock_jump), backoff and reconnect like any disconnect; counted in report.disconnects, the reconnect escalation and M1's reconnect cap (m1_report has no exemption). Where the monotonic clock runs through a suspend, AW's pong_timeout catches it within WS_PONG_TIMEOUT_S of waking. No new threshold (no silence watchdog: no gap found), no acceptance threshold changed. Offline replay test: paused N minutes, socket dead on resume, reconnect within 30 s. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 after the M1 24h run m1-20261008T2259Z (git f760e51, before AW #51) failed: 18 suspend/wake cycles left dead WS connections undetected for minutes. Done by grok-bot. Finding: on current dev AW already sends the overdue PING on the first pass after waking and pong_timeout fires within 30 s, so only the clock_jump reconnect was added.",
+      "done_at": "2026-10-10T05:48:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "BI",
+      "status": "done",
+      "title": "WS recorder: inbound-silence watchdog (silent, WS_SILENCE_TIMEOUT_S=60) and a PING / PONG latency summary",
+      "finish": "src/ws_recorder.py closes a connection that received no inbound frame of any kind (book data or PONG) for WS_SILENCE_TIMEOUT_S (monotonic; window opens at subscribe, any frame restarts it) with reason silent (event disconnected, every asset resyncs disconnect_silent), then the normal backoff, reconnect and full resync; counted in report.disconnects, the reconnect escalation and M1's reconnect cap (no exemption). A ping_latency event (pings, pongs, unanswered, unexpected_pongs, RTT p50/p99/max ms, last PING / PONG times) every WS_LATENCY_SUMMARY_PINGS PINGs and after each connection. New: WS_SILENCE_TIMEOUT_S 60 (M2 pending), WS_SILENCE_OBSERVED_HEALTHY_MAX_S 38.7 (evidence, M2 pending), WS_LATENCY_SUMMARY_PINGS 60 (operational); relation checks PONG timeout < silence and 38.7 < silence. No acceptance threshold changed. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 (queue order 1) after Poly盘口's M1 analysis: 13 awake-but-dead stretches of 657-1,270 s in m1-20261008T2259Z (git f760e51, before AW #51). Done by grok-bot. Finding: on current dev AW's pong_timeout would already have ended each within ~40 s (first unanswered PING + 30 s); the watchdog is a backstop that does not depend on PING / PONG bookkeeping and fires first when the process was paused >= 60 s with the monotonic clock running.",
+      "done_at": "2026-10-10T13:10:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "BK",
+      "status": "done",
+      "title": "WS recorder: market-data silence window (data_silent, WS_DATA_SILENCE_S=90; PONG does not count, Poly风控 F6)",
+      "finish": "src/ws_recorder.py keeps BI's any-frame window (silent, WS_SILENCE_TIMEOUT_S 60) and adds a second window timed only by market business frames (a JSON event object with a non-empty event_type: book, price_change, tick_size_change, last_trade_price or an unknown type; PONG, undecodable and malformed frames never count): none for WS_DATA_SILENCE_S disconnects with reason data_silent (event disconnected, every asset resyncs disconnect_data_silent), normal backoff, reconnect and full resync; counted in report.disconnects, the reconnect escalation and M1's reconnect cap (no exemption). New WS_DATA_SILENCE_S 90 (M2 pending), import-time check WS_SILENCE_TIMEOUT_S <= WS_DATA_SILENCE_S <= MAX_BOOK_AGE_S. Deadline checks use the same sum as the recv wait (float-safe; a fake-clock spin found here). No acceptance threshold changed. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 after #140 (BI) merged, from Poly风控 F6: a server that answers PONGs but sends no market data must be judged dead. Done by grok-bot.",
+      "done_at": "2026-10-10T13:47:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "BJ",
+      "status": "done",
+      "title": "Issue #104: RiskGate books at most intent_builder's shares; cost plus fee never above the 1% clip",
+      "finish": "risk_gate.Intent gains shares / limit_price (intent_builder's size; to_risk_intent and the e2e harness pass them). RiskGate books shares = min(intent.shares, floor to INTENT_SHARE_STEP of cap / (max(effective, limit_price) + fee_per_share)), notional_usd = shares * effective, fee from fees.ledger_fee, so shares * max(effective, limit) + fee <= max_order_pct * PAPER_EQUITY_USD; legacy intents without a size get the same all-in sizing. Invalid shares / limit veto (invalid_intent_shares / invalid_intent_limit_price); nothing fitting vetoes order_cost_above_clip. Only shrinks: never more shares than the intent, no threshold or risk.toml change. e2e golden regenerated via --update-golden (sizes only). Regression test from the review repro (20 @ 0.50 fee 4%: was 19.80 shares + $0.40 fee = $10.40, now 19.04 shares, $9.9998 all-in) and a fixed-seed fuzz. live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "P1 from Poly预测's review B2 (issue #104), Poly风控's interim rule (cap includes fees). Done by grok-bot.",
+      "done_at": "2026-10-10T14:05:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "BL",
+      "status": "done",
+      "title": "WS recorder telemetry: PING / PONG events, inbound frame counts, disconnect detail, backoff clock jumps (Poly盘口 follow-ups)",
+      "finish": "src/ws_recorder.py writes a ping event per PING (seq per connection) and a pong event per PONG (rtt_ms, unexpected when no PING was outstanding); counts inbound frames (report.inbound_frames, all frames; report.data_frames, BK's business frames); the disconnected event carries silence_s, data_silence_s, last_inbound_ts, last_data_ts, pong_wait_since_ts (the PING that armed AW's deadline) and the connection's inbound_frames / data_frames; a wall-clock jump during a backoff wait (clock_jump_s, as in a session) writes a clock_jump event (phase backoff, jump_s, attempt) and is counted in report.clock_jumps_in_backoff, the wait and reconnect unchanged; a session clock_jump disconnect also writes clock_jump (phase session). The m1_run manifest counts add pongs, inbound_frames, data_frames and clock_jumps_in_backoff. Logging only: no window, deadline or threshold changed. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Requested by Poly指挥 from Poly盘口's review of BI / BK. Done by grok-bot.",
+      "done_at": "2026-10-10T14:40:00Z",
+      "surface": "grok-bot"
     }
   ]
 }

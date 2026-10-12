@@ -7,8 +7,8 @@ Default mode: paper. Live switch is off and requires a human gate.
 |---|---|---|
 | Scanner | Gamma active markets, rewards, expiry, liquidity | no |
 | BookWatcher | CLOB book / WS staleness | no |
-| ArbBinary | YES+NO ask sum < 1, depth-sized | paper only |
-| NegRiskArb | multi-outcome ask sum < 1 | paper only |
+| ArbBinary | YES+NO ask sum < 1, depth-sized; disabled, every gap recorded as a `structural_arb_disabled` reject (#141) | no |
+| NegRiskArb | multi-outcome ask sum < 1; disabled, every gap recorded as a `structural_arb_disabled` reject (#141) | no |
 | Maker | post-only quotes, inventory skew, rewards | paper only |
 | Endgame | near-resolution 0.98-0.99 convergence | paper only |
 | SportsDevig | de-vig external odds, quote, hedge | paper only |

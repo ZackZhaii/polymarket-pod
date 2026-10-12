@@ -6,6 +6,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 import src.scanner as scanner
 from src.podlib import RISK_PATH, read_jsonl
 
@@ -33,6 +35,7 @@ def _passing(index: int, volume: float) -> dict:
         "endDate": "2026-12-31T00:00:00Z",
         "closed": False,
         "acceptingOrders": True,
+        "version": "v1",
     }
 
 
@@ -153,6 +156,28 @@ def test_spread_and_price_fallbacks():
     only_prices = {"outcomePrices": "[\"0.25\", \"0.75\"]"}
     assert scanner.yes_price(only_prices) == (0.25, "outcome_prices_0")
     assert scanner.yes_price({}) == (None, "none")
+
+
+_FEES_CASES = [(True, True), (False, False), ("missing", None), (None, None), ("true", None), (1, None),
+               (0, None), ("false", None), ([], None)]
+
+
+@pytest.mark.parametrize(("raw_value", "expected"), _FEES_CASES, ids=[repr(c[0]) for c in _FEES_CASES])
+def test_fees_enabled_only_copies_a_real_bool(raw_value, expected):
+    """Issue #116 (Task BY): a missing, null or non-bool feesEnabled is None (unknown), never False (free)."""
+    market = {row["id"]: row for row in _raw()}["ok-low"]
+    market = {key: value for key, value in market.items() if key != "feesEnabled"}
+    if raw_value != "missing":
+        market["feesEnabled"] = raw_value
+    row = scanner.normalize(market, TS)
+    assert row["fees_enabled"] is expected
+    assert scanner.fees_enabled(raw_value if raw_value != "missing" else None) is expected
+    # every other field and the filter outcome are unchanged by feesEnabled
+    baseline = scanner.normalize({**market, "feesEnabled": True}, TS)
+    assert {k: v for k, v in row.items() if k != "fees_enabled"} == {
+        k: v for k, v in baseline.items() if k != "fees_enabled"}
+    limits = scanner.thresholds_from(scanner.load_risk())
+    assert scanner.rejection_reasons(row, limits, NOW) == scanner.rejection_reasons(baseline, limits, NOW)
 
 
 # ---- pagination ---------------------------------------------------------------

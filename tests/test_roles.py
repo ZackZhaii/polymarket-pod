@@ -35,7 +35,7 @@ def test_arb_binary_signals_a_gap_and_never_fills(tmp_path):
 def test_forecaster_emits_probability_only(tmp_path):
     bus_path = tmp_path / "bus.jsonl"
     message = forecaster.emit_probability(market="m1", model_prob=0.42, bus_path=bus_path)
-    assert message["from"] == "Forecaster"
+    assert message["from"] == "NewsForecaster"
     assert message["type"] == "signal"
     assert message["payload"]["order"] is False
     try:
@@ -48,7 +48,8 @@ def test_forecaster_emits_probability_only(tmp_path):
     assert "\"fill\"" not in inspect.getsource(forecaster)
 
 
-def test_maker_records_a_paper_quote_and_rejects_size_up(tmp_path):
+def test_maker_records_a_paper_quote_and_rejects_size_up(tmp_path, fresh_book):
+    fresh_book("m1", "token")
     bus_path = tmp_path / "bus.jsonl"
     quotes_path = tmp_path / "quotes.jsonl"
     message = maker.quote(
@@ -82,7 +83,9 @@ def test_maker_records_a_paper_quote_and_rejects_size_up(tmp_path):
     assert len(read_jsonl(quotes_path)) == 1
 
 
-def test_sentinel_halt_cancels_paper_quotes_only(tmp_path):
+def test_sentinel_halt_cancels_paper_quotes_only(tmp_path, fresh_book):
+    fresh_book("m1", "a")
+    fresh_book("m2", "b")
     quotes_path = tmp_path / "quotes.jsonl"
     bus_path = tmp_path / "bus.jsonl"
     maker.quote(

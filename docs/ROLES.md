@@ -7,11 +7,11 @@ All agents are new. They do not reuse an existing chat team. Group chat is alert
 | Scanner | Gamma market discovery, rank by volume/liquidity/expiry | No |
 | BookWatcher | CLOB order book and spread | No |
 | Researcher | News, official data, sportsbook odds. No orders | No |
-| Forecaster | Blind probability, then confront market. Brier/Platt | No |
+| NewsForecaster | Blind probability, then confront market. Brier/Platt | No |
 | ArbMerge | YES+NO or multi-outcome sum gaps. Single-leg fill is directional | Signal only |
 | Maker | Post-only quotes, inventory skew, news pull | Signal only until live gate |
 | CryptoPulse | Short-window BTC/ETH up-down. Last to enable | Signal only |
-| RiskGate | Fractional Kelly, daily loss, exposure, liquidity | Veto |
+| RiskGate | Hard 1% order cap, daily loss (fees + realized losses), exposure, liquidity, spread, edge, book staleness, halts. Kelly is never used for size: `src/intent_builder.py` computes fractional Kelly in shadow mode only (reported, never applied); enforcing it needs RiskGate `Intent.size_usd` (KEY, backlog #7) | Veto |
 | Sentinel | Heartbeat, stale book, cancel-all, kill switch | Cancel only |
 | Reflector | After resolution, propose at most 3 playbook edits | No auto-apply |
 | Operator | Human. Opens live gate, funds wallet, approves proposals | Yes |

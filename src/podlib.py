@@ -5,7 +5,9 @@ import http.client
 import json
 import socket
 import ssl
+import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,11 +23,24 @@ PAPER_PATH = LOG_DIR / "paper.jsonl"
 SESSIONS_PATH = LOG_DIR / "sessions.jsonl"
 MARKETS_PATH = DATA_DIR / "markets.jsonl"
 BOOKS_PATH = DATA_DIR / "books.jsonl"
+RESOLUTIONS_PATH = DATA_DIR / "resolutions.jsonl"
+# Task AX (M3 step 2): one sealed NewsForecaster forecast per row (src/calibration_ids.py).
+FORECASTS_PATH = LOG_DIR / "forecasts.jsonl"
 QUOTES_PATH = LOG_DIR / "quotes.jsonl"
+# Sentinel StaleWatch streaks between paper_cycle runs (Task AA). Not a risk.toml key.
+SENTINEL_STATE_PATH = LOG_DIR / "sentinel_stale.json"
 
 # Local paper bankroll. Not a wallet. Sizing never exceeds the 1% clip.
-PAPER_EQUITY_USD = 1000.0
-BUS_TYPES = frozenset({"signal", "veto", "fill", "proposal", "halt"})
+from src.thresholds import PAPER_EQUITY_USD  # noqa: E402 - Task AC: value in src/thresholds.py
+from src.secret_scan import check_message as _secret_check  # noqa: E402 - Task AQ: bus secret filter
+BUS_TYPES = frozenset({"signal", "veto", "fill", "proposal", "halt", "resume"})
+# Task AL: ``resume`` lifts one halt. Only the Operator (the human, via ``python -m src.halt_store
+# resume``) may send it, and "Operator" may send nothing else: it is not a bus role otherwise.
+RESUME_FROM = "Operator"
+RESUME_SCOPES = frozenset({"global", "market"})
+# Bus role names follow docs/ROSTER.md. A legacy name is still accepted by bus() and written
+# as its ROSTER name; readers of older logs/bus.jsonl lines compare via canonical_role().
+ROLE_ALIASES = {"Forecaster": "NewsForecaster"}
 
 # Ledger refuses to run if config/risk.toml drifts off these pins.
 PINS = {
@@ -38,6 +53,13 @@ PINS = {
 
 GAMMA_PREFIX = "https://gamma-api.polymarket.com/markets"
 BOOK_PREFIX = "https://clob.polymarket.com/book?"
+# Task AK: the Data API v2 reads the Reconciler needs (plus DATA_API_STATUS_URL below) (v1 is retired 2026-10-24). Exact routes
+# with their "?" so /v2/positions/combos and every other v2 route stay refused.
+DATA_API_POSITIONS_PREFIX = "https://data-api.polymarket.com/v2/positions?"
+DATA_API_TRADES_PREFIX = "https://data-api.polymarket.com/v2/trades?"
+# Data freshness, read first on every reconciliation round. Exact URL (no query, no sub-path).
+DATA_API_STATUS_URL = "https://data-api.polymarket.com/v2/status"
+PUBLIC_PREFIXES = (GAMMA_PREFIX, BOOK_PREFIX, DATA_API_POSITIONS_PREFIX, DATA_API_TRADES_PREFIX)
 
 # public_get retries transient network/TLS failures (SSL EOF, resets, timeouts, 5xx).
 # Waits are PUBLIC_GET_BACKOFF_S * 2**n between attempts (0.5 s, 1 s). HTTP 4xx is never retried.
@@ -63,6 +85,17 @@ class PublicGetError(RuntimeError):
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def utc_now_ms() -> str:
+    """UTC now with milliseconds and Z (``2026-10-10T12:59:04.634Z``), the precision of a CLOB book_ts.
+
+    Issue #128: a clock that compares itself with a millisecond book_ts must not be cut to whole seconds,
+    or a book stamped within the current second reads as from the future (future_book_ts). Truncated to
+    the millisecond, never rounded up, so it is never later than the real clock. utc_now() (seconds) stays
+    for row and log stamps.
+    """
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def parse_risk_toml(text: str) -> dict[str, Any]:
@@ -113,10 +146,43 @@ def pin_problems(cfg: dict[str, Any]) -> list[str]:
     return problems
 
 
+class AppendLockError(OSError):
+    """Issue #162: the ``<file>.lock`` mutex was not taken in time. An OSError, so every caller's
+    existing write-failure path (halt / exit code) handles it: the write fails closed, never unguarded."""
+
+
+@contextmanager
+def append_lock(path: Path):
+    """Issue #162: the cross-process mutex for a JSONL file several processes append to (bus, quotes,
+    forecasts, proposals): halt_store's StateLock (msvcrt / flock byte lock on ``<file>.lock``, a file
+    that is never replaced) with its existing HALT_STATE_LOCK_TIMEOUT_S. Not re-entrant: never nest it
+    on the same file. Raises AppendLockError when the lock is not taken."""
+    from src.halt_store import StateLock  # local: halt_store imports this module
+
+    lock = StateLock(Path(path))
+    if not lock.acquire():
+        raise AppendLockError(f"append lock {lock.path} not taken; nothing written")
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def append_jsonl(path: Path, row: dict[str, Any]) -> None:
+    """Append one JSON line under ``<file>.lock`` (issue #162). Binary mode with an explicit ``\\n`` so a
+    line is the same bytes on every OS. Raises OSError (including AppendLockError): nothing is written."""
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+    payload = (json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    with append_lock(path):
+        with path.open("ab") as handle:
+            handle.write(payload)
+            handle.flush()
+
+
+def canonical_role(name: str) -> str:
+    """Return the ROSTER bus name for a legacy role name; any other name is returned unchanged."""
+    return ROLE_ALIASES.get(name, name)
 
 
 def bus(
@@ -127,12 +193,16 @@ def bus(
     payload: dict[str, Any],
     path: Path | None = None,
 ) -> dict[str, Any]:
+    frm = canonical_role(frm)
+    to = canonical_role(to)
     if kind not in BUS_TYPES:
         raise RuntimeError(f"bus type not allowed: {kind}")
     if kind == "fill" and frm != "Executor":
         raise RuntimeError("only Executor may emit fills")
     if kind == "fill" and payload.get("risk_decision") != "allow":
         raise RuntimeError("fill refused without RiskGate allow")
+    if kind == "resume" or frm == RESUME_FROM:
+        _check_resume(frm, to, kind, payload)
     message = {
         "ts": utc_now(),
         "from": frm,
@@ -141,8 +211,35 @@ def bus(
         "market": market,
         "payload": payload,
     }
+    # Task AQ (Sentinel design gap 9): a message holding a private key, mnemonic or credential value
+    # is never written; a global halt is recorded and SecretRefused raised (nothing echoed).
+    _secret_check(message)
     append_jsonl(path or BUS_PATH, message)
     return message
+
+
+def _check_resume(frm: str, to: str, kind: str, payload: dict[str, Any]) -> None:
+    """Task AL: a resume is from=Operator to=Sentinel, names one halt and who approved it."""
+    if kind != "resume":
+        raise RuntimeError("Operator is not a bus role except as the sender of resume")
+    if frm != RESUME_FROM:
+        raise RuntimeError("only Operator may emit resume")
+    if to != "Sentinel":
+        raise RuntimeError("resume goes to Sentinel")
+    if not isinstance(payload, dict):
+        raise RuntimeError("resume payload must be a dict")
+    approved = payload.get("approved_by")
+    if not isinstance(approved, str) or not approved.strip():
+        raise RuntimeError("resume needs approved_by")
+    if payload.get("scope") not in RESUME_SCOPES:
+        raise RuntimeError("resume scope must be global or market")
+    ref = payload.get("halt_ref")
+    if not isinstance(ref, dict) or not isinstance(ref.get("id"), str) or not ref.get("id"):
+        raise RuntimeError("resume needs halt_ref with an id")
+    if ref.get("scope") == "global" and payload.get("scope") != "global":
+        raise RuntimeError("a market resume cannot lift a global halt")
+    if payload.get("exchange_action", "none") != "none":
+        raise RuntimeError("resume carries no exchange action")
 
 
 def _retryable(exc: BaseException) -> bool:
@@ -163,8 +260,8 @@ def public_get(
     Transient network/TLS errors and HTTP 5xx are retried with exponential backoff.
     HTTP 4xx and JSON errors are raised at once. If every attempt fails, raises PublicGetError.
     """
-    if not (url.startswith(GAMMA_PREFIX) or url.startswith(BOOK_PREFIX)):
-        raise RuntimeError("refusing URL outside public Gamma markets and CLOB /book")
+    if not (url.startswith(PUBLIC_PREFIXES) or url == DATA_API_STATUS_URL):
+        raise RuntimeError("refusing URL outside public Gamma markets, CLOB /book and Data API v2 positions/trades/status")
     lowered = url.lower()
     banned = ("/order", "/auth", "api-key", "secret", "passphrase", "signature", "withdraw")
     if any(token in lowered for token in banned):
@@ -214,18 +311,32 @@ def as_float(value: Any) -> float | None:
         return None
 
 
+READ_JSONL_WARN_LINES = 10  # issue #162: how many bad line numbers a WARN lists (display only)
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Every JSON-object line of ``path``. Issue #162: a line that is not JSON or not an object is still
+    skipped (no strict mode), but never silently: one WARN on stderr names the file, the count and the
+    first line numbers."""
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    bad: list[int] = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         text = line.strip()
         if not text:
             continue
         try:
             row = json.loads(text)
         except json.JSONDecodeError:
+            bad.append(number)
             continue
         if isinstance(row, dict):
             rows.append(row)
+        else:
+            bad.append(number)
+    if bad:
+        shown = ", ".join(str(n) for n in bad[:READ_JSONL_WARN_LINES])
+        more = f", ... ({len(bad) - READ_JSONL_WARN_LINES} more)" if len(bad) > READ_JSONL_WARN_LINES else ""
+        print(f"WARN read_jsonl {path}: {len(bad)} unreadable line(s) skipped (line {shown}{more})", file=sys.stderr)
     return rows

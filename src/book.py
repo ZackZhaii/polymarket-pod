@@ -1,7 +1,15 @@
-"""Phase 0 public CLOB /book reader. Records best bid, ask, and spread. No orders."""
+"""Phase 0 public CLOB /book reader. Records best bid, ask, and spread. No orders.
+
+Each snapshot also carries ``book_ts``: the book's own timestamp from the /book response,
+normalised by book_timestamp() to ISO 8601 UTC. It is never replaced by the recorder's clock
+(``ts``). When the response has no usable timestamp, ``book_ts`` is null and ``book_ts_problem``
+says why (missing_book_ts or invalid_book_ts); RiskGate vetoes a null book_ts (fail closed).
+"""
 from __future__ import annotations
 
+import re
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -10,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.book_staleness import INVALID_BOOK_TS, MISSING_BOOK_TS, parse_book_ts  # noqa: E402
 from src.podlib import (  # noqa: E402
     BOOKS_PATH,
     MARKETS_PATH,
@@ -32,6 +41,47 @@ def latest_markets(limit: int = 5) -> list[dict[str, Any]]:
     return chosen[:limit]
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_EPOCH_MS = re.compile(r"[0-9]+")
+
+
+def book_timestamp(raw: Any) -> tuple[str | None, str | None]:
+    """Return ``(book_ts, None)`` or ``(None, reason)`` for the /book ``timestamp`` field.
+
+    The public CLOB /book response gives the snapshot time as Unix milliseconds in a string,
+    e.g. "1782753357257" (docs.polymarket.com, Get order book); a non-negative int is read the
+    same way. An aware ISO 8601 string is accepted through book_staleness.parse_book_ts.
+    Output is ISO 8601 UTC with milliseconds and a Z. Nothing is guessed: floats (unit
+    unknown), bools, signs, decimals, non-ASCII digits and naive times are invalid_book_ts;
+    an absent or blank value is missing_book_ts.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, MISSING_BOOK_TS
+    stamp: datetime | None = None
+    if isinstance(raw, bool):
+        return None, INVALID_BOOK_TS
+    if isinstance(raw, int):
+        stamp = _from_millis(raw)
+    elif isinstance(raw, str):
+        text = raw.strip()
+        if _EPOCH_MS.fullmatch(text):
+            stamp = _from_millis(int(text))
+        elif "T" in text:
+            stamp = parse_book_ts(text)
+    if stamp is None:
+        return None, INVALID_BOOK_TS
+    return stamp.isoformat(timespec="milliseconds").replace("+00:00", "Z"), None
+
+
+def _from_millis(value: int) -> datetime | None:
+    if value < 0:
+        return None
+    try:
+        return _EPOCH + timedelta(milliseconds=value)
+    except OverflowError:
+        return None
+
+
 def level(levels: Any, pick: str) -> tuple[float | None, float | None]:
     parsed: list[tuple[float, float | None]] = []
     if not isinstance(levels, list):
@@ -48,6 +98,33 @@ def level(levels: Any, pick: str) -> tuple[float | None, float | None]:
         return None, None
     price, size = (max if pick == "max" else min)(parsed, key=lambda pair: pair[0])
     return price, size
+
+
+
+def fetch_depth(token_id: str, *, getter=None) -> dict[str, Any] | None:
+    """Issue #120 (Task CJ): the full public CLOB /book for one token (asks, bids, tick, min size, book_ts).
+
+    Returns the raw response dict plus normalised ``book_ts`` / ``book_ts_problem``, or None when the GET
+    failed or the body is not an object. Does not place orders. The caller (m2_runner) turns this into an
+    intent_builder.BookSnapshot via ``intent_builder.book_snapshot_from_clob``.
+    """
+    if not isinstance(token_id, str) or not token_id.strip():
+        return None
+    url = "https://clob.polymarket.com/book?" + urlencode({"token_id": token_id.strip()})
+    get = getter or public_get
+    try:
+        body = get(url)
+    except Exception:  # noqa: BLE001 - network / HTTP on one token: missing book
+        return None
+    if not isinstance(body, dict):
+        return None
+    book_ts, book_ts_problem = book_timestamp(body.get("timestamp"))
+    out = dict(body)
+    out["book_ts"] = book_ts
+    out["book_ts_problem"] = book_ts_problem
+    out["token_id"] = token_id.strip()
+    out["fetched"] = True
+    return out
 
 
 def snapshot(
@@ -73,8 +150,13 @@ def snapshot(
         best_bid = round(best_bid, 6)
     if best_ask is not None:
         best_ask = round(best_ask, 6)
+    book_ts, book_ts_problem = book_timestamp(book.get("timestamp"))
+    if book_ts_problem is not None:
+        print(f"book_ts_problem token={token_id[:12]} reason={book_ts_problem}", file=sys.stderr)
     return {
         "ts": ts,
+        "book_ts": book_ts,
+        "book_ts_problem": book_ts_problem,
         "market_id": str(market.get("id") or ""),
         "question": market.get("question") or "",
         "condition_id": market.get("condition_id") or book.get("market") or "",
@@ -124,6 +206,8 @@ def record(
                     "best_bid": row["best_bid"],
                     "best_ask": row["best_ask"],
                     "spread": row["spread"],
+                    "book_ts": row["book_ts"],
+                    "book_ts_problem": row["book_ts_problem"],
                     "source": "clob_public_book",
                 },
                 path=bus_path,
@@ -132,12 +216,22 @@ def record(
     return written
 
 
+EXIT_OK = 0
+EXIT_NO_SNAPSHOT = 1
+EXIT_NO_MARKETS = 2
+EXIT_PIN_DRIFT = 6  # Task AS: config/risk.toml off its pins at start (global halt recorded; nothing fetched)
+
+
 def main() -> int:
+    from src.pins import refuse_start  # Task AS (gap 5): runtime pin check at start
+
+    if refuse_start("book"):
+        return EXIT_PIN_DRIFT
     cfg = load_risk()
     markets = latest_markets()
     if not markets:
         print("no markets in data/markets.jsonl; run python src/scanner.py first", file=sys.stderr)
-        return 2
+        return EXIT_NO_MARKETS
     ts = utc_now()
     written = record(markets, ts)
     for row in read_jsonl(BOOKS_PATH):
@@ -155,8 +249,8 @@ def main() -> int:
     print(f"wrote={BOOKS_PATH}")
     if written < 1:
         print("book failed: no public book snapshot", file=sys.stderr)
-        return 1
-    return 0
+        return EXIT_NO_SNAPSHOT
+    return EXIT_OK
 
 
 if __name__ == "__main__":
