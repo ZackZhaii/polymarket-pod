@@ -22,7 +22,7 @@ C.4, C.6, C.8; Poly执行's no-live audit F2 / T1-T13 on the issue):
    that market's signals before any getter.
 5. The paper ledger: ``ledger_store.read_ledger`` + ``verify``. A problem records the global halt
    ``invalid_risk_state`` (as paper_ledger does) and pauses.
-6. The daily loss breaker: today's (UTC) fees plus realized losses (src/daily_loss.py, as RiskGate counts them)
+6. The daily loss breaker: today's (UTC) fees, gross cost losses, closed reference topups and open-leg losses
    at or above ``max_daily_loss_pct x PAPER_EQUITY_USD``: paused (``daily_loss_breaker``) for the rest of the UTC
    day; the next day counts from zero again, so it resumes by itself. RiskGate vetoes these anyway; this only
    stops earlier.
@@ -400,19 +400,21 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
                 problems = ledger_store.verify(read)
             except Exception as exc:  # noqa: BLE001 - fail closed
                 read, problems = None, [f"ledger_unreadable:{type(exc).__name__}"]
-            if not problems and read is not None:
-                day = daily_loss(read.rows, now.astimezone(timezone.utc).strftime("%Y-%m-%d"), read.ids)
-                problems = list(day.problems)
         if problems or read is None:
             _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": [str(p) for p in problems[:10]],
                                                      "source": "settlement"})
             return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]]])
     rows = len(read.rows)
+    risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), _stamp(now))
+    if risk["problems"]:
+        problems = [str(p) for p in risk["problems"][:10]]
+        _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": problems})
+        return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *problems], ledger_rows=rows)
     try:
         cap = float(_risk_cfg(risk_path)["max_daily_loss_pct"]) * podlib.PAPER_EQUITY_USD
     except Exception:  # noqa: BLE001 - the pin check above makes this unreachable; fail closed anyway
         return Preflight(ACT_PAUSE, ["daily_loss_cap_unreadable"], ledger_rows=rows)
-    total = day.total_usd
+    total = risk["loss_usd"]
     if total is None or total >= cap:
         return Preflight(ACT_PAUSE, ["daily_loss_breaker", f"daily_loss_usd={total!r} cap_usd={cap:g}"],
                          ledger_rows=rows)

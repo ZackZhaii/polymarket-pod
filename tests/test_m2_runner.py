@@ -21,7 +21,6 @@ import src.heartbeat as heartbeat
 import src.ledger_store as ledger_store
 import src.sentinel_tick as sentinel_tick
 from src import forecast_inbox, m2_runner, paper_ledger, podlib
-from src.daily_loss import DailyLoss
 from src.thresholds import HEARTBEAT_RUNNER_TIMEOUT_S, RUNNER_PAUSED_ALERT_S
 from tests import m2_runner_rig as rig
 
@@ -240,9 +239,9 @@ def test_the_daily_loss_breaker_pauses_today_and_resumes_the_next_utc_day(env, m
     pending = rig.deliver(env["run"], env["now"])
     today = env["now"].strftime("%Y-%m-%d")
 
-    def loss(rows, day, ids=None):
-        return DailyLoss(today=day, fees_usd=30.0 if day == today else 0.0)  # 0.03 x 1000 = the cap exactly
-    monkeypatch.setattr(m2_runner, "daily_loss", loss)
+    def loss(rows, ids, now):
+        return {"loss_usd": 30.0 if now[:10] == today else 0.0, "problems": []}  # the cap exactly
+    monkeypatch.setattr(paper_ledger, "daily_risk_loss", loss)
     state = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(env["run"]))
     report = m2_runner.iteration(state, now=env["now"], getters=fake.getters())
     assert report.action == m2_runner.ACT_PAUSE and report.reasons[0] == "daily_loss_breaker"
