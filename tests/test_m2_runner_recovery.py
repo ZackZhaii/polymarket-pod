@@ -22,6 +22,7 @@ from tests import m2_runner_rig as rig
 def env(tmp_path, monkeypatch):
     paths = rig.isolate(monkeypatch, tmp_path)
     now = datetime.now(timezone.utc)
+    monkeypatch.setattr(m2_runner.forecaster, "utc_now", lambda: rig.stamp(now))
     return {**paths, "now": now, "tmp": tmp_path}
 
 

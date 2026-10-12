@@ -159,7 +159,8 @@ def test_the_manifest_records_progress_while_running(tmp_path, monkeypatch):
 
     def wait_for_progress():
         deadline = time.monotonic() + 5
-        while not seen and time.monotonic() < deadline:
+        # A first progress flush can precede the scripted book.
+        while not seen.get("progress", {}).get("book_rows") and time.monotonic() < deadline:
             time.sleep(0.01)
 
     code, out, _, _, _ = _main(tmp_path, [[_book(A), wait_for_progress]], ["--assets", A], progress_every_s=0.02)
