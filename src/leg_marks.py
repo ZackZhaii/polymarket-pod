@@ -26,7 +26,8 @@ offsets another leg, the realized loss or the fees. ``ref`` is
 * for the part opened today: today's cost (notional, fees excluded: they are counted already).
 
 Closed parts retain the same reference through ``closed_loss_topup``: add only the amount by which each
-reference loss exceeds its already-counted average-cost loss. A confirmed winner adds no loss or offset.
+reference loss exceeds its already-counted average-cost loss. A part closed by settlement keeps its
+conservative (zero) valuation for the rest of the UTC day: a confirmed winner credits nothing back.
 
 Pure: no clock, no file. Any position or snapshot problem is returned in ``problems``; the caller gives
 ``daily_loss_usd = None`` and RiskGate vetoes invalid_risk_state (Task AL: a global halt).
@@ -40,7 +41,7 @@ from typing import Any, Iterable, Mapping
 
 from src.book_staleness import book_age_problem, parse_book_ts
 from src.daily_loss import SIDES, counts_today
-from src.ledger_store import counts, leg_key
+from src.ledger_store import KIND_FIELD, SETTLEMENT_KIND, counts, leg_key
 from src.thresholds import LEDGER_OPEN_EPS, MAX_BOOK_AGE_S
 
 SOURCE_BID_LADDER = "bid_ladder"
@@ -192,6 +193,7 @@ class Closing:
     key: tuple[str, str]
     part: LegPosition
     proceeds_usd: float      # signed: long sale / negative short buy-back
+    settlement: bool = False  # closed by a settlement row (a market with no live book)
 
 
 @dataclass
@@ -268,7 +270,7 @@ def positions(rows: Iterable[dict[str, Any]], today: str, ids: Iterable[str] | N
             part = LegPosition(leg.shares * fraction, leg.basis * fraction,
                                leg.carried * fraction, leg.new_basis * fraction)
             proceeds = (1.0 if leg.shares > 0 else -1.0) * usd * closed / qty
-            result.closed.append(Closing(key, part, proceeds))
+            result.closed.append(Closing(key, part, proceeds, row.get(KIND_FIELD) == SETTLEMENT_KIND))
         _apply(leg, side, qty, usd, bool(is_today))
     if not started:
         result.start = {key: LegPosition(leg.shares, leg.basis, abs(leg.shares), 0.0) for key, leg in legs.items()}
@@ -326,7 +328,14 @@ def closed_loss_topup(pos: Positions, snapshot: Mapping[str, Any] | None) -> flo
     for close in pos.closed:
         ref, _ = _reference(close.part, pos.start.get(close.key), entries.get(leg_id(close.key)), late)
         cost = (1.0 if close.part.shares > 0 else -1.0) * close.part.basis
-        total += max(0.0, max(0.0, ref - close.proceeds_usd) - max(0.0, cost - close.proceeds_usd))
+        # Codex回迁 (Owner 2026-10-13, tightening only): a part closed by a settlement row had no live book, so
+        # today it was valued conservatively (zero liquidation value). A confirmed winner does NOT credit that
+        # back within the UTC day: its reference loss is kept as if it exited at the worst no-book value. The winner's gain is
+        # still booked as a realized gain (never netted against losses); the next UTC day starts from zero.
+        # Worst exit with no book: a long is worth 0, a short is bought back at 1 per share.
+        worst = 0.0 if close.part.shares > 0 else -abs(close.part.shares)
+        exit_value = min(close.proceeds_usd, worst) if close.settlement else close.proceeds_usd
+        total += max(0.0, max(0.0, ref - exit_value) - max(0.0, cost - close.proceeds_usd))
     return total
 
 

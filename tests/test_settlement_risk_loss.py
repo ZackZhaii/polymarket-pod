@@ -109,24 +109,43 @@ def test_a_cost_gain_below_the_start_reference_still_retains_that_reference_loss
     _assert_loss(env, 20.0, 14.0, gain=2.0, topup=6.0)
 
 
-def test_a_confirmed_winner_removes_conservative_marks_without_offsetting_other_losses(env):
+def test_a_confirmed_winner_keeps_the_conservative_valuation_and_offsets_nothing(env):
+    """Owner 2026-10-13: a settled winner must not credit back today's conservative (no-book) valuation."""
     _book(env, fill("buy", 20, 0.5, YESTERDAY), fill("buy", 20, 0.9))
     _snapshot(env)
     _assert_loss(env, 36.0, 0.0, unrealized=36.0)
     seen = []
 
-    def settle_after_clock():
-        assert seen == ["clock"]
+    def settle():
         seen.append("settle")
         return _settle(env, 1.0)
 
-    result = m2_runner.preflight(m2_runner.RunnerPaths.under(env["run"]), now=NOW_DT,
-                                 clock_check=lambda: seen.append("clock"), settle=settle_after_clock)
-    assert result.action == m2_runner.ACT_RUN and seen == ["clock", "settle"]
-    _assert_loss(env, 0.0, 0.0, gain=12.0)
+    result = m2_runner.preflight(m2_runner.RunnerPaths.under(env["run"]), now=NOW_DT, settle=settle)
+    assert seen == ["settle"]
+    # The kept 36 is above the 30 cap: the breaker still pauses after the winner settles (before C217 it ran).
+    assert result.action == m2_runner.ACT_PAUSE
+    assert result.reasons[0] == "daily_loss_breaker"
+    # The winner's gain is booked but the day-start reference loss (36) stays: nothing is credited back.
+    _assert_loss(env, 36.0, 0.0, gain=12.0, topup=36.0)
+    # Another leg's cost loss adds on top; the winner's gain never offsets it.
     _book(env, fill("buy", 30, 0.5, market="b", token="b-token"),
           fill("sell", 30, 0.0, market="b", token="b-token"))
-    _assert_loss(env, 15.0, 15.0, gain=12.0)
+    _assert_loss(env, 51.0, 15.0, gain=12.0, topup=36.0)
+
+
+def test_a_confirmed_winner_still_counts_toward_the_runner_breaker(env, monkeypatch):
+    _book(env, fill("buy", 20, 0.5, YESTERDAY), fill("buy", 20, 0.9))
+    _snapshot(env)
+    _settle(env, 1.0)
+    risk = paper_ledger.daily_risk_loss(*_rows_ids(env), NOW)
+    assert risk["problems"] == []
+    assert risk["marks"]["realized_topup_usd"] == pytest.approx(36.0)
+    assert risk["loss_usd"] >= 36.0
+
+
+def _rows_ids(env):
+    read = ledger_store.read_ledger(env["paper"])[1]
+    return read.rows, list(read.ids)
 
 
 @pytest.mark.parametrize("fallback", ["late", "invalid", "zero", "missing"])
