@@ -245,16 +245,23 @@ def test_clock_skew_pauses_the_runner(env):
 
 
 class _Skewing(rig.FakeGetters):
-    """Books stamped ``skew_s`` ahead of the runner clock (``None`` = a sane, fresh book)."""
+    """#222 option B: the independent CLOB /time is ``skew_s`` behind the runner clock (``None`` = in sync);
+    ``time_error`` makes /time fail (clock_unverified). Books are always fresh."""
 
     def __init__(self, now: datetime, clock: _Clock) -> None:
         super().__init__(now)
         self.clock = clock
         self.skew_s: float | None = CLOCK_SKEW_MAX_S + 30
+        self.time_error: Exception | None = None
 
     def book(self, url: str):
+        if url == m2_runner.podlib.TIME_URL:
+            self.time_calls.append(url)
+            if self.time_error is not None:
+                raise self.time_error
+            return self.clock.now().timestamp() - (self.skew_s or 0.0)
         body = dict(super().book(url))
-        moment = self.clock.now() + timedelta(seconds=self.skew_s or 0.0)
+        moment = self.clock.now()
         body["timestamp"] = str(int(moment.timestamp() * 1000))
         return body
 
@@ -286,8 +293,23 @@ def test_clock_skew_keeps_paused_since_while_the_skew_holds(env):
         assert report.action == m2_runner.ACT_PAUSE and report.paused_reason == "clock_skew"
         assert state.paused_since == first and state.paused_reason == "clock_skew"
         assert m2_runner.progress(state, clock.now())["paused_since"] == first
-    # one clock_skew event per pause, like the preflight "paused" event (not one per tick)
-    assert sum(1 for e in _events(env) if e.get("event") == "clock_skew") == 1
+    # one "paused" event per pause (not one per tick)
+    assert sum(1 for e in _events(env) if e.get("event") == "paused" and e.get("reasons") == ["clock_skew"]) == 1
+
+
+def test_clock_unverified_keeps_paused_since_while_the_clock_stays_unverifiable(env):
+    """#238 rule (PR #250) applied to #222 option B's clock_unverified pause."""
+    clock, fake, state = _skew_rig(env)
+    fake.time_error = RuntimeError("time down")
+    report = _tick(state, clock, fake)
+    assert report.action == m2_runner.ACT_PAUSE and report.paused_reason == "clock_unverified"
+    first = state.paused_since
+    assert first is not None
+    for _ in range(4):
+        report = _tick(state, clock, fake, 60.0)
+        assert report.paused_reason == "clock_unverified" and state.paused_since == first
+    assert sum(1 for e in _events(env) if e.get("event") == "paused"
+               and e.get("reasons") == ["clock_unverified"]) == 1
 
 
 def test_a_clock_skew_pause_held_past_the_alert_window_alerts_the_sentinel(env):
