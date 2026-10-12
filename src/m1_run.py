@@ -793,12 +793,12 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
             code, status = EXIT_WRITE_FAILED, "failed"
         if rest_stuck:
             print(f"m1_run: REST sampler still alive after the {REST_JOIN_TIMEOUT_S} s join timeout "
-                  "(request hung in flight); sealed, not killed; run failed", file=sys.stderr)
+                  "(request hung in flight); sealed, not killed; the run cannot complete", file=sys.stderr)
             try:
                 events.write({"ts": now(), "event": "rest_join_timeout", "timeout_s": REST_JOIN_TIMEOUT_S})
             except OSError:
-                pass  # the reason is on stderr; the run is failed below either way
-            if code == EXIT_OK:
+                pass  # the reason is on stderr; the run never completes either way
+            if code == EXIT_OK and not watch.problems:  # a pin drift keeps its own 6 (global halt)
                 code, status = EXIT_WRITE_FAILED, "failed"
         if code == EXIT_OK and watch.problems:
             code, status = EXIT_PIN_DRIFT, "pin_drift"

@@ -947,6 +947,27 @@ def test_a_risk_drift_mid_run_stops_the_run_with_6(tmp_path, monkeypatch):
     assert [x["reason"] for x in halt_store.active_halts()] == ["risk_toml_pin_drift"]
 
 
+def test_a_risk_drift_keeps_6_when_the_rest_thread_also_outlives_the_join(tmp_path, monkeypatch):
+    """Issue #82 acceptance 3 does not mask a pin drift: the stuck REST thread is recorded, the run stays 6."""
+    _drift_after(monkeypatch, tmp_path, 2)
+    monkeypatch.setattr(r, "REST_JOIN_TIMEOUT_S", 0.05)
+    entered, release = threading.Event(), threading.Event()
+
+    def blocking_getter(url):
+        entered.set()
+        release.wait(30)
+        return None
+
+    try:
+        code, out, _, _, _ = _main(tmp_path, [[lambda: entered.wait(5), _book()]],
+                                   ["--assets", A, "--max-runtime", "600", "--rest-assets", "1"], rest=blocking_getter)
+    finally:
+        release.set()
+    manifest = _manifest(out)
+    assert code == r.EXIT_PIN_DRIFT and manifest["status"] == "pin_drift" and manifest["exit_code"] == 6
+    assert [e["event"] for e in _rows(out, "events")].count("rest_join_timeout") == 1
+
+
 def test_a_risk_drift_at_start_creates_no_run_dir(tmp_path, monkeypatch):
     _drift_after(monkeypatch, tmp_path, 0)
     code, out, transport, calls, _ = _main(tmp_path, [[_book()]], ["--assets", A])
