@@ -369,6 +369,15 @@ def fees_enabled(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
+def strict_bool(value: Any) -> bool | None:
+    """Issue #232 (Task CR): a Gamma flag (``acceptingOrders``, ``closed``) only when it is a real JSON bool.
+
+    Anything else (the string "false", 0, 1, "", a list, null or a missing key) is None: unknown, and
+    rejection_reasons rejects an unknown flag (fail closed; ``bool("false")`` used to read as True).
+    """
+    return value if isinstance(value, bool) else None
+
+
 def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
     tokens, token_source, token_problem = select_token_ids(market)
     outcomes = [str(item) for item in json_list(market.get("outcomes"))]
@@ -379,7 +388,6 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
     if spread is None and best_bid is not None and best_ask is not None:
         spread = best_ask - best_bid
     price, price_source = yes_price(market)
-    accepting = market.get("acceptingOrders")
     event_id, event_slug = scanner_event(market)  # Task BF
     return {
         "ts": ts,
@@ -405,9 +413,9 @@ def normalize(market: dict[str, Any], ts: str) -> dict[str, Any]:
         "spread": spread,
         "price": price,
         "price_source": price_source,
-        "accepting_orders": None if accepting is None else bool(accepting),
+        "accepting_orders": strict_bool(market.get("acceptingOrders")),  # issue #232: non-bool is None (unknown)
         "fees_enabled": fees_enabled(market.get("feesEnabled")),  # issue #116: unknown is None, never free
-        "closed": bool(market.get("closed")),
+        "closed": strict_bool(market.get("closed")),  # issue #232: non-bool is None (unknown), rejected as closed
         # Task AX (M3 step 2): grouping labels for calibration. Gamma's own values or None/[]; not guessed.
         "category": scanner_category(market),
         "tags": scanner_tags(market),
@@ -448,7 +456,7 @@ def rejection_reasons(
     non-string, past, or closer than min_hours_to_expiry all fail closed.
     """
     reasons: list[str] = []
-    if row["closed"]:
+    if row["closed"] is not False:  # issue #232: True or unknown (non-bool / missing) fails closed
         reasons.append("closed")
     if row["token_ids_problem"] in VERSION_REASONS:
         reasons.append(row["token_ids_problem"])
@@ -457,7 +465,7 @@ def rejection_reasons(
         reasons.append(expiry)
     if market_uma_resolving(row):  # Task BX (#141): proposed / disputed / resolved, unreadable fails closed
         reasons.append(MARKET_EXPIRED_OR_RESOLVING)
-    if row["accepting_orders"] is False:
+    if row["accepting_orders"] is not True:  # issue #232: False or unknown (non-bool / missing) fails closed
         reasons.append("not_accepting_orders")
     reasons.extend(non_finite_reasons(row))
     bid, ask = row["best_bid"], row["best_ask"]
