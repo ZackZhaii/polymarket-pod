@@ -1,9 +1,9 @@
 {
  "schema": "poly_forecast_197_vectors/3",
- "version": "v3",
- "version_note": "v3 按 Poly风控 补充裁定 issuecomment-6106700917 修订：bus 至少一次 + 消费端按键去重（WO-38）；已核销市场轮询到结算、只查矛盾，读失败忽略（WO-41）；N1–N6 resolved。v2 按 Poly风控 裁定 issuecomment-6106669720 修订：核销前的确认失败/读取失败不 halt（按 #124 继续计最坏浮亏、下一轮重新确认）；只有核销后矛盾与账本核销行冲突会 halt；同 tick 先结算后核销；新增崩溃重启/账本去重向量；第二源辅证另给 expected_reread_only。",
- "generator": "vectors/gen_197_vectors.py",
- "origin_dev_sha": "070c5172fe297e2c3692089390ec3d79c9b582cb",
+ "version": "v3.2",
+ "version_note": "v3.2：OQ-N7 已裁定（https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792）：核销后矛盾 → 全局 halt（invalid_risk_state），并叠加 #214 对该市场结算的阻断；人工解除全局 halt 后该市场结算仍阻断。WO-15/16 期望不变；新增 WO-42、WO-43、INV-13；对照 dev 8b5db69。 v3.1（仅措辞）：所有 'bus' 指 M2 runner 事件流（events.jsonl），不是 pod bus；PROTOCOL / BUS_TYPES 不变（Poly指挥 澄清）。数值、字段名与 v3 @4acf535 逐项相同。v3 按 Poly风控 补充裁定 issuecomment-6106700917 修订：bus 至少一次 + 消费端按键去重（WO-38）；已核销市场轮询到结算、只查矛盾，读失败忽略（WO-41）；N1–N6 resolved。v2 按 Poly风控 裁定 issuecomment-6106669720 修订：核销前的确认失败/读取失败不 halt（按 #124 继续计最坏浮亏、下一轮重新确认）；只有核销后矛盾与账本核销行冲突会 halt；同 tick 先结算后核销；新增崩溃重启/账本去重向量；第二源辅证另给 expected_reread_only。",
+ "generator": "vectors/gen_197_vectors.v3_2.py",
+ "origin_dev_sha": "8b5db696d78fd2185c5b76fd79d20f26ab2c6bc6",
  "rule": "KEY #197 close-then-write-off: body sections A-E, approval https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6104331631, ruling https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6106669720. PR #195 NOT applied: two-sided leg_marks.",
  "constants": {
   "confirm_min_gap_s": 30.0,
@@ -16,16 +16,19 @@
  },
  "schema_doc": {
   "inputs.ledger[]": "ledger fill rows (fill_id, ts, market, token_id, condition_id='0xc-<market>', side buy|sell, shares, effective_price, notional_usd, fee_usd, hypothetical=false, counts_toward_risk=true). A fill is in the ledger from its ts on.",
-  "inputs.ledger_writeoff_rows[]": "optional: write-off rows already in the ledger from a previous process: {row: <write-off row, same shape as expected.writeoff_events[]>, bus_emitted: bool (already on the bus once before this run)}.",
-  "inputs.steps[]": "ticks. t: UTC ISO. books: {'market|token': book|null} (carried forward; null = removed). gamma: {market: Gamma read (explicit closed=true query) | {'_error':..} | [] }. second_source: {market: {source: clob_markets, accepting_orders, closed} | {source: data_v2_tokens, closed, resolved}} (ignored by expected_reread_only). resolution: confirmed settlement snapshot. restart: process restart before this tick. crash_after_ledger_write: the write-off row of this tick is fsync'd but the process dies before the bus emit.",
-  "tick order (ruling)": "1) restart: drop in-memory pending, replay ledger; bus is at-least-once (the model re-sends every write-off row whose leg is still open; consumers dedupe by key)  2) read ledger; conflicting write-off rows -> halt; halted -> stop (no settle, no write-off, daily_loss null)  3) settlement first (src.settlement.plan)  4) close detection + write-off only for open legs neither settled nor written off; post-write-off contradiction check  5) daily loss (start-of-day snapshot at the first tick of each UTC day, dev rule)  6) (RiskGate, not modelled).",
+  "inputs.ledger_writeoff_rows[]": "optional: write-off rows already in the ledger from a previous process: {row: <write-off row, same shape as expected.writeoff_events[]>, bus_emitted: bool (already in the runner event stream once before this run)}.",
+  "inputs.steps[]": "ticks. t: UTC ISO. books: {'market|token': book|null} (carried forward; null = removed). gamma: {market: Gamma read (explicit closed=true query) | {'_error':..} | [] }. second_source: {market: {source: clob_markets, accepting_orders, closed} | {source: data_v2_tokens, closed, resolved}} (ignored by expected_reread_only). resolution: confirmed settlement snapshot. restart: process restart before this tick. crash_after_ledger_write: the write-off row of this tick is fsync'd but the process dies before the bus emit. operator_resume (v3.2): operator clears the global halt before this tick (OQ-N7).",
+  "tick order (ruling)": "0) operator_resume (v3.2): clears a closed_flag_contradiction_after_writeoff global halt; that market is added to settlement_blocked_markets (#214) and stays blocked.  1) restart: drop in-memory pending, replay ledger; runner event stream is at-least-once (the model re-sends every write-off row whose leg is still open; consumers dedupe by key)  2) read ledger; conflicting write-off rows -> halt; halted -> stop (no settle, no write-off, daily_loss null)  3) settlement first (src.settlement.plan)  4) close detection + write-off only for open legs neither settled nor written off; post-write-off contradiction check  5) daily loss (start-of-day snapshot at the first tick of each UTC day, dev rule)  6) (RiskGate, not modelled). Matches origin/dev 4acf535 m2_runner.preflight: KILL/live/pins/global halt/verified ledger -> _settle_tick (resolution_watch.collect -> apply_settlements -> _writeoff_hook, CK slot) -> daily_loss re-check -> breaker -> RiskGate.",
   "inputs.start_of_day_snapshots[]": "daily_marks snapshot each UTC day gets at its first tick (dev format, two-sided liquidation_mark). late=false unless the day is in inputs.late_days.",
-  "expected.steps[]": "risk_state ok|invalid_risk_state, halt_reason, close_reasons {market: reason}, writeoff_emitted, writeoff_events [event_id written this tick], ledger_writeoff_rows (distinct leg_keys), duplicate_writeoff_rows_ignored, bus_emitted [{event_id, replay}] (one conforming at-least-once trace; NOT asserted exactly), bus_keys_required_by_now (assert: each key has >=1 bus event by the end of this tick), crash_after_ledger_write, realized_writeoff_usd, daily_loss_usd (null when halted) + parts {fees_usd, realized_loss_usd, writeoff_usd, unrealized_usd}, realized_gain_usd, max_daily_loss_veto, occupancy {count, usd, legs}, settlement_booked, marks.",
+  "expected.steps[]": "risk_state ok|invalid_risk_state, halt_reason, close_reasons {market: reason}, writeoff_emitted, writeoff_events [event_id written this tick], ledger_writeoff_rows (distinct leg_keys), duplicate_writeoff_rows_ignored, bus_emitted [{event_id, replay}] (runner event stream; one conforming at-least-once trace; NOT asserted exactly), bus_keys_required_by_now (assert: each key has >=1 runner event by the end of this tick), crash_after_ledger_write, realized_writeoff_usd, daily_loss_usd (null when halted) + parts {fees_usd, realized_loss_usd, writeoff_usd, unrealized_usd}, realized_gain_usd, max_daily_loss_veto, occupancy {count, usd, legs}, settlement_booked, marks.",
   "expected.writeoff_events[]": "ledger write-off rows: event_id 'writeoff-'+sha256('<condition>|<market>|<token>')[:32] (proposed), unique key leg_key, ts, day, market, condition_id, token_id, shares, cost_basis_usd, open_fees_usd, full_cost_usd, daily_loss_component_usd, reason, evidence {first_read_t, confirm_t, closed_time, query}.",
-  "expected.bus": "at-least-once assertions: every keys_required key has >= 1 bus event; consumer_deduped_count_by_key == 1 per key; model_emissions_by_key is informative only.",
+  "expected.bus": "runner event stream (not the pod bus), at-least-once assertions: every keys_required key has >= 1 write-off event; consumer_deduped_count_by_key == 1 per key; model_emissions_by_key is informative only.",
   "expected_reread_only": "present when uses_second_source: same shape, second_source inputs ignored (M2 default until the CLOB /markets and Data /v2/tokens endpoints are whitelisted).",
   "dev_current": "same ledger/books, origin/dev functions (no close detection, no halt). After a #197 halt nothing is settled in the shared ledger, so dev_current shows no settlement there either.",
-  "close reasons (proposed codes)": "writeoff_confirmed_reread | writeoff_confirmed_clob | writeoff_confirmed_data_tokens | awaiting_confirmation | reread_too_soon | confirmation_failed:<predicate reason> | confirmation_failed_closed_time_changed | confirmation_failed_second_source_disagrees | close_read_failed[_pending_dropped] | close_read_invalid_type[_pending_dropped] | not_closed | accepting_orders_not_false | closed_time_missing | closed_time_invalid | closed_time_in_future | already_written_off[_read_failed|_closed_time_changed] | settled_no_writeoff | settled_polling_stopped | no_open_leg. halt: closed_flag_contradiction_after_writeoff | writeoff_row_conflict:<leg_key>."
+  "close reasons (proposed codes)": "writeoff_confirmed_reread | writeoff_confirmed_clob | writeoff_confirmed_data_tokens | awaiting_confirmation | reread_too_soon | confirmation_failed:<predicate reason> | confirmation_failed_closed_time_changed | confirmation_failed_second_source_disagrees | close_read_failed[_pending_dropped] | close_read_invalid_type[_pending_dropped] | not_closed | accepting_orders_not_false | closed_time_missing | closed_time_invalid | closed_time_in_future | already_written_off[_read_failed|_closed_time_changed] | settled_no_writeoff | settled_polling_stopped | no_open_leg. halt: closed_flag_contradiction_after_writeoff | writeoff_row_conflict:<leg_key>.",
+  "terminology (v3.1)": "'bus' in field names (bus_emitted, bus_keys_required_by_now, expected.bus, ledger_writeoff_rows[].bus_emitted) means the M2 runner event stream (events.jsonl via src.m2_runner.event), NOT the pod bus (podlib.bus / PROTOCOL / BUS_TYPES, unchanged). Semantics: at-least-once, consumers dedupe by write-off key / settlement key. Field names are kept for compatibility. #211/#214 already assert that settlement puts nothing on the pod bus; write-off (CK) must do the same.",
+  "settlement gain (v3.1)": "a written-off leg that later wins books the FULL payout (shares x 1; short: shares x (1 - payout)) as realized_gain_usd on the settlement day; it never lowers daily_loss_usd. A leg settled without a prior write-off books payout - basis (dev #126 path).",
+  "expected.steps[] (v3.2 fields)": "operator_resume: halt reason cleared this tick or null; settlement_blocked_markets: markets whose settlement is blocked (#214 SETTLEMENT_BLOCKING_HALT_PREFIXES / paper_ledger.settlement_blocked_markets), sticky until a separate manual release (not modelled); settlement_skipped_blocked: markets whose resolution this tick was skipped because blocked (no halt, no booking, occupancy held). Present on every step; null/[] in WO-01..41."
  },
  "invariants": [
   {
@@ -38,7 +41,7 @@
   },
   {
    "id": "INV-3 no_double_count_at_settle",
-   "text": "已核销腿结算：输腿不再记亏；赢腿记 realized_gain = payout，不抵扣任何日亏。全部结算后终值 PnL 与无核销直接结算的现金流一致。"
+   "text": "已核销腿结算：输腿不再记亏；赢腿记 realized_gain = payout，不抵扣任何日亏。全部结算后终值 PnL 与无核销直接结算的现金流一致。 赢腿在结算日记全额 payout 为收益（WO-20/22/25/27/35）。"
   },
   {
    "id": "INV-4 occupancy_held",
@@ -66,11 +69,15 @@
   },
   {
    "id": "INV-10 halt_scope",
-   "text": "只有两种情况会 halt：已核销且仍未结算的腿之后读到 closed=false 或 acceptingOrders=true；账本同一 leg_key 有内容不同的核销行。确认失败与读取失败都不 halt。"
+   "text": "只有两种情况会 halt：已核销且仍未结算的腿之后读到 closed=false 或 acceptingOrders=true；账本同一 leg_key 有内容不同的核销行。确认失败与读取失败都不 halt。 halt 范围为全局（OQ-N7）；解除后该市场结算继续被阻断（INV-13）。"
   },
   {
    "id": "INV-11 ledger_then_bus",
-   "text": "先写账本（fsync）再发 bus；崩溃后重启从账本重放，状态相同、不写第二行、不漏计亏损；bus 至少一次（同一键可多条），消费端按核销键/结算键去重后只计一次（N4，WO-38）。"
+   "text": "先写账本（fsync）再写 runner 事件流（events.jsonl，不是 pod bus；PROTOCOL/BUS_TYPES 不变）；崩溃后重启从账本重放，状态相同、不写第二行、不漏计亏损；事件流至少一次（同一键可多条），消费端按核销键/结算键去重后只计一次（N4，WO-38）。"
+  },
+  {
+   "id": "INV-13 halt_then_market_block",
+   "text": "OQ-N7（issuecomment-6109526792）：核销后矛盾 → 全局 halt（invalid_risk_state，所有市场不结算不核销、daily_loss=None）；人工解除全局 halt 后，该市场的结算仍被 #214 settlement_blocked_markets 阻断（不入账、不 halt、占用保留），直到人工单独放开；其它市场正常结算（WO-43）。"
   },
   {
    "id": "INV-12 post_writeoff_polling",
@@ -177,9 +184,10 @@
    "id": "OQ-N4",
    "status": "resolved",
    "topic": "崩溃后 bus 语义",
-   "ruling": "至少一次，由消费端按核销键/结算键去重；以账本为准，不另记“已发”状态。WO-38 断言：账本不多行、亏损不漏计、bus 上该键 ≥1 条、消费端去重后计 1 次。",
+   "ruling": "至少一次，由消费端按核销键/结算键去重；以账本为准，不另记“已发”状态。WO-38 断言：账本不多行、亏损不漏计、runner 事件流上该键 ≥1 条、消费端去重后计 1 次。",
    "source": "https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6106700917",
-   "changed": "WO-38（另：含 restart 的 WO-32/39 的 bus 轨迹）"
+   "changed": "WO-38（另：含 restart 的 WO-32/39 的 bus 轨迹）",
+   "note": "v3.1：'bus' 指 runner 事件流（Poly指挥 澄清），CK 的核销事件不进 pod bus。"
   },
   {
    "id": "OQ-N5",
@@ -194,6 +202,14 @@
    "topic": "结算调用（NEW-2）",
    "ruling": "由 #206（Task CO）解决：runner 每个 tick 都按 halt 检查 → 结算 → 核销 → 日亏 → RiskGate 的顺序运行，不再依赖是否有 intent。向量的 tick 顺序与之一致。",
    "source": "https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6106700917"
+  },
+  {
+   "id": "OQ-N7",
+   "status": "resolved",
+   "topic": "OQ-8 halt 的范围：全局还是市场级",
+   "ruling": "全局 halt（invalid_risk_state，任何市场的新 intent 都被否决、不结算不核销、daily_loss=None），同时保留 #214 对该市场结算的阻断，两者叠加；核销不回滚、不二次核销；人工解除全局 halt 后该市场结算仍被阻断，需人工单独放开。dev 4acf535/8b5db69 目前只按市场阻断，CK 须改为全局 halt。",
+   "source": "https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792",
+   "changed": "WO-15、WO-16 期望不变；新增 WO-42（已核销赢腿结算）、WO-43（halt → 人工解除 → 该市场仍阻断）；新增 INV-13"
   }
  ],
  "changelog": [
@@ -242,6 +258,33 @@
    },
    "added": {
     "WO-41": "核销后读失败（503 / [] / 非 bool / acceptingOrders=null）忽略、不 halt；结算后停止轮询，closed=false 不 halt。"
+   }
+  },
+  {
+   "version": "v3.1",
+   "date": "2026-10-11 UTC+8",
+   "dev_sha": "4acf535a1ae0b656ba2a6db213b09cc86ed7c490",
+   "summary": "仅措辞：'bus' → runner 事件流（events.jsonl），pod bus / PROTOCOL / BUS_TYPES 不变；对照 dev 4acf535（#211 Task CO、#214 Task CP）重算，所有 expected / expected_reread_only / dev_current 数值与 v3 逐项相同。",
+   "changed": {
+    "WO-31, WO-32, WO-38": "描述改为 runner 事件流；WO-32 删去 v3 遗留的“不重发 bus”（与 v3 至少一次语义矛盾）。",
+    "schema_doc / INV-11 / INV-3 / OQ-N4": "术语改为 runner 事件流；写明已核销赢腿在结算日记全额 payout 为收益。",
+    "OQ-N7": "新增开放问题：OQ-8 halt 的范围（全局 vs 市场级），因 4acf535 settlement.SETTLEMENT_BLOCKING_HALT_PREFIXES 而起。"
+   },
+   "added": {}
+  },
+  {
+   "version": "v3.2",
+   "date": "2026-10-12 UTC+8",
+   "dev_sha": "8b5db696d78fd2185c5b76fd79d20f26ab2c6bc6",
+   "summary": "OQ-N7 裁定 https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792 → resolved。4acf535..8b5db69 的 src 只改了 paper_audit.py（生成器不用），WO-01..41 与 CTRL 数值不变（每步新增 3 个字段 operator_resume=null、settlement_blocked_markets=[]、settlement_skipped_blocked=[]）。生成器：vectors/gen_197_vectors.v3_2.py（新文件，v3 生成器未改）。",
+   "changed": {
+    "OQ-N7": "open → resolved（全局 halt + #214 市场级结算阻断叠加）",
+    "INV-10": "注明全局范围"
+   },
+   "added": {
+    "WO-42": "两市场：mB 核销后结算为赢 → 结算日全额 payout 记收益 10.0，不抵扣日亏（日亏 = mA 浮亏 0.7），mB 占用释放。",
+    "WO-43": "核销后 closed=false → 全局 halt（mA 结算也不入账）→ 人工解除 → mB 结算被阻断（不 halt、占用保留），mA 正常结算。",
+    "INV-13": "halt 后市场级结算阻断在人工解除全局 halt 后仍有效。"
    }
   }
  ],
@@ -370,6 +413,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.2,
@@ -416,6 +462,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -559,7 +608,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -685,6 +735,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.2,
@@ -731,6 +784,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -777,6 +833,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.85,
@@ -953,7 +1012,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -1093,6 +1153,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.2,
@@ -1139,6 +1202,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -1185,6 +1251,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -1227,6 +1296,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.85,
@@ -1412,7 +1484,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -1546,6 +1619,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.2,
@@ -1592,6 +1668,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -1647,6 +1726,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -1682,6 +1764,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -1717,6 +1802,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -1980,7 +2068,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -2105,6 +2194,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -2142,6 +2234,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -2177,6 +2272,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -2382,6 +2480,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -2437,6 +2538,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -2472,6 +2576,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -2551,7 +2658,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -2676,6 +2784,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -2713,6 +2824,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -2748,6 +2862,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -2953,6 +3070,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -3008,6 +3128,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -3043,6 +3166,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -3122,7 +3248,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -3245,6 +3372,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.2,
@@ -3291,6 +3421,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.2,
@@ -3335,6 +3468,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.85,
@@ -3511,7 +3647,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -3617,6 +3754,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.9,
@@ -3663,6 +3803,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.9,
@@ -3804,7 +3947,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -3923,6 +4067,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -3969,6 +4116,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -4015,6 +4165,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.85,
@@ -4191,7 +4344,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -4300,6 +4454,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -4355,6 +4512,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -4390,6 +4550,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -4586,7 +4749,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -4711,6 +4875,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -4757,6 +4924,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -4803,6 +4973,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.85,
@@ -4991,6 +5164,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -5037,6 +5213,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -5083,6 +5262,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.85,
@@ -5142,7 +5324,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -5256,6 +5439,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -5302,6 +5488,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -5348,6 +5537,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -5403,6 +5595,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -5629,7 +5824,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -5738,6 +5934,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -5784,6 +5983,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -5839,6 +6041,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -6042,6 +6247,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -6088,6 +6296,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -6143,6 +6354,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -6220,7 +6434,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -6322,6 +6537,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -6368,6 +6586,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -6423,6 +6644,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -6616,7 +6840,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -6739,6 +6964,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -6785,6 +7013,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -6840,6 +7071,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -7043,6 +7277,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -7098,6 +7335,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -7135,6 +7375,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -7212,7 +7455,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -7326,6 +7570,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -7372,6 +7619,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -7418,6 +7668,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -7473,6 +7726,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -7699,7 +7955,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -7813,6 +8070,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -7859,6 +8119,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -7905,6 +8168,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -7960,6 +8226,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -8186,7 +8455,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -8336,6 +8606,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -8382,6 +8655,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -8428,6 +8704,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -8474,6 +8753,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -8529,6 +8811,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -8564,6 +8849,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "invalid_risk_state",
       "halt_reason": "closed_flag_contradiction_after_writeoff",
       "realized_writeoff_usd": 0.0,
@@ -8591,6 +8879,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "invalid_risk_state",
       "halt_reason": "closed_flag_contradiction_after_writeoff",
       "realized_writeoff_usd": 0.0,
@@ -8914,7 +9205,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -9028,6 +9320,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -9083,6 +9378,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -9118,6 +9416,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "invalid_risk_state",
       "halt_reason": "closed_flag_contradiction_after_writeoff",
       "realized_writeoff_usd": 0.0,
@@ -9145,6 +9446,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "invalid_risk_state",
       "halt_reason": "closed_flag_contradiction_after_writeoff",
       "realized_writeoff_usd": 0.0,
@@ -9369,7 +9673,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -9487,6 +9792,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -9533,6 +9841,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -9579,6 +9890,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -9625,6 +9939,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -9680,6 +9997,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -9939,7 +10259,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -10053,6 +10374,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -10099,6 +10423,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -10145,6 +10472,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -10200,6 +10530,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -10426,7 +10759,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -10522,6 +10856,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -10568,6 +10905,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -10623,6 +10963,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -10816,7 +11159,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -10981,6 +11325,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.2,
@@ -11027,6 +11374,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -11082,6 +11432,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -11117,6 +11470,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -11150,6 +11506,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -11185,6 +11544,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -11455,7 +11817,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -11625,6 +11988,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.2,
@@ -11671,6 +12037,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -11726,6 +12095,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -11761,6 +12133,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -11794,6 +12169,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -11829,6 +12207,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -12100,7 +12481,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -12206,6 +12588,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -12261,6 +12646,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -12294,6 +12682,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -12475,7 +12866,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -12660,6 +13052,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.2,
@@ -12704,6 +13099,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -12750,6 +13148,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.7,
@@ -12805,6 +13206,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.85,
@@ -12840,6 +13244,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -12875,6 +13282,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -13176,7 +13586,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -13347,6 +13758,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -13393,6 +13807,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -13448,6 +13865,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.85,
@@ -13483,6 +13903,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.85,
@@ -13518,6 +13941,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -13784,7 +14210,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -13992,6 +14419,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.14,
@@ -14049,6 +14479,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.84,
@@ -14121,6 +14554,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.8,
       "daily_loss_usd": 9.84,
@@ -14158,6 +14594,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -14192,6 +14631,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -14514,7 +14956,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -14702,6 +15145,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.52,
@@ -14748,6 +15194,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 8.77,
@@ -14803,6 +15252,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 8.55,
       "daily_loss_usd": 8.77,
@@ -14838,6 +15290,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -14871,6 +15326,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -15122,7 +15580,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -15409,6 +15868,9 @@
         "mB|mB-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.25,
@@ -15467,6 +15929,9 @@
         "mB|mB-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 10.15,
@@ -15534,6 +15999,9 @@
         "mB|mB-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 10.15,
@@ -15581,6 +16049,9 @@
         "mB|mB-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -15627,6 +16098,9 @@
         "mB|mB-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -15950,7 +16424,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -16310,6 +16785,9 @@
         "m3|m3-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.152285,
@@ -16376,6 +16854,9 @@
         "m3|m3-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -16446,6 +16927,9 @@
         "m3|m3-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 29.847715,
@@ -16537,6 +17021,9 @@
         "m3|m3-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 30.0,
       "daily_loss_usd": 30.0,
@@ -16576,6 +17063,9 @@
         "m3|m3-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -16615,6 +17105,9 @@
         "m3|m3-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -17103,7 +17596,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -17275,6 +17769,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -17319,6 +17816,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -17363,6 +17863,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -17409,6 +17912,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -17464,6 +17970,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -17499,6 +18008,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -17794,7 +18306,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -17935,6 +18448,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.2,
@@ -17979,6 +18495,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -18025,6 +18544,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -18080,6 +18602,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -18115,6 +18640,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -18377,13 +18905,14 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
    "id": "WO-31",
    "category": "idempotency",
-   "description": "重复关闭事件：核销后再收到谓词成立读与辅证 → already_written_off，不再核销、不再发 bus。",
+   "description": "重复关闭事件：核销后再收到谓词成立读与辅证 → already_written_off，不再核销、不产生新的核销事件（runner 事件流）。",
    "issue_refs": [
     "#197"
    ],
@@ -18521,6 +19050,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -18576,6 +19108,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -18613,6 +19148,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -18650,6 +19188,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -18888,6 +19429,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -18943,6 +19487,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -18980,6 +19527,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -19017,6 +19567,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -19096,13 +19649,14 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
    "id": "WO-32",
    "category": "idempotency",
-   "description": "重启：pending 不持久化（重启后需重新首读+复读）；已核销从账本重放（重启后不重复记、不重发 bus）。",
+   "description": "重启：pending 不持久化（重启后需重新首读+复读）；已核销从账本重放（重启后不重复记；runner 事件流可重发，消费端按键去重）。",
    "issue_refs": [
     "#197"
    ],
@@ -19232,6 +19786,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -19278,6 +19835,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -19333,6 +19893,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -19375,6 +19938,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -19415,6 +19981,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -19677,7 +20246,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -19804,6 +20374,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.08,
@@ -19837,6 +20410,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.08,
@@ -19868,6 +20444,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -19990,7 +20569,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -20165,6 +20745,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.45,
@@ -20209,6 +20792,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -20255,6 +20841,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.7,
@@ -20310,6 +20899,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.85,
@@ -20343,6 +20935,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -20594,7 +21189,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -20752,6 +21348,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.11,
@@ -20798,6 +21397,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 8.01,
@@ -20853,6 +21455,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 8.0,
       "daily_loss_usd": 8.01,
@@ -20888,6 +21493,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -20921,6 +21529,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -21172,7 +21783,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -21315,6 +21927,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.2,
@@ -21361,6 +21976,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -21405,6 +22023,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -21440,6 +22061,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -21471,6 +22095,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -21661,7 +22288,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -21848,6 +22476,9 @@
         "mB|mB-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.25,
@@ -21906,6 +22537,9 @@
         "mB|mB-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 19.65,
@@ -21972,6 +22606,9 @@
         "mB|mB-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.8,
       "daily_loss_usd": 9.8,
@@ -22009,6 +22646,9 @@
         "mB|mB-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -22262,13 +22902,14 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
    "id": "WO-38",
    "category": "idempotency",
-   "description": "tick 中途重启：核销行已写入账本（fsync）但 bus 未发 → 重启后账本不多行、日亏不漏记；bus 至少一次（每次重启都可能重发），消费端按键去重后只计一次（N4）。",
+   "description": "tick 中途重启：核销行已写入账本（fsync）但 runner 事件（events.jsonl）未写 → 重启后账本不多行、日亏不漏记；事件流至少一次（每次重启都可能重发），消费端按键去重后只计一次（N4）。不写 pod bus。",
    "issue_refs": [
     "#120",
     "#197"
@@ -22417,6 +23058,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.2,
@@ -22463,6 +23107,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -22511,6 +23158,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -22553,6 +23203,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -22595,6 +23248,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -22630,6 +23286,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -22925,7 +23584,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -23080,6 +23740,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -23115,6 +23778,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -23278,7 +23944,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -23438,6 +24105,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "invalid_risk_state",
       "halt_reason": "writeoff_row_conflict:m1|m1-Y",
       "realized_writeoff_usd": 0.0,
@@ -23465,6 +24135,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "invalid_risk_state",
       "halt_reason": "writeoff_row_conflict:m1|m1-Y",
       "realized_writeoff_usd": 0.0,
@@ -23621,7 +24294,8 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
    ]
   },
   {
@@ -23818,6 +24492,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -23873,6 +24550,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 9.85,
       "daily_loss_usd": 9.9,
@@ -23910,6 +24590,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -23947,6 +24630,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -23984,6 +24670,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 9.9,
@@ -24021,6 +24710,9 @@
         "m1|m1-Y"
        ]
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -24056,6 +24748,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -24093,6 +24788,9 @@
        "usd": 0.0,
        "legs": []
       },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
@@ -24429,7 +25127,2341 @@
     "INV-6",
     "INV-9",
     "INV-10",
-    "INV-11"
+    "INV-11",
+    "INV-13"
+   ]
+  },
+  {
+   "id": "WO-42",
+   "category": "settlement",
+   "description": "两市场：mB 核销（D0）后于 D2 结算为赢 → 结算日 realized_gain 记全额 payout 10.0，不抵扣日亏（D2 日亏 = mA 浮亏 0.7）；mB 额度结算后释放，mA 仍占用。",
+   "issue_refs": [
+    "#194",
+    "#197"
+   ],
+   "inputs": {
+    "ledger": [
+     {
+      "fill_id": "a1",
+      "ts": "2026-10-12T08:00:00Z",
+      "market": "mA",
+      "token_id": "mA-Y",
+      "condition_id": "0xc-mA",
+      "side": "buy",
+      "shares": 10.0,
+      "effective_price": 0.985,
+      "notional_usd": 9.85,
+      "fee_usd": 0.0,
+      "hypothetical": false,
+      "counts_toward_risk": true,
+      "risk_decision": "allow"
+     },
+     {
+      "fill_id": "b1",
+      "ts": "2026-10-12T08:00:00Z",
+      "market": "mB",
+      "token_id": "mB-Y",
+      "condition_id": "0xc-mB",
+      "side": "buy",
+      "shares": 10.0,
+      "effective_price": 0.985,
+      "notional_usd": 9.85,
+      "fee_usd": 0.0,
+      "hypothetical": false,
+      "counts_toward_risk": true,
+      "risk_decision": "allow"
+     }
+    ],
+    "steps": [
+     {
+      "t": "2026-10-12T08:00:30Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-12T08:00:20Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       },
+       "mB|mB-Y": {
+        "book_ts": "2026-10-12T08:00:20Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       }
+      }
+     },
+     {
+      "t": "2026-10-12T12:01:00Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-12T12:00:50Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       },
+       "mB|mB-Y": null
+      },
+      "gamma": {
+       "mB": {
+        "closed": true,
+        "acceptingOrders": false,
+        "closedTime": "2026-10-12T12:00:00Z",
+        "active": true,
+        "umaResolutionStatus": "resolved"
+       }
+      }
+     },
+     {
+      "t": "2026-10-12T12:01:45Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-12T12:01:40Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       }
+      },
+      "gamma": {
+       "mB": {
+        "closed": true,
+        "acceptingOrders": false,
+        "closedTime": "2026-10-12T12:00:00Z",
+        "active": true,
+        "umaResolutionStatus": "resolved"
+       }
+      }
+     },
+     {
+      "t": "2026-10-13T00:00:30Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-13T00:00:20Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       }
+      },
+      "gamma": {
+       "mB": {
+        "closed": true,
+        "acceptingOrders": false,
+        "closedTime": "2026-10-12T12:00:00Z",
+        "active": true,
+        "umaResolutionStatus": "resolved"
+       }
+      }
+     },
+     {
+      "t": "2026-10-14T00:00:30Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-14T00:00:20Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       }
+      },
+      "gamma": {
+       "mB": {
+        "closed": true,
+        "acceptingOrders": false,
+        "closedTime": "2026-10-12T12:00:00Z",
+        "active": true,
+        "umaResolutionStatus": "resolved"
+       }
+      }
+     },
+     {
+      "t": "2026-10-14T13:00:00Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-14T12:59:50Z",
+        "bids": [
+         [
+          0.9,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.92,
+          500.0
+         ]
+        ]
+       }
+      },
+      "gamma": {
+       "mB": {
+        "closed": true,
+        "acceptingOrders": false,
+        "closedTime": "2026-10-12T12:00:00Z",
+        "active": true,
+        "umaResolutionStatus": "resolved"
+       }
+      },
+      "resolution": {
+       "condition_id": "0xc-mB",
+       "market": "mB",
+       "winning_token_id": "mB-Y",
+       "outcome_token_ids": [
+        "mB-Y",
+        "mB-N"
+       ],
+       "status": "resolved",
+       "uma_checked": true,
+       "closed_ts": "2026-10-12T12:00:00Z"
+      }
+     },
+     {
+      "t": "2026-10-14T13:05:00Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-14T13:04:50Z",
+        "bids": [
+         [
+          0.9,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.92,
+          500.0
+         ]
+        ]
+       }
+      }
+     }
+    ],
+    "late_days": [],
+    "start_of_day_snapshots": [
+     {
+      "day": "2026-10-12",
+      "created_at": "2026-10-12T08:00:30Z",
+      "late": false,
+      "legs": []
+     },
+     {
+      "day": "2026-10-13",
+      "created_at": "2026-10-13T00:00:30Z",
+      "late": false,
+      "legs": [
+       {
+        "leg_key": "mA|mA-Y",
+        "shares": 10.0,
+        "cost_basis_usd": 9.85,
+        "mark_usd": 9.7,
+        "mark_source": "bid_ladder",
+        "book_ts": "2026-10-13T00:00:20Z",
+        "mark_invalid": false
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "shares": 10.0,
+        "cost_basis_usd": 9.85,
+        "mark_usd": 0.0,
+        "mark_source": "invalid_book",
+        "book_ts": null,
+        "mark_invalid": true
+       }
+      ]
+     },
+     {
+      "day": "2026-10-14",
+      "created_at": "2026-10-14T00:00:30Z",
+      "late": false,
+      "legs": [
+       {
+        "leg_key": "mA|mA-Y",
+        "shares": 10.0,
+        "cost_basis_usd": 9.85,
+        "mark_usd": 9.7,
+        "mark_source": "bid_ladder",
+        "book_ts": "2026-10-14T00:00:20Z",
+        "mark_invalid": false
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "shares": 10.0,
+        "cost_basis_usd": 9.85,
+        "mark_usd": 0.0,
+        "mark_source": "invalid_book",
+        "book_ts": null,
+        "mark_invalid": true
+       }
+      ]
+     }
+    ]
+   },
+   "checks": [
+    "full_payout_gain_on_settlement_day",
+    "no_offset",
+    "occupancy_released_at_settle"
+   ],
+   "expected": {
+    "steps": [
+     {
+      "t": "2026-10-12T08:00:30Z",
+      "day": "2026-10-12",
+      "close_reasons": {},
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 0,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.3,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.3
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T12:01:00Z",
+      "day": "2026-10-12",
+      "close_reasons": {
+       "mB": "awaiting_confirmation"
+      },
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 0,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 10.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 10.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T12:01:45Z",
+      "day": "2026-10-12",
+      "close_reasons": {
+       "mB": "writeoff_confirmed_reread"
+      },
+      "writeoff_emitted": true,
+      "writeoff_events": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [
+       {
+        "event_id": "writeoff-6f068b1b481f494034d4dc585b0841ba",
+        "replay": false
+       }
+      ],
+      "bus_keys_required_by_now": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 9.85,
+      "daily_loss_usd": 10.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 9.85,
+       "unrealized_usd": 0.15
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       }
+      ]
+     },
+     {
+      "t": "2026-10-13T00:00:30Z",
+      "day": "2026-10-13",
+      "close_reasons": {
+       "mB": "already_written_off"
+      },
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.7,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       }
+      ]
+     },
+     {
+      "t": "2026-10-14T00:00:30Z",
+      "day": "2026-10-14",
+      "close_reasons": {
+       "mB": "already_written_off"
+      },
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.7,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       }
+      ]
+     },
+     {
+      "t": "2026-10-14T13:00:00Z",
+      "day": "2026-10-14",
+      "close_reasons": {
+       "mB": "settled_no_writeoff"
+      },
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 1,
+       "usd": 9.85,
+       "legs": [
+        "mA|mA-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.7,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.7
+      },
+      "realized_gain_usd": 10.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [
+       "settle-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.7,
+        "value_usd": 9.0,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.7
+       }
+      ]
+     },
+     {
+      "t": "2026-10-14T13:05:00Z",
+      "day": "2026-10-14",
+      "close_reasons": {},
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 1,
+       "usd": 9.85,
+       "legs": [
+        "mA|mA-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.7,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.7
+      },
+      "realized_gain_usd": 10.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.7,
+        "value_usd": 9.0,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.7
+       }
+      ]
+     }
+    ],
+    "writeoff_events": [
+     {
+      "event_id": "writeoff-6f068b1b481f494034d4dc585b0841ba",
+      "ts": "2026-10-12T12:01:45Z",
+      "day": "2026-10-12",
+      "leg_key": "mB|mB-Y",
+      "market": "mB",
+      "condition_id": "0xc-mB",
+      "token_id": "mB-Y",
+      "shares": 10.0,
+      "cost_basis_usd": 9.85,
+      "open_fees_usd": 0.0,
+      "full_cost_usd": 9.85,
+      "daily_loss_component_usd": 9.85,
+      "reason": "writeoff_confirmed_reread",
+      "evidence": {
+       "first_read_t": "2026-10-12T12:01:00Z",
+       "confirm_t": "2026-10-12T12:01:45Z",
+       "closed_time": "2026-10-12T12:00:00+00:00",
+       "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-mB&closed=true"
+      }
+     }
+    ],
+    "day_end_daily_loss_usd": {
+     "2026-10-12": 10.0,
+     "2026-10-13": 0.0,
+     "2026-10-14": 0.7
+    },
+    "final": {
+     "realized_pnl_usd": 0.15,
+     "fees_total_usd": 0.0,
+     "open_legs_not_written_off": [
+      "mA|mA-Y"
+     ],
+     "written_off_unsettled_legs": [],
+     "writeoff_count": 1
+    },
+    "halted": null,
+    "bus": {
+     "semantics": "at_least_once_consumer_dedupe_by_key",
+     "keys_required": [
+      "writeoff-6f068b1b481f494034d4dc585b0841ba"
+     ],
+     "model_emissions_by_key": {
+      "writeoff-6f068b1b481f494034d4dc585b0841ba": 1
+     },
+     "consumer_deduped_count_by_key": {
+      "writeoff-6f068b1b481f494034d4dc585b0841ba": 1
+     }
+    }
+   },
+   "dev_current": {
+    "steps": [
+     {
+      "t": "2026-10-12T08:00:30Z",
+      "day": "2026-10-12",
+      "daily_loss_usd": 0.3,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.3
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T12:01:00Z",
+      "day": "2026-10-12",
+      "daily_loss_usd": 10.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 10.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T12:01:45Z",
+      "day": "2026-10-12",
+      "daily_loss_usd": 10.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 10.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-13T00:00:30Z",
+      "day": "2026-10-13",
+      "daily_loss_usd": 9.85,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 9.85
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.7,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-14T00:00:30Z",
+      "day": "2026-10-14",
+      "daily_loss_usd": 9.85,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 9.85
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.7,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-14T13:00:00Z",
+      "day": "2026-10-14",
+      "daily_loss_usd": 0.7,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.7
+      },
+      "realized_gain_usd": 0.15,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 1,
+       "usd": 9.85,
+       "legs": [
+        "mA|mA-Y"
+       ]
+      },
+      "settlement_booked": [
+       "settle-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.7,
+        "value_usd": 9.0,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.7
+       }
+      ]
+     },
+     {
+      "t": "2026-10-14T13:05:00Z",
+      "day": "2026-10-14",
+      "daily_loss_usd": 0.7,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.7
+      },
+      "realized_gain_usd": 0.15,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 1,
+       "usd": 9.85,
+       "legs": [
+        "mA|mA-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.7,
+        "value_usd": 9.0,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.7
+       }
+      ]
+     }
+    ],
+    "day_end_daily_loss_usd": {
+     "2026-10-12": 10.0,
+     "2026-10-13": 9.85,
+     "2026-10-14": 0.7
+    },
+    "final": {
+     "realized_pnl_usd": 0.15,
+     "fees_total_usd": 0.0,
+     "open_legs_not_written_off": [
+      "mA|mA-Y"
+     ],
+     "written_off_unsettled_legs": [],
+     "writeoff_count": 0
+    }
+   },
+   "uses_second_source": false,
+   "differs_from_dev": true,
+   "diffs": [
+    "2026-10-13T00:00:30Z:daily_loss_usd 9.85 -> 0.0",
+    "2026-10-14T00:00:30Z:daily_loss_usd 9.85 -> 0.0",
+    "2026-10-14T13:00:00Z:realized_gain_usd 0.15 -> 10.0",
+    "2026-10-14T13:05:00Z:realized_gain_usd 0.15 -> 10.0"
+   ],
+   "invariants_checked": [
+    "INV-1",
+    "INV-2",
+    "INV-3",
+    "INV-4",
+    "INV-6",
+    "INV-9",
+    "INV-10",
+    "INV-11",
+    "INV-13"
+   ]
+  },
+  {
+   "id": "WO-43",
+   "category": "halt_resume",
+   "description": "OQ-N7：mB 核销后读到 closed=false → 全局 halt（任何市场都不结算、daily_loss=None）；人工解除全局 halt 后，mB 结算仍被 #214 阻断（settlement_blocked_markets，不 halt、不入账、占用保留），mA 正常结算；核销不回滚、不二次核销。",
+   "issue_refs": [
+    "#197",
+    "#214"
+   ],
+   "inputs": {
+    "ledger": [
+     {
+      "fill_id": "a1",
+      "ts": "2026-10-12T08:00:00Z",
+      "market": "mA",
+      "token_id": "mA-Y",
+      "condition_id": "0xc-mA",
+      "side": "buy",
+      "shares": 10.0,
+      "effective_price": 0.985,
+      "notional_usd": 9.85,
+      "fee_usd": 0.0,
+      "hypothetical": false,
+      "counts_toward_risk": true,
+      "risk_decision": "allow"
+     },
+     {
+      "fill_id": "b1",
+      "ts": "2026-10-12T08:00:00Z",
+      "market": "mB",
+      "token_id": "mB-Y",
+      "condition_id": "0xc-mB",
+      "side": "buy",
+      "shares": 10.0,
+      "effective_price": 0.985,
+      "notional_usd": 9.85,
+      "fee_usd": 0.0,
+      "hypothetical": false,
+      "counts_toward_risk": true,
+      "risk_decision": "allow"
+     }
+    ],
+    "steps": [
+     {
+      "t": "2026-10-12T08:00:30Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-12T08:00:20Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       },
+       "mB|mB-Y": {
+        "book_ts": "2026-10-12T08:00:20Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       }
+      }
+     },
+     {
+      "t": "2026-10-12T12:01:00Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-12T12:00:50Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       },
+       "mB|mB-Y": null
+      },
+      "gamma": {
+       "mB": {
+        "closed": true,
+        "acceptingOrders": false,
+        "closedTime": "2026-10-12T12:00:00Z",
+        "active": true,
+        "umaResolutionStatus": "resolved"
+       }
+      }
+     },
+     {
+      "t": "2026-10-12T12:01:45Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-12T12:01:40Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       }
+      },
+      "gamma": {
+       "mB": {
+        "closed": true,
+        "acceptingOrders": false,
+        "closedTime": "2026-10-12T12:00:00Z",
+        "active": true,
+        "umaResolutionStatus": "resolved"
+       }
+      }
+     },
+     {
+      "t": "2026-10-12T13:00:00Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-12T12:59:50Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       }
+      },
+      "gamma": {
+       "mB": {
+        "closed": false,
+        "acceptingOrders": true,
+        "closedTime": null,
+        "active": true,
+        "umaResolutionStatus": null
+       }
+      }
+     },
+     {
+      "t": "2026-10-12T13:05:00Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-12T13:04:50Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       }
+      },
+      "resolution": {
+       "condition_id": "0xc-mA",
+       "market": "mA",
+       "winning_token_id": "mA-Y",
+       "outcome_token_ids": [
+        "mA-Y",
+        "mA-N"
+       ],
+       "status": "resolved",
+       "uma_checked": true,
+       "closed_ts": "2026-10-12T12:00:00Z"
+      }
+     },
+     {
+      "t": "2026-10-13T09:00:00Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-13T08:59:50Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       }
+      },
+      "operator_resume": true,
+      "gamma": {
+       "mB": {
+        "closed": true,
+        "acceptingOrders": false,
+        "closedTime": "2026-10-12T12:00:00Z",
+        "active": true,
+        "umaResolutionStatus": "resolved"
+       }
+      }
+     },
+     {
+      "t": "2026-10-13T10:00:00Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-13T09:59:50Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       }
+      },
+      "gamma": {
+       "mB": {
+        "closed": true,
+        "acceptingOrders": false,
+        "closedTime": "2026-10-12T12:00:00Z",
+        "active": true,
+        "umaResolutionStatus": "resolved"
+       }
+      },
+      "resolution": {
+       "condition_id": "0xc-mB",
+       "market": "mB",
+       "winning_token_id": "mB-Y",
+       "outcome_token_ids": [
+        "mB-Y",
+        "mB-N"
+       ],
+       "status": "resolved",
+       "uma_checked": true,
+       "closed_ts": "2026-10-12T12:00:00Z"
+      }
+     },
+     {
+      "t": "2026-10-13T10:05:00Z",
+      "resolution": {
+       "condition_id": "0xc-mA",
+       "market": "mA",
+       "winning_token_id": "mA-Y",
+       "outcome_token_ids": [
+        "mA-Y",
+        "mA-N"
+       ],
+       "status": "resolved",
+       "uma_checked": true,
+       "closed_ts": "2026-10-12T12:00:00Z"
+      }
+     },
+     {
+      "t": "2026-10-14T00:00:30Z"
+     }
+    ],
+    "late_days": [],
+    "start_of_day_snapshots": [
+     {
+      "day": "2026-10-12",
+      "created_at": "2026-10-12T08:00:30Z",
+      "late": false,
+      "legs": []
+     },
+     {
+      "day": "2026-10-13",
+      "created_at": "2026-10-13T09:00:00Z",
+      "late": false,
+      "legs": [
+       {
+        "leg_key": "mA|mA-Y",
+        "shares": 10.0,
+        "cost_basis_usd": 9.85,
+        "mark_usd": 9.7,
+        "mark_source": "bid_ladder",
+        "book_ts": "2026-10-13T08:59:50Z",
+        "mark_invalid": false
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "shares": 10.0,
+        "cost_basis_usd": 9.85,
+        "mark_usd": 0.0,
+        "mark_source": "invalid_book",
+        "book_ts": null,
+        "mark_invalid": true
+       }
+      ]
+     },
+     {
+      "day": "2026-10-14",
+      "created_at": "2026-10-14T00:00:30Z",
+      "late": false,
+      "legs": [
+       {
+        "leg_key": "mB|mB-Y",
+        "shares": 10.0,
+        "cost_basis_usd": 9.85,
+        "mark_usd": 0.0,
+        "mark_source": "invalid_book",
+        "book_ts": null,
+        "mark_invalid": true
+       }
+      ]
+     }
+    ]
+   },
+   "checks": [
+    "global_halt",
+    "settlement_blocked_after_resume",
+    "others_settle"
+   ],
+   "expected": {
+    "steps": [
+     {
+      "t": "2026-10-12T08:00:30Z",
+      "day": "2026-10-12",
+      "close_reasons": {},
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 0,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.3,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.3
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T12:01:00Z",
+      "day": "2026-10-12",
+      "close_reasons": {
+       "mB": "awaiting_confirmation"
+      },
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 0,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 10.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 10.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T12:01:45Z",
+      "day": "2026-10-12",
+      "close_reasons": {
+       "mB": "writeoff_confirmed_reread"
+      },
+      "writeoff_emitted": true,
+      "writeoff_events": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [
+       {
+        "event_id": "writeoff-6f068b1b481f494034d4dc585b0841ba",
+        "replay": false
+       }
+      ],
+      "bus_keys_required_by_now": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 9.85,
+      "daily_loss_usd": 10.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 9.85,
+       "unrealized_usd": 0.15
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T13:00:00Z",
+      "day": "2026-10-12",
+      "close_reasons": {},
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "invalid_risk_state",
+      "halt_reason": "closed_flag_contradiction_after_writeoff",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": null,
+      "settlement_booked": [],
+      "max_daily_loss_veto": true
+     },
+     {
+      "t": "2026-10-12T13:05:00Z",
+      "day": "2026-10-12",
+      "close_reasons": {},
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "invalid_risk_state",
+      "halt_reason": "closed_flag_contradiction_after_writeoff",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": null,
+      "settlement_booked": [],
+      "max_daily_loss_veto": true
+     },
+     {
+      "t": "2026-10-13T09:00:00Z",
+      "day": "2026-10-13",
+      "close_reasons": {
+       "mB": "already_written_off"
+      },
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": "closed_flag_contradiction_after_writeoff",
+      "settlement_blocked_markets": [
+       "mB"
+      ],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.7,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       }
+      ]
+     },
+     {
+      "t": "2026-10-13T10:00:00Z",
+      "day": "2026-10-13",
+      "close_reasons": {
+       "mB": "already_written_off"
+      },
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [
+       "mB"
+      ],
+      "settlement_skipped_blocked": [
+       "mB"
+      ],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.7,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       }
+      ]
+     },
+     {
+      "t": "2026-10-13T10:05:00Z",
+      "day": "2026-10-13",
+      "close_reasons": {},
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 1,
+       "usd": 9.85,
+       "legs": [
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [
+       "mB"
+      ],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.0
+      },
+      "realized_gain_usd": 0.15,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [
+       "settle-3685d951dece907830eccd13c26b7475"
+      ],
+      "settlement_problems": [],
+      "marks": []
+     },
+     {
+      "t": "2026-10-14T00:00:30Z",
+      "day": "2026-10-14",
+      "close_reasons": {},
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-6f068b1b481f494034d4dc585b0841ba"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 1,
+       "usd": 9.85,
+       "legs": [
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [
+       "mB"
+      ],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": []
+     }
+    ],
+    "writeoff_events": [
+     {
+      "event_id": "writeoff-6f068b1b481f494034d4dc585b0841ba",
+      "ts": "2026-10-12T12:01:45Z",
+      "day": "2026-10-12",
+      "leg_key": "mB|mB-Y",
+      "market": "mB",
+      "condition_id": "0xc-mB",
+      "token_id": "mB-Y",
+      "shares": 10.0,
+      "cost_basis_usd": 9.85,
+      "open_fees_usd": 0.0,
+      "full_cost_usd": 9.85,
+      "daily_loss_component_usd": 9.85,
+      "reason": "writeoff_confirmed_reread",
+      "evidence": {
+       "first_read_t": "2026-10-12T12:01:00Z",
+       "confirm_t": "2026-10-12T12:01:45Z",
+       "closed_time": "2026-10-12T12:00:00+00:00",
+       "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-mB&closed=true"
+      }
+     }
+    ],
+    "day_end_daily_loss_usd": {
+     "2026-10-12": null,
+     "2026-10-13": 0.0,
+     "2026-10-14": 0.0
+    },
+    "final": {
+     "realized_pnl_usd": -9.7,
+     "fees_total_usd": 0.0,
+     "open_legs_not_written_off": [],
+     "written_off_unsettled_legs": [
+      "mB|mB-Y"
+     ],
+     "writeoff_count": 1
+    },
+    "halted": null,
+    "bus": {
+     "semantics": "at_least_once_consumer_dedupe_by_key",
+     "keys_required": [
+      "writeoff-6f068b1b481f494034d4dc585b0841ba"
+     ],
+     "model_emissions_by_key": {
+      "writeoff-6f068b1b481f494034d4dc585b0841ba": 1
+     },
+     "consumer_deduped_count_by_key": {
+      "writeoff-6f068b1b481f494034d4dc585b0841ba": 1
+     }
+    }
+   },
+   "dev_current": {
+    "steps": [
+     {
+      "t": "2026-10-12T08:00:30Z",
+      "day": "2026-10-12",
+      "daily_loss_usd": 0.3,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.3
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T12:01:00Z",
+      "day": "2026-10-12",
+      "daily_loss_usd": 10.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 10.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T12:01:45Z",
+      "day": "2026-10-12",
+      "daily_loss_usd": 10.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 10.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T13:00:00Z",
+      "day": "2026-10-12",
+      "daily_loss_usd": 10.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 10.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T13:05:00Z",
+      "day": "2026-10-12",
+      "daily_loss_usd": 10.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 10.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-13T09:00:00Z",
+      "day": "2026-10-13",
+      "daily_loss_usd": 9.85,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 9.85
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.7,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-13T10:00:00Z",
+      "day": "2026-10-13",
+      "daily_loss_usd": 9.85,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 9.85
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.7,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.7,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-13T10:05:00Z",
+      "day": "2026-10-13",
+      "daily_loss_usd": 9.85,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 9.85
+      },
+      "realized_gain_usd": 0.15,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 1,
+       "usd": 9.85,
+       "legs": [
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [
+       "settle-3685d951dece907830eccd13c26b7475"
+      ],
+      "marks": [
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     },
+     {
+      "t": "2026-10-14T00:00:30Z",
+      "day": "2026-10-14",
+      "daily_loss_usd": 9.85,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 9.85
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 1,
+       "usd": 9.85,
+       "legs": [
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       }
+      ]
+     }
+    ],
+    "day_end_daily_loss_usd": {
+     "2026-10-12": 10.0,
+     "2026-10-13": 9.85,
+     "2026-10-14": 9.85
+    },
+    "final": {
+     "realized_pnl_usd": 0.15,
+     "fees_total_usd": 0.0,
+     "open_legs_not_written_off": [
+      "mB|mB-Y"
+     ],
+     "written_off_unsettled_legs": [],
+     "writeoff_count": 0
+    }
+   },
+   "uses_second_source": false,
+   "differs_from_dev": true,
+   "diffs": [
+    "2026-10-12T13:00:00Z:daily_loss_usd 10.0 -> None",
+    "2026-10-12T13:00:00Z:max_daily_loss_veto False -> True",
+    "2026-10-12T13:00:00Z:risk_state ok -> invalid_risk_state",
+    "2026-10-12T13:05:00Z:daily_loss_usd 10.0 -> None",
+    "2026-10-12T13:05:00Z:max_daily_loss_veto False -> True",
+    "2026-10-12T13:05:00Z:risk_state ok -> invalid_risk_state",
+    "2026-10-13T09:00:00Z:daily_loss_usd 9.85 -> 0.0",
+    "2026-10-13T10:00:00Z:daily_loss_usd 9.85 -> 0.0",
+    "2026-10-13T10:05:00Z:daily_loss_usd 9.85 -> 0.0",
+    "2026-10-14T00:00:30Z:daily_loss_usd 9.85 -> 0.0",
+    "final:realized_pnl_usd 0.15 -> -9.7"
+   ],
+   "invariants_checked": [
+    "INV-1",
+    "INV-2",
+    "INV-3",
+    "INV-4",
+    "INV-6",
+    "INV-9",
+    "INV-10",
+    "INV-11",
+    "INV-13"
    ]
   }
  ]

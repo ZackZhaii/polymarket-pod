@@ -1,4 +1,4 @@
-"""Issue #197 (Task CK): Poly预测's v3 vectors (tests/fixtures/poly_forecast_197_vectors_v3.json, 44 vectors).
+"""Issue #197 (Task CK): Poly预测's v3 vectors (tests/fixtures/poly_forecast_197_vectors_v3.json, v3.2, 46 vectors; WO-43: OQ-N7 global halt, then the #214 market block after the Operator resume).
 
 Each vector is replayed tick by tick through the production code, in Poly风控's tick order
 (issuecomment-6106669720): restart (pending reads dropped, write-off events re-sent) -> ledger verify (a halt ends
@@ -21,16 +21,16 @@ from src import daily_loss as daily_loss_mod
 from src import halt_store, ledger_store, market_close, paper_ledger, settlement
 
 FIXTURE = Path(__file__).parent / "fixtures" / "poly_forecast_197_vectors_v3.json"
-SHA256_PREFIX = "23626341"
+SHA256_PREFIX = "214f058e"
 DATA = json.loads(FIXTURE.read_text(encoding="utf-8"))
 VECTORS = DATA["vectors"]
 TOL = 1e-6
 
 
-def test_the_vector_file_is_poly_forecasts_v3():
+def test_the_vector_file_is_poly_forecasts_v3_2():
     # the committed (LF) bytes: a Windows checkout with core.autocrlf=true has CRLF in the working copy
     assert hashlib.sha256(FIXTURE.read_bytes().replace(b"\r\n", b"\n")).hexdigest().startswith(SHA256_PREFIX)
-    assert DATA["version"] == "v3" and len(VECTORS) == 44
+    assert DATA["version"] == "v3.2" and len(VECTORS) == 46
 
 
 def _dt(stamp: str) -> datetime:
@@ -55,7 +55,7 @@ def _observation(market: str, read: object, now: datetime) -> market_close.Obser
 
 def _resolution(res: dict, t: str) -> dict:
     tokens = list(res["outcome_token_ids"])
-    return {"condition_id": res["condition_id"], "winning_token_id": res["winning_token_id"],
+    return {"condition_id": res["condition_id"], "market": res.get("market"), "winning_token_id": res["winning_token_id"],
             "outcome_token_ids": tokens,
             "outcome_prices_final": [1.0 if tok == res["winning_token_id"] else 0.0 for tok in tokens],
             "closed_ts": res["closed_ts"], "snapshot_ts": t, "status": res.get("status", "resolved"),
@@ -115,6 +115,7 @@ def test_poly_forecast_197_vector(env, vector):
     resend = True  # a process start
     bus_legs: set[str] = set()
     settled_markets: set[str] = set()
+    blocked: set[str] = set()  # v3.2 OQ-N7 / INV-13: the #214 market block, survives the global resume
     for step, exp in zip(inputs["steps"], expected["steps"], strict=True):
         t, now = step["t"], _dt(step["t"])
         label = f"{vector['id']} @ {t}"
@@ -131,8 +132,11 @@ def test_poly_forecast_197_vector(env, vector):
                 books.pop((market, token), None)
             else:
                 books[(market, token)] = book
-        if step.get("resolution"):
+        if step.get("resolution") and not halted:  # under a halt nothing settles: the read is not kept (WO-43)
             resolutions.append(_resolution(step["resolution"], t))
+        if step.get("operator_resume"):  # the Operator clears the global halt only; the market block stays
+            assert halted and exp["operator_resume"] and any(h.startswith(exp["operator_resume"]) for h in halted), label
+            halted = []
         _, read = ledger_store.read_ledger(env)
         problems = ledger_store.verify(read)
         if problems and not halted:
@@ -147,8 +151,14 @@ def test_poly_forecast_197_vector(env, vector):
             resend = False
         # 3) settlement first
         settled_now: set[str] = set()
-        if resolutions:
-            planned = settlement.plan(read.rows, list(read.ids), resolutions, t)
+        assert sorted(blocked) == sorted(exp.get("settlement_blocked_markets") or []), label
+        open_markets = market_close.held_markets(read.rows)
+        skipped = sorted({r["market"] for r in resolutions if r.get("market") in blocked and r["market"] in open_markets
+                          and r["snapshot_ts"] == t})
+        assert skipped == sorted(exp.get("settlement_skipped_blocked") or []), (label, skipped)
+        usable = [r for r in resolutions if r.get("market") not in blocked]
+        if usable:
+            planned = settlement.plan(read.rows, list(read.ids), usable, t)
             assert planned.problems == [], (label, planned.problems)
             for row in planned.rows:
                 ledger_store.book(env, row)
@@ -160,6 +170,10 @@ def test_poly_forecast_197_vector(env, vector):
         found = market_close.detect(tracker, read.rows, {m: o for m, o in reads.items() if m in held}, now)
         if found.halts:
             halted = found.halts
+            for reason in found.halts:  # #214: a contradicting market's settlement is blocked as well
+                market = reason.rsplit(":", 1)[-1]
+                if settlement.blocks_settlement(reason.split(":", 1)[0]) and market in reads:
+                    blocked.add(market)
             assert exp["risk_state"] == "invalid_risk_state", (label, found.halts)
             assert any(h.startswith(exp["halt_reason"]) for h in found.halts), (label, found.halts, exp["halt_reason"])
             assert len(_distinct_writeoffs(read.rows)) == exp["ledger_writeoff_rows"], label
