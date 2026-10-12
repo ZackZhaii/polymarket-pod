@@ -182,7 +182,7 @@ def test_an_untagged_intent_books_nothing(ledger):
 def _cli(**kw):
     base = dict(strategy="manual", market="m1", side="buy", model_prob=0.7, market_price=0.4, slippage=0.005,
                 fee_rate=0.0, liquidity=20000.0, spread=0.01, token_id="t", book_ts=paper_ledger.utc_now(),
-                note="", tags=None)
+                note="", tags=None, min_order_size=5.0)  # issue #226: the book minimum (missing vetoes)
     base.update(kw)
     return argparse.Namespace(**base)
 

@@ -370,6 +370,7 @@ def build_intent(forecast: dict[str, Any], signal: dict[str, Any], market_row: d
         intent_expires_at=intent_expires_at,
         shares=shares,  # issue #104: intent_builder's size; RiskGate only shrinks it
         limit_price=limit_price,
+        min_order_size=book_row.get("min_order_size"),  # issue #226: the recorded book's; missing vetoes
     )
 
 

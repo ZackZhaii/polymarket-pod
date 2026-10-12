@@ -395,7 +395,8 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     when this exact token already has an open position; another leg of the same
     market does not count. exposure_usd is the gross sum over open legs. leg_net_shares is this
     leg's net shares (buys minus sells; issue #123: RiskGate reads its sign to tell an add from a
-    reduction, and vetoes a same-direction add as add_to_open_leg).
+    reduction, and vetoes a same-direction add as add_to_open_leg; issue #226: a reduction books at most |net|,
+    and a sell on a leg that is not open vetoes sell_requires_position).
     recent_fills (every ledger row) and own_quotes (every paper quote row) are the
     history RiskGate's structured wash / self-trade check reads (Task S).
     Task AF: rows come from the strict ledger reader, deduped by fill_id. Any integrity problem
@@ -766,6 +767,8 @@ def _intent(**kwargs: Any) -> Intent:
         "tags": ("phase0-gate-test",),
         # Synthetic gate-test touch, stamped now so only the check under test can veto.
         "book_ts": utc_now(),
+        # Issue #226: the synthetic gate-test book's minimum order size (RiskGate requires one).
+        "min_order_size": 5.0,
     }
     defaults.update(kwargs)
     return Intent(**defaults)
@@ -895,6 +898,7 @@ def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
             best_bid=book.get("best_bid"),
             best_ask=book.get("best_ask"),
             fill_context=calibration_ids.FILL_CONTEXT_GATE_CHECK,  # Task BC: a gate check, never a sample
+            min_order_size=book.get("min_order_size"),  # issue #226: the recorded book's; missing vetoes
             note="Public ask used as both model and price. Must not fill. Not a forecast.",
         ),
         cfg,
@@ -921,6 +925,8 @@ def run_cli_intent(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, A
         fill_context=calibration_ids.FILL_CONTEXT_OPERATOR_CLI,  # Task BC: no book context
         # Issue #131: the market's Gamma tag slugs; none given vetoes missing_category.
         tags=tuple(t.strip() for t in (getattr(args, "tags", None) or "").split(",") if t.strip()) or None,
+        # Issue #226: the market's minimum order size in shares; none given vetoes missing_min_order_size.
+        min_order_size=getattr(args, "min_order_size", None),
     )
     return commit_if_allowed(intent, cfg)
 
@@ -958,6 +964,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--tags", default=None,
                         help="comma-separated Gamma tag slugs of the market (issue #131: none vetoes missing_category)")
+    parser.add_argument("--min-order-size", type=float, default=None,
+                        help="the market book's min_order_size in shares (issue #226: none vetoes missing_min_order_size)")
     parser.add_argument("--note", default="")
     parser.add_argument(
         "--self-check",
