@@ -15,17 +15,24 @@ UTF-8 JSONL — a bad JSON line, a non-object line, a torn last line or an unrea
 named failure; no lenient reader that skips bad lines is used. Only a ledger that verifies is
 joined, by explicit ``fill_id``.
 
-Honesty rule (review P1 on PR #202): the deep equality checks — full payload comparison, outer
-market and sender roles, duplicate / conflict copy policy, the UNKNOWN markers and input SHA256 —
-are the later acceptance items of issue #69 and are not implemented yet, so this tool never
-reports PASS: a run without problems still ends with verdict ``unknown`` and a non-zero exit, and
-the report names every check that remains unverified.
+Honesty rule (review P1 on PR #202): the deep equality checks — sender roles, duplicate / conflict
+copy policy, the UNKNOWN markers and input SHA256 — are the later acceptance items of issue #69 and
+are not implemented yet, so this tool never reports PASS: a run without problems still ends with
+verdict ``unknown`` and a non-zero exit, and the report names every check that remains unverified.
+
+Acceptance 3 of issue #69 (this change): every joined fill is compared in full. The ledger row and
+the Executor fill's ``payload`` must be equal under a type-sensitive normalized JSON comparison —
+key order and JSON formatting are normalized away, but ``10``, ``10.0``, ``true`` and ``"10.0"``
+stay distinct (Python ``==`` would call the first three equal) — and the message's outer ``market``
+must name the fill's market. The outer ``bus.ts`` is the bus write time and is deliberately
+ignored. A drifted copy, a missing field, a non-finite number or a wrong outer market is a named
+problem and a non-zero exit.
 
 Exit codes: 0 reserved for the fully checked pass (not reachable until those acceptance items
-land); 1 a problem — the ledger failed ``ledger_store.verify``, an orphan or join problem on
-either side — or verdict ``unknown`` (the logs are not validated as agreeing); 2 usage error, or
-an input that cannot be read in full (bad flags, a missing or unreadable file, undecodable bytes,
-a malformed or non-object line, a torn last line). Registry: docs/EXIT_CODES.md.
+land); 1 a problem — the ledger failed ``ledger_store.verify``, an orphan, a content mismatch or a
+join problem on either side — or verdict ``unknown`` (the logs are not validated as agreeing); 2
+usage error, or an input that cannot be read in full (bad flags, a missing or unreadable file,
+undecodable bytes, a malformed or non-object line, a torn last line). Registry: docs/EXIT_CODES.md.
 """
 from __future__ import annotations
 
@@ -45,13 +52,13 @@ BUS_FILL_TYPE = "fill"
 FILL_ID_FIELD = "fill_id"
 
 # Review P1 on PR #202: until these later acceptance items of issue #69 land, a clean fill_id join
-# is not proof that the two logs agree, so the verdict stays "unknown" and the exit stays non-zero.
+# with equal payloads is not proof that the two logs agree, so the verdict stays "unknown" and the
+# exit stays non-zero. Acceptance 3 (full payload, outer market) is checked and no longer listed.
 UNVERIFIED_CHECKS = (
-    "payload_equality_by_fill_id",        # acceptance 3: full payload + outer market comparison
-    "bus_outer_market_and_sender_roles",  # acceptance 3/4: outer market, from/to sender roles
-    "duplicate_and_conflict_copies",      # acceptance 4: bus-side duplicate / conflict policy
-    "legacy_and_hypothetical_unknown",    # acceptance 5: UNKNOWN markers for unjoinable rows
-    "input_sha256_and_counts",            # acceptance 6: input hashes, verified / unverified counts
+    "bus_sender_roles",                 # acceptance 4: from / to sender roles on the bus message
+    "duplicate_and_conflict_copies",    # acceptance 4: bus-side duplicate / conflict policy
+    "legacy_and_hypothetical_unknown",  # acceptance 5: UNKNOWN markers for unjoinable rows
+    "input_sha256_and_counts",          # acceptance 6: input hashes, verified / unverified counts
 )
 
 
@@ -92,6 +99,41 @@ def parse_jsonl(data: bytes, label: str) -> tuple[list[dict[str, Any]], list[str
 
 def _fill_id(value: Any) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
+
+
+def _canonical(value: Any) -> str | None:
+    """Type-sensitive normalized JSON text of one value (acceptance 3).
+
+    Key order and JSON formatting are normalized away, but the JSON type is not: ``10`` ("10"),
+    ``10.0`` ("10.0"), ``true`` ("true") and ``"10.0"`` stay distinct, where Python ``==`` would
+    call the first three equal. None means the value is not finite JSON (NaN / inf): it can never
+    compare equal to anything, and is named by ``_non_finite_fields``.
+    """
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False,
+                          separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _non_finite_fields(row: dict[str, Any]) -> list[str]:
+    """Field names whose value is not finite JSON (NaN / inf / unserializable), sorted."""
+    return [name for name in sorted(row) if _canonical(row[name]) is None]
+
+
+def _changed_fields(ledger_row: dict[str, Any], payload: dict[str, Any]) -> list[str]:
+    """Top-level field names where the booked row and the bus payload differ, sorted.
+
+    A key present on one side only is a difference too: the payload is the booked row verbatim
+    (paper_ledger: ``fill = booked``), so the key sets must match exactly.
+    """
+    changed = []
+    for name in sorted(set(ledger_row) | set(payload)):
+        if name not in ledger_row or name not in payload:
+            changed.append(name)
+        elif _canonical(ledger_row[name]) != _canonical(payload[name]):
+            changed.append(name)
+    return changed
 
 
 def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
@@ -137,13 +179,16 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
         return report  # a file that cannot be read in full is not a partial pass
 
     ledger_ids: list[str] = []
+    ledger_by_id: dict[str, dict[str, Any]] = {}
     for row in ledger_read.rows:
         fill_id = _fill_id(row.get(FILL_ID_FIELD))
         if fill_id is None:
             report["problems"].append("ledger:row_without_fill_id")  # legacy history: not guessed
         else:
             ledger_ids.append(fill_id)
+            ledger_by_id[fill_id] = row
     bus_ids: list[str] = []
+    bus_by_id: dict[str, list[dict[str, Any]]] = {}
     bus_fills = 0
     for row in bus_rows:
         if row.get("type") != BUS_FILL_TYPE:
@@ -155,12 +200,32 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
             report["problems"].append("bus:fill_without_fill_id")
         else:
             bus_ids.append(fill_id)
+            bus_by_id.setdefault(fill_id, []).append(row)
     report["bus"]["fills"] = bus_fills
     report["ledger"]["fills"] = len(ledger_ids)
     report["bus"]["duplicate_fills"] = len(bus_ids) - len(set(bus_ids))  # judged in acceptance 4
     report["ledger_only"] = sorted(set(ledger_ids) - set(bus_ids))
     report["bus_only"] = sorted(set(bus_ids) - set(ledger_ids))
     report["matched"] = len(set(ledger_ids) & set(bus_ids))
+
+    # Acceptance 3 of issue #69: every joined fill's full payload and the message's outer market.
+    # The comparison is type-sensitive normalized JSON (see _canonical); the outer bus.ts is the
+    # bus write time and is deliberately ignored. Every copy of a fill is compared, so a drifted
+    # second copy fails too. Sender roles stay acceptance 4 and are not checked here.
+    for fill_id in sorted(set(ledger_ids) & set(bus_ids)):
+        ledger_row = ledger_by_id[fill_id]
+        for message in bus_by_id[fill_id]:
+            payload = message.get("payload")
+            if _non_finite_fields(ledger_row) or _non_finite_fields(payload):
+                # NaN / inf can never be evidence of equality (even to a same-valued NaN copy).
+                report["problems"].append(f"non_finite_payload:{fill_id}")
+                continue
+            fields = _changed_fields(ledger_row, payload)
+            if fields:
+                report["problems"].append(f"payload_mismatch:{fill_id}:{'+'.join(fields)}")
+            outer_market = _canonical(message.get("market"))
+            if outer_market is None or outer_market != _canonical(ledger_row.get("market")):
+                report["problems"].append(f"outer_market_mismatch:{fill_id}")
     # P1: "pass" is deliberately not assigned here; without the unverified checks above it would
     # claim more than this tool proved. It appears only with the later acceptance items of #69.
     report["verdict"] = ("fail" if report["problems"] or report["ledger_only"] or report["bus_only"]
