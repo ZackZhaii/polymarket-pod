@@ -127,7 +127,9 @@ def test_a_winning_leg_settles_at_one_and_its_gain_offsets_nothing(env):
     assert sorted(row["settlement_payout"] for row in out["booked"]) == [0.0, 1.0]
     state = paper_ledger.load_state("x", "t")
     assert state["daily_realized_gain_usd"] == pytest.approx(10.0)
-    assert state["daily_loss_usd"] == pytest.approx(10.0)  # the loser only
+    # Codex回迁 C217 (Owner 2026-10-13): the loser (10) plus the settled winner kept at its no-book value
+    # (10) for the rest of the UTC day; the winner's gain offsets nothing.
+    assert state["daily_loss_usd"] == pytest.approx(20.0)
     assert state["open_positions"] == 0
     _, read = ledger_store.read_ledger(env["ledger"])
     assert ledger_store.verify(read) == []  # cash, shares and cost conservation hold with settlement rows

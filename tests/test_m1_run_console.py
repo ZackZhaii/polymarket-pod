@@ -144,16 +144,23 @@ def test_sigterm_records_the_reason(tmp_path):
     assert manifest["ended_at"] and manifest["files"]["books"]
 
 
-def test_the_manifest_records_progress_while_running(tmp_path):
+def test_the_manifest_records_progress_while_running(tmp_path, monkeypatch):
     seen = {}
+    real_write_manifest = r.write_manifest
+
+    def write_and_observe(run_dir, manifest):
+        real_write_manifest(run_dir, manifest)
+        if manifest["status"] == "running" and manifest.get("progress"):
+            # Observe the real disk while ManifestWriter still holds its lock, so this test's
+            # read handle is closed before another os.replace (Windows disallows that overlap).
+            seen.update(_peek(tmp_path))
+
+    monkeypatch.setattr(r, "write_manifest", write_and_observe)
 
     def wait_for_progress():
         deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            manifest = _peek(tmp_path)
-            if manifest.get("progress"):
-                seen.update(manifest)
-                return
+        # A first progress flush can precede the scripted book.
+        while not seen.get("progress", {}).get("book_rows") and time.monotonic() < deadline:
             time.sleep(0.01)
 
     code, out, _, _, _ = _main(tmp_path, [[_book(A), wait_for_progress]], ["--assets", A], progress_every_s=0.02)
