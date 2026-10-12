@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import inspect
+import json
 import math
 from datetime import datetime, timezone
 
@@ -25,6 +26,8 @@ NOW = "2026-10-08T08:00:00Z"
 NOW_DT = datetime(2026, 10, 8, 8, tzinfo=timezone.utc)
 STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
          "recent_fills": [], "own_quotes": []}
+# Issue #226 (D4): a sell needs an open long leg (no naked short); the net is large so it never caps the size.
+HELD = dict(STATE, open_positions=1, leg_already_open=True, leg_net_shares=1_000_000.0)
 RISK_SHA = "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04"
 INVALID = [math.nan, math.inf, -math.inf, "0.02", None, True]
 
@@ -37,6 +40,7 @@ def _intent(**overrides: object) -> Intent:
     }
     fields.update(overrides)
     fields.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
+    fields.setdefault("min_order_size", 5.0)  # issue #226: a book minimum (missing vetoes)
     return Intent(**fields)  # type: ignore[arg-type]
 
 
@@ -178,7 +182,7 @@ def test_buy_edge_pays_the_fee_on_the_effective_price():
 
 
 def test_sell_books_the_fee_on_the_market_price():
-    decision = _eval(side="sell", model_prob=0.30)
+    decision = evaluate(_intent(side="sell", model_prob=0.30), load_risk(), HELD, now=NOW_DT)
     assert decision.edge == pytest.approx(0.395 - 0.30 - 0.02 * 0.40)  # 0.087, unchanged
     # issue #104: 24.81 shares fit 10 USD all-in at 0.395 + 0.008; the fee is still charged on market_price
     assert decision.shares == 24.81
@@ -233,14 +237,22 @@ def _ledger(tmp_path, monkeypatch):
 
 def test_ledger_books_the_higher_sell_fee(tmp_path, monkeypatch):
     _ledger(tmp_path, monkeypatch)
+    # Issue #226 (D4): a naked short is vetoed now, so the sell reduces an old long leg (100 @ 0.05, no fee).
+    (tmp_path / "paper.jsonl").write_text(json.dumps({
+        "ts": "2026-01-01T00:00:00Z", "market": "ae", "token_id": "t", "side": "buy", "shares": 100.0,
+        "notional_usd": 5.0, "fee_usd": 0.0, "hypothetical": False, "counts_toward_risk": True}) + "\n",
+        encoding="utf-8")
+    naked = paper_ledger.commit_if_allowed(_intent(side="sell", model_prob=0.30, token_id="t-not-held",
+                                                   book_ts=utc_now()), load_risk())
+    assert naked["allow"] is False and naked["decision"]["reasons"] == ["sell_requires_position"]
     result = paper_ledger.commit_if_allowed(_intent(side="sell", model_prob=0.30, book_ts=utc_now()), load_risk())
     assert result["allow"] is True
     assert result["fill"]["fee_usd"] == 0.19848  # 24.81 shares * 0.02 * 0.40 (issue #104 sizing)
     assert result["fill"]["edge_formula"] == risk_gate.EDGE_FORMULA_SELL
     state = paper_ledger.load_state("ae", "t")
     assert state["daily_fees_usd"] == 0.19848
-    # Task CF (#124): the new short (no book) costs 1 USD a share to buy back: its loss counts too.
-    assert state["daily_loss_usd"] == pytest.approx(0.19848 + result["fill"]["shares"] - result["fill"]["notional_usd"])
+    assert state["leg_net_shares"] == pytest.approx(100.0 - 24.81)  # a reduce, never a sign flip
+    assert state["daily_loss_usd"] >= state["daily_fees_usd"]
 
 
 def test_ledger_buy_fee_is_unchanged(tmp_path, monkeypatch):
