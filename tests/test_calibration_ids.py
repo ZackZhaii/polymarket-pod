@@ -306,9 +306,11 @@ def test_identity_never_changes_a_risk_decision():
     now = datetime.now(timezone.utc)
     cfg = load_risk()
     for kw in [dict(), dict(model_prob=0.41), dict(spread=0.2), dict(liquidity_usd=10.0), dict(side="sell")]:
-        full = evaluate(_ok_intent(**kw), cfg, dict(STATE), now=now)
-        bare = evaluate(_ok_intent(**kw, decision_id=None, forecast_id=None, forecast_ts=None, condition_id=None,
-                                   outcome_index=None, outcome=None, end_date=None, model_version=None),
+        identified = _ok_intent(**kw, book_ts=now.isoformat())
+        full = evaluate(identified, cfg, dict(STATE), now=now)
+        bare = evaluate(dataclasses.replace(identified, decision_id=None, forecast_id=None, forecast_ts=None,
+                                            condition_id=None, outcome_index=None, outcome=None, end_date=None,
+                                            model_version=None),
                         cfg, dict(STATE), now=now)
         assert dataclasses.asdict(full) == dataclasses.asdict(bare), kw
 
