@@ -260,3 +260,20 @@ def test_exact_time_url_uses_the_existing_read_only_json_transport(monkeypatch):
     assert [(r.full_url, r.get_method(), r.data) for r in requests] == [(TIME_URL, "GET", None)]
     assert guard.url_problem(TIME_URL, code=True) is None
     assert guard.url_problems_in_source(f"URL = {TIME_URL!r}\n", "probe.py") == []
+
+
+def test_repeated_clock_pause_keeps_the_first_paused_since(env):
+    """#238 check (Codex回迁 intake): the same clock pause reason on later ticks keeps the original paused_since."""
+    first = env["now"]
+    fake = ClockGetters(first, server=RuntimeError("time down"))
+    assert tick(env, fake).paused_reason == "clock_unverified"
+    since = env["state"].paused_since
+    assert since is not None
+    for minutes in (1, 30, 120):
+        later = first + timedelta(minutes=minutes)
+        env["now"] = later
+        env["state"].clock = lambda later=later: later
+        env["state"].monotonic = lambda later=later: later.timestamp()
+        fake = ClockGetters(later, server=RuntimeError("time down"))
+        assert m2_runner.iteration(env["state"], now=later, getters=fake.getters()).paused_reason == "clock_unverified"
+        assert env["state"].paused_since == since
