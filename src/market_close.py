@@ -32,7 +32,10 @@ a non-boolean value or another closedTime is ignored.
 Write-off (``plan_writeoffs``): one ledger row per open leg of a confirmed market (YES and NO separately, never
 netted), keyed by leg_key: fill_id = ``writeoff-`` + sha256(market|token)[:32]. ``writeoff_usd`` is the leg's
 whole cost basis at average cost (a long: what it paid, fees excluded: they were counted on the fill day; a short:
-shares x 1 - sale proceeds). A leg already written off is skipped (restart-safe). Two different write-off rows for
+shares x 1 - sale proceeds), plus (RiskGate's correction, issuecomment-6109537257, tightening only) the start-of-day
+mark above that cost for the shares held since the start of the UTC day (src/leg_marks.writeoff_sod_uplift, from the
+day's snapshot; none yet today: 0), booked as ``writeoff_cost_usd`` + ``writeoff_sod_uplift_usd``. Shares bought
+today stay at cost. A leg already written off is skipped (restart-safe). Two different write-off rows for
 one key are a ledger integrity problem (src/ledger_store.py (f)): invalid_risk_state.
 """
 from __future__ import annotations
@@ -43,7 +46,7 @@ from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlencode
 
-from src import podlib
+from src import leg_marks, podlib
 from src.daily_loss import daily_loss, writeoff_amount
 from src.expiry_rule import parse_end_date
 from src.ledger_store import (
@@ -345,12 +348,20 @@ class WriteoffPlan:
 
 
 def plan_writeoffs(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], closes: Iterable[Close],
-                   now: str) -> WriteoffPlan:
-    """The write-off rows to book now for the confirmed closes (none for a leg already written off)."""
+                   now: str, snapshot: Mapping[str, Any] | None = None) -> WriteoffPlan:
+    """The write-off rows to book now for the confirmed closes (none for a leg already written off).
+
+    ``snapshot`` is the start-of-day snapshot of ``now``'s UTC day (src/daily_marks), None when there is none yet.
+    """
     result = WriteoffPlan()
     day = daily_loss(ledger_rows, now[:10], ledger_ids)
     if day.problems:
         result.problems = [f"writeoff_ledger_invalid:{problem}" for problem in day.problems]
+        return result
+    pos = leg_marks.positions(ledger_rows, now[:10], ledger_ids)
+    problems = pos.problems + leg_marks.snapshot_problems(pos, snapshot)
+    if problems:
+        result.problems = [f"writeoff_marks_invalid:{problem}" for problem in problems]
         return result
     already = written_off_legs(ledger_rows)
     held = held_markets(ledger_rows)
@@ -363,6 +374,7 @@ def plan_writeoffs(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], clo
             amount = None if leg is None else writeoff_amount(leg)
             if leg is None or amount is None:
                 continue
+            uplift = leg_marks.writeoff_sod_uplift(pos, snapshot, key)
             result.rows.append({
                 FILL_ID_FIELD: writeoff_fill_id(close.market, token),
                 "ts": now,
@@ -381,12 +393,15 @@ def plan_writeoffs(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], clo
                 "counts_toward_risk": True,
                 "risk_decision": WRITEOFF_DECISION,
                 "writeoff_shares": abs(leg["shares"]),
-                "writeoff_usd": amount,
+                "writeoff_usd": amount + uplift,
+                "writeoff_cost_usd": amount,
+                "writeoff_sod_uplift_usd": uplift,
                 "closed_ts": close.closed_ts,
                 "close_first_seen_ts": close.first_seen.isoformat(),
                 "close_confirmed_ts": close.confirmed_at.isoformat(),
                 "close_confirmed_by": close.confirmed_by,
-                "note": "Paper write-off of a closed market's open leg at its full cost (#197, KEY-approved). "
+                "note": "Paper write-off of a closed market's open leg at its full cost, start-of-day shares at "
+                        "max(cost, start-of-day mark) (#197, KEY-approved; RiskGate correction 6109537257). "
                         "No exchange action; the leg holds its limits until it settles.",
             })
     return result

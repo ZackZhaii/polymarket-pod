@@ -78,9 +78,13 @@ nothing more. All of this is tightening only and fails closed. No orders, keys o
     true) that moves nothing: ``shares``, ``notional_usd``, both prices, ``fee_rate`` and ``fee_usd`` are all 0,
     so cash, shares and cost basis stay as they were (the leg still holds every limit until it settles). It
     names the closing side of the leg, ``writeoff_shares`` (the whole open leg, exactly), ``writeoff_usd``
-    (finite, >= 0: the leg's full cost, checked by src/daily_loss.py against the average-cost replay) and
-    ``closed_ts`` (the market's zoned closedTime). It must sit on an open leg with exactly those shares and the
-    leg must not be written off already (``writeoff_not_open``); a damaged row is ``invalid_writeoff``. Its
+    (finite, >= 0: the amount realized, checked by src/daily_loss.py against the average-cost replay) and
+    ``closed_ts`` (the market's zoned closedTime). RiskGate's correction (#197, issuecomment-6109537257): shares
+    held since the start of the UTC day are written off at max(cost, start-of-day mark), so the row also carries
+    ``writeoff_cost_usd`` (the full cost) and ``writeoff_sod_uplift_usd`` (the start-of-day mark above that cost,
+    0 when none); when present each must be a finite number >= 0 (src/daily_loss.py checks that they add up).
+    A row without both (written before the correction) is the full cost exactly. It must sit on an open leg
+    with exactly those shares and the leg must not be written off already (``writeoff_not_open``); a damaged row is ``invalid_writeoff``. Its
     fill_id is derived from the leg (market, token_id) (src/market_close.py: the write-off key is leg_key), so booking it twice is
     idempotent and a restart never writes the same leg off again.
 """
@@ -217,7 +221,10 @@ def writeoff_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
           and shares is not None and shares > LEDGER_OPEN_EPS and amount is not None and amount >= 0.0
           and all(isinstance(row.get(name), str) and row.get(name).strip()  # type: ignore[union-attr]
                   for name in ("market", "token_id"))
-          and _zoned_ts(row.get("closed_ts")))
+          and _zoned_ts(row.get("closed_ts"))
+          # #197 correction (issuecomment-6109537257): the optional breakdown, when present, is a number >= 0
+          and all(row.get(name) is None or (number(name) is not None and number(name) >= 0.0)  # type: ignore[operator]
+                  for name in ("writeoff_cost_usd", "writeoff_sod_uplift_usd")))
     return [] if ok else [f"invalid_writeoff:{fill_id}"]
 
 

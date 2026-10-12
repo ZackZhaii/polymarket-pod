@@ -36,8 +36,14 @@ invalid (``problems`` non-empty). load_state then gives ``daily_loss_usd = None`
 Write-offs (issue #197, Task CK, KEY-approved "close-then-write-off"): a ``kind`` "writeoff" row
 (src/ledger_store.py (f)) on an open leg of a confirmed closed market books the leg's whole worst-case
 loss as realized, once, on the row's own UTC day: a long's average cost (``basis``), a short's
-``shares x 1 - basis`` (the buy-back at 1). Its ``writeoff_usd`` must be exactly that amount and its
-``writeoff_shares`` the whole open leg, else ``daily_loss_invalid_writeoff`` (invalid_risk_state). From
+``shares x 1 - basis`` (the buy-back at 1). RiskGate's correction (issuecomment-6109537257, tightening only):
+shares held since the start of the UTC day are written off at max(cost, start-of-day mark), shares bought today
+at cost, so the write-off day's loss is never below the #124 loss just before it (src/market_close.plan_writeoffs
+computes it from the day's snapshot). The row books ``writeoff_cost_usd`` (must be the replayed cost above) and
+``writeoff_sod_uplift_usd`` (>= 0); ``writeoff_usd`` must be exactly their sum and at most the leg's worst case
+on any mark (``shares x 1``). A row without both fields must be the cost exactly. ``writeoff_usd`` is what is
+realized. Its ``writeoff_shares`` must be the whole open leg; anything else is ``daily_loss_invalid_writeoff``
+(invalid_risk_state). From
 then on the leg is written off until it is flat: a later close (the settlement) books no further loss
 (a losing leg's settlement pnl is the loss already written off; it is reported as
 ``writeoff_settled_loss_usd`` only), a winning leg's gain is reported as a gain and never offsets
@@ -142,14 +148,15 @@ def daily_loss(rows: Iterable[dict[str, Any]], today: str, ids: Iterable[str] | 
             booked = _number(row.get("writeoff_usd"))
             shares = _number(row.get("writeoff_shares"))
             if (amount is None or leg["written_off"] or booked is None or shares is None
-                    or abs(shares - abs(leg["shares"])) > LEDGER_OPEN_EPS or abs(booked - amount) > LEDGER_OPEN_EPS):
+                    or abs(shares - abs(leg["shares"])) > LEDGER_OPEN_EPS
+                    or not _writeoff_amount_ok(row, booked, amount, abs(leg["shares"]))):
                 result.problems.append(f"daily_loss_invalid_writeoff:{label}")
                 continue
             leg["written_off"] = 1.0
             if is_today:
-                result.writeoff_usd += amount
+                result.writeoff_usd += booked
                 result.writeoffs_today += 1
-                result.realized_loss_usd += amount
+                result.realized_loss_usd += booked
             continue
         held = leg["shares"]
         if leg["written_off"] and qty > 0 and (side == "buy") == (held > 0):
@@ -184,6 +191,18 @@ def daily_loss(rows: Iterable[dict[str, Any]], today: str, ids: Iterable[str] | 
                 result.realized_gain_usd += pnl
     result.legs = legs
     return result
+
+
+def _writeoff_amount_ok(row: dict[str, Any], booked: float, cost: float, shares: float) -> bool:
+    """A write-off row's amount against the replayed cost (see the module docstring, #197 correction)."""
+    cost_field, uplift_field = row.get("writeoff_cost_usd"), row.get("writeoff_sod_uplift_usd")
+    if cost_field is None and uplift_field is None:  # a row from before the correction: the cost exactly
+        return abs(booked - cost) <= LEDGER_OPEN_EPS
+    booked_cost, uplift = _number(cost_field), _number(uplift_field)
+    if booked_cost is None or uplift is None or uplift < 0:
+        return False
+    return (abs(booked_cost - cost) <= LEDGER_OPEN_EPS and abs(booked - (cost + uplift)) <= LEDGER_OPEN_EPS
+            and booked <= max(cost, shares * 1.0) + LEDGER_OPEN_EPS)
 
 
 def writeoff_amount(leg: dict[str, float]) -> float | None:

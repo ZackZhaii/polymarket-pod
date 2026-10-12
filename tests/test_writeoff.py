@@ -521,3 +521,138 @@ def test_writeoff_events_follow_the_ledger_and_are_sent_again_after_a_restart(ru
     sent = [(e["resent"], [x["key"] for x in e["events"]]) for e in events if e.get("event") == "writeoff"]
     key = _writeoffs(runner["paper"])[0]["fill_id"]
     assert sent == [(False, [key]), (True, [key])]  # once on booking, again after the restart; consumers dedupe
+
+
+# --- RiskGate correction (#197, issuecomment-6109537257): the write-off amount ----------------------------
+# Shares held at the start of the UTC day are written off at max(cost, start-of-day mark); shares bought today
+# at cost. So the write-off day's loss is never below the #124 loss just before the write-off (tightening only).
+
+SOD_NOW = "2026-09-01T00:00:10Z"
+
+
+def _mark_books(env, *rows):
+    with (env["ledger"].parent / "books.jsonl").open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+
+
+def _top(bid, ts, market="m", token="t"):
+    return {"ts": ts, "book_ts": ts, "market_id": market, "token_id": token, "best_bid": bid,
+            "best_bid_size": 1000.0, "best_ask": round(bid + 0.02, 4), "best_ask_size": 1000.0}
+
+
+def _start_of_day(env, monkeypatch, bid, on_time=True):
+    """The day's snapshot written at the day roll with a book bid of ``bid`` (on time unless told otherwise)."""
+    monkeypatch.setattr(paper_ledger, "_LAST_EVAL_DAY", "2026-08-31" if on_time else None)
+    env["clock"]["now"] = SOD_NOW
+    _mark_books(env, _top(bid, "2026-09-01T00:00:05Z"))
+    snap_state = paper_ledger.load_state("x", "t")
+    assert snap_state["daily_marks_late"] is (not on_time)
+    env["clock"]["now"] = DAY1
+
+
+def test_a_start_of_day_mark_above_cost_is_the_writeoff_amount_and_the_day_loss_never_drops(env, monkeypatch):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])  # cost 10, held since yesterday
+    _start_of_day(env, monkeypatch, 0.8)  # start-of-day mark 16 > cost 10
+    _mark_books(env, _top(0.1, "2026-09-01T11:59:55Z"))
+    before = paper_ledger.load_state("x", "t")
+    assert before["daily_loss_usd"] == pytest.approx(14.0)  # #124: 16 - 2
+    out = paper_ledger.apply_writeoffs([close("m")])
+    assert out["problems"] == []
+    row = out["booked"][0]
+    assert row["writeoff_usd"] == pytest.approx(16.0)
+    assert row["writeoff_cost_usd"] == pytest.approx(10.0) and row["writeoff_sod_uplift_usd"] == pytest.approx(6.0)
+    after = paper_ledger.load_state("x", "t")
+    assert after["daily_loss_usd"] == pytest.approx(16.0)
+    assert after["daily_loss_usd"] >= before["daily_loss_usd"]
+    assert after["daily_writeoff_usd"] == pytest.approx(16.0)
+
+
+def test_shares_bought_today_are_written_off_at_cost_next_to_the_start_of_day_mark(env, monkeypatch):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])  # carried: cost 10
+    _start_of_day(env, monkeypatch, 0.8)  # carried mark 16
+    _book(env["ledger"], [fill("buy", 10.0, 0.6, ts="2026-09-01T06:00:00Z", market="m", token="t")], prefix="today")
+    _mark_books(env, _top(0.1, "2026-09-01T11:59:55Z"))
+    before = paper_ledger.load_state("x", "t")["daily_loss_usd"]
+    row = paper_ledger.apply_writeoffs([close("m")])["booked"][0]
+    assert row["writeoff_usd"] == pytest.approx(22.0)  # 16 (start mark) + 6 (today's cost)
+    assert row["writeoff_cost_usd"] == pytest.approx(16.0) and row["writeoff_sod_uplift_usd"] == pytest.approx(6.0)
+    assert paper_ledger.load_state("x", "t")["daily_loss_usd"] >= before
+
+
+@pytest.mark.parametrize("bid, on_time", [(0.3, True), (0.8, False)])
+def test_a_start_of_day_mark_below_cost_or_a_late_snapshot_keeps_the_cost(env, monkeypatch, bid, on_time):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    _start_of_day(env, monkeypatch, bid, on_time=on_time)
+    _mark_books(env, _top(0.1, "2026-09-01T11:59:55Z"))
+    before = paper_ledger.load_state("x", "t")["daily_loss_usd"]
+    row = paper_ledger.apply_writeoffs([close("m")])["booked"][0]
+    assert row["writeoff_usd"] == pytest.approx(10.0) and row["writeoff_sod_uplift_usd"] == 0.0
+    assert paper_ledger.load_state("x", "t")["daily_loss_usd"] >= before
+
+
+def test_no_snapshot_yet_today_writes_off_at_cost(env):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    row = paper_ledger.apply_writeoffs([close("m")])["booked"][0]
+    assert row["writeoff_usd"] == pytest.approx(10.0) and row["writeoff_sod_uplift_usd"] == 0.0
+
+
+def test_a_short_carried_leg_uses_the_lower_start_of_day_buy_back(env, monkeypatch):
+    _book(env["ledger"], [fill("sell", 10.0, 0.6, market="m", token="t")])  # proceeds 6: cost write-off 4
+    _start_of_day(env, monkeypatch, 0.28)  # buy-back at the ask 0.30: 3 -> write-off 10 - 3 = 7
+    row = paper_ledger.apply_writeoffs([close("m")])["booked"][0]
+    assert row["writeoff_usd"] == pytest.approx(7.0) and row["writeoff_cost_usd"] == pytest.approx(4.0)
+
+
+@pytest.mark.parametrize("change, ok", [
+    ({}, True),
+    ({"writeoff_usd": 12.0, "writeoff_sod_uplift_usd": 2.0}, True),    # cost + uplift, within shares x 1
+    ({"writeoff_usd": 12.0}, False),                                  # does not add up
+    ({"writeoff_cost_usd": 9.0, "writeoff_usd": 9.0}, False),         # not the replayed cost
+    ({"writeoff_usd": 21.0, "writeoff_sod_uplift_usd": 11.0}, False),  # above the leg's worst case (20 x 1)
+])
+def test_daily_loss_checks_the_writeoff_breakdown(env, change, ok):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    row = market_close.plan_writeoffs(_rows(env["ledger"]), ["ck-0000"], [close("m")], DAY1).rows[0]
+    row.update(change)
+    ledger_store.book(env["ledger"], row)
+    day = daily_loss.daily_loss(_rows(env["ledger"]), "2026-09-01")
+    assert (day.problems == []) is ok, day.problems
+    if ok:
+        assert day.writeoff_usd == pytest.approx(row["writeoff_usd"])
+        assert day.total_usd == pytest.approx(row["writeoff_usd"])
+
+
+@pytest.mark.parametrize("change", [{"writeoff_sod_uplift_usd": -1.0}, {"writeoff_cost_usd": "10"},
+                                    {"writeoff_cost_usd": float("nan")}])
+def test_a_damaged_writeoff_breakdown_is_refused(env, change):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    row = market_close.plan_writeoffs(_rows(env["ledger"]), ["ck-0000"], [close("m")], DAY1).rows[0]
+    row.update(change)
+    with pytest.raises(ledger_store.LedgerIntegrityError):
+        ledger_store.book(env["ledger"], row)
+
+
+# --- RiskGate ruling OQ-N7 (#197, issuecomment-6109526792): a reopen after the write-off is a GLOBAL halt ----
+
+def test_a_reopen_after_writeoff_halts_every_market_and_its_settlement_stays_blocked_after_the_global_resume(runner):
+    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _iterate(runner, getter, RUN_NOW)
+    _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
+    getter.row = gamma("held", closed=False, accepting=True, closed_time=None)
+    _iterate(runner, getter, RUN_NOW + timedelta(seconds=600))
+    # global, not market-only: every market's new intent is vetoed (src/risk_gate halts first)
+    assert _halted()
+    assert any(r.startswith("halt_global:") for r in halt_store.halt_problems("another-market"))
+    later = _iterate(runner, getter, RUN_NOW + timedelta(seconds=660))
+    assert later.action == m2_runner.ACT_PAUSE and later.reasons[0] == "global_halt"
+    assert len(_writeoffs(runner["paper"])) == 1  # not rolled back, not written off twice
+    # #214 stays as an extra guard: once the Operator lifts the global halt, this market's settlement is still blocked
+    for record in halt_store.active_halts():
+        if record["scope"] == halt_store.SCOPE_GLOBAL:
+            halt_store.resume(from_role="Operator", scope=halt_store.SCOPE_GLOBAL, halt_id=record["id"],
+                              approved_by="test", root_cause="test", postmortem="test",
+                              bus_path=runner["run"] / "resume_bus.jsonl")
+    assert not _halted()
+    assert "held" in paper_ledger.settlement_blocked_markets()
+    assert len(_writeoffs(runner["paper"])) == 1

@@ -334,7 +334,14 @@ def apply_writeoffs(closes: list[Any], now: str | None = None) -> dict[str, Any]
     if problems or non_finite_ledger_rows(ledger.rows):
         out["problems"] = [f"writeoff_ledger_invalid:{problem}" for problem in problems] or ["writeoff_ledger_invalid"]
         return out
-    planned = market_close.plan_writeoffs(ledger.rows, list(ledger.ids), list(closes), now or utc_now())
+    now = now or utc_now()
+    # #197 correction (issuecomment-6109537257): start-of-day shares at max(cost, start-of-day mark). Read only:
+    # no snapshot yet today means the cost (as #124's ref); a damaged one is a problem (fail closed).
+    snap, snap_problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, now[:10])
+    if snap_problems:
+        out["problems"] = [f"writeoff_daily_marks_invalid:{problem}" for problem in snap_problems]
+        return out
+    planned = market_close.plan_writeoffs(ledger.rows, list(ledger.ids), list(closes), now, snap)
     if planned.problems:
         out["problems"] = planned.problems
         return out

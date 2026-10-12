@@ -28,7 +28,8 @@ TOL = 1e-6
 
 
 def test_the_vector_file_is_poly_forecasts_v3():
-    assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest().startswith(SHA256_PREFIX)
+    # the committed (LF) bytes: a Windows checkout with core.autocrlf=true has CRLF in the working copy
+    assert hashlib.sha256(FIXTURE.read_bytes().replace(b"\r\n", b"\n")).hexdigest().startswith(SHA256_PREFIX)
     assert DATA["version"] == "v3" and len(VECTORS) == 44
 
 

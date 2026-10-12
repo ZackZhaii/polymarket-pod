@@ -26,7 +26,9 @@ offsets another leg, the realized loss or the fees. ``ref`` is
 * for the part opened today: today's cost (notional, fees excluded: they are counted already).
 
 Written-off legs (issue #197, Task CK, KEY-approved): a leg with a write-off row (src/ledger_store.py (f))
-has its whole cost realized already (src/daily_loss.py), once. From then until it is flat it adds no
+has its whole cost realized already (src/daily_loss.py), once (RiskGate's correction, issuecomment-6109537257:
+its start-of-day part at max(cost, start-of-day mark), ``writeoff_sod_uplift``, the same ``ref`` rule as
+below, so the write-off day's loss never drops below this module's loss). From then until it is flat it adds no
 unrealized loss on any day (``ref_source`` "written_off", ``loss_usd`` 0); it stays an open leg, so it
 still holds every limit until it settles.
 
@@ -284,6 +286,62 @@ def snapshot_legs(start: Mapping[tuple[str, str], LegPosition], marks: Mapping[t
     return legs
 
 
+def _snapshot_legs(snapshot: Mapping[str, Any] | None) -> tuple[dict[str, Mapping[str, Any]], bool]:
+    """The snapshot's legs by leg_key and whether it is late (no snapshot counts as late)."""
+    snap_legs: dict[str, Mapping[str, Any]] = {}
+    if snapshot is None:
+        return snap_legs, True
+    for entry in snapshot.get("legs") or []:
+        snap_legs[str(entry.get("leg_key"))] = entry
+    return snap_legs, snapshot.get("late") is not False
+
+
+def _usable_start_mark(entry: Mapping[str, Any] | None, late: bool) -> float | None:
+    """A start-of-day mark usable as the carried part's ``ref`` (on time, valid, not 0), else None (cost)."""
+    snap_mark = None if entry is None else _finite(entry.get("mark_usd"))
+    usable = (not late and entry is not None and entry.get("mark_invalid") is False
+              and snap_mark is not None and snap_mark != 0.0)
+    return snap_mark if usable else None
+
+
+def snapshot_problems(pos: Positions, snapshot: Mapping[str, Any] | None) -> list[str]:
+    """The snapshot must describe the same start-of-day legs (none: no problem)."""
+    if snapshot is None:
+        return []
+    snap_legs, _ = _snapshot_legs(snapshot)
+    problems = []
+    for key, start in pos.start.items():
+        entry = snap_legs.get(leg_id(key))
+        if (entry is None or _finite(entry.get("shares")) is None
+                or abs(float(entry["shares"]) - start.shares) > LEDGER_OPEN_EPS):
+            problems.append(f"daily_marks_leg_mismatch:{leg_id(key)}")
+    if len(snap_legs) != len(pos.start):
+        problems.append("daily_marks_leg_count_mismatch")
+    return problems
+
+
+def writeoff_sod_uplift(pos: Positions, snapshot: Mapping[str, Any] | None, key: tuple[str, str]) -> float:
+    """Issue #197, RiskGate's correction (issuecomment-6109537257): the start-of-day mark above cost, in USD.
+
+    A leg's write-off is ``cost + uplift``: its part held since the start of the UTC day at max(cost, start-of-day
+    mark), today's part at cost. The start mark is used exactly when ``unrealized_loss`` uses it as ``ref`` (an on
+    time snapshot, a valid mark, not 0, the same side); otherwise, or with no snapshot yet today, 0 (the cost, as
+    ``ref`` is then). A long: max(0, mark - cost) of the carried shares. A short (M2 opens none): max(0, proceeds -
+    start-of-day buy-back cost) of the carried shares. Call ``snapshot_problems`` first.
+    """
+    leg, start = pos.now.get(key), pos.start.get(key)
+    if (leg is None or start is None or leg.written_off or leg.carried <= LEDGER_OPEN_EPS
+            or abs(start.shares) <= LEDGER_OPEN_EPS or (start.shares > 0) != (leg.shares > 0)):
+        return 0.0
+    snap_legs, late = _snapshot_legs(snapshot)
+    snap_mark = _usable_start_mark(snap_legs.get(leg_id(key)), late)
+    if snap_mark is None:
+        return 0.0
+    carried_cost = start.basis / abs(start.shares) * leg.carried
+    carried_mark = abs(snap_mark) / abs(start.shares) * leg.carried
+    return max(0.0, carried_mark - carried_cost) if leg.shares > 0 else max(0.0, carried_cost - carried_mark)
+
+
 @dataclass
 class Unrealized:
     loss_usd: float = 0.0
@@ -298,19 +356,8 @@ def unrealized_loss(
 ) -> Unrealized:
     """Σ over open legs of max(0, ref - value); no leg's gain offsets anything. See the module docstring."""
     result = Unrealized()
-    snap_legs: dict[str, Mapping[str, Any]] = {}
-    late = True
-    if snapshot is not None:
-        late = snapshot.get("late") is not False
-        for entry in snapshot.get("legs") or []:
-            snap_legs[str(entry.get("leg_key"))] = entry
-    for key, start in pos.start.items():  # the snapshot must describe the same start-of-day legs
-        entry = snap_legs.get(leg_id(key))
-        if snapshot is not None and (entry is None or _finite(entry.get("shares")) is None
-                                     or abs(float(entry["shares"]) - start.shares) > LEDGER_OPEN_EPS):
-            result.problems.append(f"daily_marks_leg_mismatch:{leg_id(key)}")
-    if snapshot is not None and len(snap_legs) != len(pos.start):
-        result.problems.append("daily_marks_leg_count_mismatch")
+    snap_legs, late = _snapshot_legs(snapshot)
+    result.problems = snapshot_problems(pos, snapshot)
     if result.problems:
         return result
     for key in sorted(pos.now):
@@ -326,12 +373,9 @@ def unrealized_loss(
         ref_source = "cost"
         if leg.carried > LEDGER_OPEN_EPS and start is not None and (start.shares > 0) == (leg.shares > 0):
             per_share_cost = start.basis / abs(start.shares)
-            entry = snap_legs.get(leg_id(key))
-            snap_mark = None if entry is None else _finite(entry.get("mark_usd"))
-            usable = (not late and entry is not None and entry.get("mark_invalid") is False
-                      and snap_mark is not None and snap_mark != 0.0)
-            if usable:
-                carried_ref = abs(snap_mark) / abs(start.shares) * leg.carried  # type: ignore[arg-type]
+            snap_mark = _usable_start_mark(snap_legs.get(leg_id(key)), late)
+            if snap_mark is not None:
+                carried_ref = abs(snap_mark) / abs(start.shares) * leg.carried
                 ref_source = "start_mark"
             else:
                 carried_ref = per_share_cost * leg.carried
