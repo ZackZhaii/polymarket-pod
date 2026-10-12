@@ -582,14 +582,16 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
                 break
             books[token] = snap
         if skew_pause:
-            state.paused_reason = "clock_skew"
-            state.paused_since = _stamp(now)
-            try:
-                event(state, "clock_skew", now, max_skew_s=CLOCK_SKEW_MAX_S)
-            except WriteFailed as exc:
-                report.action = ACT_WRITE_FAILED
-                report.reasons = [str(exc)]
-                return
+            # Issue #238: like the preflight pause, stamp paused_since (and log the event) only when the pause
+            # starts; a skew that holds keeps the first stamp so the Sentinel's runner_paused_too_long can fire.
+            if state.paused_reason != "clock_skew":
+                state.paused_reason, state.paused_since = "clock_skew", _stamp(now)
+                try:
+                    event(state, "clock_skew", now, max_skew_s=CLOCK_SKEW_MAX_S)
+                except WriteFailed as exc:
+                    report.action = ACT_WRITE_FAILED
+                    report.reasons = [str(exc)]
+                    return
             report.action = ACT_PAUSE
             report.paused_reason = "clock_skew"
             report.reasons = ["clock_skew"]
