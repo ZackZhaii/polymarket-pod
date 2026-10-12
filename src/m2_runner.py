@@ -446,9 +446,11 @@ def _clock_problem(clock: Callable[[], datetime], getter: GuardedGetter) -> str 
         sent = clock()
         server = getter(podlib.TIME_URL)
         received = clock()
-        if (not isinstance(sent, datetime) or not isinstance(received, datetime)
-                or parse_book_ts(sent) is None or parse_book_ts(received) is None
-                or received < sent or isinstance(server, bool) or not isinstance(server, (int, float))
+        if not isinstance(sent, datetime) or not isinstance(received, datetime):
+            return "clock_unverified"
+        sent, received = parse_book_ts(sent), parse_book_ts(received)
+        if (sent is None or received is None or received < sent
+                or isinstance(server, bool) or not isinstance(server, (int, float))
                 or parse_book_ts(server) is None):
             return "clock_unverified"
         low = sent.timestamp() - server - 1.0

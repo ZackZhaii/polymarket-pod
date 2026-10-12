@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import io
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 
 import pytest
 
@@ -96,6 +96,44 @@ def test_request_interval_must_be_fully_certified(env, monkeypatch, elapsed, rea
         assert report.action == m2_runner.ACT_RUN and actions == ["settle"]
     else:
         assert report.action == m2_runner.ACT_PAUSE and report.reasons == [reason] and actions == []
+
+
+class FoldZone(tzinfo):
+    def utcoffset(self, value):
+        return timedelta(hours=0 if value.fold else 1)
+
+    def dst(self, value):
+        return timedelta(0)
+
+
+@pytest.mark.parametrize("forward", [False, True], ids=["real_backward", "wall_backward_real_forward"])
+def test_fold_clock_request_uses_utc_order(env, monkeypatch, forward):
+    zone = FoldZone()
+    if forward:
+        sent = datetime(2026, 10, 25, 2, 59, 59, tzinfo=zone, fold=0)
+        received = datetime(2026, 10, 25, 2, 0, 1, tzinfo=zone, fold=1)
+    else:
+        sent = datetime(2026, 10, 25, 2, 30, tzinfo=zone, fold=1)
+        received = sent.replace(fold=0)
+    moments = iter([sent, received])
+    env["state"].clock = lambda: next(moments)
+    fake = ClockGetters(env["now"], server=(sent.timestamp() + received.timestamp()) / 2)
+    actions = []
+    monkeypatch.setattr(m2_runner, "_settle_tick", lambda *a: actions.append("settle") or [])
+    report = tick(env, fake)
+    assert fake.time_calls == [TIME_URL]
+    if forward:
+        assert report.action == m2_runner.ACT_RUN and actions == ["settle"]
+    else:
+        assert report.action == m2_runner.ACT_PAUSE and report.reasons == ["clock_unverified"]
+        assert actions == [] and fake.gamma_urls == fake.book_urls == []
+
+
+@pytest.mark.parametrize("offset_hours", [8, -3.5])
+def test_fixed_offset_local_clock_remains_valid(env, offset_hours):
+    local = env["now"].astimezone(timezone(timedelta(hours=offset_hours)))
+    env["state"].clock = lambda: local
+    assert tick(env, ClockGetters(env["now"])).action == m2_runner.ACT_RUN
 
 
 @pytest.mark.parametrize("local", [None, True, "2026-10-12T00:00:00Z", datetime(2026, 10, 12)])
