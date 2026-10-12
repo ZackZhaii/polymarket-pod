@@ -1,12 +1,14 @@
-# 三端链接
+# 五端链接
 
-本机 Grok Build、Grok 网页端、Grok Bot 不共享聊天记录。它们只通过这个私有仓库交接：日常集成在 `dev`，`main` 只收 Poly指挥 开、人审查合并的 `dev`→`main` PR。
+五个入口不共享聊天记录：本机 Grok Build、Grok 网页端、Grok Bot、Codex 桌面、DSH（DeepSeek Harness）。它们只通过这个私有仓库交接：日常集成在 `dev`，`main` 只收 Poly指挥 开、人审查合并的 `dev`→`main` PR。
 
 | 入口 | surface | 怎么接上 |
 |---|---|---|
 | 本机 Grok Build | `grok-build-local` | 打开本仓库目录。根上的 `AGENTS.md` 就是开工说明 |
 | Grok 网页 | `grok-web` | 读 `docs/prompts/GROK_WEB.md`。每 30 分钟看一次队列；白天每小时还有一次保底 |
 | Grok Bot | `grok-bot` | 新开一个 Bot 对话，贴 `docs/prompts/GROK_BOT.md` |
+| Codex 桌面 | `codex-local` | 读 `docs/prompts/CODEX.md`。编码执行席：领 todo、写码、pytest、开 PR |
+| DSH（DeepSeek Harness） | `dsh` | 读 `docs/prompts/DSH.md`。验证/监督席：审 PR、复跑 pytest、红线巡检；领取任务时与其他入口同队列同纪律 |
 
 不要把本仓库注册进咖啡 OpenClaw workspace。
 

@@ -35,7 +35,7 @@ ROLES.md 仅作历史参考；ROLES 独有的 Researcher / ArbMerge / CryptoPuls
 ROSTER 中暂无 bot 的角色：Endgame（main 已有 `src/endgame.py` 信号桩）、SportsDevig（main 已有 `src/sports_devig.py` 信号桩，Task H）、Reconciler。
 
 注：`src/forecaster.py` 的总线名已改为 ROSTER 的 NewsForecaster（Task N）。旧名 Forecaster 经 `podlib.canonical_role` 映射，`bus()` 写入时统一成 NewsForecaster；旧的 `logs/bus.jsonl` 行不改写。
-注：loop_claim 的 surface 只有 grok-build-local / grok-web / grok-bot；Poly* bot 领取时用 `grok-bot`。
+注：loop_claim 的 surface 是 grok-build-local / grok-web / grok-bot / codex-local / dsh（后两个 2026-10-13 注册，入口提示词见 `docs/prompts/CODEX.md` 与 `docs/prompts/DSH.md`）；Poly* bot 领取时用 `grok-bot`。
 
 ## 总线
 `logs/bus.jsonl`，字段 `ts(UTC Z) / from / to / type∈{signal,veto,fill,proposal,halt} / market / payload`。
