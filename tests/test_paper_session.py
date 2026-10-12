@@ -28,6 +28,7 @@ RAW = {
     "spread": 0.02,
     "feesEnabled": False,
     "closed": False,
+    "acceptingOrders": True,  # Task CR (#232): the scanner rejects a missing / non-bool flag
     "version": "v1",
 }
 
