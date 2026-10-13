@@ -130,6 +130,21 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 KILL, the live flags, the risk.toml pins, halts, the ledger, the daily loss breaker and disk before any read, seal or commit.
 Heartbeat every HEARTBEAT_RUNNER_EVERY_S (`paused` while paused); single instance by `runs/m2/runner.lock`. Paper only, no executor.
 
+Tick order: KILL / live / pins / halts / ledger, then settlement (#206), then the independent clock check, then the daily
+loss breaker, disk, and only then scan / decide. Clock check (C222, #222 option B): one public read-only GET of the CLOB
+`https://clob.polymarket.com/time` (exact URL only; guard and `podlib.public_get` refuse every variant). The whole
+local-minus-server uncertainty interval (request round trip plus ±1 s rounding of the integer seconds) must fit inside
+±`CLOCK_SKEW_MAX_S` (5 s). Two pause reasons, neither an exit code (the runner keeps beating `paused`, nothing is scanned or
+decided, settlement still runs that tick):
+
+- `clock_unverified`: /time unreachable or malformed (timeout, HTTP error, non-numeric, bool, NaN/inf, out of range), an
+  unusable local clock, or an interval too wide to certify either way. Fail closed.
+- `clock_skew`: the whole interval lies beyond ±5 s, a confirmed skew. Sync the host clock.
+
+Switching between `clock_unverified` and `clock_skew` is one clock pause episode: `paused_since` keeps its first stamp (a
+`paused` event is still written on each switch), so the Sentinel's `runner_paused_too_long` (`RUNNER_PAUSED_ALERT_S`, 6 h)
+fires on a flapping clock too. `paused_since` clears only when a tick runs again; any other pause reason restamps it.
+
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
 | 0 | `EXIT_OK` | `runs/m2/KILL` found, `--max-runtime` reached or `--once` done | - |

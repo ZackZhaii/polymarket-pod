@@ -22,7 +22,7 @@ import src.sentinel as sentinel
 from src.podlib import RISK_PATH, load_risk, read_jsonl, utc_now
 from src.risk_gate import evaluate
 
-GOOD_STATE = {"open_positions": 0, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
+GOOD_STATE = {"open_positions": 0, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 def _intent(market="m1", **kw):

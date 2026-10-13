@@ -179,7 +179,7 @@ RUNNER_MAX_EVALS_PER_SIGNAL = 10
 RUNNER_SUSPEND_GAP_S = 180.0
 # Wall vs monotonic delta above this also counts as a suspend (host slept).
 RUNNER_WALL_MONO_SKEW_S = 30.0
-# |book_ts − local clock| above this pauses the runner (clock_skew).
+# Independent server-clock uncertainty must fit within this; book freshness is checked separately.
 CLOCK_SKEW_MAX_S = 5.0
 # Disk: the runner pauses with less than DISK_MIN_FREE_GB free on the run dir's volume, or when the run dir
 # holds more than RUNNER_DISK_BUDGET_GB.
@@ -310,6 +310,9 @@ ALL_STALE_CONSECUTIVE_CYCLES = 2
 # concurrent new global halt). Fail closed when the mutex cannot be taken within this long
 # (seconds): a resume releases nothing (halt_lock_failed), record_halt goes to logs/HALT.
 HALT_STATE_LOCK_TIMEOUT_S = 5.0
+# Task DD (#237/#280): wait for the ledger commit mutex in paper_ledger.commit_if_allowed; not acquired ->
+# the order is refused. Registered in docs/THRESHOLDS.md (value unchanged from the PR; M2 pending).
+COMMIT_LOCK_TIMEOUT_S = 5.0
 # M2 pending. Retry step (seconds) while waiting for the halt-state mutex.
 HALT_STATE_LOCK_POLL_S = 0.05
 
