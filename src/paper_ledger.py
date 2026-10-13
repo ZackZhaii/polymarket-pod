@@ -261,6 +261,8 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
     """Task CF (#124): today's unrealized loss on open legs (Poly风控's ruling, src/leg_marks.py).
 
     Reads (or, on the day's first evaluation, writes once) the start-of-day snapshot, also for closed parts.
+    ``clock_ok`` (Task DA, #225 follow-up): the caller's clock state; anything but True (a clock anomaly such as
+    the runner's clock_skew, or #253's clock_unverified) makes a snapshot written now late (fail closed).
     Returns ``{"loss_usd", "realized_topup_usd", "legs", "late", "problems"}``; any problem (positions,
     valuation, corrupt or unwritable snapshot, an exception) makes the loss unavailable: invalid_risk_state.
     """
