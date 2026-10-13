@@ -798,7 +798,8 @@ def test_ledger_store_is_standard_library_only_and_adds_no_number():
     assert modules == {"__future__", "hashlib", "json", "math", "os", "uuid", "dataclasses", "pathlib", "typing",
                        "datetime",  # issue #126 (PR #194 review): a settlement row's closed_ts must be zoned
                        "src.fees", "src.thresholds",
-                       "src.halt_store"}  # issue #64: the issue #52 cross-process mutex (StateLock)
+                       "src.halt_store",  # issue #64: the issue #52 cross-process mutex (StateLock)
+                       "src.atomic_replace"}  # issue #268: bounded Windows PermissionError retry of os.replace
     numbers = {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
                and isinstance(node.value, (int, float)) and not isinstance(node.value, bool)}
     assert numbers <= {0.0, 1, 1.0}  # empty totals, line numbers from 1, 1 USD per share (as leg_positions)
