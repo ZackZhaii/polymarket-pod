@@ -359,7 +359,7 @@ def test_crossing_utc_midnight_starts_a_new_snapshot_without_counting_yesterday_
     today = paper_ledger.load_state("x", "t")
     assert today["daily_marks_late"] is False  # this process evaluated on 08-31
     assert today["daily_unrealized_loss_usd"] == 0.0  # yesterday's 10 is not counted again
-    assert sorted(p.name for p in env["marks"].iterdir()) == ["2026-08-31.json", "2026-09-01.json"]
+    assert sorted(p.name for p in env["marks"].glob("*.json")) == ["2026-08-31.json", "2026-09-01.json"]
 
 
 def test_load_state_with_no_open_legs_is_unchanged(env):
