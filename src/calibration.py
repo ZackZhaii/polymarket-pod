@@ -45,7 +45,11 @@ then dominated by a near-zero reference, e.g. q = 1e-9 gives about -1e16), ``ok`
 
 Fail closed. Nothing is imputed: a row with calibration_problems, a missing join, a pending,
 UMA-unconfirmed, disputed, void or ambiguous resolution, or a token / outcome that disagrees with
-the snapshot is dropped and counted by reason in the report. A corrupt input file (torn line,
+the snapshot is dropped and counted by reason in the report. Issue #70: a forecast sample is kept
+only when its ts provably precedes resolution.closed_ts (zoned ISO times compared as UTC) — an
+unparseable or unzoned ts drops as forecast_ts_invalid, and a forecast sealed at or after the close
+(as the same instant in any offset) drops as forecast_not_before_close, so a result is never
+scored against a prediction made after it was known. A corrupt input file (torn line,
 bad JSON, wrong schema, conflicting duplicate) is an error exit and no report is written; a
 ledger that fails ledger_store.verify is its own error exit. Below the M3-pending minimums
 (src/thresholds.py CALIBRATION_*) a section is "insufficient" and carries no verdict.
@@ -115,6 +119,9 @@ RESOLUTION_FIELDS = ("condition_id", "winning_token_id", "outcome_prices_final",
 LEGACY_RESOLUTION_FIELDS = RESOLUTION_FIELDS[:-1]
 NOTES = (
     "Labels are only data/resolutions.jsonl rows with uma_checked=true and status=resolved; nothing is imputed.",
+    "A forecast sample must be sealed strictly before resolution.closed_ts (zoned ISO times compared as UTC): "
+    "an unparseable or unzoned ts is dropped (forecast_ts_invalid), a forecast at or after the close "
+    "(forecast_not_before_close). No time is ever imputed.",
     "UMA dispute status not checked (beyond umaResolutionStatus=resolved).",
     "Not a promise of profit. Paper only. This report proposes nothing and changes no setting.",
     "q is the first fill's market_mid (price_source=market_mid). Only a fill booked before Task BA, with no "
@@ -630,6 +637,17 @@ def forecast_samples(forecasts: Mapping[str, dict[str, Any]], resolutions: Mappi
             problem_counts.update(problems)
             drop(row, "forecast_calibration_problems")
             continue
+        # issue #70: prove the forecast predates the close before it can become a sample at all.
+        ts = _parse_ts(row["ts"])
+        if ts is None:
+            drop(row, "forecast_ts_invalid")  # unparseable or unzoned: when it was sealed cannot be proved
+            continue
+        resolution = resolutions.get(row["condition_id"])
+        if resolution is not None:
+            closed = _parse_ts(resolution["closed_ts"])
+            if closed is None or ts >= closed:
+                drop(row, "forecast_not_before_close")  # at/after the close (or unprovable close): no result leak
+                continue
         candidates.append(row)
     seen: set[str] = set()
     eligible: list[dict[str, Any]] = []
