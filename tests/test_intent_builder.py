@@ -29,7 +29,7 @@ NOW = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
 NOW_S = "2026-09-01T12:00:00Z"
 BOOK_TS = "2026-09-01T11:59:55.000Z"
 CFG = parse_risk_toml(RISK_PATH.read_text(encoding="utf-8"))
-STATE = {"open_positions": 0, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
+STATE = {"open_positions": 0, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 class _AnyDatetime(type):

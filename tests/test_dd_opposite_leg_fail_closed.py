@@ -101,3 +101,65 @@ def test_interleaved_opposite_commits_cannot_both_book(tmp_path, monkeypatch, no
     monkeypatch.setattr(paper_ledger, "evaluate", real_evaluate)
     later = paper_ledger.commit_if_allowed(_buy(YES), load_risk())
     assert later["allow"] is False and STRUCTURAL in later["decision"]["reasons"]
+
+
+# ---------------------------------------------------------------- Poly风控 on #280: no global timeout mutation
+
+
+def test_commit_leaves_the_halt_lock_timeout_unchanged(tmp_path, monkeypatch, no_bus):
+    import src.halt_store as halt_store
+
+    _ledger(tmp_path, monkeypatch, [])
+    monkeypatch.setattr(paper_ledger, "COMMIT_LOCK_TIMEOUT_S", 0.3)  # differs from the module default
+    before = halt_store.HALT_STATE_LOCK_TIMEOUT_S
+    seen: list = []
+    real_acquire = halt_store.StateLock.acquire
+
+    def spy(self, *a, **k):
+        seen.append(halt_store.HALT_STATE_LOCK_TIMEOUT_S)
+        return real_acquire(self, *a, **k)
+
+    monkeypatch.setattr(halt_store.StateLock, "acquire", spy)
+    assert paper_ledger.commit_if_allowed(_buy(NO), load_risk())["allow"] is True
+    assert halt_store.HALT_STATE_LOCK_TIMEOUT_S == before
+    assert seen and all(value == before for value in seen)  # never swapped, not even during acquire
+
+
+def test_lock_timeout_refusal_leaves_the_halt_lock_timeout_unchanged(tmp_path, monkeypatch, no_bus):
+    import src.halt_store as halt_store
+
+    _ledger(tmp_path, monkeypatch, [])
+    monkeypatch.setattr(paper_ledger, "COMMIT_LOCK_TIMEOUT_S", 0.1)
+    before = halt_store.HALT_STATE_LOCK_TIMEOUT_S
+    holder = halt_store.StateLock(paper_ledger.PAPER_PATH)
+    holder.path = paper_ledger.PAPER_PATH.with_name(paper_ledger.PAPER_PATH.name + ".commit.lock")
+    assert holder.acquire()
+    try:
+        result = paper_ledger.commit_if_allowed(_buy(NO), load_risk())
+    finally:
+        holder.release()
+    assert result["allow"] is False and "commit_lock_unavailable" in result["decision"]["reasons"]
+    assert halt_store.HALT_STATE_LOCK_TIMEOUT_S == before
+
+
+def test_state_lock_acquire_takes_a_timeout(tmp_path):
+    import time
+
+    import src.halt_store as halt_store
+
+    a, b = halt_store.StateLock(tmp_path / "s.json"), halt_store.StateLock(tmp_path / "s.json")
+    assert a.acquire()
+    try:
+        start = time.monotonic()
+        assert b.acquire(timeout_s=0.1) is False
+        assert time.monotonic() - start < halt_store.HALT_STATE_LOCK_TIMEOUT_S
+    finally:
+        a.release()
+
+
+def test_missing_opposite_pending_buys_refuses_the_buy(tmp_path, monkeypatch):
+    _ledger(tmp_path, monkeypatch, [])
+    state = paper_ledger.load_state(MARKET, NO)
+    state.pop("opposite_pending_buys")
+    decision = evaluate(_buy(), load_risk(), state)
+    assert decision.allow is False and STRUCTURAL in decision.reasons, decision.reasons

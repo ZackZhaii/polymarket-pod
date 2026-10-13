@@ -242,18 +242,15 @@ def opposite_leg_blocked(state: dict) -> bool:
 
     Fail closed: opposite_leg_shares (long shares on the market's other tokens) must be a finite number >= 0;
     missing, None, nan, inf, negative or non-numeric blocks. A value > 0 blocks. opposite_pending_buys (own open
-    buy quotes on the other tokens, i.e. unfilled orders) blocks when > 0 or, if the key is present, invalid.
+    buy quotes on the other tokens, i.e. unfilled orders) blocks when > 0, missing or invalid.
     """
     if state.get("open_positions") is None and (state.get("ledger_problems") or state.get("non_finite_ledger_rows")):
         return False  # an unusable ledger state already vetoes invalid_risk_state (one reason, as before)
     shares = _finite_number(state.get("opposite_leg_shares"))
     if shares is None or shares < 0 or shares > 0:
         return True
-    if "opposite_pending_buys" in state:
-        pending = _finite_number(state.get("opposite_pending_buys"))
-        if pending is None or pending != 0:
-            return True
-    return False
+    pending = _finite_number(state.get("opposite_pending_buys"))  # missing -> None -> refuse (Poly风控 on #280)
+    return pending is None or pending != 0
 
 
 def open_leg_problems(side: object, state: dict) -> list[str]:

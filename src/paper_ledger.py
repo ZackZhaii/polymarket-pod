@@ -526,7 +526,7 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id
 
     lock = halt_store.StateLock(PAPER_PATH)
     lock.path = Path(str(PAPER_PATH) + ".commit.lock")  # not ledger_store's <ledger>.lock (taken inside book)
-    if not _acquire_within(lock, COMMIT_LOCK_TIMEOUT_S):
+    if not lock.acquire(timeout_s=COMMIT_LOCK_TIMEOUT_S):
         summary = {"forecast_id": intent.forecast_id, "strategy": intent.strategy,
                    "reasons": ["structural_arb_disabled", "commit_lock_unavailable"],
                    "hypothetical": intent.hypothetical, "risk_decision": "veto", "decision": "veto",
@@ -537,17 +537,6 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id
         return _commit_locked(intent, cfg, unique_decision_id=unique_decision_id)
     finally:
         lock.release()
-
-
-def _acquire_within(lock: Any, timeout_s: float) -> bool:
-    from src import halt_store
-
-    original = halt_store.HALT_STATE_LOCK_TIMEOUT_S
-    halt_store.HALT_STATE_LOCK_TIMEOUT_S = timeout_s
-    try:
-        return lock.acquire()
-    finally:
-        halt_store.HALT_STATE_LOCK_TIMEOUT_S = original
 
 
 def _commit_locked(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:

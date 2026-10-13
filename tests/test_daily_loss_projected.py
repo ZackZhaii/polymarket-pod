@@ -18,7 +18,7 @@ CAP_USD = 0.03 * PAPER_EQUITY_USD  # $30
 
 def _state(daily_loss):
     return {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0,
-            "leg_net_shares": 0.0, "opposite_leg_shares": 0.0, "daily_loss_usd": daily_loss, "recent_fills": [], "own_quotes": []}
+            "leg_net_shares": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": daily_loss, "recent_fills": [], "own_quotes": []}
 
 
 def test_cap_is_the_pinned_three_percent():
