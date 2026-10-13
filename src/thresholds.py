@@ -22,6 +22,10 @@ MIN_EDGE = 0.02
 EDGE_TOLERANCE = 1e-12
 # Local paper bankroll used for sizing and the daily-loss ratio. Not a wallet.
 PAPER_EQUITY_USD = 1000.0
+# Task CX (#225, Poly风控 D1): a start-of-day snapshot taken more than this many seconds after the
+# UTC day's 00:00 is late (exactly this is on time). References MAX_BOOK_AGE_S, never its own number.
+# Raising it loosens the daily-loss check (needs KEY). M2 pending.
+DAY_START_MAX_LAG_S = MAX_BOOK_AGE_S
 
 # --- Paper cycle ---------------------------------------------------------------------------
 # Task D, aligned with MAX_BOOK_AGE_S in Tasks R/T: per-check BookWatcher stale signal (seconds).

@@ -49,6 +49,7 @@ SOURCE_ASK_LADDER = "ask_ladder"
 SOURCE_SETTLED = "settled"
 SOURCE_CLOSED_UNRESOLVED = "closed_unresolved"
 SOURCE_INVALID = "invalid_book"
+SOURCE_PREV_DAY_LAST = "prev_day_last_mark"  # Task CX (#225): snapshot-only, never a live mark
 SOURCES = (SOURCE_BID_LADDER, SOURCE_ASK_LADDER, SOURCE_SETTLED, SOURCE_CLOSED_UNRESOLVED, SOURCE_INVALID)
 
 NO_BOOK = "no_book"
@@ -315,6 +316,16 @@ def _reference(leg: LegPosition, start: LegPosition | None, entry: Mapping[str, 
             source = "start_mark"
         else:
             carried_ref = start.basis / abs(start.shares) * leg.carried
+            # Task CX (#225, D3): a late snapshot carrying the previous UTC day's last valid mark uses
+            # max(cost, that mark) in signed terms: the larger value for a long, the smaller buy-back for a short.
+            prev_ok = (late and entry is not None and entry.get("mark_source") == SOURCE_PREV_DAY_LAST
+                       and entry.get("mark_invalid") is False and snap_mark is not None and snap_mark != 0.0)
+            if prev_ok:
+                prev_ref = abs(snap_mark) / abs(start.shares) * leg.carried
+                tighter = prev_ref > carried_ref if leg.shares > 0 else prev_ref < carried_ref
+                if tighter:
+                    carried_ref = prev_ref
+                    source = SOURCE_PREV_DAY_LAST
     elif leg.carried > LEDGER_OPEN_EPS:
         carried_ref = leg.basis - leg.new_basis
     return (1.0 if leg.shares > 0 else -1.0) * (carried_ref + leg.new_basis), source
