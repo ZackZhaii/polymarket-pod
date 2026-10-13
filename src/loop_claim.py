@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 from src.podlib import load_risk, pin_problems  # noqa: E402
 
 STATE_PATH = ROOT / "docs" / "loop" / "state.json"
-SURFACES = frozenset({"grok-build-local", "grok-web", "grok-bot"})
+SURFACES = frozenset({"grok-build-local", "grok-web", "grok-bot", "codex-local", "dsh"})
 EXIT_PIN = 2
 EXIT_BUSY = 3
 EXIT_CLOSED = 4

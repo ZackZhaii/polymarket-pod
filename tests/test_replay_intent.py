@@ -1,7 +1,8 @@
-"""Issue #80 step 1: src/replay_intent.py — the single-shot offline replay bundle and its entry point."""
+"""Issue #80: src/replay_intent.py — the single-shot offline replay bundle and its entry point."""
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 from pathlib import Path
 
@@ -106,21 +107,102 @@ def test_a_usage_error_is_the_entrys_own_code(tmp_path, capsys):
     capsys.readouterr()
 
 
+# ---------------------------------------------------------------- the published result JSON
+
+def test_out_publishes_one_result_json_with_the_input_sha256(tmp_path, capsys):
+    path = write(tmp_path, bundle())
+    out_path = tmp_path / "result.json"
+    code = replay_intent.main(["--bundle", str(path), "--out", str(out_path)])
+    captured = capsys.readouterr()
+    assert code == replay_intent.EXIT_OK and captured.err == ""
+    published = json.loads(out_path.read_text(encoding="utf-8"))
+    printed = json.loads(captured.out)
+    assert published["input_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert published["input_sha256"] == printed["input_sha256"]
+    assert published["shadow"] is True and published["intent"] == printed["intent"]
+    assert published["reasons"] == [] and published["first_reason"] is None
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]  # no temp file left behind
+
+
+def test_a_second_run_never_overwrites_an_existing_output(tmp_path, capsys):
+    out_path = tmp_path / "result.json"
+    out_path.write_bytes(b"the previous result\n")
+    code = replay_intent.main(["--bundle", str(write(tmp_path, bundle())), "--out", str(out_path)])
+    out, err = capsys.readouterr()
+    assert code == replay_intent.EXIT_OUTPUT_EXISTS and "replay_intent:" in err and out == ""
+    assert out_path.read_bytes() == b"the previous result\n"
+
+
+def test_the_same_bundle_and_now_publish_byte_identical_results(tmp_path, capsys):
+    path = write(tmp_path, bundle())
+    first, second = tmp_path / "r1.json", tmp_path / "r2.json"
+    assert replay_intent.main(["--bundle", str(path), "--out", str(first)]) == replay_intent.EXIT_OK
+    capsys.readouterr()
+    assert replay_intent.main(["--bundle", str(path), "--out", str(second)]) == replay_intent.EXIT_OK
+    capsys.readouterr()
+    assert first.read_bytes() == second.read_bytes()
+
+
+def test_an_out_path_in_config_a_toml_or_thresholds_is_a_usage_error(tmp_path, monkeypatch, capsys):
+    from src import podlib
+
+    monkeypatch.setattr(podlib, "ROOT", tmp_path)
+    for rel in ("config/result.json", "config/risk.toml", "risk.toml", "src/thresholds.py"):
+        code = replay_intent.main(["--bundle", str(write(tmp_path, bundle())), "--out", str(tmp_path / rel)])
+        assert code == replay_intent.EXIT_USAGE, rel
+        assert "replay_intent:" in capsys.readouterr().err, rel
+        assert not (tmp_path / rel).exists(), rel
+
+
+def test_a_result_that_cannot_be_published_fails_closed(tmp_path, capsys):
+    out_path = tmp_path / "no-such-dir" / "result.json"
+    code = replay_intent.main(["--bundle", str(write(tmp_path, bundle())), "--out", str(out_path)])
+    out, err = capsys.readouterr()
+    assert code == replay_intent.EXIT_WRITE_FAILED and not out_path.exists()
+    assert "replay_intent:" in err and json.loads(out)["shadow"] is True
+
+
 # ---------------------------------------------------------------- read-only surface
+
+WRITE_ROOTS = ("os", "tempfile")
+WRITE_ATTRS = ("write", "flush")
+
+
+def _file_calls(names: set[str]) -> set[str]:
+    """Calls that can touch a file: the os/tempfile modules, or any .write()/.flush()."""
+    return {name for name in names
+            if name.split(".")[0] in WRITE_ROOTS or name.split(".")[-1] in WRITE_ATTRS}
+
+
+def _called(node: ast.AST) -> set[str]:
+    called: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            called.add(ast.unparse(sub.func))
+    return called
+
 
 def test_the_entry_has_no_execution_or_network_surface():
     tree = ast.parse(Path(replay_intent.__file__).read_text(encoding="utf-8"))
     imported: set[str] = set()
-    called: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             imported |= {alias.name.split(".")[0] for alias in node.names}
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported |= {node.module.split(".")[0]} | {alias.name for alias in node.names}
-        elif isinstance(node, ast.Call):
-            called.add(ast.unparse(node.func))
     assert imported.isdisjoint({"socket", "urllib", "http", "requests", "subprocess", "risk_gate", "executor",
                                 "halt_store", "sentinel", "bus", "ledger_store", "paper_ledger"})
-    # No write of any kind: the replay prints one JSON object and touches no file but its bundle.
-    assert called.isdisjoint({"open", "evaluate", "halt", "commit", "record_drift", "refuse_start"})
-    assert not [name for name in called if name.endswith(("write_text", "write_bytes", "mkdir", "unlink", "touch"))]
+
+
+def test_the_only_write_is_the_atomic_result_publish():
+    # Issue #80 acceptance 3: beside printing, the entry's one write is --out's atomic, no-clobber
+    # publish (temp file, fsync, hardlink into place, temp removed on failure) — nothing else.
+    tree = ast.parse(Path(replay_intent.__file__).read_text(encoding="utf-8"))
+    whole = _called(tree)
+    assert whole.isdisjoint({"open", "evaluate", "halt", "commit", "record_drift", "refuse_start"})
+    assert not [name for name in whole if name.endswith(("write_text", "write_bytes", "mkdir", "touch"))]
+    writes = _file_calls(whole)
+    publishers = [node for node in ast.walk(tree)
+                  if isinstance(node, ast.FunctionDef) and node.name == "publish_result"]
+    assert len(publishers) == 1
+    assert writes and writes == _file_calls(_called(publishers[0]))

@@ -52,6 +52,13 @@ zero gaps and zero fills, writes no StaleWatch state and repairs no source file.
 and a recording dir with no book file keep their old meaning (missing_book). A non-finite constant
 (NaN/Infinity) is not part of the refusal: the e2e recording carries such a row on purpose and its golden
 output must stay unchanged (the row is inert: book age reads book_ts, the gap path needs 0 < ask < 1).
+Issue #75 criterion 2 (tightening only): the inputs that are written while the cycle reads them -- the
+direct markets and books files, and the active (last) file of a recording's rotation -- get one bounded
+re-read when they change during a read. Still changing after that one re-read and the round is explicitly
+skipped: ``ok`` False, reason ``input_pending``, zero gaps and zero fills, no StaleWatch advance and no
+reset, no halt and no signal. ``--loop`` keeps the heartbeat and waits for the next round, so a transient
+append is never mapped to a permanent halt (EXIT_PIN would record a global halt); a one-shot run reports
+the skipped round and exits EXIT_OK. A file that has stopped changing is read exactly as before.
 """
 from __future__ import annotations
 
@@ -112,6 +119,10 @@ INPUT_TORN_TAIL = "torn_tail"
 INPUT_BLANK_LINE = "blank_line"
 INPUT_BAD_JSON = "bad_json"
 INPUT_NOT_OBJECT = "not_object"
+# Issue #75 criterion 2: a monitored input that is still changing after the one bounded re-read.
+INPUT_PENDING = "input_pending"
+INPUT_CHANGING = "changing"
+INPUT_REREAD_LIMIT = 1  # one bounded re-read of a changing input (structure, not a threshold)
 
 
 class CorruptInput(Exception):
@@ -167,6 +178,57 @@ def read_strict_jsonl(path: Path) -> list[dict]:
             raise CorruptInput(path, INPUT_NOT_OBJECT, number)
         rows.append(row)
     return rows
+
+
+class InputPending(Exception):
+    """A monitored markets/books input is still being appended (Issue #75 criterion 2).
+
+    Raised only after the one bounded re-read; the round is skipped (no signal, no gap, no StaleWatch
+    bookkeeping), never halted. Carries where: the path and one problem code, never file content.
+    """
+
+    def __init__(self, path: Path, detail: str = "") -> None:
+        self.path = str(path)
+        self.detail = detail
+        super().__init__(f"{self.path}: {INPUT_CHANGING}" + (f" ({detail})" if detail else ""))
+
+    def as_problem(self) -> dict:
+        return {"path": self.path, "line": None, "problem": INPUT_CHANGING}
+
+
+def _file_signature(path: Path) -> tuple[int, int] | None:
+    """(size, mtime_ns) of ``path``, or None when it is absent. How a mid-read append is seen."""
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return (stat.st_size, stat.st_mtime_ns)
+
+
+def read_stable_strict_jsonl(path: Path) -> list[dict]:
+    """``read_strict_jsonl`` for an input that may be appended while it is read (Issue #75 criterion 2).
+
+    The strict read happens with the file's signature taken before and after it. A signature that
+    changed means the rows may be a partial view: exactly ``INPUT_REREAD_LIMIT`` bounded re-read is
+    allowed. Still changing after that and InputPending names the path; the caller then skips the
+    round. A file that has stopped changing is read exactly once, so a corrupt one is refused as
+    ``CorruptInput`` without a re-read.
+    """
+    path = Path(path)
+    problem: CorruptInput | None = None
+    rows: list[dict] = []
+    for _attempt in range(1 + INPUT_REREAD_LIMIT):
+        before = _file_signature(path)
+        problem = None
+        try:
+            rows = read_strict_jsonl(path)
+        except CorruptInput as exc:
+            problem = exc
+        if _file_signature(path) == before:
+            if problem is not None:
+                raise problem
+            return rows
+    raise InputPending(path)
 
 
 NOT_RECORDED = "not_recorded"
@@ -238,36 +300,40 @@ def read_books(books_path: Path, recording_dir: Path | None = None) -> tuple[lis
     RECORDING_EMPTY: every leg is then missing_book (stale), never skipped. Issue #75: every file is
     read strictly, so one corrupt row raises CorruptInput instead of dropping the row and keeping
     the rest; a missing or empty books file still means no rows (the missing_book rule is unchanged).
+    The direct books file and the active (last) file of the rotation are the inputs that may still be
+    appended to (Issue #75 criterion 2): they get the bounded re-read, the closed ones do not.
     """
     if recording_dir is None:
-        return read_strict_jsonl(books_path), None
+        return read_stable_strict_jsonl(books_path), None
     files = recording_book_files(recording_dir)
     if not files:
         return [], RECORDING_EMPTY
     rows: list[dict] = []
-    for path in files:
+    for path in files[:-1]:
         rows.extend(read_strict_jsonl(path))
+    rows.extend(read_stable_strict_jsonl(files[-1]))
     return rows, None
 
 
-def _input_invalid(exc: CorruptInput, *, state_path: Path | None) -> dict:
-    """Issue #75: the complete result structure of a cycle refused for corrupt input.
+def _input_refusal(reason: str, problems: list[dict], *, state_path: Path | None,
+                   skipped: int = 0, skips: list[dict] | None = None) -> dict:
+    """Issue #75: the complete result structure of a cycle refused on its input.
 
-    No signal, no gap, no fill, no skip and no StaleWatch bookkeeping: the caller sees a full result
-    dict with ``ok`` False and the offending path, line and problem code in ``input_problems``.
+    No signal, no gap, no fill, no StaleWatch bookkeeping: the caller sees a full result dict with
+    ``ok`` False and the offending path, line and problem code in ``input_problems``.
     """
     path = state_path if state_path is not None else SENTINEL_STATE_PATH
     return {
         "ok": False,
-        "reason": INPUT_INVALID,
+        "reason": reason,
         "signals": 0,
         "gaps": 0,
         "structural_rejected": 0,
         "resolving_markets": 0,
         "stale": 0,
         "fills": 0,
-        "skipped": 0,
-        "skips": [],
+        "skipped": skipped,
+        "skips": skips if skips is not None else [],
         "halted_markets": [],
         "sentinel": {
             "checked": 0,
@@ -281,8 +347,25 @@ def _input_invalid(exc: CorruptInput, *, state_path: Path | None) -> dict:
         "books_problem": None,
         "not_recorded": 0,
         "recording": None,
-        "input_problems": [exc.as_problem()],
+        "input_problems": problems,
     }
+
+
+def _input_invalid(exc: CorruptInput, *, state_path: Path | None) -> dict:
+    """Issue #75: the round of a cycle refused for corrupt input (path, line and problem code only)."""
+    return _input_refusal(INPUT_INVALID, [exc.as_problem()], state_path=state_path)
+
+
+def _input_pending(exc: InputPending, *, state_path: Path | None) -> dict:
+    """Issue #75 criterion 2: the round of a cycle skipped because its input is still changing.
+
+    ``reason`` is ``input_pending`` and the round is one explicit skip: zero gaps and zero fills, the
+    StaleWatch state untouched (neither advanced nor cleared) and no halt -- a transient append must
+    never become a permanent one.
+    """
+    return _input_refusal(
+        INPUT_PENDING, [exc.as_problem()], state_path=state_path,
+        skipped=1, skips=[{"kind": INPUT_PENDING, "reason": INPUT_PENDING, "path": exc.path}])
 
 
 def run(
@@ -309,12 +392,17 @@ def run(
     # Issue #75: markets, the single-file books and every enumerated rotated book file are read in
     # full before any quote is chosen or any signal is emitted. A corrupt or unreadable input fails
     # the cycle with no gap, no stale count and no StaleWatch write (the streaks are untouched).
+    # Criterion 2: a direct file (or the active rotated one) that is still changing after the one
+    # bounded re-read skips the round the same way, with reason ``input_pending`` instead.
     try:
-        market_rows = read_strict_jsonl(markets_path)
+        market_rows = read_stable_strict_jsonl(markets_path)
         book_rows, books_problem = read_books(books_path, recording_dir)
     except CorruptInput as exc:
         _assert_risk_unchanged(before)
         return _input_invalid(exc, state_path=sentinel_state_path)
+    except InputPending as exc:
+        _assert_risk_unchanged(before)
+        return _input_pending(exc, state_path=sentinel_state_path)
     markets = _latest_by(market_rows, "id", skips, bus_path)
     books = _latest_books(book_rows, skips, bus_path)
     state_path = sentinel_state_path if sentinel_state_path is not None else SENTINEL_STATE_PATH
@@ -614,7 +702,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m src.paper_cycle",
         description="Offline paper cycle: gap and staleness signals, Sentinel StaleWatch. No orders.",
-        epilog="Exit codes: 0 ran; 1 a phase-0 pin failed (the risk file is checked before every cycle; "
+        epilog="Exit codes: 0 ran (a round skipped on a still-changing input: ok=false reason=input_pending); "
+               "1 a phase-0 pin failed (the risk file is checked before every cycle; "
                "global halt recorded); 2 usage error. See docs/EXIT_CODES.md.",
     )
     source = parser.add_mutually_exclusive_group()
@@ -671,7 +760,13 @@ def main(argv: list[str] | None = None, *, sleep=time.sleep, monotonic=time.mono
             progress = {"cycles": cycles, "gaps": result["gaps"], "stale": result["stale"],
                         "halts": len((result.get("sentinel") or {}).get("halts") or []),
                         "books_problem": result.get("books_problem")}
-            if not result["ok"]:
+            if result["reason"] == INPUT_PENDING and not args.loop:
+                # Issue #75 criterion 2: a round skipped on a changing input is not a failure and
+                # never a halt. A one-shot run reports the skip (ok=false reason=input_pending) and
+                # exits EXIT_OK; --loop falls through, keeps the heartbeat and waits for the next round.
+                hb.finish(EXIT_OK, progress)
+                return EXIT_OK
+            if not result["ok"] and result["reason"] != INPUT_PENDING:
                 hb.finish(EXIT_PIN, progress)
                 return EXIT_PIN
             if not args.loop or (args.max_cycles and cycles >= args.max_cycles):
