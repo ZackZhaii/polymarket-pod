@@ -249,7 +249,13 @@ def open_leg_problems(side: object, state: dict) -> list[str]:
     the leg (issue #226, reduce_cap).
     Issue #226 (D4): a sell on a leg that is not open (no position, i.e. opening a short) vetoes
     sell_requires_position. On Polymarket a short is a buy of the other token.
+    Issue #237: a buy while the same market's other token is held long (state["opposite_leg_shares"] > 0)
+    vetoes structural_arb_disabled.
     """
+    opposite = _finite_number(state.get("opposite_leg_shares"))
+    if side == "buy" and opposite is not None and opposite > 0:
+        # Issue #237: buying the other token while one is held builds the full set leg by leg (#141).
+        return ["structural_arb_disabled"]
     if state.get("leg_already_open") is not True:
         return ["sell_requires_position"] if side == "sell" else []
     net = _finite_number(state.get("leg_net_shares"))

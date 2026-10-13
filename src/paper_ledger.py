@@ -475,6 +475,10 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
         "exposure_usd": sum(leg["exposure_usd"] for leg in legs.values()),
         "leg_exposure_usd": 0.0 if own is None else own["exposure_usd"],
         "leg_net_shares": 0.0 if own is None else own["shares"],  # issue #123: the open leg's direction
+        # Issue #237: long holdings on the same market's other tokens (a buy here would assemble a complete set).
+        "opposite_leg_shares": sum(leg["shares"] for key, leg in legs.items()
+                                   if key[0] == leg_key(market, token_id)[0] and key != leg_key(market, token_id)
+                                   and leg["shares"] > OPEN_EPS),
         "daily_loss_usd": risk["loss_usd"],
         "daily_fees_usd": day.fees_usd,
         "daily_unrealized_loss_usd": marks["loss_usd"],  # Task CF: diagnosis (already in daily_loss_usd)

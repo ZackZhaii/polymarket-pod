@@ -66,8 +66,10 @@ def test_the_other_token_of_the_same_market_is_still_a_new_leg(tmp_path, monkeyp
     assert state["leg_already_open"] is False
     assert state["leg_net_shares"] == 0.0
     assert state["open_positions"] == 1
-    assert evaluate(_intent(token_id=NO), cfg, state).allow is True
-    assert paper_ledger.commit_if_allowed(_intent(token_id=NO), cfg)["allow"] is True
+    # Issue #237: a new leg, but buying it while YES is held builds the complete set -> structural_arb_disabled.
+    assert "add_to_open_leg" not in evaluate(_intent(token_id=NO), cfg, state).reasons
+    assert "structural_arb_disabled" in evaluate(_intent(token_id=NO), cfg, state).reasons
+    assert paper_ledger.commit_if_allowed(_intent(token_id=NO), cfg)["allow"] is False
 
 
 def test_the_other_token_still_counts_toward_the_cap(tmp_path, monkeypatch):

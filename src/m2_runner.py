@@ -283,6 +283,7 @@ class IterationReport:
     skipped: int = 0
     fills: list[dict[str, Any]] = field(default_factory=list)
     paused_reason: str | None = None
+    unverified_book_ts: int = 0  # Task DD (#275 follow-up): books whose book_ts gave no clock skew
 
 
 # ---------------------------------------------------------------- small I/O helpers
@@ -587,6 +588,8 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
                 book_refused = ["stale_book"]
                 break
             skew = _book_skew_s(snap.book_ts, fetched_at)
+            if skew is None or skew != skew or skew == float("inf"):
+                report.unverified_book_ts += 1
             if skew is not None and skew > CLOCK_SKEW_MAX_S:
                 skew_pause = True
                 break
@@ -910,7 +913,8 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     # clear clock_skew pause only after a decide that did not re-pause
     if report.action == ACT_RUN and state.paused_reason == "clock_skew":
         state.paused_reason = state.paused_since = None
-    if report.action == ACT_RUN and state.clock_anomaly == "clock_skew":
+    # Task DD (#275 follow-up): a tick with any book whose book_ts gave no skew does not clear the anomaly.
+    if report.action == ACT_RUN and state.clock_anomaly == "clock_skew" and report.unverified_book_ts == 0:
         state.clock_anomaly = None
     return report
 
