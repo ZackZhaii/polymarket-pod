@@ -22,11 +22,14 @@ C.4, C.6, C.8; Poly执行's no-live audit F2 / T1-T13 on the issue):
    that market's signals before any getter.
 5. The paper ledger: ``ledger_store.read_ledger`` + ``verify``. A problem records the global halt
    ``invalid_risk_state`` (as paper_ledger does) and pauses.
-6. The daily loss breaker: today's (UTC) fees, gross cost losses, closed reference topups and open-leg losses
+6. Independent CLOB /time: the complete local-minus-server uncertainty interval must fit inside ±5 s. An
+   unverifiable clock (``clock_unverified``) or a confirmed excessive skew (``clock_skew``) pauses after
+   settlement (#206) and before any scan or intent, even with no pending signal.
+7. The daily loss breaker: today's (UTC) fees, gross cost losses, closed reference topups and open-leg losses
    at or above ``max_daily_loss_pct x PAPER_EQUITY_USD``: paused (``daily_loss_breaker``) for the rest of the UTC
    day; the next day counts from zero again, so it resumes by itself. RiskGate vetoes these anyway; this only
    stops earlier.
-7. Disk: less than DISK_MIN_FREE_GB free on the run dir's volume, or the run dir above RUNNER_DISK_BUDGET_GB:
+8. Disk: less than DISK_MIN_FREE_GB free on the run dir's volume, or the run dir above RUNNER_DISK_BUDGET_GB:
    paused (``disk_low`` / ``disk_budget``), one event line.
 
 KILL comes first and the live / pin checks before the halts, so a drifted file exits 6 even while a halt is in
@@ -34,8 +37,8 @@ force (stricter than the order listed in the issue; each case still does nothing
 
 Network: the runner reaches the network only through its getters (``Getters``; production: ``podlib.public_get``
 for both). Every URL first passes ``url_allowed``: GET only, https, Gamma ``/markets`` or ``/markets/keyset``, or
-CLOB ``/book``; no user info, port or order / auth word. ``main`` also installs ``network_guard``, a socket-level
-tripwire for the process: name resolution for any host but those two raises. ``/clob-markets`` is not used (its
+CLOB ``/book`` or exact ``/time``; no user info, port or order / auth word. ``main`` also installs ``network_guard``,
+a socket-level tripwire for the process: name resolution for any host but those two raises. ``/clob-markets`` is not used (its
 allowlisting is a KEY issue) and no WebSocket is opened.
 
 There is no executor. ``EXECUTOR_ENABLED`` is the literal ``False``, assigned once; no argument, environment
@@ -64,6 +67,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 import os
 import platform
 import shutil
@@ -100,6 +104,7 @@ from src import (  # noqa: E402
     sentinel,
 )
 from src.daily_loss import daily_loss  # noqa: E402
+from src.book_staleness import INVALID_BOOK_TS, MISSING_BOOK_TS, book_age_problem, parse_book_ts  # noqa: E402
 from src.thresholds import (  # noqa: E402
     CLOCK_SKEW_MAX_S,
     DISK_MIN_FREE_GB,
@@ -137,14 +142,15 @@ ACT_FINISH = "finish"
 ACT_EXIT_PIN = "exit_pin_or_live"
 ACT_WRITE_FAILED = "write_failed"
 
-# The only reads: Gamma /markets (+ /markets/keyset, the scanner's pages) and CLOB /book. Derived from podlib's
-# pinned prefixes, so this module spells no host.
+# Read-only endpoints derived from podlib's pins, so this module spells no host.
 _GAMMA = urlsplit(podlib.GAMMA_PREFIX)
 _BOOK = urlsplit(podlib.BOOK_PREFIX)
+_TIME = urlsplit(podlib.TIME_URL)
 ALLOWED_GETS = frozenset({
     ("https", _GAMMA.hostname, _GAMMA.path),
     ("https", _GAMMA.hostname, _GAMMA.path + "/keyset"),
     ("https", _BOOK.hostname, _BOOK.path),
+    ("https", _TIME.hostname, _TIME.path),
 })
 ALLOWED_HOSTS = frozenset(host for _, host, _ in ALLOWED_GETS)
 BANNED_URL_WORDS = ("/order", "/cancel", "/auth", "api-key", "api_key", "apikey", "balance-allowance", "/ws/user",
@@ -175,6 +181,8 @@ def url_allowed(url: object) -> bool:
     lowered = url.lower()
     if any(word in lowered for word in BANNED_URL_WORDS):
         return False
+    if parts.path == _TIME.path:
+        return url == podlib.TIME_URL
     return (parts.scheme, (parts.hostname or "").lower(), parts.path) in ALLOWED_GETS
 
 
@@ -254,6 +262,8 @@ class RunnerState:
     clock_anomaly: str | None = "clock_unverified"
     # set during a tick when a fetched book passed the skew check; only such a tick may clear clock_anomaly
     tick_clock_verified: bool = False
+    tick_clock_vetoed: bool = False  # Poly风控 P1 on #275: any book with an invalid book_ts this tick
+    tick_time_ok: bool = False  # #253: this tick's CLOB /time check passed (|skew| <= CLOCK_SKEW_MAX_S)
     counters: dict[str, int] = field(default_factory=lambda: {
         "forecasts_sealed_total": 0, "forecasts_rejected_total": 0, "intents_built_total": 0, "allows_total": 0,
         "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0})
@@ -371,13 +381,15 @@ def runner_clock_ok(state: "RunnerState") -> bool:
 
 
 def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = None, clock_ok: bool = False,
-              ledger_path: Path | None = None, settle: Callable[[], list[str]] | None = None) -> Preflight:
+              ledger_path: Path | None = None, settle: Callable[[], list[str]] | None = None,
+              clock_check: Callable[[], str | None] | None = None) -> Preflight:
     """The C.2 checks, in order; the first failing one decides. Writes no fill itself.
 
     Issue #206 (Task CO): ``settle`` (the runner's settlement step, ``_settle_tick``) runs after the KILL / live /
     pin / global-halt checks and a verified ledger (so never under a hard halt, a KILL file or
-    invalid_risk_state), and before the daily-loss breaker, which then reads the ledger again. It runs whether
-    or not the breaker or a later check pauses this tick. Its problems are a contradiction: invalid_risk_state
+    invalid_risk_state), and before the independent clock certification (CLOB /time, C222) and the daily-loss
+    breaker, which then reads the ledger again. A clock_unverified / clock_skew pause therefore still settles. It runs whether or not the breaker or a later check pauses this tick. Its problems
+    are a contradiction: invalid_risk_state
     and a global halt. It never clears a pause or a halt; the checks after it decide this tick.
     """
     if paths.kill_file.exists():
@@ -420,6 +432,10 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
             _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": [str(p) for p in problems[:10]],
                                                      "source": "settlement"})
             return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]]])
+    if clock_check is not None:  # PR #253 review: after settlement, so a clock pause never defers it (#206)
+        problem = clock_check()
+        if problem is not None:
+            return Preflight(ACT_PAUSE, [problem], ledger_rows=len(read.rows))
     rows = len(read.rows)
     risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), _stamp(now), clock_ok=clock_ok)
     if risk["problems"]:
@@ -444,6 +460,44 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
     if used_gb > RUNNER_DISK_BUDGET_GB:
         return Preflight(ACT_PAUSE, ["disk_budget", f"run_dir_gb={used_gb:.2f}"], free_gb, rows)
     return Preflight(ACT_RUN, [], free_gb, rows)
+
+
+CLOCK_PAUSE_REASONS = frozenset({"clock_unverified", "clock_skew"})
+
+
+def _clock_check(state: "RunnerState", getter: GuardedGetter) -> str | None:
+    """#253 + Task DA: a clock_unverified / clock_skew result also marks ``state.clock_anomaly``, so later
+    ticks' daily-loss evaluation treats the day-start reference as late (fail closed)."""
+    problem = _clock_problem(state.clock, getter)
+    if problem is not None:
+        state.clock_anomaly = problem
+    else:
+        state.tick_time_ok = True  # #253: a clean CLOB /time check (the skew source) this tick
+    return problem
+
+
+def _clock_problem(clock: Callable[[], datetime], getter: GuardedGetter) -> str | None:
+    """Certify the whole local-minus-server interval, including request time and ±1 s server quantization."""
+    try:
+        sent = clock()
+        server = getter(podlib.TIME_URL)
+        received = clock()
+        if not isinstance(sent, datetime) or not isinstance(received, datetime):
+            return "clock_unverified"
+        sent, received = parse_book_ts(sent), parse_book_ts(received)
+        if (sent is None or received is None or received < sent
+                or isinstance(server, bool) or not isinstance(server, (int, float))
+                or parse_book_ts(server) is None):
+            return "clock_unverified"
+        low = sent.timestamp() - server - 1.0
+        high = received.timestamp() - server + 1.0
+    except Exception:  # noqa: BLE001 - failed reads, invalid clocks and numeric overflow cannot certify time
+        return "clock_unverified"
+    if low >= -CLOCK_SKEW_MAX_S and high <= CLOCK_SKEW_MAX_S:
+        return None
+    if low > CLOCK_SKEW_MAX_S or high < -CLOCK_SKEW_MAX_S:
+        return "clock_skew"
+    return "clock_unverified"
 
 
 # ---------------------------------------------------------------- books
@@ -573,7 +627,6 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
             continue
         books: dict[str, intent_builder.BookSnapshot] = {}
         book_refused: list[str] | None = None
-        skew_pause = False
         for token in [str(t) for t in row.get("token_ids") or []]:
             try:
                 # Issue #120: full-depth REST /book via book.fetch_depth (getter injected / guarded).
@@ -590,32 +643,19 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
                 book_refused = ["book_before_resume"]
                 break
             snap = book_snapshot_from_clob(raw, market_id, token)
-            age = _book_age_s(snap.book_ts, fetched_at)
-            if age is not None and age > MAX_BOOK_AGE_S:
-                book_refused = ["stale_book"]
-                break
-            skew = _book_skew_s(snap.book_ts, fetched_at)
-            if skew is not None and skew > CLOCK_SKEW_MAX_S:
-                skew_pause = True
+            problem = book_age_problem(snap.book_ts, fetched_at, MAX_BOOK_AGE_S)
+            if problem is not None:
+                if problem in (MISSING_BOOK_TS, INVALID_BOOK_TS):
+                    # Poly风控 P1 on #275: a missing / unparseable / non-finite book_ts vetoes this tick's
+                    # clock verification (even after a clean /time check)
+                    state.tick_clock_vetoed = True
+                book_refused = [problem]
                 break
             books[token] = snap
-            state.tick_clock_verified = True  # Task DC: a clock check passed (this book's skew is in range)
-        if skew_pause:
-            state.clock_anomaly = "clock_skew"  # Task DA: the next ticks' day-start reference is late
-            # Issue #238: like the preflight pause, stamp paused_since (and log the event) only when the pause
-            # starts; a skew that holds keeps the first stamp so the Sentinel's runner_paused_too_long can fire.
-            if state.paused_reason != "clock_skew":
-                state.paused_reason, state.paused_since = "clock_skew", _stamp(now)
-                try:
-                    event(state, "clock_skew", now, max_skew_s=CLOCK_SKEW_MAX_S)
-                except WriteFailed as exc:
-                    report.action = ACT_WRITE_FAILED
-                    report.reasons = [str(exc)]
-                    return
-            report.action = ACT_PAUSE
-            report.paused_reason = "clock_skew"
-            report.reasons = ["clock_skew"]
-            return
+            # Task DC + #253: verified only by a clean /time check plus at least one fresh, valid book this tick
+            # (an empty tick proves nothing and never clears the anomaly)
+            if state.tick_time_ok:
+                state.tick_clock_verified = True
         if book_refused is not None:
             _skip(state, now, report, item, forecast_id, book_refused)
             continue
@@ -672,14 +712,10 @@ def _skip(state: RunnerState, now: datetime, report: IterationReport, item: Pend
 
 def _book_age_s(book_ts: object, now: datetime) -> float | None:
     parsed = heartbeat.parse_stamp(book_ts) if isinstance(book_ts, str) else None
-    return None if parsed is None else round((now - parsed).total_seconds(), 3)
-
-
-def _book_skew_s(book_ts: object, now: datetime) -> float | None:
-    """Absolute |book_ts − local| in seconds (issue #120 clock skew)."""
-    parsed = heartbeat.parse_stamp(book_ts) if isinstance(book_ts, str) else None
-    return None if parsed is None else round(abs((now - parsed).total_seconds()), 3)
-
+    if parsed is None:
+        return None
+    age = round((now - parsed).total_seconds(), 3)
+    return age if math.isfinite(age) else None
 
 
 def _read_journal(path: Path) -> list[dict[str, Any]]:
@@ -885,10 +921,14 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     inbox / decisions."""
     state.iteration += 1
     state.tick_clock_verified = False  # Task DC: per tick
+    state.tick_clock_vetoed = False
+    state.tick_time_ok = False
     gamma = GuardedGetter(getters.gamma)  # one guarded Gamma getter per tick: settlement, scan, fee
+    book_get = GuardedGetter(getters.book)  # shared read-only transport for /time and later /book
     try:
         check = preflight(state.paths, now=now, risk_path=state.risk_path, clock_ok=runner_clock_ok(state),
-                          settle=lambda: _settle_tick(state, now, gamma))
+                          settle=lambda: _settle_tick(state, now, gamma),
+                          clock_check=lambda: _clock_check(state, book_get))
     except WriteFailed as exc:
         state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return IterationReport(ACT_WRITE_FAILED, [str(exc)])
@@ -898,7 +938,10 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
         report = IterationReport(check.action, check.reasons)
         if check.action == ACT_PAUSE:
             if state.paused_reason != check.reasons[0]:
-                state.paused_since = _stamp(now)
+                # PR #253 review: clock_unverified <-> clock_skew is one clock pause episode (keep paused_since)
+                if not (state.paused_reason in CLOCK_PAUSE_REASONS and check.reasons[0] in CLOCK_PAUSE_REASONS
+                        and state.paused_since is not None):
+                    state.paused_since = _stamp(now)
                 try:
                     event(state, "paused", now, reasons=check.reasons)
                 except WriteFailed:
@@ -908,11 +951,8 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
         # still advance the suspend clocks so a long pause is not itself a false resume
         state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return report
-    if state.paused_reason is not None and state.paused_reason != "clock_skew":
+    if state.paused_reason is not None:
         state.paused_reason = state.paused_since = None
-    elif state.paused_reason == "clock_skew":
-        # clear only when books look sane again (next successful decide); keep paused this pass
-        pass
     # Issue #120: suspend / resume detection before any scan or decision
     suspended, gap_s = _suspend_detected(state, now)
     if suspended:
@@ -939,7 +979,6 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
             return IterationReport(ACT_WRITE_FAILED, [str(exc)])
         return report
     report = IterationReport(ACT_RUN)
-    book_get = GuardedGetter(getters.book)
     try:
         cfg = _risk_cfg(state.risk_path)
         if (state.force_rescan or state.scan_at is None
@@ -956,10 +995,10 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
         state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return IterationReport(ACT_WRITE_FAILED, [str(exc)])
     state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
-    # clear clock_skew pause only after a decide that did not re-pause and verified the clock (Task DC)
-    if report.action == ACT_RUN and state.tick_clock_verified and state.paused_reason == "clock_skew":
-        state.paused_reason = state.paused_since = None
-    # Task DC: an empty tick (no book fetched) proves nothing about the clock and never clears the anomaly
+    if state.tick_clock_vetoed:  # one invalid book_ts vetoes the whole tick's clock verification
+        state.tick_clock_verified = False
+    # Task DC + #253: a clock anomaly (clock_skew / clock_unverified) clears only after a decide that did not
+    # re-pause, a clean CLOB /time check this tick, and no book with a missing / invalid book_ts
     if report.action == ACT_RUN and state.tick_clock_verified:
         state.clock_anomaly = None
     return report

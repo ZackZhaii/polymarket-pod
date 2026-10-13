@@ -36,6 +36,13 @@ markets of one event are drawn together. ``bootstrap_cluster_key`` (event_id / c
 ``bootstrap_clusters`` on both sections and on every judged group's ``intervals`` say what was resampled.
 Same seed and resample count; samples without an event id resample exactly as before (one market each).
 
+Task DB (issue #266): reliability() refuses a p that is not a finite probability in [0, 1] or a y outside
+{0, 1} with a ValueError (never a bare StopIteration or a hit rate above 1). A bin's mean_p is the correctly
+rounded mean of its p values and mean_p_outside_wilson is decided exactly, not by a float sum / n that can
+round across the Wilson bound. trades.metrics.brier_skill is never clipped; ``brier_skill_flag`` says
+``degenerate_market_reference`` when the market Brier is below CALIBRATION_LOGLOSS_CLIP ** 2 (the skill is
+then dominated by a near-zero reference, e.g. q = 1e-9 gives about -1e16), ``ok`` otherwise, None without one.
+
 Fail closed. Nothing is imputed: a row with calibration_problems, a missing join, a pending,
 UMA-unconfirmed, disputed, void or ambiguous resolution, or a token / outcome that disagrees with
 the snapshot is dropped and counted by reason in the report. A corrupt input file (torn line,
@@ -57,6 +64,7 @@ import random
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from fractions import Fraction
 from pathlib import Path
 from statistics import NormalDist
 from typing import Any, Iterable, Mapping, Sequence
@@ -322,8 +330,39 @@ def wilson(hits: int, n: int) -> list[float] | None:
     return [low, high]
 
 
+def _check_pairs(pairs: Sequence[tuple[float, int]]) -> None:
+    """Task DB (#266 F-06..F-10, F-14): every p a finite probability in [0, 1], every y 0 or 1, else ValueError."""
+    for p, y in pairs:
+        if isinstance(p, bool) or not isinstance(p, (int, float)) or not math.isfinite(p) or not 0.0 <= p <= 1.0:
+            raise ValueError(f"reliability: p={p!r} is not a finite probability in [0, 1]")
+        if isinstance(y, bool) or not isinstance(y, (int, float)) or y not in (0, 1):
+            raise ValueError(f"reliability: y={y!r} is not an outcome in {{0, 1}}")
+
+
+def _exact_sum(values: Iterable[float]) -> Fraction:
+    """Task DB (#266 W-16): the exact sum of floats (integer arithmetic on their binary fractions)."""
+    ratios = [float(v).as_integer_ratio() for v in values]
+    if not ratios:
+        return Fraction(0)
+    shift = max(d.bit_length() - 1 for _, d in ratios)
+    return Fraction(sum(n << (shift - (d.bit_length() - 1)) for n, d in ratios), 1 << shift)
+
+
+def _outside_wilson(mean: Fraction, hits: float, n: int) -> bool:
+    """Task DB (#266 W-16): ``mean`` outside wilson(hits, n), decided exactly.
+
+    The Wilson interval is the set of p0 with n * (hits/n - p0)**2 <= z**2 * p0 * (1 - p0) (score test), so
+    the exact mean is compared without a square root or a rounded bound (z is the float wilson() uses)."""
+    z2 = Fraction(_z()) ** 2
+    phat = Fraction(hits) / n
+    return n * (phat - mean) ** 2 > z2 * mean * (1 - mean)
+
+
 def reliability(pairs: Sequence[tuple[float, int]]) -> dict[str, Any]:
-    """Fixed design bins at >= CALIBRATION_FIXED_BINS_MIN_SAMPLES samples, else equal-frequency bins."""
+    """Fixed design bins at >= CALIBRATION_FIXED_BINS_MIN_SAMPLES samples, else equal-frequency bins.
+
+    Task DB: a p outside [0, 1] (or not finite) or a y outside {0, 1} raises ValueError (_check_pairs)."""
+    _check_pairs(pairs)
     n = len(pairs)
     bins: list[dict[str, Any]] = []
     if n >= CALIBRATION_FIXED_BINS_MIN_SAMPLES:
@@ -331,8 +370,10 @@ def reliability(pairs: Sequence[tuple[float, int]]) -> dict[str, Any]:
         edges = CALIBRATION_BIN_EDGES
         groups: list[list[tuple[float, int]]] = [[] for _ in edges[:-1]]
         for p, y in pairs:
-            index = next(i for i in range(len(edges) - 1)
-                         if edges[i] <= p < edges[i + 1] or (i == len(edges) - 2 and p == edges[-1]))
+            index = next((i for i in range(len(edges) - 1)
+                          if edges[i] <= p < edges[i + 1] or (i == len(edges) - 2 and p == edges[-1])), None)
+            if index is None:  # unreachable after _check_pairs; never a bare StopIteration
+                raise ValueError(f"reliability: p={p!r} falls in no bin of {list(edges)}")
             groups[index].append((p, y))
         ranges = [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
     else:
@@ -345,14 +386,15 @@ def reliability(pairs: Sequence[tuple[float, int]]) -> dict[str, Any]:
     for (low, high), group in zip(ranges, groups):
         size = len(group)
         hits = sum(y for _, y in group)
-        mean_p = sum(p for p, _ in group) / size if size else None
+        exact_mean = _exact_sum(p for p, _ in group) / size if size else None
+        mean_p = float(exact_mean) if exact_mean is not None else None  # Task DB: correctly rounded
         rate = hits / size if size else None
         interval = wilson(hits, size)
         if size:
             ece += size / n * abs(mean_p - rate)  # type: ignore[operator]
         judged = size >= CALIBRATION_GROUP_MIN_SAMPLES
         bins.append({"range": [low, high], "n": size, "mean_p": mean_p, "hit_rate": rate, "wilson": interval,
-                     "mean_p_outside_wilson": (not interval[0] <= mean_p <= interval[1])  # type: ignore[index]
+                     "mean_p_outside_wilson": _outside_wilson(exact_mean, hits, size)  # type: ignore[arg-type]
                      if judged and interval is not None else None})
     return {"kind": kind, "bins": bins, "ece": ece if n else None}
 
@@ -789,6 +831,15 @@ def _skill(drawn: Sequence[Mapping[str, Any]]) -> float | None:
     return None if not market else 1.0 - brier(_pairs(drawn, "p")) / market  # type: ignore[operator]
 
 
+def brier_skill_flag(bs_market: float | None, skill: float | None) -> str | None:
+    """Task DB (#266): None without a skill; ``degenerate_market_reference`` when the market Brier is below
+    CALIBRATION_LOGLOSS_CLIP ** 2 (below what a market clipped to [clip, 1 - clip] reaches even when always
+    right, so 1 - BS_p / BS_q is dominated by a near-zero reference); else ``ok``. The skill is never changed."""
+    if skill is None or bs_market is None:
+        return None
+    return "degenerate_market_reference" if bs_market < CALIBRATION_LOGLOSS_CLIP ** 2 else "ok"
+
+
 def trade_section(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
     model = _pairs(samples, "p")
     market = _pairs(samples, "q")
@@ -797,11 +848,13 @@ def trade_section(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
     bs_model, bs_market = brier(model), brier(market)
     expected = sum(s["expected_usd"] for s in samples)
     realized = sum(s["realized_usd"] for s in samples)
+    skill = (1.0 - bs_model / bs_market) if bs_model is not None and bs_market else None
     section: dict[str, Any] = {
         **gate,
         "brier_model": bs_model, "brier_market": bs_market,
         "delta_brier": None if bs_model is None else bs_model - bs_market,  # type: ignore[operator]
-        "brier_skill": (1.0 - bs_model / bs_market) if bs_model is not None and bs_market else None,
+        "brier_skill": skill,
+        "brier_skill_flag": brier_skill_flag(bs_market, skill),  # Task DB: reported unchanged, flagged
         "log_loss_model": log_loss(model), "log_loss_market": log_loss(market),
         "mean_r_minus_e": ((realized - expected) / len(samples)) if samples else None,
         "expected_usd": expected, "realized_usd": realized,
@@ -939,6 +992,12 @@ def _cluster_line(metrics: Mapping[str, Any]) -> str:
             f"({metrics.get('bootstrap_clusters', '-')} clusters)")  # Task BG
 
 
+def _skill_marker(metrics: Mapping[str, Any]) -> str:
+    """Task DB: the brier_skill_flag beside the skill when it is not ``ok`` (the number itself is unchanged)."""
+    flag = metrics.get("brier_skill_flag")
+    return "" if flag in (None, "ok") else f" **[{flag}: market Brier near zero, skill not comparable]**"
+
+
 def render_markdown(report: Mapping[str, Any]) -> str:
     f, t = report["forecasts"], report["trades"]
     fm, tm = f["metrics"], t["metrics"]
@@ -966,8 +1025,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
               f"{json.dumps(t['dropped_by_reason'], sort_keys=True)}",
               f"- market probability q by source: {json.dumps(t.get('price_sources', {}), sort_keys=True)}",
               f"- Brier model {_fmt(tm['brier_model'])}, market {_fmt(tm['brier_market'])}, delta "
-              f"{_fmt(tm['delta_brier'])} (CI {_fmt(tm.get('delta_brier_ci'))}), skill {_fmt(tm['brier_skill'])} "
-              f"(CI {_fmt(tm.get('brier_skill_ci'))})",
+              f"{_fmt(tm['delta_brier'])} (CI {_fmt(tm.get('delta_brier_ci'))}), skill {_fmt(tm['brier_skill'])}"
+              f"{_skill_marker(tm)} (CI {_fmt(tm.get('brier_skill_ci'))})",
               f"- log loss model {_fmt(tm['log_loss_model'])}, market {_fmt(tm['log_loss_market'])}",
               f"- expected {_fmt(tm['expected_usd'])} USD, realized {_fmt(tm['realized_usd'])} USD, realization "
               f"{_fmt(tm['realization'])}; mean(R-E) {_fmt(tm['mean_r_minus_e'])} "

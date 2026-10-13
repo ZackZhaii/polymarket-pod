@@ -179,7 +179,7 @@ RUNNER_MAX_EVALS_PER_SIGNAL = 10
 RUNNER_SUSPEND_GAP_S = 180.0
 # Wall vs monotonic delta above this also counts as a suspend (host slept).
 RUNNER_WALL_MONO_SKEW_S = 30.0
-# |book_ts − local clock| above this pauses the runner (clock_skew).
+# Independent server-clock uncertainty must fit within this; book freshness is checked separately.
 CLOCK_SKEW_MAX_S = 5.0
 # Disk: the runner pauses with less than DISK_MIN_FREE_GB free on the run dir's volume, or when the run dir
 # holds more than RUNNER_DISK_BUDGET_GB.

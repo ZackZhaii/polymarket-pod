@@ -110,7 +110,7 @@ It prints one `PASS`/`FAIL` line per check with the reason, then a summary line:
   order-capable package (`ORDER_CAPABLE` in `scripts/guard.py`, the single list) in `requirements*.txt` /
   `pyproject.toml`, or imported anywhere in `src/` or `scripts/`.
 - `url_allowlist`: every URL in `src/` code is an allowlisted public read-only endpoint (Gamma `/markets` and
-  `/markets/keyset`, CLOB `/book`, the WS market channel, and since Task AK only the Data API v2 `/v2/status`, `/v2/positions`
+  `/markets/keyset`, CLOB `/book` and exact `/time` (no query or fragment), the WS market channel, and since Task AK only the Data API v2 `/v2/status`, `/v2/positions`
   and `/v2/trades` reads of `src/reconcile.py`); the retired v1 Data API routes, other v2 routes, order/auth paths, the user channel, ports, credentials in
   the query and other hosts fail. Docstrings and comments may also link docs.polymarket.com and github.com.
 - `thresholds_doc`: `docs/THRESHOLDS.md` agrees with `src/thresholds.py` (Task AC table parser).
@@ -252,6 +252,12 @@ alert, 3 gap resyncs of one asset in 600 s = that market halted. All checked mar
 global halt. Alerts go to `logs/alerts.jsonl` plus a Sentinel->Operator bus `signal`. Every code by module:
 `docs/EXIT_CODES.md` (Task AS).
 
+**Run exactly one paper_cycle per checkout** (Poly风控 review of #283). Its StaleWatch streaks
+(`all_stale_streak`, `input_pending_streak` and the per-market streaks in `logs/sentinel_stale.json`) are read,
+updated and rewritten without a lock, so two paper_cycle processes on one checkout can overwrite each other's
+counts and delay the all-markets-stale global halt. `scripts/m2_start.ps1` already refuses while a paper_cycle
+heartbeat is fresh; never start a second paper_cycle (loop or one-shot) beside it by hand.
+
 Once the resident Sentinel has beaten, RiskGate, the Maker and paper_cycle treat its heartbeat older than 90 s,
 missing, corrupt or finished as a stored global halt (`sentinel_heartbeat_*`; before its first beat:
 `sentinel_heartbeat_never_seen`, not stored, see the start order above): stopping the Sentinel halts
@@ -284,8 +290,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\m2_start.ps1 -Reason
    stamped `live_enabled=false`, `mode=paper` and the pinned risk sha, and accepted by the consumers. An old heartbeat
    file never counts. If that never happens, nothing else starts (exit 4).
 2. One line is appended to `runs/m2-chain.jsonl`: `ts, run_dir, git_sha, reason, m2_end, max_runtime_s, host,
-   sentinel_pid`. If the append fails, nothing else starts (exit 5).
-3. `python -m src.m1_run --out runs/m2/m1-<UTC stamp> --max-runtime <seconds left until the M2 end>`. The run dir is
+   sentinel_pid, assets`. If the append fails, nothing else starts (exit 5). `assets` (#276) is chosen once, at the
+   first start, by m1_run's selection (top M1_TOP_MARKETS of the latest `data/markets.jsonl` batch, sports markets
+   ending the same UTC day dropped) and reused unchanged by every later start; a market that closes mid-run stays
+   listed and counts as a gap. `runs/m2/current.json` keeps a copy; `-DryRun` prints the list and its source. A
+   chain row without a valid `assets`, or rows that disagree, refuse with exit 3 (no migration).
+3. `python -m src.m1_run --out runs/m2/m1-<UTC stamp> --max-runtime <seconds left until the M2 end> --assets <ids>`. The run dir is
    new on every start, under #119's fixed `runs/m2/`, and is never reused. It counts as ready once m1_run's own fresh
    heartbeat, a valid manifest and a books file all exist, within m1_run's Sentinel timeout (120 s). Then
    paper_cycle never starts on an empty recording.

@@ -119,7 +119,7 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 |---|---|---|---|
 | 0 | `EXIT_OK` | every step started and passed its check (`--dry-run`: the plan passed the refusals) | - |
 | 2 | `EXIT_USAGE` | usage error: blank --reason, no or bad --m2-end, --m2-end differs from the chain | - |
-| 3 | `EXIT_REFUSED` | refused before anything started: M1 clone, runs/m2/KILL, bad chain, M2 window over, a process already running, run dir exists, m2_runner not watched | - |
+| 3 | `EXIT_REFUSED` | refused before anything started: M1 clone, runs/m2/KILL, bad chain (incl. missing/malformed/inconsistent `assets`, #276), no usable boot assets, M2 window over, a process already running, run dir exists, m2_runner not watched | - |
 | 4 | `EXIT_SENTINEL_NOT_FRESH` | the launched Sentinel never beat fresh within SENTINEL_HEARTBEAT_TIMEOUT_S; nothing else started | - |
 | 5 | `EXIT_NOT_READY` | the chain append or a runs/m2/current.json write failed, or a later process was not ready within its Sentinel timeout; nothing after it started | - |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins; refused, global halt recorded (`--dry-run`: none recorded) | - |
@@ -129,6 +129,21 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 `python -m src.m2_runner --run-dir runs/m2 [--max-runtime S] [--once]`: the M2 paper runner (issue #119). Every iteration checks
 KILL, the live flags, the risk.toml pins, halts, the ledger, the daily loss breaker and disk before any read, seal or commit.
 Heartbeat every HEARTBEAT_RUNNER_EVERY_S (`paused` while paused); single instance by `runs/m2/runner.lock`. Paper only, no executor.
+
+Tick order: KILL / live / pins / halts / ledger, then settlement (#206), then the independent clock check, then the daily
+loss breaker, disk, and only then scan / decide. Clock check (C222, #222 option B): one public read-only GET of the CLOB
+`https://clob.polymarket.com/time` (exact URL only; guard and `podlib.public_get` refuse every variant). The whole
+local-minus-server uncertainty interval (request round trip plus ±1 s rounding of the integer seconds) must fit inside
+±`CLOCK_SKEW_MAX_S` (5 s). Two pause reasons, neither an exit code (the runner keeps beating `paused`, nothing is scanned or
+decided, settlement still runs that tick):
+
+- `clock_unverified`: /time unreachable or malformed (timeout, HTTP error, non-numeric, bool, NaN/inf, out of range), an
+  unusable local clock, or an interval too wide to certify either way. Fail closed.
+- `clock_skew`: the whole interval lies beyond ±5 s, a confirmed skew. Sync the host clock.
+
+Switching between `clock_unverified` and `clock_skew` is one clock pause episode: `paused_since` keeps its first stamp (a
+`paused` event is still written on each switch), so the Sentinel's `runner_paused_too_long` (`RUNNER_PAUSED_ALERT_S`, 6 h)
+fires on a flapping clock too. `paused_since` clears only when a tick runs again; any other pause reason restamps it.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
@@ -164,7 +179,7 @@ later acceptance items, so the tool never reports PASS — a problem-free run en
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | ran (issue #75: a round whose markets/books input is still changing after the one bounded re-read is skipped, `ok=false reason=input_pending`, and exits 0 too: a transient append is never a halt) | - |
+| 0 | `EXIT_OK` | ran (issue #75: a round whose markets/books input is still changing after the one bounded re-read is skipped, `ok=false reason=input_pending`, and exits 0 too: a single transient append is never a halt; issue #277: consecutive such rounds are counted as `input_pending_streak` in the StaleWatch state and the heartbeat progress, cleared by a normal cycle, and at `ALL_STALE_CONSECUTIVE_CYCLES` in a row they raise the `all_markets_stale` global halt, the reason naming input_pending and the count; the exit code stays 0 and `--loop` keeps running) | - |
 | 1 | `EXIT_PIN` | a phase-0 pin failed: the in-memory config, or (Task AS) the risk file before a cycle (global halt recorded) | global halt |
 | 2 | `EXIT_USAGE` | usage error | alert |
 

@@ -192,6 +192,7 @@ def test_wall_gap_triggers_resume_detected_and_skips_orders(env):
     report1 = m2_runner.iteration(state, now=clock.now(), getters=fake.getters())
     assert report1.action == m2_runner.ACT_RUN and state.last_iter_wall is not None
     clock.advance_wall(3600)
+    fake.now = clock.now()  # the independent server clock advances through the simulated sleep too
     before_books = len(fake.book_urls)
     report2 = m2_runner.iteration(state, now=clock.now(), getters=fake.getters())
     assert "resume_detected" in report2.reasons
@@ -223,6 +224,9 @@ def test_clock_skew_pauses_the_runner(env):
 
     class Skewed(rig.FakeGetters):
         def book(self, url: str):
+            if url == m2_runner.podlib.TIME_URL:
+                self.time_calls.append(url)
+                return skewed.timestamp()
             body = dict(super().book(url))
             body["timestamp"] = str(int(skewed.timestamp() * 1000))
             return body
@@ -234,23 +238,31 @@ def test_clock_skew_pauses_the_runner(env):
     state = m2_runner.RunnerState(paths=paths, clock=clock.now, monotonic=clock.monotonic)
     report = m2_runner.iteration(state, now=clock.now(), getters=fake.getters())
     assert report.action == m2_runner.ACT_PAUSE and report.paused_reason == "clock_skew"
-    assert any(e.get("event") == "clock_skew" for e in _events(env))
+    assert any(e.get("event") == "paused" and e.get("reasons") == ["clock_skew"] for e in _events(env))
+    assert fake.book_urls == []
 
 
 # ---------------------------------------------------------------- issue #238: clock_skew keeps paused_since
 
 
 class _Skewing(rig.FakeGetters):
-    """Books stamped ``skew_s`` ahead of the runner clock (``None`` = a sane, fresh book)."""
+    """#222 option B: the independent CLOB /time is ``skew_s`` behind the runner clock (``None`` = in sync);
+    ``time_error`` makes /time fail (clock_unverified). Books are always fresh."""
 
     def __init__(self, now: datetime, clock: _Clock) -> None:
         super().__init__(now)
         self.clock = clock
         self.skew_s: float | None = CLOCK_SKEW_MAX_S + 30
+        self.time_error: Exception | None = None
 
     def book(self, url: str):
+        if url == m2_runner.podlib.TIME_URL:
+            self.time_calls.append(url)
+            if self.time_error is not None:
+                raise self.time_error
+            return self.clock.now().timestamp() - (self.skew_s or 0.0)
         body = dict(super().book(url))
-        moment = self.clock.now() + timedelta(seconds=self.skew_s or 0.0)
+        moment = self.clock.now()
         body["timestamp"] = str(int(moment.timestamp() * 1000))
         return body
 
@@ -282,8 +294,23 @@ def test_clock_skew_keeps_paused_since_while_the_skew_holds(env):
         assert report.action == m2_runner.ACT_PAUSE and report.paused_reason == "clock_skew"
         assert state.paused_since == first and state.paused_reason == "clock_skew"
         assert m2_runner.progress(state, clock.now())["paused_since"] == first
-    # one clock_skew event per pause, like the preflight "paused" event (not one per tick)
-    assert sum(1 for e in _events(env) if e.get("event") == "clock_skew") == 1
+    # one "paused" event per pause (not one per tick)
+    assert sum(1 for e in _events(env) if e.get("event") == "paused" and e.get("reasons") == ["clock_skew"]) == 1
+
+
+def test_clock_unverified_keeps_paused_since_while_the_clock_stays_unverifiable(env):
+    """#238 rule (PR #250) applied to #222 option B's clock_unverified pause."""
+    clock, fake, state = _skew_rig(env)
+    fake.time_error = RuntimeError("time down")
+    report = _tick(state, clock, fake)
+    assert report.action == m2_runner.ACT_PAUSE and report.paused_reason == "clock_unverified"
+    first = state.paused_since
+    assert first is not None
+    for _ in range(4):
+        report = _tick(state, clock, fake, 60.0)
+        assert report.paused_reason == "clock_unverified" and state.paused_since == first
+    assert sum(1 for e in _events(env) if e.get("event") == "paused"
+               and e.get("reasons") == ["clock_unverified"]) == 1
 
 
 def test_a_clock_skew_pause_held_past_the_alert_window_alerts_the_sentinel(env):
@@ -341,6 +368,8 @@ def test_stale_book_is_skipped(env):
 
     class Stale(rig.FakeGetters):
         def book(self, url: str):
+            if url == m2_runner.podlib.TIME_URL:
+                return super().book(url)
             body = dict(super().book(url))
             body["timestamp"] = str(int(old.timestamp() * 1000))
             return body
@@ -361,12 +390,57 @@ def test_progress_reports_resume_count(env):
     assert m2_runner.progress(state, env["now"])["resume_count"] == 3
 
 
+def test_alternating_clock_reasons_keep_paused_since_and_alert_the_sentinel(env):
+    """PR #253 review (Poly哨兵 a): clock_unverified <-> clock_skew is one clock pause episode; switching between
+    the two must not restamp paused_since, so a long flapping clock pause still reaches the 6 h alert."""
+    import src.heartbeat as heartbeat
+    import src.sentinel_tick as sentinel_tick
+    from src.thresholds import RUNNER_PAUSED_ALERT_S, RUNNER_SUSPEND_GAP_S
+
+    clock, fake, state = _skew_rig(env)
+    report = _tick(state, clock, fake)
+    assert report.paused_reason == "clock_skew"
+    first = state.paused_since
+    assert first is not None
+    step = RUNNER_SUSPEND_GAP_S - 10
+    held, seen, flip = 0.0, set(), False
+    while held <= RUNNER_PAUSED_ALERT_S + 60:
+        flip = not flip
+        fake.time_error = RuntimeError("time down") if flip else None
+        report = _tick(state, clock, fake, step)
+        held += step
+        assert report.action == m2_runner.ACT_PAUSE
+        assert report.paused_reason == ("clock_unverified" if flip else "clock_skew")
+        seen.add(report.paused_reason)
+        assert state.paused_since == first
+    assert seen == {"clock_unverified", "clock_skew"}
+    now = clock.now()
+    hb = heartbeat.Heartbeat(m2_runner.PROC, every_s=30.0, now=lambda: now)
+    hb.beat(heartbeat.STATE_PAUSED, m2_runner.progress(state, now), force=True)
+    result = sentinel_tick.tick(now=now, bus_path=env["tmp"] / "sentinel-bus.jsonl",
+                                ledger_path=env["tmp"] / "sentinel-paper.jsonl")
+    assert "runner_paused_too_long" in result["alerts"]
+
+
+def test_clock_pause_clears_on_recovery_and_a_non_clock_reason_restamps(env):
+    import src.halt_store as halt_store
+
+    clock, fake, state = _skew_rig(env)
+    _tick(state, clock, fake)
+    first = state.paused_since
+    fake.time_error = RuntimeError("time down")
+    assert _tick(state, clock, fake, 60.0).paused_reason == "clock_unverified" and state.paused_since == first
+    halt_store.record_halt(scope=halt_store.SCOPE_GLOBAL, reason="test_global", source="Sentinel")
+    assert _tick(state, clock, fake, 60.0).paused_reason == "global_halt"
+    assert state.paused_since not in (None, first)
+
+
 # ---------------------------------------------------------------- Task DA (#225 follow-up): clock -> day start
 
 
 def test_da_clock_skew_tick_then_next_preflight_evaluates_with_clock_not_ok(env, monkeypatch):
     """E2E: a clock_skew tick; the next tick's daily-loss evaluation gets clock_ok=False (day start late),
-    and that survives a different preflight pause; after a clean decide it is True again."""
+    and that survives another clock pause; after a clean /time + decide it is True again (merged with #253)."""
     seen: list[bool] = []
     real = m2_runner.preflight
 
@@ -380,10 +454,34 @@ def test_da_clock_skew_tick_then_next_preflight_evaluates_with_clock_not_ok(env,
     assert report.paused_reason == "clock_skew" and state.clock_anomaly == "clock_skew"
     assert seen[-1] is False  # first tick: no clock check has passed yet (fail closed, Poly风控 on #274)
     _tick(state, clock, fake, 60.0)
-    assert seen[-1] is False
+    assert seen[-1] is False  # the /time skew pause holds the anomaly
     fake.skew_s = None
-    _tick(state, clock, fake, 60.0)  # clean decide clears the anomaly
-    assert state.clock_anomaly is None
+    _tick(state, clock, fake, 60.0)  # clock certified again: daily loss runs with the earlier anomaly (late)
+    assert seen[-1] is False  # this tick still evaluates with the earlier anomaly (late)
+    assert state.clock_anomaly is None  # that tick's clean decide clears the anomaly
+    _tick(state, clock, fake, 60.0)
+    assert seen[-1] is True
+
+
+def test_da_clock_unverified_also_marks_the_day_start_late(env, monkeypatch):
+    """#253 + Task DA: an unverifiable /time sets clock_anomaly too, so the next evaluated tick is clock_ok=False."""
+    seen: list[bool] = []
+    real = m2_runner.preflight
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs["clock_ok"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(m2_runner, "preflight", spy)
+    clock, fake, state = _skew_rig(env)
+    fake.skew_s = None
+    fake.time_error = RuntimeError("time down")
+    report = _tick(state, clock, fake)
+    assert report.paused_reason == "clock_unverified" and state.clock_anomaly == "clock_unverified"
+    assert seen[-1] is False
+    fake.time_error = None
+    _tick(state, clock, fake, 60.0)  # clean /time: still evaluated late, then the anomaly clears
+    assert seen[-1] is False and state.clock_anomaly is None
     _tick(state, clock, fake, 60.0)
     assert seen[-1] is True
 
@@ -412,6 +510,8 @@ class _Empty(rig.FakeGetters):
     """A tick that fetches no book at all (every book read fails)."""
 
     def book(self, url: str):
+        if url == m2_runner.podlib.TIME_URL:  # a clean /time: only the books are missing
+            return self.clock.now().timestamp()
         raise OSError("no book")
 
 
@@ -420,6 +520,7 @@ def test_dc_an_empty_tick_during_an_anomaly_does_not_clear_it(env):
     _tick(state, clock, fake)
     assert state.clock_anomaly == "clock_skew"
     empty = _Empty(clock.now())
+    empty.clock = clock
     for _ in range(3):
         clock.advance_wall(60.0)
         clock.mono += 60.0
@@ -430,5 +531,62 @@ def test_dc_an_empty_tick_during_an_anomaly_does_not_clear_it(env):
 def test_dc_an_empty_tick_after_startup_stays_unverified(env):
     clock, _, state = _skew_rig(env)
     empty = _Empty(clock.now())
+    empty.clock = clock
     m2_runner.iteration(state, now=clock.now(), getters=empty.getters())
     assert state.clock_anomaly == "clock_unverified"
+
+
+class _BadTs(rig.FakeGetters):
+    """Books whose exchange timestamp is missing or invalid (Poly风控 P1 on #275)."""
+
+    def __init__(self, now: datetime, ts: object) -> None:
+        super().__init__(now)
+        self.ts = ts
+
+    def book(self, url: str):
+        if url == m2_runner.podlib.TIME_URL:  # a clean /time: the veto must still hold
+            return self.clock.now().timestamp()
+        body = dict(super().book(url))
+        body.pop("book_ts", None)
+        if self.ts is _MISSING:
+            body.pop("timestamp", None)
+        else:
+            body["timestamp"] = self.ts
+        return body
+
+
+_MISSING = object()
+_BAD_TS = [pytest.param(_MISSING, id="missing"), pytest.param("garbage", id="unparseable"),
+           pytest.param("nan", id="nan"), pytest.param("inf", id="inf")]
+
+
+@pytest.mark.parametrize("ts", _BAD_TS)
+def test_dc_an_invalid_book_ts_after_a_skew_tick_does_not_clear_the_anomaly(env, ts):
+    clock, fake, state = _skew_rig(env)
+    _tick(state, clock, fake)
+    assert state.clock_anomaly == "clock_skew"
+    bad = _BadTs(clock.now(), ts)
+    bad.clock = clock
+    for _ in range(2):
+        clock.advance_wall(60.0)
+        clock.mono += 60.0
+        m2_runner.iteration(state, now=clock.now(), getters=bad.getters())
+        assert state.tick_clock_verified is False
+        assert state.clock_anomaly == "clock_skew" and m2_runner.runner_clock_ok(state) is False
+
+
+@pytest.mark.parametrize("ts", _BAD_TS)
+def test_dc_an_invalid_book_ts_after_startup_stays_unverified(env, ts):
+    clock, _, state = _skew_rig(env)
+    bad = _BadTs(clock.now(), ts)
+    bad.clock = clock
+    m2_runner.iteration(state, now=clock.now(), getters=bad.getters())
+    assert state.tick_clock_verified is False
+    assert state.clock_anomaly == "clock_unverified" and m2_runner.runner_clock_ok(state) is False
+
+
+def test_dc_a_small_future_skew_within_bound_verifies(env):
+    clock, fake, state = _skew_rig(env)
+    fake.skew_s = CLOCK_SKEW_MAX_S - 1
+    _tick(state, clock, fake)
+    assert state.tick_clock_verified is True and state.clock_anomaly is None

@@ -174,7 +174,7 @@ def test_t3_public_get_refuses_them_too_with_zero_network(url, monkeypatch):
 
 def test_t3_the_runner_allowlist_is_inside_the_guard_allowlist():
     assert m2_runner.ALLOWED_GETS <= guard.ALLOWED_ENDPOINTS
-    assert {path for _, _, path in m2_runner.ALLOWED_GETS} == {"/markets", "/markets/keyset", "/book"}
+    assert {path for _, _, path in m2_runner.ALLOWED_GETS} == {"/markets", "/markets/keyset", "/book", "/time"}
 
 
 # ---------------------------------------------------------------- T4 credentials / environment
@@ -346,7 +346,7 @@ def test_t7_through_public_get_every_request_is_an_allowlisted_get(env, monkeypa
     def recorder(request, timeout=None):
         requests.append(request)
         url = request.full_url
-        body = fake.book(url) if "/book" in url else fake.gamma(url)
+        body = fake.book(url) if "/book" in url or url == podlib.TIME_URL else fake.gamma(url)
         return _Response(json.dumps(body).encode("utf-8"))
     monkeypatch.setattr(podlib, "urlopen", recorder)
     rig.deliver(env["run"], env["now"])

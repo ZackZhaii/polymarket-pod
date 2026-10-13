@@ -105,11 +105,13 @@ ORDER_CAPABLE = frozenset({
     "eip712_structs", "poly_eip712_structs", "ccxt",
 })
 
-# URLs the code may use (scheme, host, path). Query strings are allowed (token_id, paging).
+# URLs the code may use (scheme, host, path). /time alone must match the complete URL.
+TIME_URL = "https://clob.polymarket.com/time"
 ALLOWED_ENDPOINTS = frozenset({
     ("https", "gamma-api.polymarket.com", "/markets"),
     ("https", "gamma-api.polymarket.com", "/markets/keyset"),
     ("https", "clob.polymarket.com", "/book"),
+    ("https", "clob.polymarket.com", "/time"),
     ("wss", "ws-subscriptions-clob.polymarket.com", "/ws/market"),
     # Task AK: the Reconciler's three Data API v2 reads (freshness first) (v1 retires 2026-10-24). Exact paths only:
     # v1 /positions and /trades, /v2/positions/combos and every other v2 route stay refused.
@@ -408,6 +410,7 @@ def check_banned_imports(root: Path) -> Result:
 
 def url_problem(url: str, *, code: bool) -> str | None:
     """Why a URL found in src/ is not allowed, else None. ``code``: a string literal (not a docstring/comment)."""
+    original_url = url
     url = url.rstrip(".,;:")
     try:
         parts = urlsplit(url)
@@ -434,6 +437,8 @@ def url_problem(url: str, *, code: bool) -> str | None:
             return f"{url!r} has user info or a port"
         if (scheme, host, path) not in ALLOWED_ENDPOINTS:
             return f"{url!r} is not an allowlisted endpoint"
+        if path == "/time" and original_url != TIME_URL:
+            return f"{original_url!r} is not the exact public clock URL"
         return None
     if host in REFERENCE_HOSTS and scheme == "https":
         return None

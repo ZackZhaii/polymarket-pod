@@ -59,6 +59,17 @@ skipped: ``ok`` False, reason ``input_pending``, zero gaps and zero fills, no St
 reset, no halt and no signal. ``--loop`` keeps the heartbeat and waits for the next round, so a transient
 append is never mapped to a permanent halt (EXIT_PIN would record a global halt); a one-shot run reports
 the skipped round and exits EXIT_OK. A file that has stopped changing is read exactly as before.
+Issue #277 (Task DF, tightening only): consecutive ``input_pending`` rounds are no longer silent. Each one
+adds 1 to ``input_pending_streak`` in the StaleWatch state (next to ``all_stale_streak``; the per-market
+streaks are still neither advanced nor reset). At ALL_STALE_CONSECUTIVE_CYCLES rounds in a row it takes the
+existing gap-14 escalation: one GLOBAL Sentinel halt with the ``all_markets_stale`` reason prefix (the reason
+names input_pending and the count), not while one is active or logs/HALT is set, again after an Operator
+resume while the input is still pending. The round itself stays a skip (``ok`` False, reason
+``input_pending``, EXIT_OK one-shot, ``--loop`` continues). A normal completed cycle clears the streak; an
+``input_invalid`` round leaves it untouched. A StaleWatch state that cannot be read is not overwritten by a
+pending round (the next full cycle still counts it per market) and, like a failed state write, counts as one
+more pending round (fail closed: a streak that cannot be kept must not hide the alarm). The heartbeat
+progress carries ``input_pending_streak``. No new threshold: the same constant as all_markets_stale.
 """
 from __future__ import annotations
 
@@ -356,16 +367,55 @@ def _input_invalid(exc: CorruptInput, *, state_path: Path | None) -> dict:
     return _input_refusal(INPUT_INVALID, [exc.as_problem()], state_path=state_path)
 
 
-def _input_pending(exc: InputPending, *, state_path: Path | None) -> dict:
+def _input_pending(exc: InputPending, *, state_path: Path | None, pending: dict | None = None) -> dict:
     """Issue #75 criterion 2: the round of a cycle skipped because its input is still changing.
 
     ``reason`` is ``input_pending`` and the round is one explicit skip: zero gaps and zero fills, the
-    StaleWatch state untouched (neither advanced nor cleared) and no halt -- a transient append must
-    never become a permanent one.
+    per-market StaleWatch streaks untouched (neither advanced nor cleared) -- a transient append must
+    never become a permanent halt. Issue #277: ``pending`` (from ``_record_input_pending``) adds the
+    persisted ``input_pending_streak`` and whether this round fired the all_markets_stale escalation.
     """
-    return _input_refusal(
+    result = _input_refusal(
         INPUT_PENDING, [exc.as_problem()], state_path=state_path,
         skipped=1, skips=[{"kind": INPUT_PENDING, "reason": INPUT_PENDING, "path": exc.path}])
+    extra = pending or {}
+    result["sentinel"].update({
+        "state_problem": extra.get("state_problem"),
+        "write_problem": extra.get("write_problem"),
+        "input_pending_streak": extra.get("input_pending_streak", 0),
+        "input_pending_halt": bool(extra.get("input_pending_halt", False)),
+    })
+    return result
+
+
+def _record_input_pending(state_path: Path, *, bus_path: Path | None, quotes_path: Path | None) -> dict:
+    """Issue #277: one more consecutive ``input_pending`` round in the StaleWatch state; escalate at the limit.
+
+    Only ``input_pending_streak`` changes (the per-market streaks and ``all_stale_streak`` are kept as
+    loaded). A state that cannot be read is not overwritten -- the next full cycle counts it as a stale
+    check per market -- and, like a failed write, counts as one more pending round (fail closed). At
+    ALL_STALE_CONSECUTIVE_CYCLES the existing all_markets_stale path: one global halt, not while one is
+    active (or its state is unreadable) or logs/HALT is set.
+    """
+    quotes = quotes_path if quotes_path is not None else QUOTES_PATH
+    watch, state_problem = sentinel.load_watch(state_path, bus_path=bus_path, quotes_path=quotes)
+    watch.input_pending_streak += 1
+    write_problem = None
+    if state_problem is None:
+        write_problem = sentinel.save_watch(watch, state_path)
+    if state_problem is not None or write_problem is not None:
+        watch.input_pending_streak += 1  # the streak could not be read or kept: one more round
+    streak = watch.input_pending_streak
+    message = None
+    if streak >= ALL_STALE_CONSECUTIVE_CYCLES:
+        active = halt_store.has_active_halt(scope=halt_store.SCOPE_GLOBAL, reason_prefix=ALL_STALE_ALARM)
+        if active is False and not halt_store.fallback_active():
+            message = sentinel.halt(
+                reason=f"{ALL_STALE_ALARM}: {INPUT_PENDING} for {streak} consecutive cycles "
+                       f"(inputs still changing after the bounded re-read; no market could be checked)",
+                scope=halt_store.SCOPE_GLOBAL, bus_path=bus_path, quotes_path=quotes)
+    return {"state_problem": state_problem, "write_problem": write_problem,
+            "input_pending_streak": streak, "input_pending_halt": message is not None}
 
 
 def run(
@@ -401,8 +451,12 @@ def run(
         _assert_risk_unchanged(before)
         return _input_invalid(exc, state_path=sentinel_state_path)
     except InputPending as exc:
+        # Issue #277: the skip is counted; ALL_STALE_CONSECUTIVE_CYCLES in a row escalate (all_markets_stale).
+        pending = _record_input_pending(
+            sentinel_state_path if sentinel_state_path is not None else SENTINEL_STATE_PATH,
+            bus_path=bus_path, quotes_path=quotes_path)
         _assert_risk_unchanged(before)
-        return _input_pending(exc, state_path=sentinel_state_path)
+        return _input_pending(exc, state_path=sentinel_state_path, pending=pending)
     markets = _latest_by(market_rows, "id", skips, bus_path)
     books = _latest_books(book_rows, skips, bus_path)
     state_path = sentinel_state_path if sentinel_state_path is not None else SENTINEL_STATE_PATH
@@ -536,6 +590,8 @@ def run(
                        f"{watch.all_stale_streak} consecutive cycles",
                 scope=halt_store.SCOPE_GLOBAL, bus_path=bus_path,
                 quotes_path=quotes_path if quotes_path is not None else QUOTES_PATH)
+    # Issue #277: a normal completed cycle ends any run of input_pending rounds.
+    watch.input_pending_streak = 0
     write_problem = sentinel.save_watch(watch, state_path)
     if write_problem is not None:
         # This run's streaks are lost, so the failed write is one more stale check now (fail closed).
@@ -562,6 +618,7 @@ def run(
             "state_path": str(state_path),
             "all_stale_streak": watch.all_stale_streak,
             "all_stale_halt": all_stale_halt is not None,
+            "input_pending_streak": watch.input_pending_streak,
         },
         "books_problem": books_problem,
         "not_recorded": not_recorded,
@@ -702,7 +759,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m src.paper_cycle",
         description="Offline paper cycle: gap and staleness signals, Sentinel StaleWatch. No orders.",
-        epilog="Exit codes: 0 ran (a round skipped on a still-changing input: ok=false reason=input_pending); "
+        epilog="Exit codes: 0 ran (a round skipped on a still-changing input: ok=false reason=input_pending; "
+               "ALL_STALE_CONSECUTIVE_CYCLES such rounds in a row are an all_markets_stale global halt); "
                "1 a phase-0 pin failed (the risk file is checked before every cycle; "
                "global halt recorded); 2 usage error. See docs/EXIT_CODES.md.",
     )
@@ -759,7 +817,9 @@ def main(argv: list[str] | None = None, *, sleep=time.sleep, monotonic=time.mono
             _print(result)
             progress = {"cycles": cycles, "gaps": result["gaps"], "stale": result["stale"],
                         "halts": len((result.get("sentinel") or {}).get("halts") or []),
-                        "books_problem": result.get("books_problem")}
+                        "books_problem": result.get("books_problem"),
+                        # Issue #277: consecutive input_pending rounds (0 after a normal cycle).
+                        "input_pending_streak": (result.get("sentinel") or {}).get("input_pending_streak")}
             if result["reason"] == INPUT_PENDING and not args.loop:
                 # Issue #75 criterion 2: a round skipped on a changing input is not a failure and
                 # never a halt. A one-shot run reports the skip (ok=false reason=input_pending) and
