@@ -263,6 +263,11 @@ class RunnerState:
     tick_clock_verified: bool = False
     tick_clock_vetoed: bool = False  # Poly风控 P1 on #275: any book with an invalid book_ts this tick
     tick_time_ok: bool = False  # #253: this tick's CLOB /time check passed (|skew| <= CLOCK_SKEW_MAX_S)
+    # Issue #289 (Task DJ): heartbeat observation only, never read by a decision. When the current clock anomaly
+    # episode began (kept across a clock_unverified <-> clock_skew switch, None once clock_anomaly clears), and
+    # the last CLOB /time check (ts, result, low_s / high_s interval, rtt_s), None before the first check.
+    clock_anomaly_since: str | None = None
+    last_time_check: dict[str, Any] | None = None
     counters: dict[str, int] = field(default_factory=lambda: {
         "forecasts_sealed_total": 0, "forecasts_rejected_total": 0, "intents_built_total": 0, "allows_total": 0,
         "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0})
@@ -462,19 +467,39 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
 CLOCK_PAUSE_REASONS = frozenset({"clock_unverified", "clock_skew"})
 
 
-def _clock_check(state: "RunnerState", getter: GuardedGetter) -> str | None:
+def _clock_check(state: "RunnerState", getter: GuardedGetter, now: datetime | None = None) -> str | None:
     """#253 + Task DA: a clock_unverified / clock_skew result also marks ``state.clock_anomaly``, so later
     ticks' daily-loss evaluation treats the day-start reference as late (fail closed)."""
-    problem = _clock_problem(state.clock, getter)
+    measured: dict[str, float | None] = {}
+    problem = _clock_problem(state.clock, getter, measured)
     if problem is not None:
         state.clock_anomaly = problem
     else:
         state.tick_time_ok = True  # #253: a clean CLOB /time check (the skew source) this tick
+    if now is not None:  # issue #289: observation only (heartbeat), after the decision above
+        state.last_time_check = {"ts": _stamp(now), "result": problem or "ok", **{
+            key: _rounded(measured.get(key)) for key in ("low_s", "high_s", "rtt_s")}}
+        _note_clock_anomaly(state, now)
     return problem
 
 
-def _clock_problem(clock: Callable[[], datetime], getter: GuardedGetter) -> str | None:
-    """Certify the whole local-minus-server interval, including request time and ±1 s server quantization."""
+def _rounded(value: float | None) -> float | None:
+    return round(value, 3) if isinstance(value, float) and math.isfinite(value) else None
+
+
+def _note_clock_anomaly(state: "RunnerState", now: datetime) -> None:
+    """Issue #289: heartbeat bookkeeping only. Stamp ``clock_anomaly_since`` when an anomaly episode is first
+    seen (a clock_unverified <-> clock_skew switch keeps it), clear it with the anomaly. Never changes a decision."""
+    if state.clock_anomaly is None:
+        state.clock_anomaly_since = None
+    elif state.clock_anomaly_since is None:
+        state.clock_anomaly_since = _stamp(now)
+
+
+def _clock_problem(clock: Callable[[], datetime], getter: GuardedGetter,
+                   measured: dict[str, float | None] | None = None) -> str | None:
+    """Certify the whole local-minus-server interval, including request time and ±1 s server quantization.
+    Issue #289: ``measured`` (optional, observation only) receives low_s / high_s / rtt_s once computed."""
     try:
         sent = clock()
         server = getter(podlib.TIME_URL)
@@ -488,6 +513,8 @@ def _clock_problem(clock: Callable[[], datetime], getter: GuardedGetter) -> str 
             return "clock_unverified"
         low = sent.timestamp() - server - 1.0
         high = received.timestamp() - server + 1.0
+        if measured is not None:
+            measured.update(low_s=low, high_s=high, rtt_s=received.timestamp() - sent.timestamp())
     except Exception:  # noqa: BLE001 - failed reads, invalid clocks and numeric overflow cannot certify time
         return "clock_unverified"
     if low >= -CLOCK_SKEW_MAX_S and high <= CLOCK_SKEW_MAX_S:
@@ -751,6 +778,7 @@ def recover(paths: RunnerPaths, ledger_path: Path, *, now: datetime | None = Non
     now = now or (clock or (lambda: datetime.now(timezone.utc)))()
     state = RunnerState(paths=paths, risk_path=risk_path, clock=clock or (lambda: datetime.now(timezone.utc)),
                         monotonic=monotonic or time.monotonic)
+    _note_clock_anomaly(state, now)  # issue #289: the startup clock_unverified is stamped at startup (heartbeat)
     _, ledger = ledger_store.read_ledger(Path(ledger_path))
     ledger_by_decision: dict[str, dict[str, Any]] = {}
     for row in ledger.rows:
@@ -881,12 +909,13 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     state.tick_clock_verified = False  # Task DC: per tick
     state.tick_clock_vetoed = False
     state.tick_time_ok = False
+    _note_clock_anomaly(state, now)  # issue #289: heartbeat stamp for an anomaly held from startup
     gamma = GuardedGetter(getters.gamma)  # one guarded Gamma getter per tick: settlement, scan, fee
     book_get = GuardedGetter(getters.book)  # shared read-only transport for /time and later /book
     try:
         check = preflight(state.paths, now=now, risk_path=state.risk_path, clock_ok=runner_clock_ok(state),
                           settle=lambda: _settle_tick(state, now, gamma),
-                          clock_check=lambda: _clock_check(state, book_get))
+                          clock_check=lambda: _clock_check(state, book_get, now))
     except WriteFailed as exc:
         state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return IterationReport(ACT_WRITE_FAILED, [str(exc)])
@@ -959,6 +988,7 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     # re-pause, a clean CLOB /time check this tick, and no book with a missing / invalid book_ts
     if report.action == ACT_RUN and state.tick_clock_verified:
         state.clock_anomaly = None
+        _note_clock_anomaly(state, now)  # issue #289: heartbeat only
     return report
 
 
@@ -969,7 +999,10 @@ def progress(state: RunnerState, now: datetime) -> dict[str, Any]:
             "resume_count": state.resume_count, "paused_reason": state.paused_reason, "paused_since": state.paused_since,
             "disk_free_gb": None if state.disk_free_gb is None else round(state.disk_free_gb, 3),
             "ledger_rows": state.ledger_rows, "pending_signals": len(state.pending),
-            "executor_enabled": EXECUTOR_ENABLED}
+            "executor_enabled": EXECUTOR_ENABLED,
+            # issue #289 (Task DJ): read-only clock observation; see docs/EXIT_CODES.md
+            "clock_anomaly": state.clock_anomaly, "clock_anomaly_since": state.clock_anomaly_since,
+            "last_time_check": None if state.last_time_check is None else dict(state.last_time_check)}
 
 
 # ---------------------------------------------------------------- single instance, network guard, CLI

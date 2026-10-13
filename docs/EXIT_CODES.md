@@ -145,6 +145,24 @@ Switching between `clock_unverified` and `clock_skew` is one clock pause episode
 `paused` event is still written on each switch), so the Sentinel's `runner_paused_too_long` (`RUNNER_PAUSED_ALERT_S`, 6 h)
 fires on a flapping clock too. `paused_since` clears only when a tick runs again; any other pause reason restamps it.
 
+Issue #289 (Task DJ): the runner heartbeat `progress` also carries three read-only clock observation fields. They
+never feed a decision, a pause or a halt (no new alert either; alert thresholds on them are M2 pending, #289 item 2):
+
+- `clock_anomaly`: the clock anomaly the runner currently holds, `null` when clear, else `clock_unverified` or
+  `clock_skew` (the value that makes the day-start snapshot late, `clock_ok=False`). It can stay set while the runner
+  is **not** paused: from startup (fail closed, #275) and after a clock pause it clears only on a tick with a clean
+  CLOB /time check and at least one fresh book with a valid book_ts, so a run with no pending signal, no readable
+  book, or a missing / invalid book_ts keeps it set with `paused_reason` null.
+- `clock_anomaly_since`: UTC stamp of when the current anomaly episode began (`null` when `clock_anomaly` is null).
+  The startup `clock_unverified` is stamped at runner start (`recover`), a later anomaly at the tick that set it.
+  Like `paused_since`, a switch between `clock_unverified` and `clock_skew` is the same episode and keeps the first
+  stamp; it resets only when the anomaly clears, and a later anomaly gets a new stamp.
+- `last_time_check`: the last CLOB /time check, `null` before the first one (a tick stopped earlier, e.g. by KILL, a
+  halt or a pin, keeps the previous value). An object `{ts, result, low_s, high_s, rtt_s}`: `ts` the tick's stamp,
+  `result` `ok` / `clock_unverified` / `clock_skew`, `low_s` / `high_s` the certified local-minus-server interval in
+  seconds (including the ±1 s server quantization) and `rtt_s` the request time, rounded to ms; the three are
+  `null` when the check could not measure (unreachable / malformed /time, unusable local clock).
+
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
 | 0 | `EXIT_OK` | `runs/m2/KILL` found, `--max-runtime` reached or `--once` done | - |
