@@ -252,6 +252,12 @@ alert, 3 gap resyncs of one asset in 600 s = that market halted. All checked mar
 global halt. Alerts go to `logs/alerts.jsonl` plus a Sentinel->Operator bus `signal`. Every code by module:
 `docs/EXIT_CODES.md` (Task AS).
 
+**Run exactly one paper_cycle per checkout** (Poly风控 review of #283). Its StaleWatch streaks
+(`all_stale_streak`, `input_pending_streak` and the per-market streaks in `logs/sentinel_stale.json`) are read,
+updated and rewritten without a lock, so two paper_cycle processes on one checkout can overwrite each other's
+counts and delay the all-markets-stale global halt. `scripts/m2_start.ps1` already refuses while a paper_cycle
+heartbeat is fresh; never start a second paper_cycle (loop or one-shot) beside it by hand.
+
 Once the resident Sentinel has beaten, RiskGate, the Maker and paper_cycle treat its heartbeat older than 90 s,
 missing, corrupt or finished as a stored global halt (`sentinel_heartbeat_*`; before its first beat:
 `sentinel_heartbeat_never_seen`, not stored, see the start order above): stopping the Sentinel halts
