@@ -22,6 +22,7 @@ EXPECTED = {
     "MIN_EDGE": 0.02,
     "EDGE_TOLERANCE": 1e-12,
     "PAPER_EQUITY_USD": 1000.0,
+    "DAY_START_MAX_LAG_S": 120.0,  # Task CX (#225): = MAX_BOOK_AGE_S
     "PAPER_CYCLE_STALE_AFTER_S": 120,
     "SENTINEL_STALE_S": 120.0,
     "SENTINEL_STALE_CONSECUTIVE": 2,
@@ -202,7 +203,7 @@ REEXPORTS = {
     "resolutions.RESOLUTION_HOLD_HOURS": "RESOLUTION_HOLD_HOURS",
 }
 
-M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
+M2_PENDING = {"MAX_BOOK_AGE_S", "DAY_START_MAX_LAG_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
               "PAIR_CROSS_TOLERANCE",  # Task CG (#145)
               "MIN_HOURS_TO_EXPIRY", "WS_ROW_REFRESH_S",
               # Task AI: the M1 acceptance criteria (conservative first values for the user at M2).
@@ -387,6 +388,7 @@ def test_doc_names_the_pinned_risk_sha():
 def test_relations_hold():
     assert thresholds.consistency_problems() == []
     assert thresholds.SENTINEL_STALE_S == thresholds.MAX_BOOK_AGE_S
+    assert thresholds.DAY_START_MAX_LAG_S == thresholds.MAX_BOOK_AGE_S  # Task CX (#225)
     assert thresholds.PAPER_CYCLE_STALE_AFTER_S == thresholds.MAX_BOOK_AGE_S
 
 

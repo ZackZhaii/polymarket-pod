@@ -433,3 +433,56 @@ def test_clock_pause_clears_on_recovery_and_a_non_clock_reason_restamps(env):
     halt_store.record_halt(scope=halt_store.SCOPE_GLOBAL, reason="test_global", source="Sentinel")
     assert _tick(state, clock, fake, 60.0).paused_reason == "global_halt"
     assert state.paused_since not in (None, first)
+
+
+# ---------------------------------------------------------------- Task DA (#225 follow-up): clock -> day start
+
+
+def test_da_clock_skew_tick_then_next_preflight_evaluates_with_clock_not_ok(env, monkeypatch):
+    """E2E: a clock_skew tick; the next tick's daily-loss evaluation gets clock_ok=False (day start late),
+    after a clean decide it is True again (merged with #253's /time pause)."""
+    from src import paper_ledger
+
+    seen: list[bool] = []
+    real = paper_ledger.daily_risk_loss
+
+    def spy(rows, ids, now, *, clock_ok=True):
+        seen.append(clock_ok)
+        return real(rows, ids, now, clock_ok=clock_ok)
+
+    monkeypatch.setattr(paper_ledger, "daily_risk_loss", spy)
+    clock, fake, state = _skew_rig(env)
+    report = _tick(state, clock, fake)
+    assert report.paused_reason == "clock_skew" and state.clock_anomaly == "clock_skew"
+    assert seen == []  # #253: the /time clock pause returns after settlement, before the daily-loss evaluation
+    fake.skew_s = None
+    _tick(state, clock, fake, 60.0)  # clock certified again: daily loss runs with the earlier anomaly (late)
+    assert seen[0] is False  # the preflight call (a later commit_if_allowed call has its own evaluation)
+    assert state.clock_anomaly is None  # that tick's clean decide clears the anomaly
+    _tick(state, clock, fake, 60.0)
+    assert seen[-1] is True
+
+
+def test_da_clock_unverified_also_marks_the_day_start_late(env, monkeypatch):
+    """#253 + Task DA: an unverifiable /time sets clock_anomaly too, so the next evaluated tick is clock_ok=False."""
+    from src import paper_ledger
+
+    seen: list[bool] = []
+    real = paper_ledger.daily_risk_loss
+
+    def spy(rows, ids, now, *, clock_ok=True):
+        seen.append(clock_ok)
+        return real(rows, ids, now, clock_ok=clock_ok)
+
+    monkeypatch.setattr(paper_ledger, "daily_risk_loss", spy)
+    clock, fake, state = _skew_rig(env)
+    fake.skew_s = None
+    fake.time_error = RuntimeError("time down")
+    report = _tick(state, clock, fake)
+    assert report.paused_reason == "clock_unverified" and state.clock_anomaly == "clock_unverified"
+    assert seen == []
+    fake.time_error = None
+    _tick(state, clock, fake, 60.0)
+    assert seen[0] is False and state.clock_anomaly is None
+    _tick(state, clock, fake, 60.0)
+    assert seen[-1] is True

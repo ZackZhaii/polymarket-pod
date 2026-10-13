@@ -66,6 +66,7 @@ from src.risk_gate import Decision, Intent, evaluate  # noqa: E402
 from src.daily_loss import daily_loss  # noqa: E402 - Task AR: fees + realized losses
 from src.expiry_rule import hours_to_expiry, parse_end_date  # noqa: E402 - Task BA: hours at entry
 from src import wash_detect  # noqa: E402 - Task CH (#145): the market's token pair
+from src import day_boundary  # noqa: E402 - Task CX (#225): the one day-boundary rule
 from src import daily_marks, leg_marks  # noqa: E402 - Task CF (#124): unrealized loss in the daily loss
 
 # Task CF (#124): the start-of-day leg marks (one file per UTC day, never overwritten) and the books the
@@ -187,11 +188,51 @@ def _previous_day(day: str) -> str | None:
     return (stamp - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
+def _previous_day_marks(today: str, start: dict, current: dict) -> tuple[dict, list[str]]:
+    """Task CX (#225, D3): for a late snapshot, each start leg's previous-UTC-day last valid mark, if any."""
+    prev = _previous_day(today)
+    if prev is None:
+        return current, []
+    legs, problems = daily_marks.read_last_marks(DAILY_MARKS_DIR, prev)
+    if problems or not legs:
+        return current, problems
+    out = dict(current)
+    for key, leg in start.items():
+        entry = legs.get(leg_marks.leg_id(key))
+        if entry is not None and abs(leg.shares) > OPEN_EPS:
+            out[key] = leg_marks.Mark(float(entry["per_share_usd"]) * leg.shares, leg_marks.SOURCE_PREV_DAY_LAST,
+                                      entry["book_ts"], False)
+    return out, []
+
+
+def _record_last_marks(today: str, now: str, marks: dict) -> list[str]:
+    """Task CX (#225): keep today's last valid book mark per leg (read back as the next day's late reference)."""
+    fresh = {leg_marks.leg_id(key): {"per_share_usd": abs(mark.value_usd) / abs(shares), "book_ts": mark.book_ts, "at": now}
+             for key, (mark, shares) in marks.items()
+             if not mark.mark_invalid and mark.source in (leg_marks.SOURCE_BID_LADDER, leg_marks.SOURCE_ASK_LADDER)
+             and abs(shares) > OPEN_EPS and 0.0 < abs(mark.value_usd) / abs(shares) <= 1.0}
+    if not fresh:
+        return []
+    legs, problems = daily_marks.read_last_marks(DAILY_MARKS_DIR, today)
+    if problems:
+        return problems
+    merged = dict(legs or {})
+    merged.update(fresh)
+    try:
+        daily_marks.write_last_marks(DAILY_MARKS_DIR, today, now, merged)
+    except (OSError, ValueError) as exc:
+        return [f"daily_marks_last_write_failed:{type(exc).__name__}"]
+    return []
+
+
 def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
-                     books: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
+                     books: dict[tuple[str, str], dict[str, Any]] | None = None, *,
+                     clock_ok: bool = True) -> dict[str, Any]:
     """Task CF (#124): today's unrealized loss on open legs (Poly风控's ruling, src/leg_marks.py).
 
     Reads (or, on the day's first evaluation, writes once) the start-of-day snapshot, also for closed parts.
+    ``clock_ok`` (Task DA, #225 follow-up): the caller's clock state; anything but True (a clock anomaly such as
+    the runner's clock_skew, or #253's clock_unverified) makes a snapshot written now late (fail closed).
     Returns ``{"loss_usd", "realized_topup_usd", "legs", "late", "problems"}``; any problem (positions,
     valuation, corrupt or unwritable snapshot, an exception) makes the loss unavailable: invalid_risk_state.
     """
@@ -215,7 +256,14 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
         if snap is None:
             start_marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt)
                            for key, leg in pos.start.items()}
-            late = _LAST_EVAL_DAY is None or _LAST_EVAL_DAY != _previous_day(today)
+            # Task CX (#225, D1/D2): late = written more than DAY_START_MAX_LAG_S after today's 00:00 UTC
+            # (or a clock anomaly), whatever this process did yesterday.
+            late = day_boundary.day_start_late(now, clock_ok=clock_ok)
+            if late:
+                start_marks, problems = _previous_day_marks(today, pos.start, start_marks)
+                if problems:
+                    result["problems"] = problems
+                    return result
             try:
                 snap = daily_marks.create_snapshot(DAILY_MARKS_DIR, today, now, late,
                                                    leg_marks.snapshot_legs(pos.start, start_marks))
@@ -229,6 +277,10 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
                 return result
         _LAST_EVAL_DAY = today
         marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt) for key, leg in pos.now.items()}
+        problems = _record_last_marks(today, now, {key: (marks[key], leg.shares) for key, leg in pos.now.items()})
+        if problems:
+            result["problems"] = problems
+            return result
         unrealized = leg_marks.unrealized_loss(pos, marks, snap)
         result["late"] = snap.get("late")
         if unrealized.problems:
@@ -244,10 +296,13 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
         return result
 
 
-def daily_risk_loss(rows: list[dict[str, Any]], ids: list[str], now: str) -> dict[str, Any]:
-    """One UTC evaluation: fees + gross cost losses + closed reference topups + open-leg losses."""
+def daily_risk_loss(rows: list[dict[str, Any]], ids: list[str], now: str, *,
+                    clock_ok: bool = True) -> dict[str, Any]:
+    """One UTC evaluation: fees + gross cost losses + closed reference topups + open-leg losses.
+
+    ``clock_ok`` is passed to daily_unrealized (Task DA): False while the caller knows of a clock anomaly."""
     day = daily_loss(rows, now[:10], ids)
-    marks = (daily_unrealized(rows, ids, now) if not day.problems
+    marks = (daily_unrealized(rows, ids, now, clock_ok=clock_ok) if not day.problems
              else {"loss_usd": None, "realized_topup_usd": None, "legs": [], "late": None, "problems": []})
     problems = list(day.problems) + list(marks["problems"])
     total = None if problems else day.total_usd + marks["realized_topup_usd"] + marks["loss_usd"]
