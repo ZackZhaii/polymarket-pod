@@ -114,13 +114,15 @@ def test_risk_gate_and_sizing_never_read_them():
 
 
 def test_they_never_change_a_decision_or_a_size():
-    now = datetime.now(timezone.utc)
+    # Issue #262: one shared book_ts with the fixed now (utc_now truncates to whole seconds).
+    from tests.test_calibration_ids import _stable_book_and_now
+    book_ts, now = _stable_book_and_now()
     cfg = load_risk()
     for kw in [dict(), dict(model_prob=0.41), dict(spread=0.2), dict(liquidity_usd=10.0), dict(side="sell")]:
-        base = dataclasses.asdict(evaluate(_ok_intent(**kw), cfg, dict(STATE), now=now))
+        base = dataclasses.asdict(evaluate(_ok_intent(book_ts=book_ts, **kw), cfg, dict(STATE), now=now))
         for extra in [dict(kelly_frac_raw=None, fill_context=None), dict(kelly_frac_raw=1.0, fill_context="gate_check"),
                       dict(kelly_frac_raw=math.nan, fill_context="operator_cli"), dict(kelly_frac_raw=-3.0)]:
-            got = dataclasses.asdict(evaluate(_ok_intent(**kw, **extra), cfg, dict(STATE), now=now))
+            got = dataclasses.asdict(evaluate(_ok_intent(book_ts=book_ts, **kw, **extra), cfg, dict(STATE), now=now))
             assert got == base, (kw, extra)
 
 
