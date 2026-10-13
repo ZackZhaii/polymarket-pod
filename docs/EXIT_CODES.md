@@ -104,7 +104,7 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 | 1 | `EXIT_NO_ROWS` | no book snapshot recorded | alert |
 | 2 | `EXIT_USAGE` | usage error | alert |
 | 3 | `EXIT_NO_WEBSOCKETS` | the optional websockets package is missing | alert |
-| 4 | `EXIT_WRITE_FAILED` | writing the run directory failed | global halt |
+| 4 | `EXIT_WRITE_FAILED` | writing the run directory failed, or (issue #82) the REST sampler thread was still alive after the 120 s finishing join (`rest_join_timeout` event, manifest `failed`; the thread is sealed, not killed) | global halt |
 | 5 | `EXIT_INTERRUPTED` | stopped by SIGINT/SIGTERM/SIGBREAK or Ctrl+C/Ctrl+Break (Operator stop). Task BT: a Windows console close / logoff / shutdown also finishes the manifest `interrupted` with exit_code 5, but the m1_run heartbeat ends `crashed` (global halt), not this log-only exit | log |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins at start (no run dir created) or while running (PIN_RECHECK_S); global halt recorded | global halt |
 | 7 | `EXIT_CLOCK_BEHIND` | Task CM: refused to start (no run dir): the local clock is behind the exchange by more than `M1_MAX_CLOCK_BEHIND_S` (max of `book_ts` - local receive time over one public `/book` read per asset), or no `/book` answer was usable to check it. Sync the host clock and start again | alert |
@@ -216,19 +216,25 @@ later acceptance items, so the tool never reports PASS — a problem-free run en
 
 ## `src/replay_intent.py`
 
-`python -m src.replay_intent --bundle path/to/bundle.json` (issue #80 step 1): one single-shot offline
-Intent-builder replay on one fixed bundle (schema_version 1: one raw bus signal row, one scanner market
-row, that market's book rows, strategy, fee_rate, a zoned now). One signal and one run only, no bus, no
-ledger, no halt, no RiskGate, no executor and no network; it prints the intent or the complete ordered
-rejection reasons. The pin check is read only, so drift is refused here without recording a global halt.
+`python -m src.replay_intent --bundle path/to/bundle.json [--out path/to/result.json]` (issue #80):
+one single-shot offline Intent-builder replay on one fixed bundle (schema_version 1: one raw bus
+signal row, one scanner market row, that market's book rows, strategy, fee_rate, a zoned now). One
+signal and one run only, no bus, no ledger, no halt, no RiskGate, no executor and no network; it
+prints the intent or the complete ordered rejection reasons, with the SHA256 of the bundle's raw
+bytes (`input_sha256`). With `--out` the same JSON is published atomically (temp file, fsync,
+hardlink into place): an existing output is refused, never overwritten, and never into config/, a
+.toml or src/thresholds.py. The pin check is read only, so drift is refused here without recording
+a global halt.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | the single replay ran; the printed JSON holds an intent or the builder's ordered reasons | - |
-| 2 | `EXIT_USAGE` | usage error (missing `--bundle`; `--help` exits 0) | - |
+| 0 | `EXIT_OK` | the single replay ran; the printed JSON holds an intent or the builder's ordered reasons (with `--out`: also published) | - |
+| 2 | `EXIT_USAGE` | usage error (missing `--bundle`; `--help` exits 0), or `--out` points into config/, a .toml or src/thresholds.py | - |
 | 3 | `EXIT_CORRUPT_BUNDLE` | bundle unreadable, not JSON, wrong `schema_version`, missing keys, bad types, or a `now` without a timezone | - |
 | 4 | `EXIT_UNSUPPORTED_BUNDLE` | not a single-shot bundle: extra keys (history, loop), a list of signals, or a book row for another market | - |
+| 5 | `EXIT_OUTPUT_EXISTS` | refused: `--out` already exists; nothing overwritten, no result published | - |
 | 6 | `EXIT_PIN_DRIFT` | refused: config/risk.toml off its pins (read-only check; this entry records no halt); nothing replayed | - |
+| 7 | `EXIT_WRITE_FAILED` | refused: publishing the result JSON failed (e.g. no such folder); the destination is untouched | - |
 
 ## `src/reflector.py`
 

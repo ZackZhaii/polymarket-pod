@@ -291,6 +291,51 @@ def test_env_files_are_never_opened(logs, monkeypatch):
     assert not [name for name in opened if name.startswith(".env")]
 
 
+def deny_scandir(monkeypatch, denied: Path) -> None:
+    """``os.scandir`` raises PermissionError for ``denied`` only: a dir that stats as a dir but
+    cannot be enumerated (issue #53). Everything else still lists normally."""
+    real = secret_scan.os.scandir
+
+    def fake(target):
+        if Path(target) == denied:
+            raise PermissionError(13, "synthetic denial", str(target))
+        return real(target)
+
+    monkeypatch.setattr(secret_scan.os, "scandir", fake)
+
+
+def test_a_root_dir_that_cannot_be_listed_is_a_scan_error(logs, monkeypatch):
+    """Issue #53: the walk dropped the enumeration OSError and scan_paths returned clean."""
+    write_bus(logs, [{"note": "ok"}])
+    deny_scandir(monkeypatch, logs)
+    findings, errors = secret_scan.scan_paths([logs], logs.parent)
+    assert findings == []
+    assert errors and "unreadable" in errors[0] and "PermissionError" in errors[0] and "logs" in errors[0]
+
+
+def test_a_nested_dir_that_cannot_be_listed_is_a_scan_error(logs, monkeypatch):
+    (logs / "sub").mkdir()
+    (logs / "top.log").write_text("ok\n", encoding="utf-8")
+    deny_scandir(monkeypatch, logs / "sub")
+    findings, errors = secret_scan.scan_paths([logs], logs.parent)
+    assert findings == []
+    assert errors and "unreadable" in errors[0] and "PermissionError" in errors[0] and "sub" in errors[0]
+
+
+def test_an_empty_dir_is_still_clean(logs):
+    assert secret_scan.scan_paths([logs], logs.parent) == ([], [])
+
+
+def test_guard_fails_when_a_dir_cannot_be_listed(logs, monkeypatch):
+    deny_scandir(monkeypatch, logs)
+    monkeypatch.setattr(guard, "repo_files", lambda root: ([], "tracked"))
+    monkeypatch.setattr(guard, "_repo_module", lambda root, module: secret_scan)
+    result = guard.check_secret_scan(logs.parent)
+    assert result.status == guard.FAIL
+    assert "scan error" in result.reason and "PermissionError" in result.reason
+    assert "logs/ scanned" not in result.line()
+
+
 def test_cli_clean_exit_0_and_no_halt(logs, capsys):
     write_bus(logs, [{"tx": fake_hex_key(), "note": "fill ok"}])
     assert secret_scan.main([]) == 0
@@ -338,6 +383,23 @@ def test_cli_scan_error_fails_closed(logs, monkeypatch, capsys, tmp_path):
     active = halt_store.active_halts()
     assert active and {r["scope"] for r in active} == {"global"}
     assert halt_store.fallback_active()
+
+
+def test_cli_a_dir_that_cannot_be_listed_exits_2_and_halts(logs, monkeypatch, capsys):
+    write_bus(logs, [{"note": "ok"}])
+    deny_scandir(monkeypatch, logs)
+    assert secret_scan.main([]) == secret_scan.EXIT_SCAN_ERROR == 2
+    out = capsys.readouterr().out
+    assert "ERROR" in out and "PermissionError" in out
+    assert "findings=0 errors=1" in out
+    (record,) = halt_store.active_halts()
+    assert record["scope"] == "global" and record["source"] == "Sentinel"
+
+
+def test_cli_no_halt_still_fails_on_a_dir_that_cannot_be_listed(logs, monkeypatch):
+    deny_scandir(monkeypatch, logs)
+    assert secret_scan.main(["--no-halt"]) == secret_scan.EXIT_SCAN_ERROR == 2
+    assert halt_store.active_halts() == []
 
 
 def test_cli_extra_path_and_usage(logs, tmp_path, capsys):

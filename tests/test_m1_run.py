@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -509,6 +510,104 @@ def test_rest_sampler_drops_a_failed_read_that_returns_after_the_seal():
     assert calls != [] and sampler.errors == 0 and events.rows == [] and beats.beats == []
 
 
+class BlockingGetter:
+    """Task CW (issue #82): a fake /book reader whose ``block_on``-th request blocks in flight until the
+    test releases it (threading.Event, no sleeps, no network); ``fail`` makes that request fail instead."""
+
+    def __init__(self, block_on, *, fail=False):
+        self.calls: list[str] = []
+        self.block_on = block_on
+        self.fail = fail
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self._fetch = _rest_getter(self.calls)
+
+    def __call__(self, url):
+        book = self._fetch(url)
+        if len(self.calls) == self.block_on:
+            self.entered.set()
+            assert self.release.wait(30), "the test never released the in-flight request"
+            if self.fail:
+                raise OSError("timeout")
+        return book
+
+
+def _tree(root):
+    """Every file under ``root`` with its exact bytes."""
+    return {path.relative_to(root).as_posix(): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["book", "failed_read"])
+def test_rest_sampler_a_blocked_request_returning_after_the_seal_changes_nothing(tmp_path, fail):
+    """Issue #82 acceptance 1 + 5 (Task CW): a real sampler thread, real rotating outputs and a real
+    heartbeat. The second sample's first request is still in flight when the run seals, closes the
+    outputs and writes the finished heartbeat; when it returns afterwards, file bytes, file list,
+    counters and the finished heartbeat stay exactly as sealed, and the next asset is never requested."""
+    from src.heartbeat import Heartbeat  # local: as in m1_run.main
+
+    clock = Clock()
+    run_dir, beat_dir = tmp_path / "run", tmp_path / "heartbeat"
+    rest = w.RotatingJsonl(run_dir / "rest", "rest", 1 << 20, 3600.0)
+    events = w.RotatingJsonl(run_dir / "events", "events", 1 << 20, 3600.0)
+    beats = Heartbeat("m1_rest", every_s=1.0, directory=beat_dir)
+    getter = BlockingGetter(3, fail=fail)  # sample 1 reads A and B; sample 2 blocks on A
+    sampler = r.RestSampler([A, B], {}, rest, events, every_s=10, deadline_s=1e6, getter=getter,
+                            now=clock.now, monotonic=clock.monotonic, heartbeat=beats)
+
+    def wait(seconds):
+        clock.t += seconds  # only the sampler thread moves the fake clock
+        return False
+
+    thread = threading.Thread(target=sampler.run, args=(threading.Event(), wait), daemon=True)
+    thread.start()
+    assert getter.entered.wait(30)
+    assert sampler.rows == 2 and rest.rows == 2 and beats.seq == 1  # sample 1 was really published
+
+    sealer = threading.Thread(target=sampler.seal, daemon=True)
+    sealer.start()
+    sealer.join(30)
+    assert not sealer.is_alive()  # the seal never waits for the HTTP request in flight
+    rest.close()
+    events.close()
+    assert beats.finish(0) is None
+    sealed = (_tree(tmp_path), list(rest.files), list(events.files),
+              (sampler.samples, sampler.rows, sampler.errors, rest.rows, events.rows))
+    finished = json.loads(beats.path.read_text(encoding="utf-8"))
+    assert finished["state"] == "finished" and finished["exit_code"] == 0
+
+    getter.release.set()  # the in-flight request returns only now, after the seal
+    thread.join(30)
+    assert not thread.is_alive()
+    assert getter.calls == [f"https://clob.polymarket.com/book?token_id={token}" for token in (A, B, A)]  # B: never
+    assert (_tree(tmp_path), list(rest.files), list(events.files),
+            (sampler.samples, sampler.rows, sampler.errors, rest.rows, events.rows)) == sealed
+    assert sealed[-1] == (2, 2, 0, 2, 0)
+    assert json.loads(beats.path.read_text(encoding="utf-8")) == finished
+    assert sampler.failure is None  # nothing even tried to write to the closed outputs
+
+
+def test_rest_sampler_a_pre_stopped_thread_makes_zero_requests_and_publishes_nothing(tmp_path):
+    """Issue #82 acceptance 5 (Task CW): stopped before the sampler thread starts: zero GETs, no
+    rows, no events, no heartbeat, no file."""
+    from src.heartbeat import Heartbeat
+
+    run_dir = tmp_path / "run"
+    rest = w.RotatingJsonl(run_dir / "rest", "rest", 1 << 20, 3600.0)
+    events = w.RotatingJsonl(run_dir / "events", "events", 1 << 20, 3600.0)
+    beats = Heartbeat("m1_rest", every_s=1.0, directory=tmp_path / "heartbeat")
+    getter = BlockingGetter(1)
+    stop = threading.Event()
+    stop.set()
+    sampler = r.RestSampler([A, B], {}, rest, events, every_s=10, deadline_s=1e6, getter=getter,
+                            heartbeat=beats)
+    thread = threading.Thread(target=sampler.run, args=(stop,), daemon=True)
+    thread.start()
+    thread.join(30)
+    assert not thread.is_alive() and getter.calls == []
+    assert (sampler.samples, sampler.rows, sampler.errors, rest.rows, events.rows, beats.seq) == (0, 0, 0, 0, 0, 0)
+    assert rest.files == [] and events.files == [] and _tree(tmp_path) == {}
+
+
 def test_main_seals_the_rest_sampler_before_the_finish_event(tmp_path, monkeypatch):
     seen: list[int] = []
     real_seal = r.RestSampler.seal
@@ -522,6 +621,146 @@ def test_main_seals_the_rest_sampler_before_the_finish_event(tmp_path, monkeypat
     assert code == r.EXIT_OK and len(seen) == 1
     events = _rows(out, "events")
     assert events[-1]["event"] == "finish" and seen[0] == len(events) - 1
+
+
+def test_the_rest_join_keeps_the_120_second_wait():
+    assert r.REST_JOIN_TIMEOUT_S == 120  # Issue #82: the existing wait is kept; tests shorten it, production never
+
+
+def test_a_rest_sampler_still_alive_after_the_join_fails_the_run_with_exit_4(tmp_path, monkeypatch, capsys):
+    """Issue #82 acceptance 3: the finishing join times out while the REST thread is still in a request.
+
+    The run is failed with EXIT_WRITE_FAILED=4 and an explicit reason (stderr and a ``rest_join_timeout``
+    event), never completed / exit 0; the thread is not killed. The join wait is shortened by patching
+    REST_JOIN_TIMEOUT_S, so nothing waits 120 seconds.
+    """
+    monkeypatch.setattr(r, "REST_JOIN_TIMEOUT_S", 0.05)
+    entered, release = threading.Event(), threading.Event()
+    calls: list[str] = []
+    fetch = _rest_getter(calls)
+
+    def blocking_getter(url):
+        entered.set()
+        release.wait(30)  # stays in flight past the join; released by the test only after main returned
+        return fetch(url)
+
+    started = time.monotonic()
+    try:
+        code, out, _, _, _ = _main(tmp_path, [[lambda: entered.wait(5), _book()], []], ["--rest-assets", "1"],
+                                   rest=blocking_getter)
+        elapsed = time.monotonic() - started
+        alive = [t for t in threading.enumerate() if t.name == "m1-rest-sampler" and t.is_alive()]
+        assert alive, "the REST thread must not be killed"
+    finally:
+        release.set()
+    assert elapsed < 30  # the 120 s wait was not served
+    assert code == r.EXIT_WRITE_FAILED
+    manifest = _manifest(out)
+    assert manifest["status"] == "failed" and manifest["exit_code"] == r.EXIT_WRITE_FAILED
+    events = _rows(out, "events")
+    timeouts = [e for e in events if e["event"] == "rest_join_timeout"]
+    assert len(timeouts) == 1 and timeouts[0]["timeout_s"] == 0.05
+    assert events[-1] == {"ts": events[-1]["ts"], "event": "finish", "status": "failed",
+                          "exit_code": r.EXIT_WRITE_FAILED}
+    err = capsys.readouterr().err
+    assert "REST sampler still alive" in err
+    rest_bytes = {rel: (out / rel).read_bytes() for rel in manifest["files"]["rest"]}
+    for thread in alive:
+        thread.join(5)  # the late request returns into a sealed sampler: nothing is published
+    assert {rel: (out / rel).read_bytes() for rel in manifest["files"]["rest"]} == rest_bytes
+    assert manifest["counts"]["rest_rows"] == 0 and _manifest(out) == manifest
+
+
+def test_a_rest_thread_that_ends_within_the_join_keeps_the_run_completed(tmp_path, monkeypatch):
+    monkeypatch.setattr(r, "REST_JOIN_TIMEOUT_S", 5.0)  # returns as soon as the thread ends
+    code, out, _, calls, _ = _main(tmp_path, [[_book()], []], ["--rest-assets", "1"])
+    assert code == r.EXIT_OK and _manifest(out)["status"] == "completed"
+    assert all(e["event"] != "rest_join_timeout" for e in _rows(out, "events"))
+
+
+def test_final_manifest_rest_rows_uses_frozen_sink_not_lagging_sampler(tmp_path, monkeypatch):
+    """Issue #82 acceptance 4: final rest_rows and files['rest'] come from the frozen REST sink.
+
+    RestSampler.sample_once does sink.write(row) then self.rows += 1 under the barrier. An
+    instrumented seal forces sampler.rows to lag the already-written sink.rows (the race window
+    after a completed write). After seal/close the finished manifest must report the frozen
+    RotatingJsonl .rows and .files, not the lagging sampler counter.
+    """
+    real_seal = r.RestSampler.seal
+    lag: list[tuple[int, int, list[str]]] = []
+
+    def seal_then_lag(self):
+        real_seal(self)
+        # Sink is frozen under the seal: force the duplicate counter behind the completed write.
+        if self.sink.rows >= 1 and self.rows == self.sink.rows:
+            self.rows = self.sink.rows - 1
+        lag.append((self.rows, self.sink.rows, list(self.sink.files)))
+
+    monkeypatch.setattr(r.RestSampler, "seal", seal_then_lag)
+    code, out, _, _, _ = _main(tmp_path, [[_book()], []], ["--rest-assets", "1"])
+    assert code == r.EXIT_OK and lag, "expected a REST publish so the lag can be forced"
+    lagged, frozen, sealed_files = lag[0]
+    assert frozen >= 1 and lagged == frozen - 1
+    manifest = _manifest(out)
+    rest_rows_on_disk = _rows(out, "rest")
+    assert len(rest_rows_on_disk) == frozen
+    assert manifest["counts"]["rest_rows"] == frozen
+    assert manifest["counts"]["rest_rows"] != lagged  # would fail if final counts still used sampler.rows
+    assert list(manifest["files"]["rest"]) == sealed_files
+    assert sealed_files  # at least one rest file after a successful sample
+    for rel in sealed_files:
+        assert (out / rel).is_file()
+    # RotatingJsonl keeps .rows after close (issue #82 / CU): a closed sink's count is the freeze.
+    closed = w.RotatingJsonl(tmp_path / "closed-check", "rest", 1 << 20, 3600.0, monotonic=lambda: 0.0)
+    closed.write({"n": 1})
+    closed.write({"n": 2})
+    closed.close()
+    closed.close()  # idempotent
+    assert closed.closed and closed.rows == 2 and closed.files == ["closed-check/rest-000001.jsonl"]
+    with pytest.raises(w.SinkClosed):
+        closed.write({"n": 3})
+    assert closed.rows == 2  # unchanged after a refused write
+
+
+def test_sample_once_write_then_rows_gap_leaves_sink_ahead_of_sampler(tmp_path, monkeypatch):
+    """Deterministic offline race: delay between sink.write and sampler.rows += 1.
+
+    An instrumented sink.write releases the publish barrier mid-sample so a concurrent seal can
+    observe sink.rows already advanced while sampler.rows still lags. The finished main path must
+    still freeze rest_rows from the sink (covered by the sibling test); this one proves the gap.
+    """
+    clock = Clock()
+    rest = w.RotatingJsonl(tmp_path / "rest", "rest", 1 << 20, 3600.0, monotonic=clock.monotonic)
+    events = w.RotatingJsonl(tmp_path / "events", "events", 1 << 20, 3600.0, monotonic=clock.monotonic)
+    mid = threading.Event()
+    resume = threading.Event()
+    real_write = w.RotatingJsonl.write
+
+    def gap_write(self, row):
+        real_write(self, row)
+        if self is rest:
+            mid.set()
+            assert resume.wait(30)
+
+    monkeypatch.setattr(w.RotatingJsonl, "write", gap_write)
+
+    # Re-bind m1_run's RotatingJsonl.write used via the sink instance method resolution:
+    # RestSampler holds `rest`, whose write looks up type(rest).write ? ws_recorder.RotatingJsonl.
+    # m1_run imports RotatingJsonl from ws_recorder; patching w.RotatingJsonl is enough.
+    sampler = r.RestSampler([A], {}, rest, events, every_s=10, deadline_s=1e6,
+                            getter=_rest_getter([]), now=clock.now, monotonic=clock.monotonic)
+    worker = threading.Thread(target=sampler.sample_once, daemon=True)
+    worker.start()
+    assert mid.wait(30), "sink.write must complete (sink.rows advanced) before sampler.rows += 1"
+    # write() holds the sampler barrier; seal would wait. Observe the race window directly:
+    assert rest.rows == 1 and sampler.rows == 0  # sink ahead of the lagging sampler counter
+    resume.set()
+    worker.join(30)
+    assert not worker.is_alive()
+    assert sampler.rows == 1 and rest.rows == 1  # counters catch up after the gap
+    sampler.seal()
+    rest.close()
+    assert rest.closed and rest.rows == 1 and rest.files == ["rest/rest-000001.jsonl"]
 
 
 # --- recorder hooks (stop, on_event) -----------------------------------------------------------------
@@ -669,6 +908,21 @@ def test_a_stop_event_without_signal_handlers(tmp_path):
     code, out, _, _, _ = _main(tmp_path, [[_book(A), stop.set]], ["--assets", A], stop_event=stop,
                                install_signals=False)
     assert code == r.EXIT_INTERRUPTED and _manifest(out)["stop_signal"] is None
+
+
+def test_a_pre_stopped_run_makes_zero_rest_requests(tmp_path):
+    """Issue #82 acceptance 5 (Task CW): a run stopped before it starts sends no REST /book request,
+    writes no REST row and no m1_rest heartbeat."""
+    from src import heartbeat as hb_module
+
+    stop = threading.Event()
+    stop.set()
+    code, out, _, calls, _ = _main(tmp_path, [[_book(A)]], ["--assets", A, "--rest-assets", "1"],
+                                   stop_event=stop, install_signals=False)
+    counts = _manifest(out)["counts"]
+    assert code == r.EXIT_INTERRUPTED and calls == []
+    assert counts["rest_samples"] == 0 and counts["rest_rows"] == 0 and counts["rest_errors"] == 0
+    assert _rows(out, "rest") == [] and not hb_module.beat_path("m1_rest").exists()
 
 
 def test_files_rotate_during_a_run(tmp_path):
@@ -889,6 +1143,27 @@ def test_a_risk_drift_mid_run_stops_the_run_with_6(tmp_path, monkeypatch):
     assert manifest["status"] == "pin_drift" and manifest["exit_code"] == 6 and manifest["orders"] == "none"
     assert len(_rows(out, "books")) == 1
     assert [x["reason"] for x in halt_store.active_halts()] == ["risk_toml_pin_drift"]
+
+
+def test_a_risk_drift_keeps_6_when_the_rest_thread_also_outlives_the_join(tmp_path, monkeypatch):
+    """Issue #82 acceptance 3 does not mask a pin drift: the stuck REST thread is recorded, the run stays 6."""
+    _drift_after(monkeypatch, tmp_path, 2)
+    monkeypatch.setattr(r, "REST_JOIN_TIMEOUT_S", 0.05)
+    entered, release = threading.Event(), threading.Event()
+
+    def blocking_getter(url):
+        entered.set()
+        release.wait(30)
+        return None
+
+    try:
+        code, out, _, _, _ = _main(tmp_path, [[lambda: entered.wait(5), _book()]],
+                                   ["--assets", A, "--max-runtime", "600", "--rest-assets", "1"], rest=blocking_getter)
+    finally:
+        release.set()
+    manifest = _manifest(out)
+    assert code == r.EXIT_PIN_DRIFT and manifest["status"] == "pin_drift" and manifest["exit_code"] == 6
+    assert [e["event"] for e in _rows(out, "events")].count("rest_join_timeout") == 1
 
 
 def test_a_risk_drift_at_start_creates_no_run_dir(tmp_path, monkeypatch):

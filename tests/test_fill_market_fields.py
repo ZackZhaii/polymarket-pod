@@ -131,11 +131,13 @@ def test_risk_gate_never_reads_the_market_fields():
 
 
 def test_market_fields_never_change_a_decision_or_a_size():
-    now = datetime.now(timezone.utc)
+    # Issue #262: one shared book_ts with the fixed now (utc_now truncates to whole seconds).
+    from tests.test_calibration_ids import _stable_book_and_now
+    book_ts, now = _stable_book_and_now()
     cfg = load_risk()
     for kw in [dict(), dict(model_prob=0.41), dict(spread=0.2), dict(liquidity_usd=10.0), dict(side="sell")]:
-        base = dataclasses.asdict(evaluate(_ok_intent(**kw), cfg, dict(STATE), now=now))
+        base = dataclasses.asdict(evaluate(_ok_intent(book_ts=book_ts, **kw), cfg, dict(STATE), now=now))
         for extra in [dict(best_bid=None, best_ask=None, kelly_fraction_used=None),
                       dict(best_bid=0.99, best_ask=0.01, kelly_fraction_used=1.0),
                       dict(best_bid=math.nan, best_ask=math.inf, kelly_fraction_used=-5.0)]:
-            assert dataclasses.asdict(evaluate(_ok_intent(**kw, **extra), cfg, dict(STATE), now=now)) == base, (kw, extra)
+            assert dataclasses.asdict(evaluate(_ok_intent(book_ts=book_ts, **kw, **extra), cfg, dict(STATE), now=now)) == base, (kw, extra)
