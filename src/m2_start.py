@@ -13,8 +13,11 @@ Start order (issue #129, Poly指挥: the Sentinel first, nothing else before its
    (halt_store.sentinel_heartbeat_problem() is None). An old heartbeat file never counts. If that
    never happens, nothing else is started: exit 4 with the reason.
 2. One line appended to ``runs/m2-chain.jsonl``: ts, run_dir, git_sha, reason, m2_end, max_runtime_s,
-   host, the Sentinel's pid. A failed append starts nothing else (exit 5).
-3. ``python -m src.m1_run --out runs/m2/m1-<UTC stamp> --max-runtime <seconds left until --m2-end>``.
+   host, the Sentinel's pid, assets (#276: the token ids chosen once at the first start by
+   m1_run.select_assets from data/markets.jsonl, same-day sports singles dropped; every later start reuses
+   them, never re-picks; a market that closes mid-run stays listed and counts as a gap; runs/m2/current.json
+   keeps a copy; a missing, malformed or inconsistent chain ``assets`` refuses, exit 3, no migration). A failed append starts nothing else (exit 5).
+3. ``python -m src.m1_run --out runs/m2/m1-<UTC stamp> --max-runtime <seconds left> --assets <frozen ids>``.
    The run dir is new on every start (m1_run never reuses a non-empty one) and lives under #119's
    fixed ``runs/m2/``. Ready = a fresh m1_run heartbeat from this launch, a valid manifest and at least
    one books file, within m1_run's Sentinel timeout (PROC_SPECS). Not ready: exit 5, nothing after it.
@@ -63,6 +66,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src import halt_store, heartbeat, paper_cycle, pins  # noqa: E402
+from src.expiry_rule import parse_end_date  # noqa: E402
+from src.m1_run import select_assets  # noqa: E402
+from src.podlib import read_jsonl  # noqa: E402
+from src.thresholds import M1_TOP_MARKETS  # noqa: E402
 from src.sentinel_tick import PROC_SPECS  # noqa: E402
 from src.thresholds import SENTINEL_HEARTBEAT_TIMEOUT_S  # noqa: E402
 
@@ -82,7 +89,9 @@ CHAIN_PATH = RUNS_DIR / "m2-chain.jsonl"
 CURRENT_NAME = "current.json"  # runs/m2/current.json: this start's run dir and processes (read-only for monitors)
 CURRENT_SCHEMA = "m2_current/1"
 KILL_NAME = "KILL"
-CHAIN_FIELDS = ("ts", "run_dir", "git_sha", "reason", "m2_end", "max_runtime_s", "host", "sentinel_pid")
+CHAIN_FIELDS = ("ts", "run_dir", "git_sha", "reason", "m2_end", "max_runtime_s", "host", "sentinel_pid", "assets")
+MARKETS_NAME = "data/markets.jsonl"  # the scanner output the boot start selects its assets from (as m1_run does)
+SPORTS_SLUG = "sports"
 LIVE_STATES = (heartbeat.STATE_STARTING, heartbeat.STATE_RUNNING, heartbeat.STATE_PAUSED)
 WATCHED = ("m1_run", "paper_cycle", "m2_runner")  # a second copy of these must never start
 
@@ -119,6 +128,43 @@ def in_m1_clone(root: Path) -> bool:
     return here == clone or here.startswith(clone + "\\")
 
 
+def assets_problem(value: object) -> str | None:
+    """None for a non-empty list of distinct, non-blank token-id strings without whitespace; else why."""
+    if not isinstance(value, list) or not value:
+        return "assets_missing_or_not_a_list"
+    if not all(isinstance(a, str) and a and a == a.strip() and not any(c.isspace() for c in a) for a in value):
+        return "assets_bad_token_id"
+    if len(set(value)) != len(value):
+        return "assets_duplicate_token_id"
+    return None
+
+
+def same_day_sports(row: dict[str, Any], now: datetime) -> bool:
+    """Task DE (#276): a sports market (tag slug or Gamma category ``sports``) whose end date falls on the
+    start's UTC day: a single game that resolves before the M2 window has really begun."""
+    tags = row.get("tags") if isinstance(row.get("tags"), list) else []
+    category = row.get("category")
+    sports = any(isinstance(t, str) and t.strip().lower() == SPORTS_SLUG for t in tags) or (
+        isinstance(category, str) and category.strip().lower() == SPORTS_SLUG)
+    end = parse_end_date(row.get("end_date"))
+    return sports and end is not None and end.date() == now.astimezone(timezone.utc).date()
+
+
+def boot_selection(root: Path, now: datetime) -> tuple[list[str], str | None]:
+    """E1: the first start's assets, chosen once by m1_run.select_assets (N = M1_TOP_MARKETS) from the
+    latest scanner batch, after dropping same-day sports singles. ``([], why)`` when nothing is usable."""
+    path = root / MARKETS_NAME
+    try:
+        rows = read_jsonl(path) if path.exists() else []
+    except (OSError, ValueError) as exc:
+        return [], f"{MARKETS_NAME} unreadable ({type(exc).__name__})"
+    rows = [row for row in rows if not (isinstance(row, dict) and same_day_sports(row, now))]
+    assets = select_assets(rows, M1_TOP_MARKETS)["assets"]
+    if assets_problem(assets) is not None:
+        return [], f"no usable assets in {MARKETS_NAME}; run python -m src.scanner first"
+    return list(assets), None
+
+
 def read_chain(path: Path) -> tuple[list[dict[str, Any]], str | None]:
     """The chain rows, or a problem (unreadable, a line that is not a chain object, mixed M2 ends)."""
     if not path.exists():
@@ -138,9 +184,14 @@ def read_chain(path: Path) -> tuple[list[dict[str, Any]], str | None]:
         if not isinstance(row, dict) or any(field not in row for field in CHAIN_FIELDS) \
                 or parse_utc(row["m2_end"]) is None:
             return [], f"chain_malformed:line {number}"
+        problem = assets_problem(row["assets"])
+        if problem is not None:
+            return [], f"chain_{problem}:line {number}"
         rows.append(row)
     if len({parse_utc(row["m2_end"]) for row in rows}) > 1:
         return [], "chain_m2_end_inconsistent"
+    if any(row["assets"] != rows[0]["assets"] for row in rows):
+        return [], "chain_assets_inconsistent"
     return rows, None
 
 
@@ -265,10 +316,13 @@ class Current:
 
 # ---------------------------------------------------------------- the orchestration
 
-def plan_commands(python: str, run_dir_arg: str, max_runtime_s: int, with_runner: bool) -> list[tuple[str, list[str]]]:
-    """(proc, argv) in start order after the Sentinel. Paper only: no live flag exists to pass."""
+def plan_commands(python: str, run_dir_arg: str, max_runtime_s: int, with_runner: bool,
+                  assets: list[str]) -> list[tuple[str, list[str]]]:
+    """(proc, argv) in start order after the Sentinel. Paper only: no live flag exists to pass. m1_run always
+    gets the frozen ``--assets`` (#276), never a fresh --top selection."""
     steps = [
-        ("m1_run", [python, "-m", "src.m1_run", "--out", run_dir_arg, "--max-runtime", str(max_runtime_s)]),
+        ("m1_run", [python, "-m", "src.m1_run", "--out", run_dir_arg, "--max-runtime", str(max_runtime_s),
+                    "--assets", ",".join(assets)]),
         ("paper_cycle", [python, "-m", "src.paper_cycle", "--loop", "--recording-dir", run_dir_arg]),
     ]
     if with_runner:
@@ -339,9 +393,19 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
     if drift:
         return refuse(EXIT_PIN_DRIFT, f"config/risk.toml off its pins: {', '.join(drift[:5])}")
 
+    # E1-E3 (#276): the boot start picks the asset set once; every later start reuses the chain's (read_chain
+    # already refused a missing, malformed or inconsistent one). E4: closed assets stay listed (gaps).
+    if rows:
+        assets, assets_source = list(rows[0]["assets"]), "chain"
+    else:
+        assets, why = boot_selection(root, moment)
+        if why is not None:
+            return refuse(EXIT_REFUSED, why)
+        assets_source = "boot selection"
+
     run_arg = rel(run_dir, root)
     logs_dir = m2_dir / "start-logs" / stamp(moment)
-    steps = plan_commands(python, run_arg, max_runtime_s, with_runner)
+    steps = plan_commands(python, run_arg, max_runtime_s, with_runner, assets)
     if argv_for is not None:
         steps = [(proc, argv_for(proc, argv)) for proc, argv in steps]
     sentinel_argv = [python, "-m", "src.sentinel_tick"]
@@ -349,7 +413,9 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
         sentinel_argv = argv_for("sentinel", sentinel_argv)
     say(f"root={root} m2_end={heartbeat.utc_stamp(end)} max_runtime_s={max_runtime_s} run_dir={run_arg} "
         f"m2_runner={'yes' if with_runner else 'not in this checkout (#119)'} live=none")
+    say(f"assets ({len(assets)}, from {assets_source}): {','.join(assets)}")
     current = Current(m2_dir / CURRENT_NAME, m2_end=heartbeat.utc_stamp(end), reason=reason.strip(), now=now)
+    current.data["assets"], current.data["assets_source"] = list(assets), assets_source
     current_rel = rel(current.path, root)
 
     def publish(failing: str | None = None) -> bool:
@@ -400,7 +466,8 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
     chain_row = {"ts": heartbeat.utc_stamp(now()), "run_dir": run_arg, "git_sha": heartbeat.git_sha(),
                  "reason": reason.strip(), "m2_end": heartbeat.utc_stamp(end), "max_runtime_s": max_runtime_s,
                  "host": socket.gethostname(),
-                 "sentinel_pid": sentinel_record["pid"] if sentinel_record is not None else None}
+                 "sentinel_pid": sentinel_record["pid"] if sentinel_record is not None else None,
+                 "assets": list(assets)}
     line = json.dumps(chain_row, ensure_ascii=False, sort_keys=True)
     if dry_run:
         say(f"step 2 chain: would append to {rel(chain_path, root)}: {line}")
