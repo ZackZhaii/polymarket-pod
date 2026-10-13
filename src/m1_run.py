@@ -237,6 +237,9 @@ class RestSampler:
         Under the shared barrier the sampler is marked sealed; once this returns, a request still
         in flight may return but can no longer publish a row, an event, a count or a heartbeat, and
         no further asset request is started (its result would have nowhere sealed to go).
+        The barrier is never held across an HTTP request, so the seal waits at most for a publish
+        already under way, never for a request in flight; only a request admitted before the seal
+        can still return, and it is dropped (tests: test_rest_sampler_a_blocked_request_*).
         """
         with self._barrier:
             self._sealed = True
