@@ -53,6 +53,8 @@ PINS = {
 
 GAMMA_PREFIX = "https://gamma-api.polymarket.com/markets"
 BOOK_PREFIX = "https://clob.polymarket.com/book?"
+# Independent public server clock: exact URL, no query or sub-path.
+TIME_URL = "https://clob.polymarket.com/time"
 # Task AK: the Data API v2 reads the Reconciler needs (plus DATA_API_STATUS_URL below) (v1 is retired 2026-10-24). Exact routes
 # with their "?" so /v2/positions/combos and every other v2 route stay refused.
 DATA_API_POSITIONS_PREFIX = "https://data-api.polymarket.com/v2/positions?"
@@ -260,8 +262,8 @@ def public_get(
     Transient network/TLS errors and HTTP 5xx are retried with exponential backoff.
     HTTP 4xx and JSON errors are raised at once. If every attempt fails, raises PublicGetError.
     """
-    if not (url.startswith(PUBLIC_PREFIXES) or url == DATA_API_STATUS_URL):
-        raise RuntimeError("refusing URL outside public Gamma markets, CLOB /book and Data API v2 positions/trades/status")
+    if not (url.startswith(PUBLIC_PREFIXES) or url in (DATA_API_STATUS_URL, TIME_URL)):
+        raise RuntimeError("refusing URL outside public Gamma markets, CLOB /book /time and Data API v2 positions/trades/status")
     lowered = url.lower()
     banned = ("/order", "/auth", "api-key", "secret", "passphrase", "signature", "withdraw")
     if any(token in lowered for token in banned):
