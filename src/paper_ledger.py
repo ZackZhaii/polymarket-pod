@@ -226,10 +226,13 @@ def _record_last_marks(today: str, now: str, marks: dict) -> list[str]:
 
 
 def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
-                     books: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
+                     books: dict[tuple[str, str], dict[str, Any]] | None = None, *,
+                     clock_ok: bool = True) -> dict[str, Any]:
     """Task CF (#124): today's unrealized loss on open legs (Poly风控's ruling, src/leg_marks.py).
 
     Reads (or, on the day's first evaluation, writes once) the start-of-day snapshot, also for closed parts.
+    ``clock_ok`` (Task DA, #225 follow-up): the caller's clock state; anything but True (a clock anomaly such as
+    the runner's clock_skew, or #253's clock_unverified) makes a snapshot written now late (fail closed).
     Returns ``{"loss_usd", "realized_topup_usd", "legs", "late", "problems"}``; any problem (positions,
     valuation, corrupt or unwritable snapshot, an exception) makes the loss unavailable: invalid_risk_state.
     """
@@ -255,7 +258,7 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
                            for key, leg in pos.start.items()}
             # Task CX (#225, D1/D2): late = written more than DAY_START_MAX_LAG_S after today's 00:00 UTC
             # (or a clock anomaly), whatever this process did yesterday.
-            late = day_boundary.day_start_late(now)
+            late = day_boundary.day_start_late(now, clock_ok=clock_ok)
             if late:
                 start_marks, problems = _previous_day_marks(today, pos.start, start_marks)
                 if problems:
@@ -293,10 +296,13 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
         return result
 
 
-def daily_risk_loss(rows: list[dict[str, Any]], ids: list[str], now: str) -> dict[str, Any]:
-    """One UTC evaluation: fees + gross cost losses + closed reference topups + open-leg losses."""
+def daily_risk_loss(rows: list[dict[str, Any]], ids: list[str], now: str, *,
+                    clock_ok: bool = True) -> dict[str, Any]:
+    """One UTC evaluation: fees + gross cost losses + closed reference topups + open-leg losses.
+
+    ``clock_ok`` is passed to daily_unrealized (Task DA): False while the caller knows of a clock anomaly."""
     day = daily_loss(rows, now[:10], ids)
-    marks = (daily_unrealized(rows, ids, now) if not day.problems
+    marks = (daily_unrealized(rows, ids, now, clock_ok=clock_ok) if not day.problems
              else {"loss_usd": None, "realized_topup_usd": None, "legs": [], "late": None, "problems": []})
     problems = list(day.problems) + list(marks["problems"])
     total = None if problems else day.total_usd + marks["realized_topup_usd"] + marks["loss_usd"]
