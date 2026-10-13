@@ -180,6 +180,8 @@ Paging, retry and sampling limits. They decide how much is read, not what passes
 | `m1_report.MISMATCH_LIST_LIMIT` | `200` | rows | The M1 report lists at most this many REST-vs-WS mismatches (all are counted). | `src/m1_report.py` | Task AI | no |
 | `reconcile.PAGE_LIMIT` | `500` | rows/page | Data API v2 first-page size for `/v2/positions` and `/v2/trades` (doc maximum 1000; later pages use the cursor's size). | `src/reconcile.py` | Task AK | no |
 | `reconcile.MAX_PAGES` | `200` | pages | Cap on one cursor walk; hitting it with a cursor left is `incomplete_walk` (exit 3, fails closed). | `src/reconcile.py` | Task AK | no |
+| `atomic_replace.REPLACE_ATTEMPTS` | `5` | attempts | Tries in all for the ledger's `os.replace` when Windows raises `PermissionError` (target briefly held by another handle). Other errors and other platforms are never retried; exhausted, the error propagates and the temp file is removed (fail closed). | `src/atomic_replace.py` | Task DL (issue #268) | no |
+| `atomic_replace.REPLACE_BACKOFF_S` | `0.02` | s | Retry backoff base for the above (0.02, 0.04, 0.08, 0.16 s: 0.30 s worst case, under the ledger mutex). | `src/atomic_replace.py` | Task DL (issue #268) | no |
 
 Not gathered either: `book.record(per_market=2)` (books at most 2 outcomes per market) is a function default,
 and the e2e fixtures' `assumed_slippage` is fixture data (a test pins it to `ASSUMED_SLIPPAGE`). Since Task AT

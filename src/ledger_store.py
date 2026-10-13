@@ -33,6 +33,11 @@ nothing more. All of this is tightening only and fails closed. No orders, keys o
     read. The compare re-reads the ledger after the mutex is held, so a competing book that
     completed in the meantime is detected and kept (``LedgerIntegrityError``, our write is
     refused). A mutex that cannot be taken refuses the write too (``OSError``, fail closed).
+    Issue #268 (Task DL): that replace is ``src.atomic_replace.replace_with_retry``: on Windows only, a
+    ``PermissionError`` (another handle briefly holds the ledger) is retried a bounded number of times,
+    still under the mutex. Any other exception, and every exception elsewhere, propagates at once as
+    before; when the tries run out the ``PermissionError`` propagates unchanged, the temp file is removed
+    and the old ledger is intact (fail closed).
 
 (c) Conservation
     Replaying the counted rows (not hypothetical, counts_toward_risk not False; the same rows
@@ -84,6 +89,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.atomic_replace import replace_with_retry  # issue #268: bounded Windows PermissionError retry
 from src.fees import booked_fee_usd, ledger_fee
 from src.halt_store import StateLock  # issue #64: the issue #52 cross-process mutex, reused as-is
 from src.thresholds import LEDGER_OPEN_EPS, PAPER_EQUITY_USD
@@ -426,7 +432,9 @@ def atomic_append(path: Path, expected: bytes, line: bytes) -> None:
     replace all run under the cross-process mutex (issue #52), so another process's completed
     book can neither slip in between them nor be overwritten by ours; a stale ``expected`` is a
     LedgerIntegrityError that keeps the other writer's rows, and a mutex we cannot take is an
-    OSError before anything is written (fail closed).
+    OSError before anything is written (fail closed). Issue #268: the replace retries a Windows
+    PermissionError a bounded number of times (src/atomic_replace.py); exhausted, it raises and the temp
+    file is removed as for any other failure.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
@@ -442,7 +450,7 @@ def atomic_append(path: Path, expected: bytes, line: bytes) -> None:
             current = path.read_bytes() if path.exists() else b""
             if current != expected:
                 raise LedgerIntegrityError(["ledger_changed_during_write"])
-            os.replace(tmp, path)
+            replace_with_retry(tmp, path)
         finally:
             mutex.release()
     except BaseException:
