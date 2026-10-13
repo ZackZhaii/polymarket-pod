@@ -119,7 +119,7 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 |---|---|---|---|
 | 0 | `EXIT_OK` | every step started and passed its check (`--dry-run`: the plan passed the refusals) | - |
 | 2 | `EXIT_USAGE` | usage error: blank --reason, no or bad --m2-end, --m2-end differs from the chain | - |
-| 3 | `EXIT_REFUSED` | refused before anything started: M1 clone, runs/m2/KILL, bad chain, M2 window over, a process already running, run dir exists, m2_runner not watched | - |
+| 3 | `EXIT_REFUSED` | refused before anything started: M1 clone, runs/m2/KILL, bad chain (incl. missing/malformed/inconsistent `assets`, #276), no usable boot assets, M2 window over, a process already running, run dir exists, m2_runner not watched | - |
 | 4 | `EXIT_SENTINEL_NOT_FRESH` | the launched Sentinel never beat fresh within SENTINEL_HEARTBEAT_TIMEOUT_S; nothing else started | - |
 | 5 | `EXIT_NOT_READY` | the chain append or a runs/m2/current.json write failed, or a later process was not ready within its Sentinel timeout; nothing after it started | - |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins; refused, global halt recorded (`--dry-run`: none recorded) | - |
@@ -179,7 +179,7 @@ later acceptance items, so the tool never reports PASS — a problem-free run en
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | ran (issue #75: a round whose markets/books input is still changing after the one bounded re-read is skipped, `ok=false reason=input_pending`, and exits 0 too: a transient append is never a halt) | - |
+| 0 | `EXIT_OK` | ran (issue #75: a round whose markets/books input is still changing after the one bounded re-read is skipped, `ok=false reason=input_pending`, and exits 0 too: a single transient append is never a halt; issue #277: consecutive such rounds are counted as `input_pending_streak` in the StaleWatch state and the heartbeat progress, cleared by a normal cycle, and at `ALL_STALE_CONSECUTIVE_CYCLES` in a row they raise the `all_markets_stale` global halt, the reason naming input_pending and the count; the exit code stays 0 and `--loop` keeps running) | - |
 | 1 | `EXIT_PIN` | a phase-0 pin failed: the in-memory config, or (Task AS) the risk file before a cycle (global halt recorded) | global halt |
 | 2 | `EXIT_USAGE` | usage error | alert |
 

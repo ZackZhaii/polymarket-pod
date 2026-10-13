@@ -56,11 +56,22 @@ class FakeHandle:
         return self.code
 
 
+def _default_scan(root: Path) -> None:
+    """One older scanner batch so every boot start has usable assets (later batches in a test win)."""
+    path = root / "data" / "markets.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {"ts": "2026-10-01T00:00:00Z", "id": "m-d", "question": "q", "version": "v2",
+           "token_id_source": "clob", "token_ids": ["tD1", "tD2"]}
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+
+
 class Rig:
     """Launcher stand-in: records each start; ``on[proc]`` plays what that child would write."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
+        _default_scan(root)  # Task DE (#276): the boot start selects its assets from data/markets.jsonl
         self.launched: list[tuple[str, list[str], Path]] = []
         self.exit: dict[str, int] = {}
         self.on = {
@@ -500,7 +511,7 @@ def test_running_from_the_m1_clone_refuses(rig, monkeypatch):
 def test_dry_run_prints_the_plan_in_order_and_touches_nothing(rig, no_sentinel):
     lines: list[str] = []
     assert _start(rig, lines, dry_run=True) == m2_start.EXIT_OK
-    assert rig.launched == [] and not rig.root.exists()
+    assert rig.launched == [] and sorted(p.name for p in rig.root.iterdir()) == ["data"]  # only the scan input
     text = "\n".join(lines)
     order = [text.index(key) for key in ("step 1 sentinel: would start python -m src.sentinel_tick",
                                           "step 2 chain: would append", "step 3 m1_run: would start",
@@ -562,6 +573,7 @@ beat.finish(0)
 def test_real_detached_children_start_in_order_and_stop_cleanly(tmp_path, no_sentinel):
     root = tmp_path / "pod"
     root.mkdir()
+    _default_scan(root)
     stub = tmp_path / "stub.py"
     stub.write_text(STUB, encoding="utf-8")
     stop = tmp_path / "STOP"

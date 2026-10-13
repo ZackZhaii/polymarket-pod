@@ -67,6 +67,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 import os
 import platform
 import shutil
@@ -102,7 +103,7 @@ from src import (  # noqa: E402
     sentinel,
 )
 from src.daily_loss import daily_loss  # noqa: E402
-from src.book_staleness import book_age_problem, parse_book_ts  # noqa: E402
+from src.book_staleness import INVALID_BOOK_TS, MISSING_BOOK_TS, book_age_problem, parse_book_ts  # noqa: E402
 from src.thresholds import (  # noqa: E402
     CLOCK_SKEW_MAX_S,
     DISK_MIN_FREE_GB,
@@ -255,7 +256,13 @@ class RunnerState:
     paused_since: str | None = None
     # Task DA (#225 follow-up): the clock anomaly the runner currently holds ("clock_skew"; #253 can set
     # "clock_unverified"). Kept apart from paused_reason so a later preflight pause does not forget it.
-    clock_anomaly: str | None = None
+    # Task DC (Poly风控 on #274): fail closed from startup / restart: "clock_unverified" until a tick fetched at
+    # least one book within CLOCK_SKEW_MAX_S of the local clock (and did not re-pause).
+    clock_anomaly: str | None = "clock_unverified"
+    # set during a tick when a fetched book passed the skew check; only such a tick may clear clock_anomaly
+    tick_clock_verified: bool = False
+    tick_clock_vetoed: bool = False  # Poly风控 P1 on #275: any book with an invalid book_ts this tick
+    tick_time_ok: bool = False  # #253: this tick's CLOB /time check passed (|skew| <= CLOCK_SKEW_MAX_S)
     counters: dict[str, int] = field(default_factory=lambda: {
         "forecasts_sealed_total": 0, "forecasts_rejected_total": 0, "intents_built_total": 0, "allows_total": 0,
         "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0})
@@ -365,11 +372,12 @@ def live_flag_problems(risk_path: Path | None = None) -> list[str]:
 
 
 def runner_clock_ok(state: "RunnerState") -> bool:
-    """Task DA: True only when the runner holds no clock anomaly (generic: any non-None reason is not ok)."""
+    """Task DA: True only after a clock check has passed and while the runner holds no clock anomaly (generic:
+    any non-None reason is not ok). Before the first check (right after startup) it is False: fail closed."""
     return state.clock_anomaly is None
 
 
-def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = None, clock_ok: bool = True,
+def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = None, clock_ok: bool = False,
               ledger_path: Path | None = None, settle: Callable[[], list[str]] | None = None,
               clock_check: Callable[[], str | None] | None = None) -> Preflight:
     """The C.2 checks, in order; the first failing one decides. Writes no fill itself.
@@ -460,6 +468,8 @@ def _clock_check(state: "RunnerState", getter: GuardedGetter) -> str | None:
     problem = _clock_problem(state.clock, getter)
     if problem is not None:
         state.clock_anomaly = problem
+    else:
+        state.tick_time_ok = True  # #253: a clean CLOB /time check (the skew source) this tick
     return problem
 
 
@@ -632,9 +642,17 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
             snap = book_snapshot_from_clob(raw, market_id, token)
             problem = book_age_problem(snap.book_ts, fetched_at, MAX_BOOK_AGE_S)
             if problem is not None:
+                if problem in (MISSING_BOOK_TS, INVALID_BOOK_TS):
+                    # Poly风控 P1 on #275: a missing / unparseable / non-finite book_ts vetoes this tick's
+                    # clock verification (even after a clean /time check)
+                    state.tick_clock_vetoed = True
                 book_refused = [problem]
                 break
             books[token] = snap
+            # Task DC + #253: verified only by a clean /time check plus at least one fresh, valid book this tick
+            # (an empty tick proves nothing and never clears the anomaly)
+            if state.tick_time_ok:
+                state.tick_clock_verified = True
         if book_refused is not None:
             _skip(state, now, report, item, forecast_id, book_refused)
             continue
@@ -691,7 +709,10 @@ def _skip(state: RunnerState, now: datetime, report: IterationReport, item: Pend
 
 def _book_age_s(book_ts: object, now: datetime) -> float | None:
     parsed = heartbeat.parse_stamp(book_ts) if isinstance(book_ts, str) else None
-    return None if parsed is None else round((now - parsed).total_seconds(), 3)
+    if parsed is None:
+        return None
+    age = round((now - parsed).total_seconds(), 3)
+    return age if math.isfinite(age) else None
 
 
 def _read_journal(path: Path) -> list[dict[str, Any]]:
@@ -857,6 +878,9 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     """One loop step: the checks first (settlement inside them, issue #206); only when they all pass, scan /
     inbox / decisions."""
     state.iteration += 1
+    state.tick_clock_verified = False  # Task DC: per tick
+    state.tick_clock_vetoed = False
+    state.tick_time_ok = False
     gamma = GuardedGetter(getters.gamma)  # one guarded Gamma getter per tick: settlement, scan, fee
     book_get = GuardedGetter(getters.book)  # shared read-only transport for /time and later /book
     try:
@@ -929,8 +953,11 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
         state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return IterationReport(ACT_WRITE_FAILED, [str(exc)])
     state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
-    # Task DA: a clock anomaly (clock_skew / clock_unverified) clears only after a decide that did not re-pause
-    if report.action == ACT_RUN and state.clock_anomaly in CLOCK_PAUSE_REASONS:
+    if state.tick_clock_vetoed:  # one invalid book_ts vetoes the whole tick's clock verification
+        state.tick_clock_verified = False
+    # Task DC + #253: a clock anomaly (clock_skew / clock_unverified) clears only after a decide that did not
+    # re-pause, a clean CLOB /time check this tick, and no book with a missing / invalid book_ts
+    if report.action == ACT_RUN and state.tick_clock_verified:
         state.clock_anomaly = None
     return report
 
