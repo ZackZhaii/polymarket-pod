@@ -121,7 +121,7 @@ def test_every_drop_is_counted_and_nothing_is_imputed():
         forecast(14, 0.5),                                       # void prices
         forecast(15, 0.5, outcome_index=0, token="t15-1"),       # token says outcome 1, index says 0
         forecast(16, 0.5),                                       # disputed snapshots
-        forecast(0, 0.9, ts="2026-10-05T00:00:00Z"),             # second forecast on market 0
+        forecast(0, 0.9, ts="2026-10-01T06:00:00Z"),             # second forecast on market 0 (before its close)
         forecast(17, 0.5, strategy="phase0-gate-test"),
         forecast(18, 0.5, market="e2e-alpha"),
         forecast(19, 0.5, outcome_index=5),                      # out of range for a binary market
@@ -152,11 +152,111 @@ def test_a_stored_clean_list_does_not_hide_a_recomputed_problem():
 
 
 def test_the_first_sealed_forecast_per_market_wins():
-    late = forecast(0, 0.9, ts="2026-10-09T00:00:00Z")
+    late = forecast(0, 0.9, ts="2026-10-01T08:00:00Z")  # both sealed before the 2026-10-01T12:00:00Z close
     early = forecast(0, 0.2, ts="2026-10-01T00:00:00Z")
     report, samples = build([late, early], [resolution(0, 0)])
     kept = [s for s in samples if s["eligible"]]
     assert [s["p"] for s in kept] == [0.2]
+
+
+# ------------------------------------------------------------------ causal time (issue #70)
+
+
+def test_a_forecast_strictly_before_the_close_is_kept():
+    f = forecast(0, 0.7, ts="2026-10-01T11:59:59Z")  # one second before the close
+    report, samples = build([f], [resolution(0, 0, day=1)])
+    assert report["forecasts"]["eligible"] == 1 and report["forecasts"]["dropped"] == 0
+    assert samples[0]["eligible"] is True
+
+
+def test_a_forecast_at_the_close_moment_is_dropped():
+    f = forecast(0, 0.99, ts="2026-10-01T12:00:00Z")  # exactly resolution(0).closed_ts
+    report, samples = build([f], [resolution(0, 0, day=1)])
+    assert report["forecasts"]["eligible"] == 0
+    assert report["forecasts"]["dropped_by_reason"] == {"forecast_not_before_close": 1}
+    assert [s["reason"] for s in samples if not s["eligible"]] == ["forecast_not_before_close"]
+
+
+def test_a_forecast_after_the_settlement_is_never_a_sample():
+    # issue #70 repro: closed 2026-10-10, forecast 2026-10-20, winner prob .99: no sample, no Brier
+    f = forecast(0, 0.99, ts="2026-10-20T00:00:00Z")
+    report, samples = build([f], [resolution(0, 0, day=10)])
+    assert report["forecasts"]["eligible"] == 0
+    assert report["forecasts"]["metrics"]["brier"] is None
+    assert report["forecasts"]["dropped_by_reason"] == {"forecast_not_before_close": 1}
+
+
+@pytest.mark.parametrize("ts", ["yesterday", "2026-10-01", "2026-10-01T00:00:00", "2026-10-01T25:00:00Z"])
+def test_a_forecast_whose_time_cannot_be_parsed_or_has_no_zone_is_dropped(ts):
+    f = forecast(0, 0.5, ts=ts)
+    report, samples = build([f], [resolution(0, 0, day=1)])
+    assert report["forecasts"]["eligible"] == 0
+    assert report["forecasts"]["dropped_by_reason"] == {"forecast_ts_invalid": 1}
+    assert [s["reason"] for s in samples if not s["eligible"]] == ["forecast_ts_invalid"]
+
+
+def test_a_missing_forecast_time_is_dropped_and_recorded():
+    row = forecast(0, 0.5)
+    row["ts"] = ""  # a blank time cannot prove when the forecast was sealed
+    report, samples = build([row], [resolution(0, 0)])
+    assert report["forecasts"]["eligible"] == 0
+    assert report["forecasts"]["dropped_by_reason"] == {"forecast_calibration_problems": 1}
+    assert report["forecasts"]["calibration_problems"] == {"missing_ts": 1}
+
+
+def test_the_same_moment_in_another_offset_is_not_before_the_close():
+    # closed 2026-10-01T12:00:00Z: 14:00+02:00 and 07:00-05:00 are that same moment; 18:30+08:00 is 10:30Z
+    fs = [forecast(0, 0.99, ts="2026-10-01T14:00:00+02:00"),
+          forecast(1, 0.99, ts="2026-10-01T07:00:00-05:00"),
+          forecast(2, 0.5, ts="2026-10-01T18:30:00+08:00")]
+    report, samples = build(fs, [resolution(i, 0, day=1) for i in range(3)])
+    assert report["forecasts"]["eligible"] == 1
+    assert report["forecasts"]["dropped_by_reason"] == {"forecast_not_before_close": 2}
+    kept = [s for s in samples if s["eligible"]]
+    assert [s["forecast_id"] for s in kept] == [fs[2]["forecast_id"]]
+
+
+def test_an_unprovable_time_never_takes_the_first_forecast_slot():
+    bad = forecast(0, 0.99, ts="2026-09-30T00:00")  # sorts first but has no timezone
+    good = forecast(0, 0.2, ts="2026-10-01T11:00:00Z")
+    report, samples = build([bad, good], [resolution(0, 0, day=1)])
+    kept = [s for s in samples if s["eligible"]]
+    assert [s["p"] for s in kept] == [0.2]
+    assert report["forecasts"]["dropped_by_reason"] == {"forecast_ts_invalid": 1}
+
+
+def test_mixed_times_drop_exactly_and_match_samples_jsonl(tmp_path):
+    fs = [forecast(0, 0.7, ts="2026-10-01T11:00:00Z"),          # before the close: kept
+          forecast(1, 0.99, ts="2026-10-01T12:00:00Z"),          # at the close
+          forecast(2, 0.99, ts="2026-10-20T00:00:00Z"),          # after the close
+          forecast(3, 0.5, ts="yesterday"),                      # unparseable
+          forecast(4, 0.5, ts="2026-10-01T00:00:00"),            # no timezone
+          forecast(5, 0.5, ts="2026-10-01T13:00:00+02:00"),      # 11:00Z: before the close
+          forecast(6, 0.5)]                                      # no time at all
+    fs[6]["ts"] = ""
+    rs = [resolution(i, 0, day=1) for i in range(7)]
+    report, samples = build(fs, rs)
+    f = report["forecasts"]
+    assert f["eligible"] == 2 and f["dropped"] == 5
+    assert f["dropped_by_reason"] == {"forecast_calibration_problems": 1, "forecast_not_before_close": 2,
+                                      "forecast_ts_invalid": 2}
+    assert f["calibration_problems"] == {"missing_ts": 1}
+    assert sum(1 for s in samples if s["eligible"]) == 2
+    assert sum(1 for s in samples if not s["eligible"]) == 5
+    out = tmp_path / "out"
+    code = cal.main(["--forecasts", str(_write(tmp_path / "f.jsonl", fs)), "--resolutions",
+                     str(_write(tmp_path / "r.jsonl", rs)), "--ledger", str(tmp_path / "absent.jsonl"),
+                     "--out-dir", str(out), "--now", NOW])
+    assert code == cal.EXIT_OK
+    written = [json.loads(line) for line
+               in (out / "2026-11-20" / "samples.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(written) == 7
+    assert sum(1 for s in written if s["eligible"]) == 2
+    reasons = {}
+    for s in written:
+        if not s["eligible"]:
+            reasons[s["reason"]] = reasons.get(s["reason"], 0) + 1
+    assert reasons == f["dropped_by_reason"]
 
 
 # ------------------------------------------------------------------ corrupt input
