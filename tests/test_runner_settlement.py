@@ -63,7 +63,9 @@ class Gamma:
         return [u for u in self.urls if "id=" in u]
 
 
-def _no_book(url):
+def _no_book(url, now):
+    if url == m2_runner.podlib.TIME_URL:
+        return now.timestamp()
     raise AssertionError(f"no book read expected: {url}")
 
 
@@ -88,7 +90,9 @@ def _hold_loser(env):
 
 def _tick(env, getter, now=NOW):
     env["state"].monotonic = lambda: now.timestamp()  # wall and monotonic move together (no #120 resume)
-    return m2_runner.iteration(env["state"], now=now, getters=m2_runner.Getters(gamma=getter, book=_no_book))
+    env["state"].clock = lambda: now
+    return m2_runner.iteration(env["state"], now=now,
+                               getters=m2_runner.Getters(gamma=getter, book=lambda url: _no_book(url, now)))
 
 
 def _settlements(env):
@@ -300,7 +304,7 @@ def test_the_runner_loop_calls_apply_settlements_without_any_intent(env, monkeyp
         return [fake.row] if want_closed else []
 
     fake.gamma = gamma
-    assert rig.run_once(env["run"], fake) == m2_runner.EXIT_OK
+    assert rig.run_once(env["run"], fake, clock=lambda: NOW) == m2_runner.EXIT_OK
     assert len(calls) == 1 and len(_settlements(env)) == 1
 
 
@@ -408,3 +412,26 @@ def test_the_commit_path_also_skips_a_blocked_market(env):
     env["res"].write_text(json.dumps(snap) + "\n")
     out = paper_ledger.apply_settlements()
     assert out["booked"] == [] and out["skipped_markets"] == [rig.MARKET_ID]
+
+
+@pytest.mark.parametrize("server,reason", [("down", "clock_unverified"), (-7.0, "clock_skew")])
+def test_settlement_books_during_a_clock_pause(env, server, reason):
+    """PR #253 review (Poly哨兵 b): an unreachable or skewed CLOB /time pauses the tick but must not defer
+    settlement (#206): the resolved leg is settled, nothing is scanned or decided, no global halt."""
+    _hold_loser(env)
+
+    def clock_book(url, now=NOW):
+        if url == m2_runner.podlib.TIME_URL:
+            if server == "down":
+                raise TimeoutError("time down")
+            return now.timestamp() + server
+        raise AssertionError(f"no book read expected: {url}")
+
+    env["state"].monotonic = lambda: NOW.timestamp()
+    env["state"].clock = lambda: NOW
+    report = m2_runner.iteration(env["state"], now=NOW,
+                                 getters=m2_runner.Getters(gamma=Gamma(resolved_row()), book=clock_book))
+    assert report.action == m2_runner.ACT_PAUSE and report.reasons == [reason]
+    booked = _settlements(env)
+    assert len(booked) == 1 and booked[0]["token_id"] == LOSER and booked[0]["settlement_payout"] == 0.0
+    assert len(_events(env, "settled")) == 1 and not _global_halt()

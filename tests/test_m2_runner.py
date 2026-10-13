@@ -68,8 +68,8 @@ def test_once_scans_seals_reads_books_builds_and_books_one_allowed_fill(env):
     sealed = rig.read_jsonl(Path(m2_runner.forecaster.FORECASTS_PATH))
     assert len(sealed) == 1 and sealed[0]["forecast_id"] == fill["forecast_id"]
     # reads: one keyset page, one Gamma fee read, the two books; all allowlisted GETs
-    assert len(fake.gamma_urls) == 2 and len(fake.book_urls) == 2
-    assert all(m2_runner.url_allowed(url) for url in fake.gamma_urls + fake.book_urls)
+    assert len(fake.gamma_urls) == 2 and len(fake.book_urls) == 2 and fake.time_calls == [podlib.TIME_URL]
+    assert all(m2_runner.url_allowed(url) for url in fake.gamma_urls + fake.book_urls + fake.time_calls)
     _, read = ledger_store.read_ledger(env["paper"])
     assert ledger_store.verify(read) == []
     # Task CF (#124): RiskGate's start-of-day leg marks were written under the run dir, and the default restored
@@ -245,7 +245,7 @@ def test_the_daily_loss_breaker_pauses_today_and_resumes_the_next_utc_day(env, m
     state = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(env["run"]))
     report = m2_runner.iteration(state, now=env["now"], getters=fake.getters())
     assert report.action == m2_runner.ACT_PAUSE and report.reasons[0] == "daily_loss_breaker"
-    assert fake.calls == 0 and pending.exists()
+    assert fake.time_calls == [podlib.TIME_URL] and fake.gamma_urls == fake.book_urls == [] and pending.exists()
     tomorrow = (env["now"] + timedelta(days=1)).replace(hour=0, minute=0, second=1)
     assert m2_runner.preflight(state.paths, now=tomorrow).action == m2_runner.ACT_RUN
 
