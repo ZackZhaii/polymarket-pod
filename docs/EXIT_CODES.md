@@ -201,19 +201,25 @@ later acceptance items, so the tool never reports PASS — a problem-free run en
 
 ## `src/replay_intent.py`
 
-`python -m src.replay_intent --bundle path/to/bundle.json` (issue #80 step 1): one single-shot offline
-Intent-builder replay on one fixed bundle (schema_version 1: one raw bus signal row, one scanner market
-row, that market's book rows, strategy, fee_rate, a zoned now). One signal and one run only, no bus, no
-ledger, no halt, no RiskGate, no executor and no network; it prints the intent or the complete ordered
-rejection reasons. The pin check is read only, so drift is refused here without recording a global halt.
+`python -m src.replay_intent --bundle path/to/bundle.json [--out path/to/result.json]` (issue #80):
+one single-shot offline Intent-builder replay on one fixed bundle (schema_version 1: one raw bus
+signal row, one scanner market row, that market's book rows, strategy, fee_rate, a zoned now). One
+signal and one run only, no bus, no ledger, no halt, no RiskGate, no executor and no network; it
+prints the intent or the complete ordered rejection reasons, with the SHA256 of the bundle's raw
+bytes (`input_sha256`). With `--out` the same JSON is published atomically (temp file, fsync,
+hardlink into place): an existing output is refused, never overwritten, and never into config/, a
+.toml or src/thresholds.py. The pin check is read only, so drift is refused here without recording
+a global halt.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | the single replay ran; the printed JSON holds an intent or the builder's ordered reasons | - |
-| 2 | `EXIT_USAGE` | usage error (missing `--bundle`; `--help` exits 0) | - |
+| 0 | `EXIT_OK` | the single replay ran; the printed JSON holds an intent or the builder's ordered reasons (with `--out`: also published) | - |
+| 2 | `EXIT_USAGE` | usage error (missing `--bundle`; `--help` exits 0), or `--out` points into config/, a .toml or src/thresholds.py | - |
 | 3 | `EXIT_CORRUPT_BUNDLE` | bundle unreadable, not JSON, wrong `schema_version`, missing keys, bad types, or a `now` without a timezone | - |
 | 4 | `EXIT_UNSUPPORTED_BUNDLE` | not a single-shot bundle: extra keys (history, loop), a list of signals, or a book row for another market | - |
+| 5 | `EXIT_OUTPUT_EXISTS` | refused: `--out` already exists; nothing overwritten, no result published | - |
 | 6 | `EXIT_PIN_DRIFT` | refused: config/risk.toml off its pins (read-only check; this entry records no halt); nothing replayed | - |
+| 7 | `EXIT_WRITE_FAILED` | refused: publishing the result JSON failed (e.g. no such folder); the destination is untouched | - |
 
 ## `src/reflector.py`
 

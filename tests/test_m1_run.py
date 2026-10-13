@@ -678,6 +678,91 @@ def test_a_rest_thread_that_ends_within_the_join_keeps_the_run_completed(tmp_pat
     assert all(e["event"] != "rest_join_timeout" for e in _rows(out, "events"))
 
 
+def test_final_manifest_rest_rows_uses_frozen_sink_not_lagging_sampler(tmp_path, monkeypatch):
+    """Issue #82 acceptance 4: final rest_rows and files['rest'] come from the frozen REST sink.
+
+    RestSampler.sample_once does sink.write(row) then self.rows += 1 under the barrier. An
+    instrumented seal forces sampler.rows to lag the already-written sink.rows (the race window
+    after a completed write). After seal/close the finished manifest must report the frozen
+    RotatingJsonl .rows and .files, not the lagging sampler counter.
+    """
+    real_seal = r.RestSampler.seal
+    lag: list[tuple[int, int, list[str]]] = []
+
+    def seal_then_lag(self):
+        real_seal(self)
+        # Sink is frozen under the seal: force the duplicate counter behind the completed write.
+        if self.sink.rows >= 1 and self.rows == self.sink.rows:
+            self.rows = self.sink.rows - 1
+        lag.append((self.rows, self.sink.rows, list(self.sink.files)))
+
+    monkeypatch.setattr(r.RestSampler, "seal", seal_then_lag)
+    code, out, _, _, _ = _main(tmp_path, [[_book()], []], ["--rest-assets", "1"])
+    assert code == r.EXIT_OK and lag, "expected a REST publish so the lag can be forced"
+    lagged, frozen, sealed_files = lag[0]
+    assert frozen >= 1 and lagged == frozen - 1
+    manifest = _manifest(out)
+    rest_rows_on_disk = _rows(out, "rest")
+    assert len(rest_rows_on_disk) == frozen
+    assert manifest["counts"]["rest_rows"] == frozen
+    assert manifest["counts"]["rest_rows"] != lagged  # would fail if final counts still used sampler.rows
+    assert list(manifest["files"]["rest"]) == sealed_files
+    assert sealed_files  # at least one rest file after a successful sample
+    for rel in sealed_files:
+        assert (out / rel).is_file()
+    # RotatingJsonl keeps .rows after close (issue #82 / CU): a closed sink's count is the freeze.
+    closed = w.RotatingJsonl(tmp_path / "closed-check", "rest", 1 << 20, 3600.0, monotonic=lambda: 0.0)
+    closed.write({"n": 1})
+    closed.write({"n": 2})
+    closed.close()
+    closed.close()  # idempotent
+    assert closed.closed and closed.rows == 2 and closed.files == ["closed-check/rest-000001.jsonl"]
+    with pytest.raises(w.SinkClosed):
+        closed.write({"n": 3})
+    assert closed.rows == 2  # unchanged after a refused write
+
+
+def test_sample_once_write_then_rows_gap_leaves_sink_ahead_of_sampler(tmp_path, monkeypatch):
+    """Deterministic offline race: delay between sink.write and sampler.rows += 1.
+
+    An instrumented sink.write releases the publish barrier mid-sample so a concurrent seal can
+    observe sink.rows already advanced while sampler.rows still lags. The finished main path must
+    still freeze rest_rows from the sink (covered by the sibling test); this one proves the gap.
+    """
+    clock = Clock()
+    rest = w.RotatingJsonl(tmp_path / "rest", "rest", 1 << 20, 3600.0, monotonic=clock.monotonic)
+    events = w.RotatingJsonl(tmp_path / "events", "events", 1 << 20, 3600.0, monotonic=clock.monotonic)
+    mid = threading.Event()
+    resume = threading.Event()
+    real_write = w.RotatingJsonl.write
+
+    def gap_write(self, row):
+        real_write(self, row)
+        if self is rest:
+            mid.set()
+            assert resume.wait(30)
+
+    monkeypatch.setattr(w.RotatingJsonl, "write", gap_write)
+
+    # Re-bind m1_run's RotatingJsonl.write used via the sink instance method resolution:
+    # RestSampler holds `rest`, whose write looks up type(rest).write ? ws_recorder.RotatingJsonl.
+    # m1_run imports RotatingJsonl from ws_recorder; patching w.RotatingJsonl is enough.
+    sampler = r.RestSampler([A], {}, rest, events, every_s=10, deadline_s=1e6,
+                            getter=_rest_getter([]), now=clock.now, monotonic=clock.monotonic)
+    worker = threading.Thread(target=sampler.sample_once, daemon=True)
+    worker.start()
+    assert mid.wait(30), "sink.write must complete (sink.rows advanced) before sampler.rows += 1"
+    # write() holds the sampler barrier; seal would wait. Observe the race window directly:
+    assert rest.rows == 1 and sampler.rows == 0  # sink ahead of the lagging sampler counter
+    resume.set()
+    worker.join(30)
+    assert not worker.is_alive()
+    assert sampler.rows == 1 and rest.rows == 1  # counters catch up after the gap
+    sampler.seal()
+    rest.close()
+    assert rest.closed and rest.rows == 1 and rest.files == ["rest/rest-000001.jsonl"]
+
+
 # --- recorder hooks (stop, on_event) -----------------------------------------------------------------
 
 
