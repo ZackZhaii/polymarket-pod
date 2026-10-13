@@ -37,6 +37,7 @@ from src.podlib import (  # noqa: E402
     SESSIONS_PATH,
     append_jsonl,
     load_risk,
+    parse_risk_toml,
     pin_problems,
     utc_now,
 )
@@ -77,15 +78,20 @@ def run(
     check m2_runner / paper_cycle / book already use. Pre-start drift refuses with
     reason=risk_toml_pin_drift and writes nothing.
     """
-    before = RISK_PATH.read_bytes()
-    loaded = cfg if cfg is not None else load_risk()
+    path = Path(risk_path) if risk_path is not None else RISK_PATH
     empty = {"markets": 0, "books": 0, "gaps": 0, "stale": 0, "fills": 0}
-    # Full file pins first (sha + every key); then the in-memory five-pin check.
-    drift = risk_file_problems(risk_path)
+    # Full file pins first (sha + every key) on the same path we will load.
+    # Unreadable/unparseable -> risk_toml_pin_drift (not a raw throw past record_drift).
+    drift = risk_file_problems(path)
     if drift:
         record_drift("paper_session", drift, phase="start", bus_path=bus_path)
-        _assert_risk_unchanged(before)
         return {"ok": False, "reason": "risk_toml_pin_drift", **empty}
+    # Snapshot the real committed RISK_PATH after the pin gate (tests assert untouched).
+    before = RISK_PATH.read_bytes()
+    if cfg is not None:
+        loaded = cfg
+    else:
+        loaded = parse_risk_toml(path.read_text(encoding="utf-8"))
     if pin_problems(loaded):
         _assert_risk_unchanged(before)
         return {"ok": False, "reason": "phase0_pin", **empty}
