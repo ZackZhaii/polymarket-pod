@@ -388,3 +388,48 @@ def test_progress_reports_resume_count(env):
     paths = m2_runner.RunnerPaths.under(env["run"])
     state = m2_runner.RunnerState(paths=paths, resume_count=3)
     assert m2_runner.progress(state, env["now"])["resume_count"] == 3
+
+
+def test_alternating_clock_reasons_keep_paused_since_and_alert_the_sentinel(env):
+    """PR #253 review (Poly哨兵 a): clock_unverified <-> clock_skew is one clock pause episode; switching between
+    the two must not restamp paused_since, so a long flapping clock pause still reaches the 6 h alert."""
+    import src.heartbeat as heartbeat
+    import src.sentinel_tick as sentinel_tick
+    from src.thresholds import RUNNER_PAUSED_ALERT_S, RUNNER_SUSPEND_GAP_S
+
+    clock, fake, state = _skew_rig(env)
+    report = _tick(state, clock, fake)
+    assert report.paused_reason == "clock_skew"
+    first = state.paused_since
+    assert first is not None
+    step = RUNNER_SUSPEND_GAP_S - 10
+    held, seen, flip = 0.0, set(), False
+    while held <= RUNNER_PAUSED_ALERT_S + 60:
+        flip = not flip
+        fake.time_error = RuntimeError("time down") if flip else None
+        report = _tick(state, clock, fake, step)
+        held += step
+        assert report.action == m2_runner.ACT_PAUSE
+        assert report.paused_reason == ("clock_unverified" if flip else "clock_skew")
+        seen.add(report.paused_reason)
+        assert state.paused_since == first
+    assert seen == {"clock_unverified", "clock_skew"}
+    now = clock.now()
+    hb = heartbeat.Heartbeat(m2_runner.PROC, every_s=30.0, now=lambda: now)
+    hb.beat(heartbeat.STATE_PAUSED, m2_runner.progress(state, now), force=True)
+    result = sentinel_tick.tick(now=now, bus_path=env["tmp"] / "sentinel-bus.jsonl",
+                                ledger_path=env["tmp"] / "sentinel-paper.jsonl")
+    assert "runner_paused_too_long" in result["alerts"]
+
+
+def test_clock_pause_clears_on_recovery_and_a_non_clock_reason_restamps(env):
+    import src.halt_store as halt_store
+
+    clock, fake, state = _skew_rig(env)
+    _tick(state, clock, fake)
+    first = state.paused_since
+    fake.time_error = RuntimeError("time down")
+    assert _tick(state, clock, fake, 60.0).paused_reason == "clock_unverified" and state.paused_since == first
+    halt_store.record_halt(scope=halt_store.SCOPE_GLOBAL, reason="test_global", source="Sentinel")
+    assert _tick(state, clock, fake, 60.0).paused_reason == "global_halt"
+    assert state.paused_since not in (None, first)

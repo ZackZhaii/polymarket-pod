@@ -277,3 +277,18 @@ def test_repeated_clock_pause_keeps_the_first_paused_since(env):
         fake = ClockGetters(later, server=RuntimeError("time down"))
         assert m2_runner.iteration(env["state"], now=later, getters=fake.getters()).paused_reason == "clock_unverified"
         assert env["state"].paused_since == since
+
+
+@pytest.mark.parametrize("server,reason", [(RuntimeError("time down"), "clock_unverified"), ("skew", "clock_skew")])
+def test_clock_pause_still_settles_before_pausing(env, monkeypatch, server, reason):
+    """PR #253 review (Poly哨兵 b) / issue #206: an unverifiable or skewed clock must not defer settlement.
+    Tick order: halt check -> settlement -> (write-off) -> clock -> daily loss -> RiskGate; no scan, no intent."""
+    fake = ClockGetters(env["now"], server=env["now"].timestamp() - 7 if server == "skew" else server)
+    actions = []
+    monkeypatch.setattr(m2_runner, "_settle_tick", lambda *a: actions.append("settle") or [])
+    monkeypatch.setattr(paper_ledger, "commit_if_allowed", lambda *a, **k: actions.append("commit"))
+    pending = rig.deliver(env["run"], env["now"])
+    report = tick(env, fake)
+    assert report.action == m2_runner.ACT_PAUSE and report.reasons == [reason]
+    assert actions == ["settle"] and fake.book_urls == [] and pending.exists()
+

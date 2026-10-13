@@ -412,3 +412,26 @@ def test_the_commit_path_also_skips_a_blocked_market(env):
     env["res"].write_text(json.dumps(snap) + "\n")
     out = paper_ledger.apply_settlements()
     assert out["booked"] == [] and out["skipped_markets"] == [rig.MARKET_ID]
+
+
+@pytest.mark.parametrize("server,reason", [("down", "clock_unverified"), (-7.0, "clock_skew")])
+def test_settlement_books_during_a_clock_pause(env, server, reason):
+    """PR #253 review (Poly哨兵 b): an unreachable or skewed CLOB /time pauses the tick but must not defer
+    settlement (#206): the resolved leg is settled, nothing is scanned or decided, no global halt."""
+    _hold_loser(env)
+
+    def clock_book(url, now=NOW):
+        if url == m2_runner.podlib.TIME_URL:
+            if server == "down":
+                raise TimeoutError("time down")
+            return now.timestamp() + server
+        raise AssertionError(f"no book read expected: {url}")
+
+    env["state"].monotonic = lambda: NOW.timestamp()
+    env["state"].clock = lambda: NOW
+    report = m2_runner.iteration(env["state"], now=NOW,
+                                 getters=m2_runner.Getters(gamma=Gamma(resolved_row()), book=clock_book))
+    assert report.action == m2_runner.ACT_PAUSE and report.reasons == [reason]
+    booked = _settlements(env)
+    assert len(booked) == 1 and booked[0]["token_id"] == LOSER and booked[0]["settlement_payout"] == 0.0
+    assert len(_events(env, "settled")) == 1 and not _global_halt()
