@@ -60,6 +60,20 @@ CLOSED_STATUSES = frozenset({"cancelled"})
 OWN_ACCOUNT_IDS = frozenset({"self", "own", "pod", "paper-pod", "maker", "executor"})
 
 
+QUOTE_STR_FIELDS = ("market", "status", "side", "token_id")
+
+
+def _quote_fields_are_str(row: dict, *, unknown_token_ok: bool = True) -> bool:
+    """Task DD (#280, Poly风控): a quote row's market, status, side and token_id must all be str before any
+    membership check (a list / dict status would raise TypeError on the set lookup). No str() coercion.
+    ``unknown_token_ok``: a None token_id stays the existing "unknown leg" (treated as possibly the same /
+    complement leg by the wash checks); paper_ledger's pending count passes False (a None token refuses)."""
+    if not all(isinstance(row.get(field), str) for field in ("market", "status", "side")):
+        return False
+    token = row.get("token_id")
+    return isinstance(token, str) or (unknown_token_ok and token is None)
+
+
 def _token(value: object) -> str | None:
     """'' for an unknown leg, the id for a named leg, None for an unusable value."""
     if value is None:
@@ -126,6 +140,8 @@ def pair_quotes(market: object, token_id: object, quotes: object) -> bool:
     for row in quotes:
         if not isinstance(row, dict):
             return True
+        if not _quote_fields_are_str(row):
+            return True  # Task DD (#280): a malformed quote is unusable input (fail closed, no TypeError)
         if row.get("market") != market or row.get("status") in CLOSED_STATUSES:
             continue
         row_leg = _token(row.get("token_id"))
@@ -162,7 +178,7 @@ def pair_cross_problems(
         if row["market"] != market:
             continue
         status, row_side, row_leg = row.get("status"), row.get("side"), _token(row.get("token_id"))
-        if not isinstance(status, str) or row_leg is None or row_side not in SIDES:
+        if not _quote_fields_are_str(row) or row_leg is None or row_side not in SIDES:
             return [WASH_INPUT_INVALID]
         if status in CLOSED_STATUSES:
             continue
@@ -250,7 +266,7 @@ def wash_problems(
         status = row.get("status")
         row_leg = _token(row.get("token_id"))
         row_side = row.get("side")
-        if not isinstance(status, str) or row_leg is None or row_side not in SIDES:
+        if not _quote_fields_are_str(row) or row_leg is None or row_side not in SIDES:
             return [WASH_INPUT_INVALID]
         if status in CLOSED_STATUSES:
             continue

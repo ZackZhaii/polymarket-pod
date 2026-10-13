@@ -21,7 +21,7 @@ from src.risk_gate import evaluate, exposure_state_problems, open_leg_problems
 from tests.test_single_leg_exposure import MARKET, NO, YES, _intent, _ledger, _row
 
 CLEAN = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0,
-         "leg_net_shares": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
+         "leg_net_shares": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 def _open(net: float) -> dict:
@@ -66,8 +66,10 @@ def test_the_other_token_of_the_same_market_is_still_a_new_leg(tmp_path, monkeyp
     assert state["leg_already_open"] is False
     assert state["leg_net_shares"] == 0.0
     assert state["open_positions"] == 1
-    assert evaluate(_intent(token_id=NO), cfg, state).allow is True
-    assert paper_ledger.commit_if_allowed(_intent(token_id=NO), cfg)["allow"] is True
+    # Issue #237: a new leg, but buying it while YES is held builds the complete set -> structural_arb_disabled.
+    assert "add_to_open_leg" not in evaluate(_intent(token_id=NO), cfg, state).reasons
+    assert "structural_arb_disabled" in evaluate(_intent(token_id=NO), cfg, state).reasons
+    assert paper_ledger.commit_if_allowed(_intent(token_id=NO), cfg)["allow"] is False
 
 
 def test_the_other_token_still_counts_toward_the_cap(tmp_path, monkeypatch):

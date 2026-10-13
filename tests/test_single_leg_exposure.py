@@ -232,7 +232,9 @@ def test_one_leg_under_the_cap_still_allows(tmp_path, monkeypatch):
     cfg = load_risk()
     _ledger(tmp_path, monkeypatch, [_row(MARKET, YES, "buy", 10.0, 4.5)])
     state = paper_ledger.load_state(MARKET, NO)
-    assert evaluate(_intent(token_id=NO), cfg, state).allow is True
+    # Issue #237: the cap is not hit, but buying the other token of a held market is vetoed.
+    assert "max_open_positions" not in evaluate(_intent(token_id=NO), cfg, state).reasons
+    assert evaluate(_intent(token_id=NO), cfg, state).reasons == ["structural_arb_disabled"]
 
 
 def test_market_level_flag_alone_no_longer_exempts():

@@ -166,6 +166,7 @@ EXPECTED = {
     "REFLECTOR_EDGE_TIER_REALIZATION_MAX": 0.25,
     # issue #52: the halt-state read-modify-write mutex (M2 pending).
     "HALT_STATE_LOCK_TIMEOUT_S": 5.0,
+    "COMMIT_LOCK_TIMEOUT_S": 5.0,  # Task DD (#280): moved from src/paper_ledger.py, value unchanged
     "HALT_STATE_LOCK_POLL_S": 0.05,
 }
 
@@ -268,7 +269,9 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "DAY_START_MAX_LAG_S", "MIN_EDGE", "SENTINEL_STA
               # Task BE: edge-tier realization rule.
               "REFLECTOR_EDGE_TIER_REALIZATION_MAX",
               # issue #52: the halt-state read-modify-write mutex.
-              "HALT_STATE_LOCK_TIMEOUT_S", "HALT_STATE_LOCK_POLL_S"}
+              "HALT_STATE_LOCK_TIMEOUT_S", "HALT_STATE_LOCK_POLL_S",
+              # Task DD (#280): the ledger commit mutex wait.
+              "COMMIT_LOCK_TIMEOUT_S"}
 HEADER = ["Name", "Value", "Unit", "Meaning", "Where", "Source", "M2 pending"]
 
 

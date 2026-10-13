@@ -37,6 +37,7 @@ import json
 import os
 import sys
 import tempfile
+import math
 import time
 from pathlib import Path
 from typing import Any
@@ -332,8 +333,12 @@ class StateLock:
         self.path = state_lock_path(path)
         self._fd: int | None = None
 
-    def acquire(self) -> bool:
-        deadline = time.monotonic() + HALT_STATE_LOCK_TIMEOUT_S
+    def acquire(self, timeout_s: float | None = None) -> bool:
+        """``timeout_s`` (Task DD): how long to wait, a finite number > 0; None keeps HALT_STATE_LOCK_TIMEOUT_S."""
+        if timeout_s is not None and (isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
+                                      or not math.isfinite(timeout_s) or timeout_s <= 0):
+            return False  # Task DD (Poly风控 on #280): only a finite timeout > 0; nan / inf / <= 0 never lock
+        deadline = time.monotonic() + (HALT_STATE_LOCK_TIMEOUT_S if timeout_s is None else timeout_s)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)

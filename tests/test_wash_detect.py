@@ -68,7 +68,7 @@ def _state(fills: list | None = None, quotes: list | None = None) -> dict:
     return {
         "open_positions": 0,
         "leg_already_open": False,
-        "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
+        "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0,
         "recent_fills": [] if fills is None else fills,
         "own_quotes": [] if quotes is None else quotes,
     }

@@ -24,7 +24,7 @@ from src.risk_gate import Intent, evaluate
 
 NOW = "2026-10-08T08:00:00Z"
 NOW_DT = datetime(2026, 10, 8, 8, tzinfo=timezone.utc)
-STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
+STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0,
          "recent_fills": [], "own_quotes": []}
 # Issue #226 (D4): a sell needs an open long leg (no naked short); the net is large so it never caps the size.
 HELD = dict(STATE, open_positions=1, leg_already_open=True, leg_net_shares=1_000_000.0)
