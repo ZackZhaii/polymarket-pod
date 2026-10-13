@@ -26,8 +26,8 @@ Where it runs:
   recorded (halt_store.record_halt, source Sentinel) and SecretRefused is raised.
 * ``python -m src.secret_scan`` scans logs/ (and any ``--path``). A hit or a file it cannot read is a
   global Sentinel halt (sentinel.halt: halt record, paper quotes cancelled, halt bus line);
-  ``--no-halt`` only reports. Exit 0 clean, 1 secret found, 2 scan error (unreadable file or bad
-  word list), 3 usage.
+  ``--no-halt`` only reports. Exit 0 clean, 1 secret found, 2 scan error (unreadable file or
+  directory, bad word list), 3 usage.
 * scripts/guard.py check ``secret_scan`` scans logs/ and every tracked file (read only, no halt).
 
 Lifting the halt is the Operator's resume after the key is rotated and the logs are cleaned
@@ -114,7 +114,8 @@ _MNEMONIC_SEP_RE = re.compile(r"[\s,;|]*(?:\d{1,2}[.):]?)?[\s,;|]*")
 
 
 class ScanError(RuntimeError):
-    """The scan itself could not run (unreadable file, bad word list). Fail closed: treat as a hit."""
+    """The scan itself could not run (unreadable file, unenumerable directory, bad word list).
+    Fail closed: treat as a hit."""
 
 
 class SecretRefused(RuntimeError):
@@ -259,14 +260,24 @@ def is_env_file(name: str) -> bool:
 
 
 def iter_files(base: Path) -> Iterator[Path]:
-    """Every regular file under ``base`` (or ``base`` itself), sorted; symlinks are not followed."""
+    """Every regular file under ``base`` (or ``base`` itself), sorted; symlinks are not followed.
+
+    A directory that can be stat-ed but not enumerated is a :class:`ScanError` (issue #53): the
+    walk's ``onerror`` converts the OSError into an explicit scan error instead of letting the walk
+    drop it silently, so a scan that cannot see every file fails closed instead of returning clean.
+    """
     if base.is_file():
         if not is_env_file(base.name):
             yield base
         return
     if not base.is_dir():
         return
-    for folder, dirs, files in os.walk(base, followlinks=False):
+
+    def _onerror(exc: OSError) -> None:
+        name = Path(exc.filename).as_posix() if getattr(exc, "filename", None) else Path(base).as_posix()
+        raise ScanError(f"{name} unreadable ({type(exc).__name__})") from exc
+
+    for folder, dirs, files in os.walk(base, followlinks=False, onerror=_onerror):
         dirs.sort()
         for name in sorted(files):
             if is_env_file(name):
@@ -277,7 +288,12 @@ def iter_files(base: Path) -> Iterator[Path]:
 
 
 def scan_paths(paths: Iterable[Path], root: Path | None = None) -> tuple[list[Finding], list[str]]:
-    """``(findings, errors)`` for every file under ``paths``. Errors are short, never file contents."""
+    """``(findings, errors)`` for every file under ``paths``. Errors are short, never file contents.
+
+    Errors are collected at both scan boundaries (issue #53): per file (``scan_file``) and per
+    traversal (``iter_files`` cannot enumerate a directory), so an unreadable file or an
+    unenumerable directory can never come back as a clean result.
+    """
     findings: list[Finding] = []
     errors: list[str] = []
     try:
@@ -285,12 +301,15 @@ def scan_paths(paths: Iterable[Path], root: Path | None = None) -> tuple[list[Fi
     except ScanError as exc:
         return [], [str(exc)]
     for base in paths:
-        for path in iter_files(Path(base)):
-            label = _label(path, root)
-            try:
-                findings += scan_file(path, label, vocab)
-            except ScanError as exc:
-                errors.append(str(exc))
+        try:
+            for path in iter_files(Path(base)):
+                label = _label(path, root)
+                try:
+                    findings += scan_file(path, label, vocab)
+                except ScanError as exc:
+                    errors.append(str(exc))  # one unreadable file: keep scanning the rest
+        except ScanError as exc:
+            errors.append(str(exc))  # the traversal itself failed (issue #53): fail closed
     return findings, errors
 
 
