@@ -67,6 +67,7 @@ if str(ROOT) not in sys.path:
 
 from src import halt_store, heartbeat, paper_cycle, pins  # noqa: E402
 from src.expiry_rule import parse_end_date  # noqa: E402
+from src.book_staleness import parse_book_ts  # noqa: E402
 from src.m1_run import select_assets  # noqa: E402
 from src.podlib import read_jsonl  # noqa: E402
 from src.thresholds import M1_TOP_MARKETS  # noqa: E402
@@ -139,26 +140,53 @@ def assets_problem(value: object) -> str | None:
     return None
 
 
+def is_sports(row: dict[str, Any]) -> bool:
+    """A sports market: tag slug or Gamma category ``sports`` (case and whitespace insensitive)."""
+    tags = row.get("tags") if isinstance(row.get("tags"), list) else []
+    category = row.get("category")
+    return any(isinstance(t, str) and t.strip().lower() == SPORTS_SLUG for t in tags) or (
+        isinstance(category, str) and category.strip().lower() == SPORTS_SLUG)
+
+
+def classification_ok(row: dict[str, Any]) -> bool:
+    """Task DI (#137): the market's sports classification is readable: ``tags`` is a list of str and
+    ``category`` a non-empty str. Anything else (missing, wrong type, empty) is unknown and the boot
+    selection drops it (fail closed): an unclassifiable market could be a sports single."""
+    tags = row.get("tags")
+    category = row.get("category")
+    return (isinstance(tags, list) and all(isinstance(t, str) for t in tags)
+            and isinstance(category, str) and category.strip() != "")
+
+
 def same_day_sports(row: dict[str, Any], now: datetime) -> bool:
     """Task DE (#276): a sports market (tag slug or Gamma category ``sports``) whose end date falls on the
     start's UTC day: a single game that resolves before the M2 window has really begun."""
-    tags = row.get("tags") if isinstance(row.get("tags"), list) else []
-    category = row.get("category")
-    sports = any(isinstance(t, str) and t.strip().lower() == SPORTS_SLUG for t in tags) or (
-        isinstance(category, str) and category.strip().lower() == SPORTS_SLUG)
     end = parse_end_date(row.get("end_date"))
-    return sports and end is not None and end.date() == now.astimezone(timezone.utc).date()
+    return is_sports(row) and end is not None and end.date() == now.astimezone(timezone.utc).date()
 
 
-def boot_selection(root: Path, now: datetime) -> tuple[list[str], str | None]:
+def ends_before(row: dict[str, Any], m2_end: datetime) -> bool:
+    """Task DI (#137): the market's end date is before the M2 end, or missing / unparseable (fail closed)."""
+    end = parse_end_date(row.get("end_date"))
+    return end is None or end < m2_end
+
+
+def boot_selection(root: Path, now: datetime, m2_end: datetime | None = None) -> tuple[list[str], str | None]:
     """E1: the first start's assets, chosen once by m1_run.select_assets (N = M1_TOP_MARKETS) from the
-    latest scanner batch, after dropping same-day sports singles. ``([], why)`` when nothing is usable."""
+    latest scanner batch. Task DI (#137): every sports market is dropped (Gamma puts a tennis single's
+    endDate about a week after the match, so the end date cannot tell a single game apart), and, given
+    ``m2_end``, every market ending before it (or without a usable end date). ``([], why)`` when nothing
+    is usable. Task DI: a market with unknown or malformed classification is dropped too."""
     path = root / MARKETS_NAME
     try:
         rows = read_jsonl(path) if path.exists() else []
     except (OSError, ValueError) as exc:
         return [], f"{MARKETS_NAME} unreadable ({type(exc).__name__})"
-    rows = [row for row in rows if not (isinstance(row, dict) and same_day_sports(row, now))]
+    stamps = [parse_book_ts(row.get("ts")) for row in rows if isinstance(row, dict)]
+    latest = max((stamp for stamp in stamps if stamp is not None), default=None)
+    # Pin the latest batch first: filtering must never make an older scan the "latest" one.
+    rows = [row for row in rows if isinstance(row, dict) and parse_book_ts(row.get("ts")) == latest
+            and classification_ok(row) and not is_sports(row) and not (m2_end is not None and ends_before(row, m2_end))]
     assets = select_assets(rows, M1_TOP_MARKETS)["assets"]
     if assets_problem(assets) is not None:
         return [], f"no usable assets in {MARKETS_NAME}; run python -m src.scanner first"
@@ -398,7 +426,7 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
     if rows:
         assets, assets_source = list(rows[0]["assets"]), "chain"
     else:
-        assets, why = boot_selection(root, moment)
+        assets, why = boot_selection(root, moment, end)
         if why is not None:
             return refuse(EXIT_REFUSED, why)
         assets_source = "boot selection"
