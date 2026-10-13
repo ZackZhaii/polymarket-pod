@@ -164,7 +164,7 @@ later acceptance items, so the tool never reports PASS — a problem-free run en
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | ran (issue #75: a round whose markets/books input is still changing after the one bounded re-read is skipped, `ok=false reason=input_pending`, and exits 0 too: a transient append is never a halt) | - |
+| 0 | `EXIT_OK` | ran (issue #75: a round whose markets/books input is still changing after the one bounded re-read is skipped, `ok=false reason=input_pending`, and exits 0 too: a single transient append is never a halt; issue #277: consecutive such rounds are counted as `input_pending_streak` in the StaleWatch state and the heartbeat progress, cleared by a normal cycle, and at `ALL_STALE_CONSECUTIVE_CYCLES` in a row they raise the `all_markets_stale` global halt, the reason naming input_pending and the count; the exit code stays 0 and `--loop` keeps running) | - |
 | 1 | `EXIT_PIN` | a phase-0 pin failed: the in-memory config, or (Task AS) the risk file before a cycle (global halt recorded) | global halt |
 | 2 | `EXIT_USAGE` | usage error | alert |
 

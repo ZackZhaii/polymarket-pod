@@ -292,7 +292,9 @@ def test_an_input_still_changing_after_the_one_re_read_skips_the_round(tmp_path,
     assert result["skips"] == [{"kind": "input_pending", "reason": "input_pending", "path": str(target)}]
     assert reads.count(str(target)) == 2  # one bounded re-read, never an unbounded retry
     assert not bus_path.exists()  # no gap, no stale and no skip signal
-    assert not state.exists()  # StaleWatch untouched: no advance and no reset
+    # StaleWatch market streaks untouched (no advance, no reset); issue #277: only the pending round is counted.
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["streaks"] == {} and saved["all_stale_streak"] == 0 and saved["input_pending_streak"] == 1
     assert halt_store.active_halts() == halts_before  # a transient append is never a permanent halt
     assert target.read_bytes() == damaged  # the source file is reported, never repaired or truncated
     assert RISK_PATH.read_bytes() == before
@@ -313,9 +315,12 @@ def test_input_pending_leaves_the_stale_watch_streak_untouched(tmp_path, monkeyp
     skipped = paper_cycle.run(markets_path=markets, books_path=books, bus_path=bus_path,
                               now="2026-10-08T00:10:00Z", sentinel_state_path=state)
     assert skipped["reason"] == paper_cycle.INPUT_PENDING
-    assert state.read_bytes() == recorded  # the streak is neither advanced nor cleared
+    after = json.loads(state.read_text(encoding="utf-8"))
+    # the market streak is neither advanced nor cleared; issue #277 counts only the pending round
+    assert after == dict(json.loads(recorded), input_pending_streak=1)
     assert skipped["sentinel"] == {"checked": 0, "state_problem": None, "write_problem": None, "halts": [],
-                                   "state_path": str(state), "all_stale_streak": 0, "all_stale_halt": False}
+                                   "state_path": str(state), "all_stale_streak": 0, "all_stale_halt": False,
+                                   "input_pending_streak": 1, "input_pending_halt": False}
 
 
 def test_only_the_active_rotated_book_file_is_monitored_for_append_changes(tmp_path, monkeypatch):

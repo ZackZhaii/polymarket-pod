@@ -202,6 +202,8 @@ class StaleWatch:
         self.alarmed: set[str] = set()
         # Task AP gap 14: consecutive paper cycles in which every checked market was stale.
         self.all_stale_streak = 0
+        # Issue #277 (Task DF): consecutive paper cycles skipped as input_pending (#75 criterion 2).
+        self.input_pending_streak = 0
 
     def check(
         self,
@@ -272,6 +274,7 @@ class StaleWatch:
             "streaks": dict(sorted(self.streaks.items())),
             "alarmed": sorted(self.alarmed),
             "all_stale_streak": self.all_stale_streak,
+            "input_pending_streak": self.input_pending_streak,
         }
 
     @classmethod
@@ -308,6 +311,11 @@ class StaleWatch:
         if isinstance(all_stale, bool) or not isinstance(all_stale, int) or all_stale < 0:
             raise ValueError("bad all_stale_streak")
         watch.all_stale_streak = all_stale
+        # Issue #277 (Task DF): same rule -- absent in an older state file (counts from 0); present means strict.
+        pending = data.get("input_pending_streak", 0)
+        if isinstance(pending, bool) or not isinstance(pending, int) or pending < 0:
+            raise ValueError("bad input_pending_streak")
+        watch.input_pending_streak = pending
         return watch
 
 
