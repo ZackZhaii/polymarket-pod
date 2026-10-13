@@ -104,7 +104,7 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 | 1 | `EXIT_NO_ROWS` | no book snapshot recorded | alert |
 | 2 | `EXIT_USAGE` | usage error | alert |
 | 3 | `EXIT_NO_WEBSOCKETS` | the optional websockets package is missing | alert |
-| 4 | `EXIT_WRITE_FAILED` | writing the run directory failed | global halt |
+| 4 | `EXIT_WRITE_FAILED` | writing the run directory failed, or (issue #82) the REST sampler thread was still alive after the 120 s finishing join (`rest_join_timeout` event, manifest `failed`; the thread is sealed, not killed) | global halt |
 | 5 | `EXIT_INTERRUPTED` | stopped by SIGINT/SIGTERM/SIGBREAK or Ctrl+C/Ctrl+Break (Operator stop). Task BT: a Windows console close / logoff / shutdown also finishes the manifest `interrupted` with exit_code 5, but the m1_run heartbeat ends `crashed` (global halt), not this log-only exit | log |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins at start (no run dir created) or while running (PIN_RECHECK_S); global halt recorded | global halt |
 | 7 | `EXIT_CLOCK_BEHIND` | Task CM: refused to start (no run dir): the local clock is behind the exchange by more than `M1_MAX_CLOCK_BEHIND_S` (max of `book_ts` - local receive time over one public `/book` read per asset), or no `/book` answer was usable to check it. Sync the host clock and start again | alert |

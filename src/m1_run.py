@@ -31,6 +31,9 @@ through src.ws_recorder and the public CLOB /book path through src.book.snapshot
   thread stops, files are closed (fsync) and the manifest is finished with status ``interrupted``.
   Stop-sealing (Issue #82) and every REST publish (row, event, count, heartbeat) share one barrier:
   a request that returns after the seal publishes nothing and no next asset request is started.
+  The finish waits REST_JOIN_TIMEOUT_S (120 s) for the REST thread; if it is still alive after that
+  wait (a request hung in flight), the run is failed with exit 4 and a ``rest_join_timeout`` event
+  (the thread is sealed, never killed), so a stuck sampler is never declared completed.
 - ``manifest.json`` (atomic replace) is written at start (status ``running``) and at the end:
   start/end times, elapsed seconds, assets with their market metadata, settings, thresholds,
   versions (Python, websockets, schema), the git sha (and whether the tree was dirty), the
@@ -38,7 +41,8 @@ through src.ws_recorder and the public CLOB /book path through src.book.snapshot
 
 Exit codes: 0 ran to --max-runtime and recorded at least one snapshot; 1 no snapshot recorded;
 2 usage error (bad arguments, no usable assets, a non-empty --out); 3 the optional websockets
-package is missing; 4 writing an output file failed; 5 stopped by SIGINT/SIGTERM (the run dir is
+package is missing; 4 writing an output file failed, or the REST thread outlived the finishing
+join; 5 stopped by SIGINT/SIGTERM (the run dir is
 complete and can still be reported, but it is not a full acceptance run); 6 config/risk.toml off its
 pins at start (no run dir) or while running (Task AS, src/pins.py; a global halt is recorded); 7 Task CM:
 the local clock is behind the exchange by more than M1_MAX_CLOCK_BEHIND_S, or could not be checked (no run dir).
@@ -121,6 +125,10 @@ EXIT_WRITE_FAILED = 4
 EXIT_INTERRUPTED = 5
 EXIT_PIN_DRIFT = 6  # Task AS: config/risk.toml off its pins at start or while running (global halt recorded)
 EXIT_CLOCK_BEHIND = 7  # Task CM: local clock behind the exchange (or unverifiable) at start; no run dir
+
+# Issue #82 acceptance 3: how long the finish waits for the REST thread (unchanged 120 s; tests shorten it).
+# Still alive after it: status failed, EXIT_WRITE_FAILED, a rest_join_timeout event; the thread is not killed.
+REST_JOIN_TIMEOUT_S = 120
 
 # Task BT: Windows console control events (wincon.h). C and BREAK are an Operator stop (like SIGINT);
 # CLOSE, LOGOFF and SHUTDOWN mean the OS kills the process about 5 s after the handler is called.
@@ -229,6 +237,9 @@ class RestSampler:
         Under the shared barrier the sampler is marked sealed; once this returns, a request still
         in flight may return but can no longer publish a row, an event, a count or a heartbeat, and
         no further asset request is started (its result would have nowhere sealed to go).
+        The barrier is never held across an HTTP request, so the seal waits at most for a publish
+        already under way, never for a request in flight; only a request admitted before the seal
+        can still return, and it is dropped (tests: test_rest_sampler_a_blocked_request_*).
         """
         with self._barrier:
             self._sealed = True
@@ -773,7 +784,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
         stop.set()
         progress.join(timeout=30)
         if thread.is_alive():
-            thread.join(timeout=120)
+            thread.join(timeout=REST_JOIN_TIMEOUT_S)
+        rest_stuck = thread.is_alive()  # Issue #82 acceptance 3: re-checked after the join, never killed
         sampler.seal()  # Issue #82: freeze publishes before the outputs are closed and finalized
         for signum, handler in previous.items():
             signal.signal(signum, handler)
@@ -782,6 +794,15 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
         if sampler.failure is not None and code == EXIT_OK:
             print(f"m1_run: REST sampler failed: {sampler.failure!r}", file=sys.stderr)
             code, status = EXIT_WRITE_FAILED, "failed"
+        if rest_stuck:
+            print(f"m1_run: REST sampler still alive after the {REST_JOIN_TIMEOUT_S} s join timeout "
+                  "(request hung in flight); sealed, not killed; the run cannot complete", file=sys.stderr)
+            try:
+                events.write({"ts": now(), "event": "rest_join_timeout", "timeout_s": REST_JOIN_TIMEOUT_S})
+            except OSError:
+                pass  # the reason is on stderr; the run never completes either way
+            if code == EXIT_OK and not watch.problems:  # a pin drift keeps its own 6 (global halt)
+                code, status = EXIT_WRITE_FAILED, "failed"
         if code == EXIT_OK and watch.problems:
             code, status = EXIT_PIN_DRIFT, "pin_drift"
         if code == EXIT_OK and stopped_by_signal:
