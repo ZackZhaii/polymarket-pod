@@ -63,7 +63,7 @@ def test_independent_clock_quantization_boundaries_before_any_work(env, monkeypa
         assert report.action == m2_runner.ACT_RUN and actions[0] == "settle"
     else:
         assert report.action == m2_runner.ACT_PAUSE and report.reasons == [reason]
-        assert report.paused_reason == reason and actions == []
+        assert report.paused_reason == reason and actions == ["settle"]
         assert fake.gamma_urls == fake.book_urls == [] and pending.exists()
 
 
@@ -71,7 +71,7 @@ def test_independent_clock_quantization_boundaries_before_any_work(env, monkeypa
     None, True, False, "1234567890", "", [], {}, float("nan"), float("inf"), -float("inf"),
     10**400, 253402300800, -62135596801, TimeoutError("offline"), ValueError("bad JSON"),
 ])
-def test_unusable_server_time_pauses_without_settlement_or_intent(env, monkeypatch, server):
+def test_unusable_server_time_settles_then_pauses_without_intent(env, monkeypatch, server):
     fake = ClockGetters(env["now"])
     fake.server = server
     actions = []
@@ -79,7 +79,7 @@ def test_unusable_server_time_pauses_without_settlement_or_intent(env, monkeypat
     monkeypatch.setattr(paper_ledger, "commit_if_allowed", lambda *a, **k: actions.append("commit"))
     report = tick(env, fake)
     assert report.action == m2_runner.ACT_PAUSE and report.reasons == ["clock_unverified"]
-    assert actions == [] and fake.time_calls == [TIME_URL] and fake.gamma_urls == fake.book_urls == []
+    assert actions == ["settle"] and fake.time_calls == [TIME_URL] and fake.gamma_urls == fake.book_urls == []
 
 
 @pytest.mark.parametrize("elapsed,reason", [(2, None), (4, None), (4.000001, "clock_unverified"),
@@ -95,7 +95,7 @@ def test_request_interval_must_be_fully_certified(env, monkeypatch, elapsed, rea
     if reason is None:
         assert report.action == m2_runner.ACT_RUN and actions == ["settle"]
     else:
-        assert report.action == m2_runner.ACT_PAUSE and report.reasons == [reason] and actions == []
+        assert report.action == m2_runner.ACT_PAUSE and report.reasons == [reason] and actions == ["settle"]
 
 
 class FoldZone(tzinfo):
@@ -126,7 +126,7 @@ def test_fold_clock_request_uses_utc_order(env, monkeypatch, forward):
         assert report.action == m2_runner.ACT_RUN and actions == ["settle"]
     else:
         assert report.action == m2_runner.ACT_PAUSE and report.reasons == ["clock_unverified"]
-        assert actions == [] and fake.gamma_urls == fake.book_urls == []
+        assert actions == ["settle"] and fake.gamma_urls == fake.book_urls == []
 
 
 @pytest.mark.parametrize("offset_hours", [8, -3.5])
@@ -142,7 +142,7 @@ def test_unusable_local_clock_cannot_certify_server_time(env, monkeypatch, local
     actions = []
     monkeypatch.setattr(m2_runner, "_settle_tick", lambda *a: actions.append("settle") or [])
     report = tick(env, ClockGetters(env["now"]))
-    assert report.action == m2_runner.ACT_PAUSE and report.reasons == ["clock_unverified"] and actions == []
+    assert report.action == m2_runner.ACT_PAUSE and report.reasons == ["clock_unverified"] and actions == ["settle"]
 
 
 @pytest.mark.parametrize("age", [6, 35, 120])

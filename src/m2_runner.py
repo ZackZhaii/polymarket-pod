@@ -23,7 +23,8 @@ C.4, C.6, C.8; Poly执行's no-live audit F2 / T1-T13 on the issue):
 5. The paper ledger: ``ledger_store.read_ledger`` + ``verify``. A problem records the global halt
    ``invalid_risk_state`` (as paper_ledger does) and pauses.
 6. Independent CLOB /time: the complete local-minus-server uncertainty interval must fit inside ±5 s. An
-   unverifiable clock or a confirmed excessive skew pauses before settlement, even with no pending signal.
+   unverifiable clock (``clock_unverified``) or a confirmed excessive skew (``clock_skew``) pauses after
+   settlement (#206) and before any scan or intent, even with no pending signal.
 7. The daily loss breaker: today's (UTC) fees, gross cost losses, closed reference topups and open-leg losses
    at or above ``max_daily_loss_pct x PAPER_EQUITY_USD``: paused (``daily_loss_breaker``) for the rest of the UTC
    day; the next day counts from zero again, so it resumes by itself. RiskGate vetoes these anyway; this only
@@ -367,8 +368,8 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
 
     Issue #206 (Task CO): ``settle`` (the runner's settlement step, ``_settle_tick``) runs after the KILL / live /
     pin / global-halt checks and a verified ledger (so never under a hard halt, a KILL file or
-    invalid_risk_state) and independent clock certification, and before the daily-loss breaker, which then
-    reads the ledger again. It runs whether or not the breaker or a later check pauses this tick. Its problems
+    invalid_risk_state), and before the independent clock certification (CLOB /time, C222) and the daily-loss
+    breaker, which then reads the ledger again. A clock_unverified / clock_skew pause therefore still settles. It runs whether or not the breaker or a later check pauses this tick. Its problems
     are a contradiction: invalid_risk_state
     and a global halt. It never clears a pause or a halt; the checks after it decide this tick.
     """
@@ -400,10 +401,6 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
     if problems or read is None:
         _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": [str(p) for p in problems[:10]]})
         return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]]])
-    if clock_check is not None:
-        problem = clock_check()
-        if problem is not None:
-            return Preflight(ACT_PAUSE, [problem], ledger_rows=len(read.rows))
     if settle is not None:  # issue #206: settlement before the daily-loss breaker (see the docstring)
         problems = [str(p) for p in settle()]
         if not problems:
@@ -416,6 +413,10 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
             _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": [str(p) for p in problems[:10]],
                                                      "source": "settlement"})
             return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]]])
+    if clock_check is not None:  # PR #253 review: after settlement, so a clock pause never defers it (#206)
+        problem = clock_check()
+        if problem is not None:
+            return Preflight(ACT_PAUSE, [problem], ledger_rows=len(read.rows))
     rows = len(read.rows)
     risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), _stamp(now))
     if risk["problems"]:
@@ -440,6 +441,9 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
     if used_gb > RUNNER_DISK_BUDGET_GB:
         return Preflight(ACT_PAUSE, ["disk_budget", f"run_dir_gb={used_gb:.2f}"], free_gb, rows)
     return Preflight(ACT_RUN, [], free_gb, rows)
+
+
+CLOCK_PAUSE_REASONS = frozenset({"clock_unverified", "clock_skew"})
 
 
 def _clock_problem(clock: Callable[[], datetime], getter: GuardedGetter) -> str | None:
@@ -851,7 +855,10 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
         report = IterationReport(check.action, check.reasons)
         if check.action == ACT_PAUSE:
             if state.paused_reason != check.reasons[0]:
-                state.paused_since = _stamp(now)
+                # PR #253 review: clock_unverified <-> clock_skew is one clock pause episode (keep paused_since)
+                if not (state.paused_reason in CLOCK_PAUSE_REASONS and check.reasons[0] in CLOCK_PAUSE_REASONS
+                        and state.paused_since is not None):
+                    state.paused_since = _stamp(now)
                 try:
                     event(state, "paused", now, reasons=check.reasons)
                 except WriteFailed:
