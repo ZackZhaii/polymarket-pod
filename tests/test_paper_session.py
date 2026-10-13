@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import inspect
 import json
+from pathlib import Path
 
 import src.paper_session as paper_session
+from src import pins
 from src.podlib import RISK_PATH, read_jsonl
 
 
@@ -121,4 +123,126 @@ def test_pin_drift_does_not_read_the_book(tmp_path):
     assert result["fills"] == 0
     assert called["n"] == 0
     assert not (tmp_path / "sessions.jsonl").exists()
+    assert RISK_PATH.read_bytes() == before
+
+
+# --- Task DH (#233): full risk.toml SHA + RISK_FILE_PINS before start (reuse src.pins) ---
+
+_REAL_RISK = (Path(__file__).resolve().parents[1] / "config" / "risk.toml").read_bytes().replace(b"\r\n", b"\n")
+
+
+def _risk_file(tmp_path, data: bytes | str, name="risk.toml") -> Path:
+    path = tmp_path / name
+    path.write_bytes(data.encode("utf-8") if isinstance(data, str) else data)
+    return path
+
+
+def _drifted(tmp_path, old: str, new: str, name="drift.toml") -> Path:
+    text = _REAL_RISK.decode("utf-8")
+    assert text.count(old) == 1
+    return _risk_file(tmp_path, text.replace(old, new), name)
+
+
+def _assert_wrote_nothing(tmp_path) -> None:
+    assert not (tmp_path / "markets.jsonl").exists()
+    assert not (tmp_path / "books.jsonl").exists()
+    assert not (tmp_path / "sessions.jsonl").exists()
+
+
+def test_pre_start_sha_drift_refuses_and_writes_nothing(tmp_path):
+    """A comment-only change is still sha drift: refuse before any public read or write."""
+    before = RISK_PATH.read_bytes()
+    drifted = _risk_file(tmp_path, _REAL_RISK + b"# note\n", "sha-drift.toml")
+    called = {"n": 0}
+
+    def getter(url: str) -> dict:
+        called["n"] += 1
+        raise AssertionError(url)
+
+    result = paper_session.run(
+        raw_markets=[RAW, *REJECTED],
+        book_getter=getter,
+        markets_path=tmp_path / "markets.jsonl",
+        books_path=tmp_path / "books.jsonl",
+        bus_path=tmp_path / "bus.jsonl",
+        sessions_path=tmp_path / "sessions.jsonl",
+        risk_path=drifted,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "risk_toml_pin_drift"
+    assert result["markets"] == 0 and result["books"] == 0 and result["fills"] == 0
+    assert called["n"] == 0
+    _assert_wrote_nothing(tmp_path)
+    assert RISK_PATH.read_bytes() == before
+
+
+def test_pre_start_changed_pin_refuses_and_writes_nothing(tmp_path):
+    before = RISK_PATH.read_bytes()
+    drifted = _drifted(tmp_path, "live_enabled = false", "live_enabled = true")
+    called = {"n": 0}
+
+    def getter(url: str) -> dict:
+        called["n"] += 1
+        raise AssertionError(url)
+
+    result = paper_session.run(
+        raw_markets=[RAW, *REJECTED],
+        book_getter=getter,
+        markets_path=tmp_path / "markets.jsonl",
+        books_path=tmp_path / "books.jsonl",
+        bus_path=tmp_path / "bus.jsonl",
+        sessions_path=tmp_path / "sessions.jsonl",
+        risk_path=drifted,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "risk_toml_pin_drift"
+    assert called["n"] == 0
+    _assert_wrote_nothing(tmp_path)
+    assert RISK_PATH.read_bytes() == before
+
+
+def test_pre_start_missing_pin_refuses_and_writes_nothing(tmp_path):
+    before = RISK_PATH.read_bytes()
+    drifted = _drifted(tmp_path, "kelly_fraction = 0.15\n", "")
+    called = {"n": 0}
+
+    def getter(url: str) -> dict:
+        called["n"] += 1
+        raise AssertionError(url)
+
+    result = paper_session.run(
+        raw_markets=[RAW, *REJECTED],
+        book_getter=getter,
+        markets_path=tmp_path / "markets.jsonl",
+        books_path=tmp_path / "books.jsonl",
+        bus_path=tmp_path / "bus.jsonl",
+        sessions_path=tmp_path / "sessions.jsonl",
+        risk_path=drifted,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "risk_toml_pin_drift"
+    assert called["n"] == 0
+    _assert_wrote_nothing(tmp_path)
+    assert RISK_PATH.read_bytes() == before
+
+
+def test_clean_pinned_config_still_starts(tmp_path):
+    """Explicit risk_path at the real pinned file still runs the happy path."""
+    before = RISK_PATH.read_bytes()
+    assert pins.risk_file_problems(RISK_PATH) == []
+    result = paper_session.run(
+        raw_markets=[RAW, *REJECTED],
+        book_getter=_book,
+        markets_path=tmp_path / "markets.jsonl",
+        books_path=tmp_path / "books.jsonl",
+        bus_path=tmp_path / "bus.jsonl",
+        sessions_path=tmp_path / "sessions.jsonl",
+        now="2026-10-08T06:00:00Z",
+        clock=lambda: CLOCK,
+        risk_path=RISK_PATH,
+    )
+    assert result["ok"] is True
+    assert result["reason"] == "signals_only"
+    assert result["fills"] == 0
+    assert (tmp_path / "sessions.jsonl").exists()
     assert RISK_PATH.read_bytes() == before
