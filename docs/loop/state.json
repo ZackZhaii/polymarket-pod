@@ -539,12 +539,12 @@
       "surface": "grok-bot"
     },
     {
-      "id": "DL",
+      "id": "DK",
       "status": "done",
-      "title": "Issue #268: bounded Windows PermissionError retry for the ledger's atomic os.replace",
-      "finish": "src/atomic_replace.py replace_with_retry retries os.replace only on a PermissionError and only on Windows, at most REPLACE_ATTEMPTS=5 tries in all with REPLACE_BACKOFF_S=0.02 s doubling (0.30 s worst case); any other exception and every exception on other platforms propagate at once as before; exhausted, the last PermissionError is re-raised unchanged and ledger_store.atomic_append removes its temp file, the old ledger intact (fail closed). ledger_store.atomic_append uses it under the existing cross-process mutex; both constants are in docs/THRESHOLDS.md Operational limits. tests/test_ledger_replace_retry.py reproduces it deterministically (faked os.replace; on Windows a real held reader handle). Write reliability only: no check relaxed. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
-      "note": "Triaged pod-ready (non-KEY) by Poly指挥 on issue #268; branch task-dl/replace-retry-bounded. Done by grok-bot.",
-      "done_at": "2026-10-13T22:28:00Z",
+      "title": "Issue #247: m2_runner writes one kill_file alert line to logs/alerts.jsonl on KILL (exit code stays 0)",
+      "finish": "src/m2_runner.py: when preflight finds <run dir>/KILL, iteration calls kill_alert, which appends one row to the Sentinel's logs/alerts.jsonl (sentinel_tick.ALERTS_PATH via podlib.append_jsonl, Sentinel row shape: ts, from m2_runner, alert kill_file, severity info, proc m2_runner, detail, exchange_action none), at most once per stop (RunnerState.kill_alerted). Exit code on KILL stays 0, no getter is called, recovery unchanged, no auto-restart (KEY #243). A failed alert write raises WriteFailed: exit 4 like a journal / events write, never dropped silently. docs/EXIT_CODES.md notes it. Offline tests tests/test_m2_runner_kill_alert.py. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Non-KEY part split from #243, claimed by Poly桥接 as Task DK. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-13T21:30:00Z",
       "surface": "grok-bot"
     }
   ]
