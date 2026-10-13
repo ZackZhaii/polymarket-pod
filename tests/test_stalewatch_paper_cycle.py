@@ -79,7 +79,8 @@ def test_first_run_counts_one_and_does_not_halt(paths):
     result = _run(paths, NOW1)
     assert (result["gaps"], result["stale"], result["fills"]) == (1, 1, 0)
     assert result["sentinel"] == {"checked": 2, "state_problem": None, "write_problem": None, "halts": [],
-                                  "state_path": str(paths["state"]), "all_stale_streak": 0, "all_stale_halt": False}
+                                  "state_path": str(paths["state"]), "all_stale_streak": 0, "all_stale_halt": False,
+                                  "input_pending_streak": 0}
     saved = json.loads(paths["state"].read_text(encoding="utf-8"))
     assert saved["streaks"] == {"stale": 1} and saved["alarmed"] == []
     assert sentinel.state_marker(paths["state"]).exists()
