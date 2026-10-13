@@ -310,6 +310,9 @@ ALL_STALE_CONSECUTIVE_CYCLES = 2
 # concurrent new global halt). Fail closed when the mutex cannot be taken within this long
 # (seconds): a resume releases nothing (halt_lock_failed), record_halt goes to logs/HALT.
 HALT_STATE_LOCK_TIMEOUT_S = 5.0
+# Task DD (#237/#280): wait for the ledger commit mutex in paper_ledger.commit_if_allowed; not acquired ->
+# the order is refused. Registered in docs/THRESHOLDS.md (value unchanged from the PR; M2 pending).
+COMMIT_LOCK_TIMEOUT_S = 5.0
 # M2 pending. Retry step (seconds) while waiting for the halt-state mutex.
 HALT_STATE_LOCK_POLL_S = 0.05
 
