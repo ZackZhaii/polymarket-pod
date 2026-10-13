@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -524,6 +525,61 @@ def test_main_seals_the_rest_sampler_before_the_finish_event(tmp_path, monkeypat
     assert events[-1]["event"] == "finish" and seen[0] == len(events) - 1
 
 
+def test_the_rest_join_keeps_the_120_second_wait():
+    assert r.REST_JOIN_TIMEOUT_S == 120  # Issue #82: the existing wait is kept; tests shorten it, production never
+
+
+def test_a_rest_sampler_still_alive_after_the_join_fails_the_run_with_exit_4(tmp_path, monkeypatch, capsys):
+    """Issue #82 acceptance 3: the finishing join times out while the REST thread is still in a request.
+
+    The run is failed with EXIT_WRITE_FAILED=4 and an explicit reason (stderr and a ``rest_join_timeout``
+    event), never completed / exit 0; the thread is not killed. The join wait is shortened by patching
+    REST_JOIN_TIMEOUT_S, so nothing waits 120 seconds.
+    """
+    monkeypatch.setattr(r, "REST_JOIN_TIMEOUT_S", 0.05)
+    entered, release = threading.Event(), threading.Event()
+    calls: list[str] = []
+    fetch = _rest_getter(calls)
+
+    def blocking_getter(url):
+        entered.set()
+        release.wait(30)  # stays in flight past the join; released by the test only after main returned
+        return fetch(url)
+
+    started = time.monotonic()
+    try:
+        code, out, _, _, _ = _main(tmp_path, [[lambda: entered.wait(5), _book()], []], ["--rest-assets", "1"],
+                                   rest=blocking_getter)
+        elapsed = time.monotonic() - started
+        alive = [t for t in threading.enumerate() if t.name == "m1-rest-sampler" and t.is_alive()]
+        assert alive, "the REST thread must not be killed"
+    finally:
+        release.set()
+    assert elapsed < 30  # the 120 s wait was not served
+    assert code == r.EXIT_WRITE_FAILED
+    manifest = _manifest(out)
+    assert manifest["status"] == "failed" and manifest["exit_code"] == r.EXIT_WRITE_FAILED
+    events = _rows(out, "events")
+    timeouts = [e for e in events if e["event"] == "rest_join_timeout"]
+    assert len(timeouts) == 1 and timeouts[0]["timeout_s"] == 0.05
+    assert events[-1] == {"ts": events[-1]["ts"], "event": "finish", "status": "failed",
+                          "exit_code": r.EXIT_WRITE_FAILED}
+    err = capsys.readouterr().err
+    assert "REST sampler still alive" in err
+    rest_bytes = {rel: (out / rel).read_bytes() for rel in manifest["files"]["rest"]}
+    for thread in alive:
+        thread.join(5)  # the late request returns into a sealed sampler: nothing is published
+    assert {rel: (out / rel).read_bytes() for rel in manifest["files"]["rest"]} == rest_bytes
+    assert manifest["counts"]["rest_rows"] == 0 and _manifest(out) == manifest
+
+
+def test_a_rest_thread_that_ends_within_the_join_keeps_the_run_completed(tmp_path, monkeypatch):
+    monkeypatch.setattr(r, "REST_JOIN_TIMEOUT_S", 5.0)  # returns as soon as the thread ends
+    code, out, _, calls, _ = _main(tmp_path, [[_book()], []], ["--rest-assets", "1"])
+    assert code == r.EXIT_OK and _manifest(out)["status"] == "completed"
+    assert all(e["event"] != "rest_join_timeout" for e in _rows(out, "events"))
+
+
 # --- recorder hooks (stop, on_event) -----------------------------------------------------------------
 
 
@@ -889,6 +945,27 @@ def test_a_risk_drift_mid_run_stops_the_run_with_6(tmp_path, monkeypatch):
     assert manifest["status"] == "pin_drift" and manifest["exit_code"] == 6 and manifest["orders"] == "none"
     assert len(_rows(out, "books")) == 1
     assert [x["reason"] for x in halt_store.active_halts()] == ["risk_toml_pin_drift"]
+
+
+def test_a_risk_drift_keeps_6_when_the_rest_thread_also_outlives_the_join(tmp_path, monkeypatch):
+    """Issue #82 acceptance 3 does not mask a pin drift: the stuck REST thread is recorded, the run stays 6."""
+    _drift_after(monkeypatch, tmp_path, 2)
+    monkeypatch.setattr(r, "REST_JOIN_TIMEOUT_S", 0.05)
+    entered, release = threading.Event(), threading.Event()
+
+    def blocking_getter(url):
+        entered.set()
+        release.wait(30)
+        return None
+
+    try:
+        code, out, _, _, _ = _main(tmp_path, [[lambda: entered.wait(5), _book()]],
+                                   ["--assets", A, "--max-runtime", "600", "--rest-assets", "1"], rest=blocking_getter)
+    finally:
+        release.set()
+    manifest = _manifest(out)
+    assert code == r.EXIT_PIN_DRIFT and manifest["status"] == "pin_drift" and manifest["exit_code"] == 6
+    assert [e["event"] for e in _rows(out, "events")].count("rest_join_timeout") == 1
 
 
 def test_a_risk_drift_at_start_creates_no_run_dir(tmp_path, monkeypatch):
