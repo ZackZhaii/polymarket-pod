@@ -148,6 +148,16 @@ def is_sports(row: dict[str, Any]) -> bool:
         isinstance(category, str) and category.strip().lower() == SPORTS_SLUG)
 
 
+def classification_ok(row: dict[str, Any]) -> bool:
+    """Task DI (#137): the market's sports classification is readable: ``tags`` is a list of str and
+    ``category`` a non-empty str. Anything else (missing, wrong type, empty) is unknown and the boot
+    selection drops it (fail closed): an unclassifiable market could be a sports single."""
+    tags = row.get("tags")
+    category = row.get("category")
+    return (isinstance(tags, list) and all(isinstance(t, str) for t in tags)
+            and isinstance(category, str) and category.strip() != "")
+
+
 def same_day_sports(row: dict[str, Any], now: datetime) -> bool:
     """Task DE (#276): a sports market (tag slug or Gamma category ``sports``) whose end date falls on the
     start's UTC day: a single game that resolves before the M2 window has really begun."""
@@ -156,17 +166,17 @@ def same_day_sports(row: dict[str, Any], now: datetime) -> bool:
 
 
 def ends_before(row: dict[str, Any], m2_end: datetime) -> bool:
-    """Task DH (#137): the market's end date is before the M2 end, or missing / unparseable (fail closed)."""
+    """Task DI (#137): the market's end date is before the M2 end, or missing / unparseable (fail closed)."""
     end = parse_end_date(row.get("end_date"))
     return end is None or end < m2_end
 
 
 def boot_selection(root: Path, now: datetime, m2_end: datetime | None = None) -> tuple[list[str], str | None]:
     """E1: the first start's assets, chosen once by m1_run.select_assets (N = M1_TOP_MARKETS) from the
-    latest scanner batch. Task DH (#137): every sports market is dropped (Gamma puts a tennis single's
+    latest scanner batch. Task DI (#137): every sports market is dropped (Gamma puts a tennis single's
     endDate about a week after the match, so the end date cannot tell a single game apart), and, given
     ``m2_end``, every market ending before it (or without a usable end date). ``([], why)`` when nothing
-    is usable."""
+    is usable. Task DI: a market with unknown or malformed classification is dropped too."""
     path = root / MARKETS_NAME
     try:
         rows = read_jsonl(path) if path.exists() else []
@@ -176,7 +186,7 @@ def boot_selection(root: Path, now: datetime, m2_end: datetime | None = None) ->
     latest = max((stamp for stamp in stamps if stamp is not None), default=None)
     # Pin the latest batch first: filtering must never make an older scan the "latest" one.
     rows = [row for row in rows if isinstance(row, dict) and parse_book_ts(row.get("ts")) == latest
-            and not is_sports(row) and not (m2_end is not None and ends_before(row, m2_end))]
+            and classification_ok(row) and not is_sports(row) and not (m2_end is not None and ends_before(row, m2_end))]
     assets = select_assets(rows, M1_TOP_MARKETS)["assets"]
     if assets_problem(assets) is not None:
         return [], f"no usable assets in {MARKETS_NAME}; run python -m src.scanner first"

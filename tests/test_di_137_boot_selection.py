@@ -1,4 +1,4 @@
-"""Task DH (#137): boot_selection drops markets ending before the M2 end and every sports market.
+"""Task DI (#137): boot_selection drops markets ending before the M2 end and every sports market.
 
 Vectors from the 2026-10-13 offline report (poly-scan-137-boot-vectors-20261014.md); fixture rows are
 in 24h-volume order, now = 2026-10-14T00:00Z, N = M1_TOP_MARKETS = 5. Offline; no network, no orders.
@@ -104,3 +104,38 @@ def test_start_passes_its_m2_end_to_boot_selection(tmp_path, no_sentinel):
         handle.write("".join(json.dumps(r) + "\n" for r in rows))
     assert _start(rig) == m2_start.EXIT_OK  # END = 2099-01-01
     assert _chain(rig.root)[0]["assets"] == ["t2a", "t2b"]
+
+
+_MISSING = object()
+
+
+@pytest.mark.parametrize("field, value", [
+    ("tags", "politics"), ("tags", {"politics": True}), ("tags", None), ("tags", ["politics", 7]),
+    ("tags", [None]), ("tags", _MISSING),
+    ("category", ""), ("category", "   "), ("category", None), ("category", 3), ("category", ["politics"]),
+    ("category", _MISSING),
+])
+def test_unknown_or_malformed_classification_fails_closed(tmp_path, field, value):
+    """Task DI (#137, Codex P1): a market whose tags / category cannot be read is never treated as non-sports."""
+    bad = _row(1, "2099-01-01T00:00:00Z")
+    if value is _MISSING:
+        del bad[field]
+    else:
+        bad[field] = value
+    rows = [bad, _row(2, "2099-01-01T00:00:00Z")]
+    for end in (END, None):
+        assets, why = m2_start.boot_selection(_root(tmp_path / str(end is None), rows), NOW, end)
+        assert why is None and _ids(assets) == [2]
+
+
+def test_both_fields_missing_fails_closed(tmp_path):
+    bad = _row(1, "2099-01-01T00:00:00Z")
+    del bad["tags"], bad["category"]
+    assets, why = m2_start.boot_selection(_root(tmp_path, [bad]), NOW, END)
+    assert assets == [] and "no usable assets" in why
+
+
+def test_empty_tag_list_with_category_is_classified(tmp_path):
+    rows = [_row(1, "2099-01-01T00:00:00Z", tags=())]
+    assets, why = m2_start.boot_selection(_root(tmp_path, rows), NOW, END)
+    assert why is None and _ids(assets) == [1]

@@ -27,7 +27,8 @@ def _scan(root, tokens, ts):
     path = root / "data" / "markets.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = [{"ts": ts, "id": f"m-{tokens[i]}", "question": "q", "version": "v2", "token_id_source": "clob",
-             "token_ids": [tokens[i], tokens[i + 1]], "end_date": "2099-01-01T00:00:00Z"} for i in (0, 2)]
+             "token_ids": [tokens[i], tokens[i + 1]], "end_date": "2099-01-01T00:00:00Z",
+             "tags": ["politics"], "category": "politics"} for i in (0, 2)]
     with path.open("a", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row) + "\n")
@@ -195,9 +196,9 @@ def _sports_scan(root, ts, end_date):
     path = root / "data" / "markets.jsonl"
     rows = [
         {"ts": ts, "id": "m-game", "question": "A vs B", "version": "v2", "token_id_source": "clob",
-         "token_ids": ["tG1", "tG2"], "tags": ["sports", "tennis"], "end_date": end_date},
+         "token_ids": ["tG1", "tG2"], "tags": ["sports", "tennis"], "category": "sports", "end_date": end_date},
         {"ts": ts, "id": "m-pol", "question": "q", "version": "v2", "token_id_source": "clob",
-         "token_ids": ["tP1", "tP2"], "tags": ["politics"], "end_date": "2099-01-01T00:00:00Z"},
+         "token_ids": ["tP1", "tP2"], "tags": ["politics"], "category": "politics", "end_date": "2099-01-01T00:00:00Z"},
     ]
     with path.open("a", encoding="utf-8") as handle:
         for row in rows:
@@ -212,7 +213,7 @@ def test_boot_drops_a_sports_market_ending_the_same_utc_day(rig, no_sentinel):
 
 
 def test_boot_drops_a_sports_market_ending_on_a_later_day(rig, no_sentinel):
-    """Task DH (#137): every sports market is dropped, whatever its end date."""
+    """Task DI (#137): every sports market is dropped, whatever its end date."""
     _sports_scan(rig.root, "2026-10-20T00:00:00Z", "2099-01-01T00:00:00Z")
     assert _start(rig) == m2_start.EXIT_OK
     assert _boot_assets(rig) == ["tP1", "tP2"]
