@@ -830,7 +830,7 @@ def test_a_missing_word_list_fails_secret_scan(repo):
 def test_the_exit_code_registry_passes_on_the_real_repo():
     result = results(ROOT)["exit_codes"]
     assert result.status == guard.PASS, result.reason
-    assert "23 entry points" in result.reason  # issue #80: + src/replay_intent.py; Task BR: + src/m2_start.py; Task BB: + src/reflector_proposals.py;  # Task AY: src/ws_hash_check.py; Task AZ: src/calibration.py
+    assert "25 entry points" in result.reason  # issue #69: + src/paper_audit.py; Task CE: + src/m2_runner.py; issue #80: + src/replay_intent.py; Task BR: + src/m2_start.py; Task BB: + src/reflector_proposals.py;  # Task AY: src/ws_hash_check.py; Task AZ: src/calibration.py
 
 
 def test_an_undocumented_exit_code_fails_only_that_check(repo):

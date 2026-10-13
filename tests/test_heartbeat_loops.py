@@ -3,6 +3,7 @@ window (gap 13), paper_cycle --recording-dir (gap 11) and the all-markets-stale 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -273,6 +274,41 @@ def test_paper_cycle_pin_failure_finishes_1(monkeypatch, capsys):
                                                          "gaps": 0, "stale": 0, "fills": 0})
     assert paper_cycle.main([]) == 1
     assert read("paper_cycle")["exit_code"] == 1
+
+
+def _pending(tmp_path):
+    """The full result of a round skipped on a changing input (issue #75 criterion 2)."""
+    return paper_cycle._input_pending(paper_cycle.InputPending(tmp_path / "books.jsonl"), state_path=None)
+
+
+def test_the_loop_keeps_the_heartbeat_on_an_input_pending_round(cycle, monkeypatch, capsys):
+    _write(cycle.tmp / "books.jsonl", _rows(FRESH))
+    monkeypatch.setattr(paper_cycle, "MARKETS_PATH", cycle.tmp / "markets.jsonl")
+    real_run = paper_cycle.run
+    beats = []
+
+    def run(**kw):
+        beat = read("paper_cycle")
+        beats.append((beat["state"], beat["progress"]["cycles"]))
+        if len(beats) == 1:
+            return _pending(cycle.tmp)  # still being appended: the round is skipped
+        return real_run(markets_path=cycle.tmp / "markets.jsonl", bus_path=cycle.tmp / "bus.jsonl", now=NOW,
+                        sentinel_state_path=cycle.tmp / "state.json", quotes_path=cycle.tmp / "quotes.jsonl", **kw)
+    monkeypatch.setattr(paper_cycle, "run", run)
+    sleeps = []
+    code = paper_cycle.main(["--books", str(cycle.tmp / "books.jsonl"), "--loop", "--max-cycles", "2"],
+                            sleep=sleeps.append, monotonic=lambda: 0.0)
+
+    assert code == 0 and beats == [("running", 0), ("running", 1)]  # the skip never finished the heartbeat
+    assert sleeps == [HEARTBEAT_PAPER_CYCLE_EVERY_S]  # and the loop waited for the next round
+    final = read("paper_cycle")
+    assert final["state"] == "finished" and final["exit_code"] == 0 and final["progress"]["cycles"] == 2
+
+
+def test_a_one_shot_input_pending_round_exits_zero_not_the_pin_halt(monkeypatch, capsys):
+    monkeypatch.setattr(paper_cycle, "run", lambda **kw: _pending(Path("books.jsonl")))
+    assert paper_cycle.main([]) == 0  # EXIT_PIN would record a global halt: a transient append never does
+    assert read("paper_cycle")["exit_code"] == 0
 
 
 @pytest.mark.parametrize("argv", [["--every", "61"], ["--every", "0"], ["--max-cycles", "-1"],

@@ -13,6 +13,9 @@ Measured over the run window (manifest started_at .. ended_at, recorder clock):
   book_ts, an invalidation row or no row yet are not fresh);
 - book age p50/p90/p99/max per asset over the points that have a live book, plus the share of
   points with no live book;
+- Task CM (reporting only, no criterion uses it): per asset, the timeline points whose latest live book_ts is
+  LATER than the point (``future_points`` / ``future_share``: the recorder clock behind the exchange). They are
+  already not fresh under the coverage rule above, which is unchanged; this only says why;
 - resyncs by reason (``disconnect_*`` versus gaps and invalid data), reconnects, connect
   failures, disconnect reasons, from events/;
 - REST vs WS: each REST /book sample is compared with the live WS row for the same token whose
@@ -132,7 +135,7 @@ def timeline(rows: list[dict], start_us: int, end_us: int, step_us: int, max_age
             continue
         stamped.append((written, index, _live_book_us(row)))
     stamped.sort()
-    points = fresh = no_book = 0
+    points = fresh = no_book = future = 0
     ages: list[float] = []
     current: int | None = None
     have_row = False
@@ -151,11 +154,15 @@ def timeline(rows: list[dict], start_us: int, end_us: int, step_us: int, max_age
             ages.append(age / 1e6)
             if 0 <= age <= max_age_us:
                 fresh += 1
+            elif age < 0:
+                future += 1  # Task CM: reporting only (already not fresh)
         t += step_us
     return {
         "points": points,
         "coverage": fresh / points if points else 0.0,
         "no_book_share": no_book / points if points else 1.0,
+        "future_points": future,
+        "future_share": future / points if points else 0.0,
         "age_s": {"p50": percentile(ages, 50), "p90": percentile(ages, 90), "p99": percentile(ages, 99),
                   "max": max(ages) if ages else None},
         "rows": len(rows),
@@ -335,8 +342,8 @@ def build_report(run_dir: Path) -> dict[str, Any]:
         if window_ok:
             per_asset[asset] = timeline(ws_by_asset.get(asset, []), start_us, end_us, step_us, int(MAX_BOOK_AGE_S * 1e6))
         else:
-            per_asset[asset] = {"points": 0, "coverage": 0.0, "no_book_share": 1.0,
-                                "age_s": {"p50": None, "p90": None, "p99": None, "max": None},
+            per_asset[asset] = {"points": 0, "coverage": 0.0, "no_book_share": 1.0, "future_points": 0,
+                                "future_share": 0.0, "age_s": {"p50": None, "p90": None, "p99": None, "max": None},
                                 "rows": len(ws_by_asset.get(asset, [])), "rows_bad_ts": 0}
         meta = next((item for item in manifest["assets"] if isinstance(item, dict) and str(item.get("token_id")) == asset), {})
         per_asset[asset].update({"market_id": meta.get("market_id"), "outcome": meta.get("outcome"),
@@ -470,14 +477,17 @@ def render_markdown(report: dict[str, Any]) -> str:
     ]
     lines += [f"| {name} | {'PASS' if item['pass'] else 'FAIL'} | {item['rule']} |" for name, item in report["criteria"].items()]
     lines += ["", "## Coverage and book age per asset", "",
-              "| Asset | Market | Outcome | Coverage | No book | p50 s | p90 s | p99 s | max s | Rows | Gap resyncs |",
-              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+              "| Asset | Market | Outcome | Coverage | No book | Future ts | p50 s | p90 s | p99 s | max s | Rows | Gap resyncs |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     gaps = report["events"]["gap_resyncs_by_asset"]
     for asset, item in report["assets"].items():
         age = item["age_s"]
         lines.append(f"| `{asset[:16]}...` | {item.get('market_id')} | {item.get('outcome')} | {item['coverage']:.4f} | "
-                     f"{item['no_book_share']:.4f} | {_fmt(age['p50'])} | {_fmt(age['p90'])} | {_fmt(age['p99'])} | "
+                     f"{item['no_book_share']:.4f} | {item.get('future_points', 0)} ({item.get('future_share', 0.0):.4f}) | "
+                     f"{_fmt(age['p50'])} | {_fmt(age['p90'])} | {_fmt(age['p99'])} | "
                      f"{_fmt(age['max'])} | {item['rows']} | {gaps.get(asset, 0)} |")
+    lines += ["", "Future ts (reporting only, Task CM): timeline points whose latest live book_ts is later than the "
+              "point (recorder clock behind the exchange); they already count as not fresh, the coverage rule is unchanged."]
     observed = report.get("observed_span")
     if observed:
         lines += ["", f"## Observed span (not a criterion; source: {observed['source']})", "",

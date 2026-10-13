@@ -30,6 +30,7 @@ def _intent(**overrides: object) -> Intent:
     }
     fields.update(overrides)
     fields.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
+    fields.setdefault("min_order_size", 5.0)  # issue #226: a book minimum (missing vetoes)
     return Intent(**fields)  # type: ignore[arg-type]
 
 
@@ -129,7 +130,9 @@ def test_nan_shares_cannot_hide_an_open_leg(tmp_path, monkeypatch):
 def test_finite_ledger_still_counts_normally(tmp_path, monkeypatch):
     _ledger(tmp_path, monkeypatch, [_row()])
     state = paper_ledger.load_state("m", "t")
-    assert state["open_positions"] == 1 and state["daily_loss_usd"] == 0.0
+    assert state["open_positions"] == 1 and state["daily_fees_usd"] + state["daily_realized_loss_usd"] == 0.0
+    # Task CF (#124): the open leg has no book, so its cost is today's unrealized loss.
+    assert state["daily_loss_usd"] == pytest.approx(state["daily_unrealized_loss_usd"]) and state["daily_loss_usd"] > 0
 
 
 def test_non_finite_numbers_in_non_counting_rows_are_ignored(tmp_path, monkeypatch):

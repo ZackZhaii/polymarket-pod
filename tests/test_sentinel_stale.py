@@ -152,7 +152,7 @@ def test_boundary_matches_riskgate(paper):
 def _intent(book_ts: object) -> Intent:
     return Intent(strategy="paper-gap-check", market="m1", side="buy", model_prob=0.70, market_price=0.40,
                   assumed_slippage=0.005, fee_rate=0.0, liquidity_usd=20000.0, spread=0.01, book_ts=book_ts,
-                  tags=("test-market",))  # issue #131
+                  tags=("test-market",), min_order_size=5.0)  # issue #131, #226
 
 
 def test_a_single_stale_check_is_still_blocked_per_check(paper):

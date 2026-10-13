@@ -254,16 +254,29 @@ def test_tags_never_filter_a_market():
 # ------------------------------------------------------------------ paper fills
 
 def _ok_intent(**kw) -> Intent:
+    # Issue #262: book_ts defaults via setdefault so a caller that compares two evaluate() results
+    # against one fixed `now` can pass one shared stamp (utc_now truncates to whole seconds).
     base = dict(strategy="news-forecaster", market="m1", side="buy", model_prob=0.7, market_price=0.4,
                 assumed_slippage=0.005, fee_rate=0.02, liquidity_usd=20000.0, spread=0.01, token_id="t-yes",
-                book_ts=podlib.utc_now(), forecast_id="fc_abc", forecast_ts="2026-10-09T00:00:00Z",
+                forecast_id="fc_abc", forecast_ts="2026-10-09T00:00:00Z",
                 condition_id="0xc1", outcome_index=0, outcome="Yes", category=None, tags=("us",),
                 end_date="2026-12-01T00:00:00Z", model_version="v1",
                 best_bid=0.38, best_ask=0.4, kelly_fraction_used=0.15,
                 kelly_frac_raw=0.1, fill_context="intent_builder")  # Task BC
     base.update(kw)
+    if "book_ts" not in kw:
+        base["book_ts"] = podlib.utc_now()
     base.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
+    base.setdefault("min_order_size", 5.0)  # issue #226: a book minimum (missing vetoes)
     return Intent(**base)
+
+
+def _stable_book_and_now():
+    """One book_ts + one now for identity comparisons (book_ts first so now >= stamp)."""
+    from datetime import datetime, timezone
+    book_ts = podlib.utc_now()
+    now = datetime.now(timezone.utc)
+    return book_ts, now
 
 
 def test_a_full_identity_fill_is_joinable(paths):
@@ -302,15 +315,50 @@ def test_a_wrong_decision_id_is_flagged(paths):
 
 
 def test_identity_never_changes_a_risk_decision():
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc)
+    book_ts, now = _stable_book_and_now()
     cfg = load_risk()
     for kw in [dict(), dict(model_prob=0.41), dict(spread=0.2), dict(liquidity_usd=10.0), dict(side="sell")]:
-        full = evaluate(_ok_intent(**kw), cfg, dict(STATE), now=now)
-        bare = evaluate(_ok_intent(**kw, decision_id=None, forecast_id=None, forecast_ts=None, condition_id=None,
-                                   outcome_index=None, outcome=None, end_date=None, model_version=None),
+        full = evaluate(_ok_intent(book_ts=book_ts, **kw), cfg, dict(STATE), now=now)
+        bare = evaluate(_ok_intent(book_ts=book_ts, **kw, decision_id=None, forecast_id=None, forecast_ts=None,
+                                   condition_id=None, outcome_index=None, outcome=None, end_date=None,
+                                   model_version=None),
                         cfg, dict(STATE), now=now)
         assert dataclasses.asdict(full) == dataclasses.asdict(bare), kw
+
+
+def test_identity_risk_decision_insensitive_to_second_boundary(monkeypatch):
+    """Issue #262: crossing a second between full/bare constructions must not add future_book_ts.
+
+    utc_now() truncates to whole seconds; book_staleness has no age<0 tolerance. With one fixed now,
+    two fresh utc_now() stamps that straddle a second boundary used to make bare alone pick up
+    future_book_ts. Sharing one book_ts keeps the identity assertion stable.
+    """
+    from datetime import datetime, timezone
+
+    fixed_now = datetime(2026, 10, 13, 12, 0, 0, 900_000, tzinfo=timezone.utc)
+    stamps = iter(["2026-10-13T12:00:00Z", "2026-10-13T12:00:01Z"])
+    monkeypatch.setattr(podlib, "utc_now", lambda: next(stamps))
+
+    # Old pattern (fresh book_ts per intent) would disagree under this clock:
+    cfg = load_risk()
+    kw = dict(spread=0.2)
+    full_old = evaluate(_ok_intent(**kw), cfg, dict(STATE), now=fixed_now)
+    bare_old = evaluate(_ok_intent(**kw, decision_id=None, forecast_id=None, forecast_ts=None,
+                                   condition_id=None, outcome_index=None, outcome=None, end_date=None,
+                                   model_version=None),
+                        cfg, dict(STATE), now=fixed_now)
+    assert "future_book_ts" in bare_old.reasons and "future_book_ts" not in full_old.reasons
+    assert dataclasses.asdict(full_old) != dataclasses.asdict(bare_old)
+
+    # Fixed book_ts (the production fix for this test family): identical decisions.
+    book_ts = "2026-10-13T12:00:00Z"
+    full = evaluate(_ok_intent(book_ts=book_ts, **kw), cfg, dict(STATE), now=fixed_now)
+    bare = evaluate(_ok_intent(book_ts=book_ts, **kw, decision_id=None, forecast_id=None, forecast_ts=None,
+                               condition_id=None, outcome_index=None, outcome=None, end_date=None,
+                               model_version=None),
+                    cfg, dict(STATE), now=fixed_now)
+    assert dataclasses.asdict(full) == dataclasses.asdict(bare)
+    assert "future_book_ts" not in full.reasons
 
 
 def test_risk_gate_never_reads_identity():

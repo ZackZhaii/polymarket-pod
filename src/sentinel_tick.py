@@ -21,6 +21,7 @@ Event matrix (design table; ``alert`` = one line in logs/alerts.jsonl plus a Sen
 
 ==================  =========================================================================
 global halt         ws_recorder / m1_run exit 4 or crash; endgame_scan exit 4; loop_claim exit 2;
+                    m2_runner exit 4 / 6 or crash, m2_runner heartbeat stale (HEARTBEAT_RUNNER_TIMEOUT_S);
                     scanner / ws_recorder / m1_run exit 6 and paper_cycle exit 1 (pin drift, Task AS);
                     resolutions exit 6 (pin drift) and 5 (bad snapshot clock) (Task AV);
                     ws_recorder / m1_run heartbeat stale (HEARTBEAT_RECORDER_TIMEOUT_S);
@@ -34,10 +35,11 @@ market halt         one asset with RECORDER_GAP_RESYNC_HALT_COUNT gap resyncs in
 alert               scanner exit 1 / 2; scanner exit 3 SCANNER_INCOMPLETE_CONSECUTIVE times in a
                     row; scanner / endgame_scan / loop_claim / resolutions start with no finish after
                     SCANNER_HANG_S; no successful scan for SCANNER_MAX_SUCCESS_AGE_S; m1_run exit
-                    1 / 2 / 3; m1_rest heartbeat stale (HEARTBEAT_REST_TIMEOUT_S) or non-zero exit;
+                    1 / 2 / 3 / 7; m1_rest heartbeat stale (HEARTBEAT_REST_TIMEOUT_S) or non-zero exit;
                     paper_cycle heartbeat stale (HEARTBEAT_PAPER_CYCLE_TIMEOUT_S) or crash;
                     RECORDER_RECONNECT_ALERT_COUNT reconnects in the window; any other non-zero
-                    exit; a crash of a process not listed above
+                    exit; a crash of a process not listed above; m2_runner paused longer than
+                    RUNNER_PAUSED_ALERT_S (or paused with no readable paused_since)
 log only            m1_run exit 5 (the Operator stopped the run)
 ==================  =========================================================================
 
@@ -78,8 +80,10 @@ from src.thresholds import (  # noqa: E402
     HEARTBEAT_PAPER_CYCLE_TIMEOUT_S,
     HEARTBEAT_RECORDER_TIMEOUT_S,
     HEARTBEAT_REST_TIMEOUT_S,
+    HEARTBEAT_RUNNER_TIMEOUT_S,
     RECORDER_GAP_RESYNC_HALT_COUNT,
     RECORDER_RECONNECT_ALERT_COUNT,
+    RUNNER_PAUSED_ALERT_S,
     SCANNER_HANG_S,
     SCANNER_INCOMPLETE_CONSECUTIVE,
     SCANNER_MAX_SUCCESS_AGE_S,
@@ -121,6 +125,8 @@ PROC_SPECS: dict[str, ProcSpec] = {
     "paper_cycle": ProcSpec(HEARTBEAT_PAPER_CYCLE_TIMEOUT_S, ALERT,
                             halt_after_s=HEARTBEAT_PAPER_CYCLE_TIMEOUT_S * HEARTBEAT_PAPER_CYCLE_HALT_FACTOR),
     "halt_consumer": ProcSpec(HEARTBEAT_CONSUMER_TIMEOUT_S, GLOBAL),
+    # Issue #119 (Task CE): the M2 paper runner. Stale = global halt; paused too long = alert (check_proc).
+    "m2_runner": ProcSpec(HEARTBEAT_RUNNER_TIMEOUT_S, GLOBAL),
 }
 
 # (proc, exit code) -> action. Any other non-zero code is an ALERT; scanner 3 is handled by streak.
@@ -128,6 +134,7 @@ EXIT_EVENTS: dict[tuple[str, int], str] = {
     ("scanner", 1): ALERT, ("scanner", 2): ALERT,
     ("ws_recorder", 1): ALERT, ("ws_recorder", 2): ALERT, ("ws_recorder", 3): ALERT, ("ws_recorder", 4): GLOBAL,
     ("m1_run", 1): ALERT, ("m1_run", 2): ALERT, ("m1_run", 3): ALERT, ("m1_run", 4): GLOBAL, ("m1_run", 5): LOG,
+    ("m1_run", 7): ALERT,  # Task CM: refused to start, host clock behind the exchange (no run dir)
     ("endgame_scan", 4): GLOBAL,
     ("loop_claim", 2): GLOBAL,
     # Task AS (gaps 4, 5): refused to start / stopped on risk.toml pin drift (docs/EXIT_CODES.md).
@@ -136,8 +143,11 @@ EXIT_EVENTS: dict[tuple[str, int], str] = {
     # zoned timestamp. No design row for the clock; the stricter action (a broken clock, like a heartbeat
     # with a bad time, is a global halt).
     ("resolutions", 5): GLOBAL, ("resolutions", 6): GLOBAL,
+    # Issue #119 (Task CE): m2_runner 6 = risk.toml pin drift or a live flag (it recorded the global halt too);
+    # 4 = its journal / events / candidates could not be written (as m1_run 4).
+    ("m2_runner", 4): GLOBAL, ("m2_runner", 6): GLOBAL,
 }
-CRASH_IS_GLOBAL = frozenset({"ws_recorder", "m1_run", "halt_consumer"})
+CRASH_IS_GLOBAL = frozenset({"ws_recorder", "m1_run", "halt_consumer", "m2_runner"})
 
 
 def _now() -> datetime:
@@ -309,6 +319,8 @@ class Tick:
             self._escalation(proc, record)
         if proc == "scanner":
             self._scanner_success(record)
+        if proc == "m2_runner" and state == heartbeat.STATE_PAUSED:
+            self._runner_paused(record)
 
     def _liveness(self, proc: str, spec: ProcSpec, record: dict[str, Any]) -> None:
         age = heartbeat.beat_age_s(record, self.now, spec.clock)
@@ -365,6 +377,15 @@ class Tick:
             if isinstance(market, str) and market:
                 self.halt(f"recorder_gap_resyncs:{asset}", market=market, extra={"detail": detail})
             self.alert(f"gap_resync_storm:{proc}:{asset}", "gap_resync_storm", detail, proc=proc)
+
+    def _runner_paused(self, record: dict[str, Any]) -> None:
+        """Issue #119: an m2_runner paused (a halt, the daily loss breaker, disk) longer than RUNNER_PAUSED_ALERT_S
+        alerts the Operator. A paused heartbeat without a readable ``paused_since`` alerts too (fail closed)."""
+        since = record["progress"].get("paused_since")
+        age = heartbeat.beat_age_s({"t": since}, self.now, "t") if isinstance(since, str) else None
+        if age is None or age > RUNNER_PAUSED_ALERT_S:
+            self.alert("runner_paused_too_long:m2_runner", "runner_paused_too_long",
+                       f"paused_since={since!r} reason={record['progress'].get('paused_reason')!r}", proc="m2_runner")
 
     def _scanner_success(self, record: dict[str, Any]) -> None:
         last = record["progress"].get("last_success_ts")

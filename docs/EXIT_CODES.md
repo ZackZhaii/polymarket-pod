@@ -14,7 +14,7 @@ Sentinel column (what the resident Sentinel does when a heartbeat finishes with 
 For every entry point:
 
 - An uncaught exception ends Python with 1 and a traceback. The heartbeat wrappers write state `crashed` first, and
-  the Sentinel reads that state, not the 1 (ws_recorder / m1_run / halt_consumer crash = global halt, other = alert).
+  the Sentinel reads that state, not the 1 (ws_recorder / m1_run / halt_consumer / m2_runner crash = global halt, other = alert).
 - `--help` exits 0. Usage errors are each module's `EXIT_USAGE` (never argparse's own exit).
 - Pin drift (Task AS, gaps 5 and 6, `src/pins.py`): config/risk.toml is checked as a file (sha256
   `0aea23af…bc04`, CRLF normalised, and every key with its value and type, no unknown key) at start by scanner,
@@ -104,9 +104,10 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 | 1 | `EXIT_NO_ROWS` | no book snapshot recorded | alert |
 | 2 | `EXIT_USAGE` | usage error | alert |
 | 3 | `EXIT_NO_WEBSOCKETS` | the optional websockets package is missing | alert |
-| 4 | `EXIT_WRITE_FAILED` | writing the run directory failed | global halt |
+| 4 | `EXIT_WRITE_FAILED` | writing the run directory failed, or (issue #82) the REST sampler thread was still alive after the 120 s finishing join (`rest_join_timeout` event, manifest `failed`; the thread is sealed, not killed) | global halt |
 | 5 | `EXIT_INTERRUPTED` | stopped by SIGINT/SIGTERM/SIGBREAK or Ctrl+C/Ctrl+Break (Operator stop). Task BT: a Windows console close / logoff / shutdown also finishes the manifest `interrupted` with exit_code 5, but the m1_run heartbeat ends `crashed` (global halt), not this log-only exit | log |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins at start (no run dir created) or while running (PIN_RECHECK_S); global halt recorded | global halt |
+| 7 | `EXIT_CLOCK_BEHIND` | Task CM: refused to start (no run dir): the local clock is behind the exchange by more than `M1_MAX_CLOCK_BEHIND_S` (max of `book_ts` - local receive time over one public `/book` read per asset), or no `/book` answer was usable to check it. Sync the host clock and start again | alert |
 
 ## `src/m2_start.py`
 
@@ -123,13 +124,47 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 | 5 | `EXIT_NOT_READY` | the chain append or a runs/m2/current.json write failed, or a later process was not ready within its Sentinel timeout; nothing after it started | - |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins; refused, global halt recorded (`--dry-run`: none recorded) | - |
 
+## `src/m2_runner.py`
+
+`python -m src.m2_runner --run-dir runs/m2 [--max-runtime S] [--once]`: the M2 paper runner (issue #119). Every iteration checks
+KILL, the live flags, the risk.toml pins, halts, the ledger, the daily loss breaker and disk before any read, seal or commit.
+Heartbeat every HEARTBEAT_RUNNER_EVERY_S (`paused` while paused); single instance by `runs/m2/runner.lock`. Paper only, no executor.
+
+| Code | Name | Meaning | Sentinel |
+|---|---|---|---|
+| 0 | `EXIT_OK` | `runs/m2/KILL` found, `--max-runtime` reached or `--once` done | - |
+| 2 | `EXIT_USAGE` | usage error (an unknown argument, `--max-runtime` not > 0) | alert |
+| 3 | `EXIT_ALREADY_RUNNING` | another m2_runner holds `runner.lock` (no heartbeat written, nothing done) | alert |
+| 4 | `EXIT_WRITE_FAILED` | a journal / events / candidates write failed | global halt |
+| 6 | `EXIT_PIN_OR_LIVE` | config/risk.toml off its pins or a live flag (`live_enabled` not false, `mode` not paper, `require_human_gate` not true); global halt recorded (`risk_toml_pin_drift` / `m2_live_flag`) | global halt |
+| 7 | `EXIT_SELF_CHECK` | the start self-check failed (run dir or inbox not writable) | alert |
+
+## `src/paper_audit.py`
+
+`python -m src.paper_audit --ledger PATH --bus PATH [--json]`: offline, read-only cross-check of the
+paper ledger against Executor bus fills, joined by explicit fill_id (issue #69). Standard library
+and first-party `src` only, no network, no halt, nothing written; the report goes to stdout. No
+heartbeat. Acceptance 2: the ledger must pass `ledger_store.verify` first (only then is it joined),
+and the bus is parsed strictly — bad JSON, non-object rows, a torn tail and unreadable files are
+named failures. Acceptance 3: each joined fill's full payload and the message's outer `market` are
+compared with a type-sensitive normalized JSON comparison (key order / formatting normalized;
+`10` / `10.0` / `true` / `"10.0"` stay distinct); the outer `bus.ts` is ignored. Review P1 on PR
+#202: the remaining checks (sender roles, duplicate / conflict copies, UNKNOWN markers, SHA256) are
+later acceptance items, so the tool never reports PASS — a problem-free run ends verdict `unknown`.
+
+| Code | Name | Meaning | Sentinel |
+|---|---|---|---|
+| 0 | `EXIT_OK` | reserved for the fully checked pass (every #69 check); not reachable before the remaining acceptance items land | - |
+| 1 | `EXIT_MISMATCH` | a problem (the ledger failed `ledger_store.verify`, an orphan / join problem on either side, a payload or outer-market mismatch, a non-finite number), or no problem but verdict `unknown` (the two logs are not validated as agreeing) | - |
+| 2 | `EXIT_USAGE` | usage error, or an input that cannot be read in full (missing, unreadable, undecodable bytes, a malformed or non-object line, a torn last row, a conflicting fill_id) | - |
+
 ## `src/paper_cycle.py`
 
 `python -m src.paper_cycle [--loop]`: gap / staleness signals and the Sentinel StaleWatch. Heartbeat every cycle.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | ran | - |
+| 0 | `EXIT_OK` | ran (issue #75: a round whose markets/books input is still changing after the one bounded re-read is skipped, `ok=false reason=input_pending`, and exits 0 too: a transient append is never a halt) | - |
 | 1 | `EXIT_PIN` | a phase-0 pin failed: the in-memory config, or (Task AS) the risk file before a cycle (global halt recorded) | global halt |
 | 2 | `EXIT_USAGE` | usage error | alert |
 
@@ -166,19 +201,25 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 
 ## `src/replay_intent.py`
 
-`python -m src.replay_intent --bundle path/to/bundle.json` (issue #80 step 1): one single-shot offline
-Intent-builder replay on one fixed bundle (schema_version 1: one raw bus signal row, one scanner market
-row, that market's book rows, strategy, fee_rate, a zoned now). One signal and one run only, no bus, no
-ledger, no halt, no RiskGate, no executor and no network; it prints the intent or the complete ordered
-rejection reasons. The pin check is read only, so drift is refused here without recording a global halt.
+`python -m src.replay_intent --bundle path/to/bundle.json [--out path/to/result.json]` (issue #80):
+one single-shot offline Intent-builder replay on one fixed bundle (schema_version 1: one raw bus
+signal row, one scanner market row, that market's book rows, strategy, fee_rate, a zoned now). One
+signal and one run only, no bus, no ledger, no halt, no RiskGate, no executor and no network; it
+prints the intent or the complete ordered rejection reasons, with the SHA256 of the bundle's raw
+bytes (`input_sha256`). With `--out` the same JSON is published atomically (temp file, fsync,
+hardlink into place): an existing output is refused, never overwritten, and never into config/, a
+.toml or src/thresholds.py. The pin check is read only, so drift is refused here without recording
+a global halt.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | the single replay ran; the printed JSON holds an intent or the builder's ordered reasons | - |
-| 2 | `EXIT_USAGE` | usage error (missing `--bundle`; `--help` exits 0) | - |
+| 0 | `EXIT_OK` | the single replay ran; the printed JSON holds an intent or the builder's ordered reasons (with `--out`: also published) | - |
+| 2 | `EXIT_USAGE` | usage error (missing `--bundle`; `--help` exits 0), or `--out` points into config/, a .toml or src/thresholds.py | - |
 | 3 | `EXIT_CORRUPT_BUNDLE` | bundle unreadable, not JSON, wrong `schema_version`, missing keys, bad types, or a `now` without a timezone | - |
 | 4 | `EXIT_UNSUPPORTED_BUNDLE` | not a single-shot bundle: extra keys (history, loop), a list of signals, or a book row for another market | - |
+| 5 | `EXIT_OUTPUT_EXISTS` | refused: `--out` already exists; nothing overwritten, no result published | - |
 | 6 | `EXIT_PIN_DRIFT` | refused: config/risk.toml off its pins (read-only check; this entry records no halt); nothing replayed | - |
+| 7 | `EXIT_WRITE_FAILED` | refused: publishing the result JSON failed (e.g. no such folder); the destination is untouched | - |
 
 ## `src/reflector.py`
 

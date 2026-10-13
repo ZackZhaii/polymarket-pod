@@ -31,6 +31,9 @@ through src.ws_recorder and the public CLOB /book path through src.book.snapshot
   thread stops, files are closed (fsync) and the manifest is finished with status ``interrupted``.
   Stop-sealing (Issue #82) and every REST publish (row, event, count, heartbeat) share one barrier:
   a request that returns after the seal publishes nothing and no next asset request is started.
+  The finish waits REST_JOIN_TIMEOUT_S (120 s) for the REST thread; if it is still alive after that
+  wait (a request hung in flight), the run is failed with exit 4 and a ``rest_join_timeout`` event
+  (the thread is sealed, never killed), so a stuck sampler is never declared completed.
 - ``manifest.json`` (atomic replace) is written at start (status ``running``) and at the end:
   start/end times, elapsed seconds, assets with their market metadata, settings, thresholds,
   versions (Python, websockets, schema), the git sha (and whether the tree was dirty), the
@@ -38,10 +41,20 @@ through src.ws_recorder and the public CLOB /book path through src.book.snapshot
 
 Exit codes: 0 ran to --max-runtime and recorded at least one snapshot; 1 no snapshot recorded;
 2 usage error (bad arguments, no usable assets, a non-empty --out); 3 the optional websockets
-package is missing; 4 writing an output file failed; 5 stopped by SIGINT/SIGTERM (the run dir is
+package is missing; 4 writing an output file failed, or the REST thread outlived the finishing
+join; 5 stopped by SIGINT/SIGTERM (the run dir is
 complete and can still be reported, but it is not a full acceptance run); 6 config/risk.toml off its
-pins at start (no run dir) or while running (Task AS, src/pins.py; a global halt is recorded).
+pins at start (no run dir) or while running (Task AS, src/pins.py; a global halt is recorded); 7 Task CM:
+the local clock is behind the exchange by more than M1_MAX_CLOCK_BEHIND_S, or could not be checked (no run dir).
 Registry: docs/EXIT_CODES.md.
+
+Task CM (M1 6h FAIL m1-20261010T1907Z: coverage was lost to rows whose exchange book_ts was later than the
+recorder's own ts, because the host clock ran slow): before the run dir is created, every selected asset's public
+CLOB /book is read once through book.snapshot (the same reader and host the REST sampler uses). For each usable
+answer ``lead_s = book_ts - local receive time``. A book's timestamp is its last update, never later than the
+exchange's clock when it answered, so the largest lead is a LOWER bound on how far the local clock is behind
+(it can miss a lag, it never invents one). The run refuses to start (exit 7, nothing written) when that bound is
+above M1_MAX_CLOCK_BEHIND_S or no answer was usable; otherwise the measurement goes into manifest ``clock_check``.
 """
 from __future__ import annotations
 
@@ -73,6 +86,7 @@ from src.podlib import MARKETS_PATH, RISK_PATH, parse_risk_toml, read_jsonl  # n
 from src.thresholds import (  # noqa: E402
     M1_CONSOLE_CLOSE_WAIT_S,
     M1_MANIFEST_PROGRESS_S,
+    M1_MAX_CLOCK_BEHIND_S,
     M1_REST_ASSETS,
     M1_RUN_TARGET_S,
     M1_REST_EVERY_S,
@@ -89,6 +103,7 @@ from src.ws_recorder import (  # noqa: E402
     RawBookSink,
     Recorder,
     RotatingJsonl,
+    SinkClosed,  # Issue #82: write after RotatingJsonl / RawBookSink close (an OSError: exit 4)
     Transport,
     TransportUnavailable,
     WebsocketsTransport,
@@ -109,6 +124,11 @@ EXIT_NO_WEBSOCKETS = 3
 EXIT_WRITE_FAILED = 4
 EXIT_INTERRUPTED = 5
 EXIT_PIN_DRIFT = 6  # Task AS: config/risk.toml off its pins at start or while running (global halt recorded)
+EXIT_CLOCK_BEHIND = 7  # Task CM: local clock behind the exchange (or unverifiable) at start; no run dir
+
+# Issue #82 acceptance 3: how long the finish waits for the REST thread (unchanged 120 s; tests shorten it).
+# Still alive after it: status failed, EXIT_WRITE_FAILED, a rest_join_timeout event; the thread is not killed.
+REST_JOIN_TIMEOUT_S = 120
 
 # Task BT: Windows console control events (wincon.h). C and BREAK are an Operator stop (like SIGINT);
 # CLOSE, LOGOFF and SHUTDOWN mean the OS kills the process about 5 s after the handler is called.
@@ -217,6 +237,9 @@ class RestSampler:
         Under the shared barrier the sampler is marked sealed; once this returns, a request still
         in flight may return but can no longer publish a row, an event, a count or a heartbeat, and
         no further asset request is started (its result would have nowhere sealed to go).
+        The barrier is never held across an HTTP request, so the seal waits at most for a publish
+        already under way, never for a request in flight; only a request admitted before the seal
+        can still return, and it is dropped (tests: test_rest_sampler_a_blocked_request_*).
         """
         with self._barrier:
             self._sealed = True
@@ -278,6 +301,45 @@ class RestSampler:
                     return
         except BaseException as exc:  # noqa: BLE001 - reported by main (write failure -> exit 4)
             self.failure = exc
+
+
+# --- clock check (Task CM) ---------------------------------------------------------------------
+
+
+def clock_check(assets: list[str], meta: dict[str, dict[str, Any]], *, getter: Any = None,
+                now: Callable[[], str] = utc_now_ms, limit_s: float = M1_MAX_CLOCK_BEHIND_S) -> dict[str, Any]:
+    """Task CM: how far the local clock is behind the exchange, from one public /book read per asset.
+
+    ``lead_s = book_ts - local receive time`` per usable answer; ``max_behind_s`` (the largest lead) is a lower
+    bound on the local clock's lag. ``ok`` only when at least one answer was usable and max_behind_s <= limit_s.
+    Read only: book.snapshot (public CLOB /book, the REST sampler's reader); nothing is written."""
+    samples: list[dict[str, Any]] = []
+    unusable = 0
+    for token in assets:
+        info = meta.get(token, {})
+        market = {"id": info.get("market_id", ""), "question": info.get("question", ""),
+                  "condition_id": info.get("condition_id", ""), "liquidity_usd": info.get("liquidity_usd")}
+        row = rest_snapshot(market, info.get("outcome", ""), token, now(), getter=getter)
+        received = now()
+        book_at = parse_book_ts(row.get("book_ts")) if row and row.get("book_ts_problem") is None else None
+        local_at = parse_book_ts(received)
+        if book_at is None or local_at is None:
+            unusable += 1
+            continue
+        samples.append({"token_id": token, "book_ts": row["book_ts"], "received_at": received,
+                        "lead_s": round((book_at - local_at).total_seconds(), 3)})
+    leads = sorted(item["lead_s"] for item in samples)
+    behind = leads[-1] if leads else None
+    if behind is None:
+        reason = "no_usable_sample"
+    elif behind > limit_s:
+        reason = "clock_behind"
+    else:
+        reason = None
+    return {"source": "clob_rest_book", "bound": "lower", "limit_s": limit_s, "requested": len(assets),
+            "usable": len(samples), "unusable": unusable, "max_behind_s": behind,
+            "median_lead_s": leads[len(leads) // 2] if leads else None, "ok": reason is None, "reason": reason,
+            "samples": samples}
 
 
 # --- manifest ----------------------------------------------------------------------------------
@@ -449,7 +511,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="M1 acceptance run: read-only WS books + REST /book samples, no orders.",
         epilog="Exit codes: 0 ran to --max-runtime with at least one snapshot; 1 no snapshot; 2 usage error; "
                "3 websockets missing (pip install -r requirements-ws.txt); 4 write failed; 5 stopped by SIGINT/SIGTERM; "
-               "6 config/risk.toml off its pins (global halt recorded). See docs/EXIT_CODES.md.",
+               "6 config/risk.toml off its pins (global halt recorded); 7 local clock behind the exchange by more than "
+               "M1_MAX_CLOCK_BEHIND_S or unverifiable (no run dir). See docs/EXIT_CODES.md.",
     )
     parser.add_argument("--out", required=True, type=Path, help="new or empty run directory")
     parser.add_argument("--max-runtime", type=float, default=M1_RUN_TARGET_S,
@@ -478,7 +541,7 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None, r
          now: Callable[[], str] | None = None, stop_event: threading.Event | None = None,
          install_signals: bool = True, git: Callable[[], dict] = git_state,
          console: Callable[[Callable[[int], bool]], Callable[[], None] | None] | None = None,
-         progress_every_s: float = M1_MANIFEST_PROGRESS_S) -> int:
+         progress_every_s: float = M1_MANIFEST_PROGRESS_S, clock_getter: Any = None) -> int:
     """Task AP (Sentinel design gap 2): logs/heartbeat/m1_run.json is written by the recorder loop every
     HEARTBEAT_RECORDER_EVERY_S (also while backing off) and logs/heartbeat/m1_rest.json after every REST
     sample; both end with a beat carrying the exit code. For the resident Sentinel (src/sentinel_tick.py):
@@ -500,7 +563,8 @@ def main(argv: list[str] | None = None, *, transport: Transport | None = None, r
     try:
         code = _main(argv, transport=transport, rest_getter=rest_getter, monotonic=monotonic, sleep=sleep, now=now,
                      stop_event=stop_event, install_signals=install_signals, git=git, heartbeat=hb,
-                     rest_heartbeat=rest_hb, console=console, progress_every_s=progress_every_s, outcome=outcome)
+                     rest_heartbeat=rest_hb, console=console, progress_every_s=progress_every_s, outcome=outcome,
+                     clock_getter=clock_getter)
     except BaseException:
         hb.finish(None, crashed=True)
         if rest_hb.seq:
@@ -524,7 +588,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
           now: Callable[[], str] | None, stop_event: threading.Event | None,
           install_signals: bool, git: Callable[[], dict], heartbeat: Any = None, rest_heartbeat: Any = None,
           console: Callable[[Callable[[int], bool]], Callable[[], None] | None] | None = None,
-          progress_every_s: float = M1_MANIFEST_PROGRESS_S, outcome: dict[str, Any] | None = None) -> int:
+          progress_every_s: float = M1_MANIFEST_PROGRESS_S, outcome: dict[str, Any] | None = None,
+          clock_getter: Any = None) -> int:
     try:
         args = build_parser().parse_args(argv)
     except SystemExit as exc:
@@ -570,6 +635,14 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
             return True
         return stop.is_set()
 
+    clock = clock_check(assets, meta, getter=clock_getter if clock_getter is not None else rest_getter, now=now)
+    if not clock["ok"]:
+        print("m1_run: refusing to start (" + str(clock["reason"]) + "): local clock behind the exchange by at least "
+              f"{clock['max_behind_s']} s (limit M1_MAX_CLOCK_BEHIND_S {M1_MAX_CLOCK_BEHIND_S:g} s), "
+              f"{clock['usable']}/{clock['requested']} usable /book answers; sync the host clock first. "
+              + json.dumps({k: v for k, v in clock.items() if k != "samples"}), file=sys.stderr)
+        return EXIT_CLOCK_BEHIND  # before the run dir exists: nothing recorded
+
     run_dir.mkdir(parents=True, exist_ok=True)
     rotate_bytes = max(1, int(args.rotate_mb * 1048576))
     sinks = {name: RotatingJsonl(run_dir / name, name, rotate_bytes, args.rotate_s, monotonic) for name in STREAMS}
@@ -595,6 +668,7 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
         "settings": {"rest_every_s": args.rest_every, "rest_assets": args.rest_assets,
                      "rotate_bytes": rotate_bytes, "rotate_s": args.rotate_s, "raw_books": bool(args.raw_books)},
         "thresholds": _threshold_values(),
+        "clock_check": clock,  # Task CM
         "version": {"schema": SCHEMA, "python": platform.python_version(), "websockets": websockets_version()},
         "git": git(),
         "risk": {"pinned_sha256": PINNED_RISK_SHA256, "start": risk_state(), "end": None},
@@ -710,7 +784,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
         stop.set()
         progress.join(timeout=30)
         if thread.is_alive():
-            thread.join(timeout=120)
+            thread.join(timeout=REST_JOIN_TIMEOUT_S)
+        rest_stuck = thread.is_alive()  # Issue #82 acceptance 3: re-checked after the join, never killed
         sampler.seal()  # Issue #82: freeze publishes before the outputs are closed and finalized
         for signum, handler in previous.items():
             signal.signal(signum, handler)
@@ -719,6 +794,15 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
         if sampler.failure is not None and code == EXIT_OK:
             print(f"m1_run: REST sampler failed: {sampler.failure!r}", file=sys.stderr)
             code, status = EXIT_WRITE_FAILED, "failed"
+        if rest_stuck:
+            print(f"m1_run: REST sampler still alive after the {REST_JOIN_TIMEOUT_S} s join timeout "
+                  "(request hung in flight); sealed, not killed; the run cannot complete", file=sys.stderr)
+            try:
+                events.write({"ts": now(), "event": "rest_join_timeout", "timeout_s": REST_JOIN_TIMEOUT_S})
+            except OSError:
+                pass  # the reason is on stderr; the run never completes either way
+            if code == EXIT_OK and not watch.problems:  # a pin drift keeps its own 6 (global halt)
+                code, status = EXIT_WRITE_FAILED, "failed"
         if code == EXIT_OK and watch.problems:
             code, status = EXIT_PIN_DRIFT, "pin_drift"
         if code == EXIT_OK and stopped_by_signal:
@@ -744,7 +828,9 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
                               "dropped": dict(raw_sink.dropped), "file_max_bytes": raw_sink.files.max_bytes,
                               "run_max_bytes": raw_sink.run_max_bytes}} if raw_sink is not None else {}),
             "counts": {
-                "book_rows": report.rows, "events": events.rows, "rest_rows": sampler.rows,
+                # Issue #82 acceptance 4: freeze rest_rows from the closed REST sink, not sampler.rows
+                # (sample_once does sink.write then self.rows += 1; the counter can lag a completed write).
+                "book_rows": report.rows, "events": events.rows, "rest_rows": sinks["rest"].rows,
                 "rest_samples": sampler.samples, "rest_errors": sampler.errors,
                 "connects": report.connects, "connect_failures": report.connect_failures,
                 "disconnects": dict(report.disconnects), "pings": report.pings, "ended_by": report.ended_by,
@@ -765,7 +851,7 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
             print(f"m1_run: writing the manifest failed: {exc}", file=sys.stderr)
             code = EXIT_WRITE_FAILED
     print(f"m1_run status={manifest['status']} exit={code} assets={len(assets)} book_rows={report.rows} "
-          f"rest_rows={sampler.rows} connects={report.connects} run_dir={run_dir} orders=none")
+          f"rest_rows={sinks['rest'].rows} connects={report.connects} run_dir={run_dir} orders=none")
     return code
 
 

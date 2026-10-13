@@ -26,6 +26,7 @@ EXPECTED = {
     "SENTINEL_STALE_S": 120.0,
     "SENTINEL_STALE_CONSECUTIVE": 2,
     "WASH_WINDOW_S": 300.0,
+    "PAIR_CROSS_TOLERANCE": 1e-9,  # Task CG (#145)
     "MIN_HOURS_TO_EXPIRY": 24.0,
     "SCANNER_MIN_PRICE": 0.03,
     "SCANNER_MAX_PRICE": 0.97,
@@ -67,6 +68,20 @@ EXPECTED = {
     "FEE_RATE_MAX": 0.25,  # Task BZ #117 (M2 pending)
     "FORECAST_MAX_ASOF_LAG_S": 21600.0,  # Task CD #118 (M2 pending)
     "FORECAST_MIN_HALF_WIDTH": 0.03,  # Task CD #118 (M2 pending)
+    "RUNNER_LOOP_S": 60.0,  # Task CE #119 (M2 pending)
+    "HEARTBEAT_RUNNER_EVERY_S": 30.0,  # Task CE #119 (M2 pending)
+    "HEARTBEAT_RUNNER_TIMEOUT_S": 120.0,  # Task CE #119 (M2 pending)
+    "RUNNER_PAUSED_ALERT_S": 21600.0,  # Task CE #119 (M2 pending)
+    "RUNNER_SCAN_EVERY_S": 1800.0,  # Task CE #119 (M2 pending)
+    "RUNNER_SCAN_MAX_AGE_S": 7200.0,  # Task CE #119 (M2 pending)
+    "RUNNER_MAX_INGEST_PER_ITER": 20,  # Task CE #119 (M2 pending)
+    "RUNNER_MAX_EVALS_PER_SIGNAL": 10,  # Task CE #119 (M2 pending)
+    "RUNNER_SUSPEND_GAP_S": 180.0,  # Task CJ #120 (M2 pending)
+    "RUNNER_WALL_MONO_SKEW_S": 30.0,  # Task CJ #120 (M2 pending)
+    "CLOCK_SKEW_MAX_S": 5.0,  # Task CJ #120 (M2 pending)
+    "M1_MAX_CLOCK_BEHIND_S": 0.1,  # Task CM (M2 pending, tightening)
+    "DISK_MIN_FREE_GB": 2.0,  # Task CE #119 (M2 pending)
+    "RUNNER_DISK_BUDGET_GB": 5.0,  # Task CE #119 (M2 pending)
     "M1_RUN_TARGET_S": 21600.0,  # KEY-approved 2026-10-11 家伟批准
     "M1_MIN_RUN_S": 21540.0,  # KEY-approved 2026-10-11 家伟批准 (was 86340.0)
     "M1_MIN_COVERAGE": 0.99,
@@ -130,6 +145,10 @@ EXPECTED = {
     "CALIBRATION_BOOTSTRAP_SEED": 20261009,
     "CALIBRATION_CI_LEVEL": 0.95,
     "CALIBRATION_LOGLOSS_CLIP": 0.01,
+    # Task AZ: M3 calibration bin / group-tier tuples (M3 pending; not used in M2).
+    "CALIBRATION_BIN_EDGES": (0.0, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 1.0),
+    "CALIBRATION_EDGE_TIERS": (0.02, 0.04, 0.08),
+    "CALIBRATION_EXPIRY_TIERS_H": (24.0, 72.0, 336.0),
     # Task BD: largest event-cluster share (M3 pending).
     "CALIBRATION_MAX_CLUSTER_SHARE": 0.30,
     # Task BB: M3 Reflector proposal rules (M3 pending).
@@ -163,6 +182,7 @@ REEXPORTS = {
     "sentinel.SENTINEL_STALE_S": "SENTINEL_STALE_S",
     "sentinel.SENTINEL_STALE_CONSECUTIVE": "SENTINEL_STALE_CONSECUTIVE",
     "wash_detect.WASH_WINDOW_S": "WASH_WINDOW_S",
+    "wash_detect.PAIR_CROSS_TOLERANCE": "PAIR_CROSS_TOLERANCE",
     "expiry_rule.MIN_HOURS_TO_EXPIRY": "MIN_HOURS_TO_EXPIRY",
     "scanner.MIN_HOURS_TO_EXPIRY": "MIN_HOURS_TO_EXPIRY",
     "endgame_scan.MIN_HOURS_TO_EXPIRY": "MIN_HOURS_TO_EXPIRY",
@@ -183,6 +203,7 @@ REEXPORTS = {
 }
 
 M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
+              "PAIR_CROSS_TOLERANCE",  # Task CG (#145)
               "MIN_HOURS_TO_EXPIRY", "WS_ROW_REFRESH_S",
               # Task AI: the M1 acceptance criteria (conservative first values for the user at M2).
               "M1_MIN_COVERAGE", "M1_MAX_RECONNECTS", "M1_MAX_GAP_RESYNCS_PER_ASSET",
@@ -193,6 +214,12 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "FEE_CACHE_TTL_S", "FEE_NEG_CACHE_S", "FEE_RATE_MAX",
               # Task CD (#118, M2-B): the forecast inbox.
               "FORECAST_MAX_ASOF_LAG_S", "FORECAST_MIN_HALF_WIDTH",
+              # Task CE (#119, M2-C1): the paper runner.
+              "RUNNER_LOOP_S", "HEARTBEAT_RUNNER_EVERY_S", "HEARTBEAT_RUNNER_TIMEOUT_S", "RUNNER_PAUSED_ALERT_S",
+              "RUNNER_SCAN_EVERY_S", "RUNNER_SCAN_MAX_AGE_S", "RUNNER_MAX_INGEST_PER_ITER",
+              "RUNNER_MAX_EVALS_PER_SIGNAL", "RUNNER_SUSPEND_GAP_S", "RUNNER_WALL_MONO_SKEW_S",
+              "CLOCK_SKEW_MAX_S", "DISK_MIN_FREE_GB", "RUNNER_DISK_BUDGET_GB",
+              "M1_MAX_CLOCK_BEHIND_S",  # Task CM
               # Task AK: Data API v2 reconciliation.
               "RECONCILE_SHARES_TOL", "DATA_API_POSITIONS_DUST_SHARES", "DATA_API_TRADES_MIN_SHARES",
               "DATA_API_MAX_LAG_S", "DATA_API_IDENTITY_TOL_USDC",
@@ -228,6 +255,8 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "CALIBRATION_EQUAL_FREQ_BINS", "CALIBRATION_EQUAL_FREQ_MIN_PER_BIN", "CALIBRATION_BOOTSTRAP_RESAMPLES",
               "CALIBRATION_MAX_DECISIONS_PER_MARKET",
               "CALIBRATION_BOOTSTRAP_SEED", "CALIBRATION_CI_LEVEL", "CALIBRATION_LOGLOSS_CLIP",
+              # Task AZ: M3 calibration bin / group-tier tuples (not used in M2).
+              "CALIBRATION_BIN_EDGES", "CALIBRATION_EDGE_TIERS", "CALIBRATION_EXPIRY_TIERS_H",
               # Task BD: largest event-cluster share.
               "CALIBRATION_MAX_CLUSTER_SHARE",
               # Task BB: M3 Reflector proposals; the daily cap is now M3 pending too.
@@ -274,7 +303,7 @@ def _module_constants() -> dict[str, object]:
         name: value
         for name, value in vars(thresholds).items()
         if name.isupper() and not name.startswith("_")
-        and isinstance(value, (int, float)) and not isinstance(value, bool)
+        and isinstance(value, (int, float, tuple)) and not isinstance(value, bool)
     }
 
 
@@ -389,6 +418,22 @@ def test_relations_hold():
         ("FORECAST_MAX_ASOF_LAG_S = 21600.0", "FORECAST_MAX_ASOF_LAG_S = 604800.0"),  # Task CD: above one day
         ("FORECAST_MIN_HALF_WIDTH = 0.03", "FORECAST_MIN_HALF_WIDTH = 0.0"),  # Task CD
         ("FORECAST_MIN_HALF_WIDTH = 0.03", "FORECAST_MIN_HALF_WIDTH = 0.5"),  # Task CD
+        ("RUNNER_LOOP_S = 60.0", "RUNNER_LOOP_S = 0.0"),  # Task CE
+        ("RUNNER_LOOP_S = 60.0", "RUNNER_LOOP_S = 120.0"),  # Task CE: not below the heartbeat timeout
+        ("HEARTBEAT_RUNNER_EVERY_S = 30.0", "HEARTBEAT_RUNNER_EVERY_S = 120.0"),  # Task CE
+        ("HEARTBEAT_RUNNER_TIMEOUT_S = 120.0", "HEARTBEAT_RUNNER_TIMEOUT_S = 120"),  # Task CE: a float
+        ("RUNNER_PAUSED_ALERT_S = 21600.0", "RUNNER_PAUSED_ALERT_S = 60.0"),  # Task CE
+        ("RUNNER_SCAN_MAX_AGE_S = 7200.0", "RUNNER_SCAN_MAX_AGE_S = 1800.0"),  # Task CE
+        ("RUNNER_MAX_INGEST_PER_ITER = 20", "RUNNER_MAX_INGEST_PER_ITER = 0"),  # Task CE
+        ("RUNNER_MAX_EVALS_PER_SIGNAL = 10", "RUNNER_MAX_EVALS_PER_SIGNAL = True"),  # Task CE
+        ("RUNNER_SUSPEND_GAP_S = 180.0", "RUNNER_SUSPEND_GAP_S = 30.0"),  # Task CJ: must stay above loop
+        ("RUNNER_WALL_MONO_SKEW_S = 30.0", "RUNNER_WALL_MONO_SKEW_S = 0.0"),  # Task CJ
+        ("CLOCK_SKEW_MAX_S = 5.0", "CLOCK_SKEW_MAX_S = 120.0"),  # Task CJ: must stay below MAX_BOOK_AGE_S
+        ("M1_MAX_CLOCK_BEHIND_S = 0.1", "M1_MAX_CLOCK_BEHIND_S = 0.0"),  # Task CM: must be > 0
+        ("M1_MAX_CLOCK_BEHIND_S = 0.1", "M1_MAX_CLOCK_BEHIND_S = 1.0"),  # Task CM: below M1_REPORT_STEP_S
+        ("M1_MAX_CLOCK_BEHIND_S = 0.1", "M1_MAX_CLOCK_BEHIND_S = 0"),  # Task CM: a float
+        ("DISK_MIN_FREE_GB = 2.0", "DISK_MIN_FREE_GB = -1.0"),  # Task CE
+        ("RUNNER_DISK_BUDGET_GB = 5.0", "RUNNER_DISK_BUDGET_GB = float('nan')"),  # Task CE
         ("WS_GROUP_FLUSH_S = 0.25", "WS_GROUP_FLUSH_S = 0.0"),  # Task CC: must be > 0
         ("WS_GROUP_FLUSH_S = 0.25", "WS_GROUP_FLUSH_S = 5.0"),  # Task CC: not well below WS_ROW_REFRESH_S
         ("WS_GROUP_FLUSH_S = 0.25", "WS_GROUP_FLUSH_S = 1"),  # Task CC: a float
@@ -454,6 +499,9 @@ def test_relations_hold():
         # issue #52: the halt-state mutex constants.
         ("HALT_STATE_LOCK_TIMEOUT_S = 5.0", "HALT_STATE_LOCK_TIMEOUT_S = 0.0"),
         ("HALT_STATE_LOCK_POLL_S = 0.05", "HALT_STATE_LOCK_POLL_S = 5.0"),
+        # Task CG (#145): the complementary-leg pairing allowance.
+        ("PAIR_CROSS_TOLERANCE = 1e-9", "PAIR_CROSS_TOLERANCE = 0.0"),
+        ("PAIR_CROSS_TOLERANCE = 1e-9", "PAIR_CROSS_TOLERANCE = 0.05"),
     ],
 )
 def test_an_inconsistent_edit_fails_at_import(line, replacement):

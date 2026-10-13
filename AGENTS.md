@@ -1,6 +1,6 @@
 # polymarket-pod
 
-纸面项目。你是三个入口之一：`grok-build-local`（本机 Grok Build）、`grok-web`、`grok-bot`。
+纸面项目。你是入口之一：`grok-build-local`（本机 Grok Build）、`grok-web`、`grok-bot`、`codex-local`（Codex 桌面，编码执行席）、`dsh`（DeepSeek Harness，验证/监督席）。
 共享记忆只有 GitHub 仓库：https://github.com/ZackZhaii/polymarket-pod 。日常集成在 `dev`；`main` 只收 `dev`→`main` PR
 不要相信上一轮聊天。不要碰咖啡业务、StarHive 或其他交易仓库。
 
@@ -21,7 +21,7 @@ python src/loop_claim.py claim --surface grok-build-local --task F
 python src/loop_claim.py release --surface grok-build-local --done
 ```
 
-网页端把 surface 写成 `grok-web`，Grok Bot 写成 `grok-bot`。
+网页端把 surface 写成 `grok-web`，Grok Bot 写成 `grok-bot`，Codex 桌面写 `codex-local`，DSH 写 `dsh`。DSH 默认做审查、复跑测试和红线巡检，不抢队列第一件 `todo`；确实领取任务时与其他入口同队列同纪律。
 
 ## 写 git
 
