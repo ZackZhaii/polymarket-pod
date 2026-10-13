@@ -239,7 +239,7 @@ def test_the_daily_loss_breaker_pauses_today_and_resumes_the_next_utc_day(env, m
     pending = rig.deliver(env["run"], env["now"])
     today = env["now"].strftime("%Y-%m-%d")
 
-    def loss(rows, ids, now):
+    def loss(rows, ids, now, *, clock_ok=True):  # Task DA: preflight passes clock_ok
         return {"loss_usd": 30.0 if now[:10] == today else 0.0, "problems": []}  # the cap exactly
     monkeypatch.setattr(paper_ledger, "daily_risk_loss", loss)
     state = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(env["run"]))
