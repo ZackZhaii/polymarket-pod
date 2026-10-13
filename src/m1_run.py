@@ -828,7 +828,9 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
                               "dropped": dict(raw_sink.dropped), "file_max_bytes": raw_sink.files.max_bytes,
                               "run_max_bytes": raw_sink.run_max_bytes}} if raw_sink is not None else {}),
             "counts": {
-                "book_rows": report.rows, "events": events.rows, "rest_rows": sampler.rows,
+                # Issue #82 acceptance 4: freeze rest_rows from the closed REST sink, not sampler.rows
+                # (sample_once does sink.write then self.rows += 1; the counter can lag a completed write).
+                "book_rows": report.rows, "events": events.rows, "rest_rows": sinks["rest"].rows,
                 "rest_samples": sampler.samples, "rest_errors": sampler.errors,
                 "connects": report.connects, "connect_failures": report.connect_failures,
                 "disconnects": dict(report.disconnects), "pings": report.pings, "ended_by": report.ended_by,
@@ -849,7 +851,7 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
             print(f"m1_run: writing the manifest failed: {exc}", file=sys.stderr)
             code = EXIT_WRITE_FAILED
     print(f"m1_run status={manifest['status']} exit={code} assets={len(assets)} book_rows={report.rows} "
-          f"rest_rows={sampler.rows} connects={report.connects} run_dir={run_dir} orders=none")
+          f"rest_rows={sinks['rest'].rows} connects={report.connects} run_dir={run_dir} orders=none")
     return code
 
 
