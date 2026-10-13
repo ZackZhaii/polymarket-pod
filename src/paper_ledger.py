@@ -66,6 +66,7 @@ from src.risk_gate import Decision, Intent, evaluate  # noqa: E402
 from src.daily_loss import daily_loss  # noqa: E402 - Task AR: fees + realized losses
 from src.expiry_rule import hours_to_expiry, parse_end_date  # noqa: E402 - Task BA: hours at entry
 from src import wash_detect  # noqa: E402 - Task CH (#145): the market's token pair
+from src import day_boundary  # noqa: E402 - Task CX (#225): the one day-boundary rule
 from src import daily_marks, leg_marks  # noqa: E402 - Task CF (#124): unrealized loss in the daily loss
 
 # Task CF (#124): the start-of-day leg marks (one file per UTC day, never overwritten) and the books the
@@ -187,17 +188,63 @@ def _previous_day(day: str) -> str | None:
     return (stamp - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
+def _previous_day_marks(today: str, start: dict, current: dict) -> tuple[dict, list[str]]:
+    """Task CX (#225, D3): for a late snapshot, each start leg's previous-UTC-day last valid mark, if any."""
+    prev = _previous_day(today)
+    if prev is None:
+        return current, []
+    legs, problems = daily_marks.read_last_marks(DAILY_MARKS_DIR, prev)
+    if problems or not legs:
+        return current, problems
+    out = dict(current)
+    for key, leg in start.items():
+        entry = legs.get(leg_marks.leg_id(key))
+        if entry is not None and abs(leg.shares) > OPEN_EPS:
+            out[key] = leg_marks.Mark(float(entry["per_share_usd"]) * leg.shares, leg_marks.SOURCE_PREV_DAY_LAST,
+                                      entry["book_ts"], False)
+    return out, []
+
+
+def _record_last_marks(today: str, now: str, marks: dict) -> list[str]:
+    """Task CX (#225): keep today's last valid book mark per leg (read back as the next day's late reference)."""
+    fresh = {leg_marks.leg_id(key): {"per_share_usd": abs(mark.value_usd) / abs(shares), "book_ts": mark.book_ts, "at": now}
+             for key, (mark, shares) in marks.items()
+             if not mark.mark_invalid and mark.source in (leg_marks.SOURCE_BID_LADDER, leg_marks.SOURCE_ASK_LADDER)
+             and abs(shares) > OPEN_EPS and 0.0 < abs(mark.value_usd) / abs(shares) <= 1.0}
+    if not fresh:
+        return []
+    legs, problems = daily_marks.read_last_marks(DAILY_MARKS_DIR, today)
+    if problems:
+        return problems
+    merged = dict(legs or {})
+    merged.update(fresh)
+    try:
+        daily_marks.write_last_marks(DAILY_MARKS_DIR, today, now, merged)
+    except (OSError, ValueError) as exc:
+        return [f"daily_marks_last_write_failed:{type(exc).__name__}"]
+    return []
+
+
 def ensure_daily_snapshot(pos: leg_marks.Positions, today: str, now: str, now_dt: Any,
-                          book_map: dict[tuple[str, str], dict[str, Any]]) -> tuple[dict[str, Any] | None, list[str]]:
+                          book_map: dict[tuple[str, str], dict[str, Any]], *,
+                          clock_ok: bool = True) -> tuple[dict[str, Any] | None, list[str]]:
     """The day's start-of-day snapshot: read it, or write it once (Task CF #124). Shared by daily_unrealized and,
     issue #255, apply_writeoffs (a write-off on the day's first tick must not book its uplift before the snapshot).
+    Task CX (#225) / Task DA: lateness is src/day_boundary.day_start_late (the one UTC day-boundary rule, with
+    the caller's ``clock_ok``); a late snapshot's reference is max(cost, previous day's last valid mark).
     Returns (snapshot, problems); any problem is fail closed for the caller."""
     snap, problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, today)
     if problems or snap is not None:
         return snap, problems
     start_marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt)
                    for key, leg in pos.start.items()}
-    late = _LAST_EVAL_DAY is None or _LAST_EVAL_DAY != _previous_day(today)
+    # Task CX (#225, D1/D2): late = written more than DAY_START_MAX_LAG_S after today's 00:00 UTC
+    # (or a clock anomaly), whatever this process did yesterday.
+    late = day_boundary.day_start_late(now, clock_ok=clock_ok)
+    if late:
+        start_marks, problems = _previous_day_marks(today, pos.start, start_marks)
+        if problems:
+            return None, problems
     try:
         return daily_marks.create_snapshot(DAILY_MARKS_DIR, today, now, late,
                                            leg_marks.snapshot_legs(pos.start, start_marks)), []
@@ -209,7 +256,8 @@ def ensure_daily_snapshot(pos: leg_marks.Positions, today: str, now: str, now_dt
 
 
 def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
-                     books: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
+                     books: dict[tuple[str, str], dict[str, Any]] | None = None, *,
+                     clock_ok: bool = True) -> dict[str, Any]:
     """Task CF (#124): today's unrealized loss on open legs (Poly风控's ruling, src/leg_marks.py).
 
     Reads (or, on the day's first evaluation, writes once) the start-of-day snapshot, also for closed parts.
@@ -229,13 +277,17 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
             result["problems"] = pos.problems
             return result
         book_map = mark_books(MARK_BOOKS_PATH) if books is None else books
-        snap, problems = ensure_daily_snapshot(pos, today, now, now_dt, book_map)
+        snap, problems = ensure_daily_snapshot(pos, today, now, now_dt, book_map, clock_ok=clock_ok)
         if problems or snap is None:
             result["problems"] = problems or ["daily_marks_missing_after_create"]
             return result
         _LAST_EVAL_DAY = today
         result["snapshot"] = snap
         marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt) for key, leg in pos.now.items()}
+        problems = _record_last_marks(today, now, {key: (marks[key], leg.shares) for key, leg in pos.now.items()})
+        if problems:
+            result["problems"] = problems
+            return result
         unrealized = leg_marks.unrealized_loss(pos, marks, snap)
         result["late"] = snap.get("late")
         if unrealized.problems:
@@ -251,10 +303,13 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
         return result
 
 
-def daily_risk_loss(rows: list[dict[str, Any]], ids: list[str], now: str) -> dict[str, Any]:
-    """One UTC evaluation: fees + gross cost losses + closed reference topups + open-leg losses."""
+def daily_risk_loss(rows: list[dict[str, Any]], ids: list[str], now: str, *,
+                    clock_ok: bool = True) -> dict[str, Any]:
+    """One UTC evaluation: fees + gross cost losses + closed reference topups + open-leg losses.
+
+    ``clock_ok`` is passed to daily_unrealized (Task DA): False while the caller knows of a clock anomaly."""
     day = daily_loss(rows, now[:10], ids)
-    marks = (daily_unrealized(rows, ids, now) if not day.problems
+    marks = (daily_unrealized(rows, ids, now, clock_ok=clock_ok) if not day.problems
              else {"loss_usd": None, "realized_topup_usd": None, "legs": [], "late": None, "problems": []})
     problems = list(day.problems) + list(marks["problems"])
     if not problems:  # issue #255: every write-off booked today, its uplift recomputed from the day's snapshot
@@ -334,7 +389,8 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
 
 
 def apply_writeoffs(closes: list[Any], now: str | None = None,
-                    books: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
+                    books: dict[tuple[str, str], dict[str, Any]] | None = None, *,
+                    clock_ok: bool = True) -> dict[str, Any]:
     """Issue #197 (Task CK, KEY-approved): book one write-off row per open leg of each confirmed closed market.
 
     ``closes`` are src/market_close.Close values (confirmed by src/m2_runner._writeoff_hook). Idempotent: a leg
@@ -365,7 +421,8 @@ def apply_writeoffs(closes: list[Any], now: str | None = None,
         out["problems"] = [f"writeoff_daily_marks_invalid:{p}" for p in (pos.problems or ["invalid_now"])]
         return out
     snap, snap_problems = ensure_daily_snapshot(pos, now[:10], now, now_dt,
-                                                mark_books(MARK_BOOKS_PATH) if books is None else books)
+                                                mark_books(MARK_BOOKS_PATH) if books is None else books,
+                                                clock_ok=clock_ok)
     if snap_problems or snap is None:
         snap_problems = snap_problems or ["daily_marks_missing_after_create"]
         out["problems"] = [f"writeoff_daily_marks_invalid:{problem}" for problem in snap_problems]

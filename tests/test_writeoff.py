@@ -544,7 +544,8 @@ def _top(bid, ts, market="m", token="t"):
 def _start_of_day(env, monkeypatch, bid, on_time=True):
     """The day's snapshot written at the day roll with a book bid of ``bid`` (on time unless told otherwise)."""
     monkeypatch.setattr(paper_ledger, "_LAST_EVAL_DAY", "2026-08-31" if on_time else None)
-    env["clock"]["now"] = SOD_NOW
+    # Task CX/DA: lateness is src/day_boundary.day_start_late (time since 00:00 UTC), not _LAST_EVAL_DAY
+    env["clock"]["now"] = SOD_NOW if on_time else "2026-09-01T03:00:00Z"
     _mark_books(env, _top(bid, "2026-09-01T00:00:05Z"))
     snap_state = paper_ledger.load_state("x", "t")
     assert snap_state["daily_marks_late"] is (not on_time)

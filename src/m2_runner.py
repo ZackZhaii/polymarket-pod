@@ -247,6 +247,9 @@ class RunnerState:
     fee_getter: Callable[[str], Any] | None = None
     paused_reason: str | None = None
     paused_since: str | None = None
+    # Task DA (#225 follow-up): the clock anomaly the runner currently holds ("clock_skew"; #253 can set
+    # "clock_unverified"). Kept apart from paused_reason so a later preflight pause does not forget it.
+    clock_anomaly: str | None = None
     counters: dict[str, int] = field(default_factory=lambda: {
         "forecasts_sealed_total": 0, "forecasts_rejected_total": 0, "intents_built_total": 0, "allows_total": 0,
         "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0})
@@ -357,7 +360,12 @@ def live_flag_problems(risk_path: Path | None = None) -> list[str]:
     return problems
 
 
-def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = None,
+def runner_clock_ok(state: "RunnerState") -> bool:
+    """Task DA: True only when the runner holds no clock anomaly (generic: any non-None reason is not ok)."""
+    return state.clock_anomaly is None
+
+
+def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = None, clock_ok: bool = True,
               ledger_path: Path | None = None, settle: Callable[[], list[str]] | None = None) -> Preflight:
     """The C.2 checks, in order; the first failing one decides. Writes no fill itself.
 
@@ -408,7 +416,7 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
                                                      "source": "settlement"})
             return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]]])
     rows = len(read.rows)
-    risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), _stamp(now))
+    risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), _stamp(now), clock_ok=clock_ok)
     if risk["problems"]:
         problems = [str(p) for p in risk["problems"][:10]]
         _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": problems})
@@ -587,6 +595,7 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
                 break
             books[token] = snap
         if skew_pause:
+            state.clock_anomaly = "clock_skew"  # Task DA: the next ticks' day-start reference is late
             # Issue #238: like the preflight pause, stamp paused_since (and log the event) only when the pause
             # starts; a skew that holds keeps the first stamp so the Sentinel's runner_paused_too_long can fire.
             if state.paused_reason != "clock_skew":
@@ -815,7 +824,7 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter) -> l
             halt_store.record_halt(scope=halt_store.SCOPE_MARKET, market=market, reason=reason, source="m2_runner")
         return step.halts
     if step.closes:
-        out = paper_ledger.apply_writeoffs(step.closes, _stamp(now))
+        out = paper_ledger.apply_writeoffs(step.closes, _stamp(now), clock_ok=runner_clock_ok(state))
         if out["problems"]:
             return [str(problem) for problem in out["problems"]]
         if out["booked"]:  # on disk and fsynced (ledger_store.book) before the event
@@ -871,7 +880,7 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     state.iteration += 1
     gamma = GuardedGetter(getters.gamma)  # one guarded Gamma getter per tick: settlement, scan, fee
     try:
-        check = preflight(state.paths, now=now, risk_path=state.risk_path,
+        check = preflight(state.paths, now=now, risk_path=state.risk_path, clock_ok=runner_clock_ok(state),
                           settle=lambda: _settle_tick(state, now, gamma))
     except WriteFailed as exc:
         state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
@@ -943,6 +952,8 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     # clear clock_skew pause only after a decide that did not re-pause
     if report.action == ACT_RUN and state.paused_reason == "clock_skew":
         state.paused_reason = state.paused_since = None
+    if report.action == ACT_RUN and state.clock_anomaly == "clock_skew":
+        state.clock_anomaly = None
     return report
 
 

@@ -57,6 +57,7 @@ SOURCE_ASK_LADDER = "ask_ladder"
 SOURCE_SETTLED = "settled"
 SOURCE_CLOSED_UNRESOLVED = "closed_unresolved"
 SOURCE_INVALID = "invalid_book"
+SOURCE_PREV_DAY_LAST = "prev_day_last_mark"  # Task CX (#225): snapshot-only, never a live mark
 SOURCES = (SOURCE_BID_LADDER, SOURCE_ASK_LADDER, SOURCE_SETTLED, SOURCE_CLOSED_UNRESOLVED, SOURCE_INVALID)
 
 NO_BOOK = "no_book"
@@ -327,6 +328,21 @@ def _usable_start_mark(entry: Mapping[str, Any] | None, late: bool) -> float | N
     return snap_mark if usable else None
 
 
+def _prev_day_mark(entry: Mapping[str, Any] | None, late: bool) -> float | None:
+    """Task CX (#225, D3): a late snapshot's previous-UTC-day last valid mark (valid, not 0), else None."""
+    snap_mark = None if entry is None else _finite(entry.get("mark_usd"))
+    usable = (late and entry is not None and entry.get("mark_source") == SOURCE_PREV_DAY_LAST
+              and entry.get("mark_invalid") is False and snap_mark is not None and snap_mark != 0.0)
+    return snap_mark if usable else None
+
+
+def _start_reference_mark(entry: Mapping[str, Any] | None, late: bool) -> float | None:
+    """The start-of-day mark ``_reference`` compares with the cost: on time -> the snapshot mark; late -> the
+    previous day's last valid mark (#225). Used by ``writeoff_sod_uplift`` too (one rule for #124 and #197)."""
+    mark = _usable_start_mark(entry, late)
+    return mark if mark is not None else _prev_day_mark(entry, late)
+
+
 def snapshot_problems(pos: Positions, snapshot: Mapping[str, Any] | None) -> list[str]:
     """The snapshot must describe the same start-of-day legs (none: no problem)."""
     if snapshot is None:
@@ -348,7 +364,7 @@ def writeoff_sod_uplift(pos: Positions, snapshot: Mapping[str, Any] | None, key:
 
     A leg's write-off is ``cost + uplift``: its part held since the start of the UTC day at max(cost, start-of-day
     mark), today's part at cost. The start mark is used exactly when ``unrealized_loss`` uses it as ``ref`` (an on
-    time snapshot, a valid mark, not 0, the same side); otherwise, or with no snapshot yet today, 0 (the cost, as
+    time snapshot's valid mark, or a late snapshot's previous-day last valid mark, #225; not 0, the same side); otherwise, or with no snapshot yet today, 0 (the cost, as
     ``ref`` is then). A long: max(0, mark - cost) of the carried shares. A short (M2 opens none): max(0, proceeds -
     start-of-day buy-back cost) of the carried shares. Call ``snapshot_problems`` first.
     """
@@ -357,7 +373,7 @@ def writeoff_sod_uplift(pos: Positions, snapshot: Mapping[str, Any] | None, key:
             or abs(start.shares) <= LEDGER_OPEN_EPS or (start.shares > 0) != (leg.shares > 0)):
         return 0.0
     snap_legs, late = _snapshot_legs(snapshot)
-    snap_mark = _usable_start_mark(snap_legs.get(leg_id(key)), late)
+    snap_mark = _start_reference_mark(snap_legs.get(leg_id(key)), late)
     if snap_mark is None:
         return 0.0
     carried_cost = start.basis / abs(start.shares) * leg.carried
@@ -415,6 +431,15 @@ def _reference(leg: LegPosition, start: LegPosition | None, entry: Mapping[str, 
             source = "start_mark"
         else:
             carried_ref = start.basis / abs(start.shares) * leg.carried
+            # Task CX (#225, D3): a late snapshot carrying the previous UTC day's last valid mark uses
+            # max(cost, that mark) in signed terms: the larger value for a long, the smaller buy-back for a short.
+            snap_mark = _prev_day_mark(entry, late)
+            if snap_mark is not None:
+                prev_ref = abs(snap_mark) / abs(start.shares) * leg.carried
+                tighter = prev_ref > carried_ref if leg.shares > 0 else prev_ref < carried_ref
+                if tighter:
+                    carried_ref = prev_ref
+                    source = SOURCE_PREV_DAY_LAST
     elif leg.carried > LEDGER_OPEN_EPS:
         carried_ref = leg.basis - leg.new_basis
     return (1.0 if leg.shares > 0 else -1.0) * (carried_ref + leg.new_basis), source

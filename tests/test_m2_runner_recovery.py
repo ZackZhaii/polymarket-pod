@@ -359,3 +359,32 @@ def test_progress_reports_resume_count(env):
     paths = m2_runner.RunnerPaths.under(env["run"])
     state = m2_runner.RunnerState(paths=paths, resume_count=3)
     assert m2_runner.progress(state, env["now"])["resume_count"] == 3
+
+
+# ---------------------------------------------------------------- Task DA (#225 follow-up): clock -> day start
+
+
+def test_da_clock_skew_tick_then_next_preflight_evaluates_with_clock_not_ok(env, monkeypatch):
+    """E2E: a clock_skew tick; the next tick's daily-loss evaluation gets clock_ok=False (day start late),
+    and that survives a different preflight pause; after a clean decide it is True again."""
+    from src import paper_ledger
+
+    seen: list[bool] = []
+    real = paper_ledger.daily_risk_loss
+
+    def spy(rows, ids, now, *, clock_ok=True):
+        seen.append(clock_ok)
+        return real(rows, ids, now, clock_ok=clock_ok)
+
+    monkeypatch.setattr(paper_ledger, "daily_risk_loss", spy)
+    clock, fake, state = _skew_rig(env)
+    report = _tick(state, clock, fake)
+    assert report.paused_reason == "clock_skew" and state.clock_anomaly == "clock_skew"
+    assert seen[-1] is True  # first tick: the skew is seen only after the daily-loss evaluation
+    _tick(state, clock, fake, 60.0)
+    assert seen[-1] is False
+    fake.skew_s = None
+    _tick(state, clock, fake, 60.0)  # clean decide clears the anomaly
+    assert state.clock_anomaly is None
+    _tick(state, clock, fake, 60.0)
+    assert seen[-1] is True
