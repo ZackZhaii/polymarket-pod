@@ -64,6 +64,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 import os
 import platform
 import shutil
@@ -253,6 +254,7 @@ class RunnerState:
     clock_anomaly: str | None = "clock_unverified"
     # set during a tick when a fetched book passed the skew check; only such a tick may clear clock_anomaly
     tick_clock_verified: bool = False
+    tick_clock_vetoed: bool = False  # Poly风控 P1 on #275: any book with an invalid book_ts this tick
     counters: dict[str, int] = field(default_factory=lambda: {
         "forecasts_sealed_total": 0, "forecasts_rejected_total": 0, "intents_built_total": 0, "allows_total": 0,
         "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0})
@@ -588,11 +590,17 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
                 break
             snap = book_snapshot_from_clob(raw, market_id, token)
             age = _book_age_s(snap.book_ts, fetched_at)
-            if age is not None and age > MAX_BOOK_AGE_S:
+            skew = _book_skew_s(snap.book_ts, fetched_at)
+            if age is None or skew is None:
+                # Poly风控 P1 on #275: a missing / unparseable / non-finite book_ts proves nothing about the
+                # clock; refuse the book (like RiskGate) and veto this tick's clock verification.
+                book_refused = ["missing_book_ts"]
+                state.tick_clock_vetoed = True
+                break
+            if age > MAX_BOOK_AGE_S:
                 book_refused = ["stale_book"]
                 break
-            skew = _book_skew_s(snap.book_ts, fetched_at)
-            if skew is not None and skew > CLOCK_SKEW_MAX_S:
+            if skew > CLOCK_SKEW_MAX_S:
                 skew_pause = True
                 break
             books[token] = snap
@@ -669,13 +677,19 @@ def _skip(state: RunnerState, now: datetime, report: IterationReport, item: Pend
 
 def _book_age_s(book_ts: object, now: datetime) -> float | None:
     parsed = heartbeat.parse_stamp(book_ts) if isinstance(book_ts, str) else None
-    return None if parsed is None else round((now - parsed).total_seconds(), 3)
+    if parsed is None:
+        return None
+    age = round((now - parsed).total_seconds(), 3)
+    return age if math.isfinite(age) else None
 
 
 def _book_skew_s(book_ts: object, now: datetime) -> float | None:
     """Absolute |book_ts − local| in seconds (issue #120 clock skew)."""
     parsed = heartbeat.parse_stamp(book_ts) if isinstance(book_ts, str) else None
-    return None if parsed is None else round(abs((now - parsed).total_seconds()), 3)
+    if parsed is None:
+        return None
+    skew = round(abs((now - parsed).total_seconds()), 3)
+    return skew if math.isfinite(skew) else None
 
 
 
@@ -843,6 +857,7 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     inbox / decisions."""
     state.iteration += 1
     state.tick_clock_verified = False  # Task DC: per tick
+    state.tick_clock_vetoed = False
     gamma = GuardedGetter(getters.gamma)  # one guarded Gamma getter per tick: settlement, scan, fee
     try:
         check = preflight(state.paths, now=now, risk_path=state.risk_path, clock_ok=runner_clock_ok(state),
@@ -914,6 +929,8 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
         state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return IterationReport(ACT_WRITE_FAILED, [str(exc)])
     state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
+    if state.tick_clock_vetoed:  # one invalid book_ts vetoes the whole tick's clock verification
+        state.tick_clock_verified = False
     # clear clock_skew pause only after a decide that did not re-pause and verified the clock (Task DC)
     if report.action == ACT_RUN and state.tick_clock_verified and state.paused_reason == "clock_skew":
         state.paused_reason = state.paused_since = None

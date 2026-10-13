@@ -432,3 +432,55 @@ def test_dc_an_empty_tick_after_startup_stays_unverified(env):
     empty = _Empty(clock.now())
     m2_runner.iteration(state, now=clock.now(), getters=empty.getters())
     assert state.clock_anomaly == "clock_unverified"
+
+
+class _BadTs(rig.FakeGetters):
+    """Books whose exchange timestamp is missing or invalid (Poly风控 P1 on #275)."""
+
+    def __init__(self, now: datetime, ts: object) -> None:
+        super().__init__(now)
+        self.ts = ts
+
+    def book(self, url: str):
+        body = dict(super().book(url))
+        body.pop("book_ts", None)
+        if self.ts is _MISSING:
+            body.pop("timestamp", None)
+        else:
+            body["timestamp"] = self.ts
+        return body
+
+
+_MISSING = object()
+_BAD_TS = [pytest.param(_MISSING, id="missing"), pytest.param("garbage", id="unparseable"),
+           pytest.param("nan", id="nan"), pytest.param("inf", id="inf")]
+
+
+@pytest.mark.parametrize("ts", _BAD_TS)
+def test_dc_an_invalid_book_ts_after_a_skew_tick_does_not_clear_the_anomaly(env, ts):
+    clock, fake, state = _skew_rig(env)
+    _tick(state, clock, fake)
+    assert state.clock_anomaly == "clock_skew"
+    bad = _BadTs(clock.now(), ts)
+    for _ in range(2):
+        clock.advance_wall(60.0)
+        clock.mono += 60.0
+        m2_runner.iteration(state, now=clock.now(), getters=bad.getters())
+        assert state.tick_clock_verified is False
+        assert state.clock_anomaly == "clock_skew" and m2_runner.runner_clock_ok(state) is False
+
+
+@pytest.mark.parametrize("ts", _BAD_TS)
+def test_dc_an_invalid_book_ts_after_startup_stays_unverified(env, ts):
+    clock, _, state = _skew_rig(env)
+    bad = _BadTs(clock.now(), ts)
+    m2_runner.iteration(state, now=clock.now(), getters=bad.getters())
+    assert state.tick_clock_verified is False
+    assert state.clock_anomaly == "clock_unverified" and m2_runner.runner_clock_ok(state) is False
+
+
+def test_dc_a_small_future_skew_within_bound_verifies(env):
+    clock, fake, state = _skew_rig(env)
+    fake.skew_s = CLOCK_SKEW_MAX_S - 1
+    _tick(state, clock, fake)
+    assert state.tick_clock_verified is True and state.clock_anomaly is None
