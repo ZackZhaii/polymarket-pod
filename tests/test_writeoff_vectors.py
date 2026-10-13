@@ -21,16 +21,16 @@ from src import daily_loss as daily_loss_mod
 from src import halt_store, ledger_store, market_close, paper_ledger, settlement
 
 FIXTURE = Path(__file__).parent / "fixtures" / "poly_forecast_197_vectors_v3.json"
-SHA256_PREFIX = "214f058e"
+SHA256_PREFIX = "0f1f210b"  # v3.3 (Task CK, #225 regen of WO-27/WO-43 + WO-27-ONTIME); v3.2 was 214f058e
 DATA = json.loads(FIXTURE.read_text(encoding="utf-8"))
 VECTORS = DATA["vectors"]
 TOL = 1e-6
 
 
-def test_the_vector_file_is_poly_forecasts_v3_2():
+def test_the_vector_file_is_poly_forecasts_v3_3():
     # the committed (LF) bytes: a Windows checkout with core.autocrlf=true has CRLF in the working copy
     assert hashlib.sha256(FIXTURE.read_bytes().replace(b"\r\n", b"\n")).hexdigest().startswith(SHA256_PREFIX)
-    assert DATA["version"] == "v3.2" and len(VECTORS) == 46
+    assert DATA["version"] == "v3.3" and len(VECTORS) == 47
 
 
 def _dt(stamp: str) -> datetime:
@@ -69,7 +69,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(paper_ledger, "MARK_BOOKS_PATH", tmp_path / "books.jsonl")
     monkeypatch.setattr(paper_ledger, "DAILY_MARKS_DIR", tmp_path / "daily_marks")
     monkeypatch.setattr(paper_ledger, "SETTLEMENT_RESOLUTIONS_PATH", tmp_path / "resolutions.jsonl")
-    monkeypatch.setattr(paper_ledger, "_LAST_EVAL_DAY", None)
+    monkeypatch.setattr(paper_ledger, "_LAST_EVAL_DAY", None)  # isolation only; it no longer decides ``late``
     monkeypatch.setattr(paper_ledger, "bus", lambda *args, **kwargs: None)
     monkeypatch.setattr(halt_store, "HALT_STATE_PATH", tmp_path / "halt_state.json")
     monkeypatch.setattr(halt_store, "HALT_FALLBACK_PATH", tmp_path / "HALT")
@@ -104,6 +104,12 @@ def _distinct_writeoffs(rows: list[dict]) -> set[str]:
 
 @pytest.mark.parametrize("vector", VECTORS, ids=[v["id"] for v in VECTORS])
 def test_poly_forecast_197_vector(env, vector):
+    _run(env, vector)
+
+
+def _run(env, vector, *, clock_ok: bool = True, check_parts: bool = True) -> dict[str, dict]:
+    """Replay one vector; returns {t: {"late", "unrealized_usd", "daily_loss_usd"}} as computed by the repo."""
+    seen: dict[str, dict] = {}
     expected = vector.get("expected_reread_only") or vector["expected"]
     inputs = vector["inputs"]
     fills = sorted(inputs["ledger"], key=lambda r: r["ts"])
@@ -180,7 +186,7 @@ def test_poly_forecast_197_vector(env, vector):
             continue
         assert exp["risk_state"] == "ok", (label, exp.get("halt_reason"))
         if found.closes:
-            out = paper_ledger.apply_writeoffs(found.closes, t, books)
+            out = paper_ledger.apply_writeoffs(found.closes, t, books, clock_ok=clock_ok)
             assert out["problems"] == [], (label, out["problems"])
             if not step.get("crash_after_ledger_write"):
                 bus_legs |= {f"{r['market']}|{r['token_id']}" for r in out["booked"]}
@@ -209,10 +215,15 @@ def test_poly_forecast_197_vector(env, vector):
         # 5) daily loss
         day = daily_loss_mod.daily_loss(read.rows, t[:10], list(read.ids))
         assert day.problems == [], (label, day.problems)
-        if t[:10] not in set(inputs.get("late_days") or []) and paper_ledger._LAST_EVAL_DAY != t[:10]:
-            paper_ledger._LAST_EVAL_DAY = paper_ledger._previous_day(t[:10])  # the runner ran yesterday: not late
-        unrealized = paper_ledger.daily_unrealized(read.rows, list(read.ids), t, books)
+        # Poly风控 (#225 / Task CK): no "ran yesterday => on time" assumption and no override of ``late``: the
+        # snapshot's lateness is src/day_boundary.day_start_late on the step's own time (the vectors model a
+        # verified clock, clock_ok=True; a clock anomaly is covered by tests/test_da_day_start_clock.py).
+        unrealized = paper_ledger.daily_unrealized(read.rows, list(read.ids), t, books, clock_ok=clock_ok)
         assert unrealized["problems"] == [], (label, unrealized["problems"])
+        seen[t] = {"late": unrealized["late"], "unrealized_usd": unrealized["loss_usd"],
+                   "daily_loss_usd": day.total_usd + unrealized["loss_usd"]}
+        if not check_parts:
+            continue
         parts = exp["parts"]
         got = {"fees_usd": day.fees_usd, "realized_loss_usd": day.realized_loss_usd - day.writeoff_usd,
                "writeoff_usd": day.writeoff_usd, "unrealized_usd": unrealized["loss_usd"]}
@@ -223,4 +234,32 @@ def test_poly_forecast_197_vector(env, vector):
         assert day.realized_gain_usd == pytest.approx(exp["realized_gain_usd"], abs=TOL), label
         open_legs = sorted(f"{m}|{tok}" for m, tok in market_close.open_legs(read.rows))
         assert open_legs == sorted(exp["occupancy"]["legs"]) and len(open_legs) == exp["occupancy"]["count"], label
-    assert bool(halted) == bool(expected.get("halted")), vector["id"]
+    if check_parts:
+        assert bool(halted) == bool(expected.get("halted")), vector["id"]
+    return seen
+
+
+# --- Poly风控's exact #225 values (Task CK): late first evaluations, the on-time control, its clock anomaly ----
+
+def _vector(vid: str) -> dict:
+    return next(v for v in VECTORS if v["id"] == vid)
+
+
+@pytest.mark.parametrize("vid, t, late, loss", [
+    ("WO-27", "2026-10-14T13:00:00Z", True, 0.30),          # first evaluation at 13:00: late
+    ("WO-43", "2026-10-13T09:00:00Z", True, 0.15),          # first evaluation at 09:00: late
+    ("WO-27-ONTIME", "2026-10-14T00:00:30Z", False, 0.0),   # control: the harness writes it at 00:00
+    ("WO-27-ONTIME", "2026-10-14T13:00:00Z", False, 0.0),
+])
+def test_poly_risk_225_exact_values(env, vid, t, late, loss):
+    seen = _run(env, _vector(vid))
+    assert seen[t]["late"] is late and seen[t]["unrealized_usd"] == pytest.approx(loss, abs=TOL), seen[t]
+    exp = next(e for e in _vector(vid)["expected"]["steps"] if e["t"] == t)
+    assert exp["parts"]["unrealized_usd"] == pytest.approx(loss, abs=TOL)  # the file carries the same value
+
+
+def test_poly_risk_225_control_with_clock_anomaly_is_late_030(env):
+    """The same 00:00 snapshot written with clock_ok=False is late: max(cost, previous day's mark) -> $0.30."""
+    seen = _run(env, _vector("WO-27-ONTIME"), clock_ok=False, check_parts=False)
+    for t in ("2026-10-14T00:00:30Z", "2026-10-14T13:00:00Z"):
+        assert seen[t]["late"] is True and seen[t]["unrealized_usd"] == pytest.approx(0.30, abs=TOL), (t, seen[t])

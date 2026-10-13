@@ -547,7 +547,7 @@ def _start_of_day(env, monkeypatch, bid, on_time=True):
     # Task CX/DA: lateness is src/day_boundary.day_start_late (time since 00:00 UTC), not _LAST_EVAL_DAY
     env["clock"]["now"] = SOD_NOW if on_time else "2026-09-01T03:00:00Z"
     _mark_books(env, _top(bid, "2026-09-01T00:00:05Z"))
-    snap_state = paper_ledger.load_state("x", "t")
+    snap_state = paper_ledger.load_state("x", "t", clock_ok=True)  # verified clock (Task DC)
     assert snap_state["daily_marks_late"] is (not on_time)
     env["clock"]["now"] = DAY1
 

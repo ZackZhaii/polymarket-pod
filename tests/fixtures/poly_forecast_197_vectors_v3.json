@@ -1,7 +1,7 @@
 {
  "schema": "poly_forecast_197_vectors/3",
- "version": "v3.2",
- "version_note": "v3.2：OQ-N7 已裁定（https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792）：核销后矛盾 → 全局 halt（invalid_risk_state），并叠加 #214 对该市场结算的阻断；人工解除全局 halt 后该市场结算仍阻断。WO-15/16 期望不变；新增 WO-42、WO-43、INV-13；对照 dev 8b5db69。 v3.1（仅措辞）：所有 'bus' 指 M2 runner 事件流（events.jsonl），不是 pod bus；PROTOCOL / BUS_TYPES 不变（Poly指挥 澄清）。数值、字段名与 v3 @4acf535 逐项相同。v3 按 Poly风控 补充裁定 issuecomment-6106700917 修订：bus 至少一次 + 消费端按键去重（WO-38）；已核销市场轮询到结算、只查矛盾，读失败忽略（WO-41）；N1–N6 resolved。v2 按 Poly风控 裁定 issuecomment-6106669720 修订：核销前的确认失败/读取失败不 halt（按 #124 继续计最坏浮亏、下一轮重新确认）；只有核销后矛盾与账本核销行冲突会 halt；同 tick 先结算后核销；新增崩溃重启/账本去重向量；第二源辅证另给 expected_reread_only。",
+ "version": "v3.3",
+ "version_note": "v3.3（Task CK，Poly风控 #225 裁定）：WO-27 2026-10-14T13:00Z、WO-43 2026-10-13T09:00Z/10:00Z 为当日首次评估，距 UTC 00:00 超过 DAY_START_MAX_LAG_S，日初快照迟到，参考价取 max(成本, 前一日最后有效标价)；期望值由仓库函数（tests/test_writeoff_vectors.py 同一 harness，src.paper_ledger.daily_unrealized / src.daily_loss）重算。新增对照 WO-27-ONTIME（00:00:30Z 准时快照，13:00 期望 0）。harness 不再假设“昨天跑过即准时”。其余期望不变。 | 前版：v3.2：OQ-N7 已裁定（https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792）：核销后矛盾 → 全局 halt（invalid_risk_state），并叠加 #214 对该市场结算的阻断；人工解除全局 halt 后该市场结算仍阻断。WO-15/16 期望不变；新增 WO-42、WO-43、INV-13；对照 dev 8b5db69。 v3.1（仅措辞）：所有 'bus' 指 M2 runner 事件流（events.jsonl），不是 pod bus；PROTOCOL / BUS_TYPES 不变（Poly指挥 澄清）。数值、字段名与 v3 @4acf535 逐项相同。v3 按 Poly风控 补充裁定 issuecomment-6106700917 修订：bus 至少一次 + 消费端按键去重（WO-38）；已核销市场轮询到结算、只查矛盾，读失败忽略（WO-41）；N1–N6 resolved。v2 按 Poly风控 裁定 issuecomment-6106669720 修订：核销前的确认失败/读取失败不 halt（按 #124 继续计最坏浮亏、下一轮重新确认）；只有核销后矛盾与账本核销行冲突会 halt；同 tick 先结算后核销；新增崩溃重启/账本去重向量；第二源辅证另给 expected_reread_only。",
  "generator": "vectors/gen_197_vectors.v3_2.py",
  "origin_dev_sha": "8b5db696d78fd2185c5b76fd79d20f26ab2c6bc6",
  "rule": "KEY #197 close-then-write-off: body sections A-E, approval https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6104331631, ruling https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6106669720. PR #195 NOT applied: two-sided leg_marks.",
@@ -16103,6 +16103,921 @@
       "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.3,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.3
+      },
+      "realized_gain_usd": 10.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [
+       "settle-3685d951dece907830eccd13c26b7475"
+      ],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.5,
+        "value_usd": 9.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       }
+      ]
+     }
+    ],
+    "writeoff_events": [
+     {
+      "event_id": "writeoff-3685d951dece907830eccd13c26b7475",
+      "ts": "2026-10-12T12:01:40Z",
+      "day": "2026-10-12",
+      "leg_key": "mA|mA-Y",
+      "market": "mA",
+      "condition_id": "0xc-mA",
+      "token_id": "mA-Y",
+      "shares": 10.0,
+      "cost_basis_usd": 9.85,
+      "open_fees_usd": 0.0,
+      "full_cost_usd": 9.85,
+      "daily_loss_component_usd": 9.85,
+      "reason": "writeoff_confirmed_reread",
+      "evidence": {
+       "first_read_t": "2026-10-12T12:01:00Z",
+       "confirm_t": "2026-10-12T12:01:40Z",
+       "closed_time": "2026-10-12T12:00:00+00:00",
+       "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-mA&closed=true"
+      }
+     }
+    ],
+    "day_end_daily_loss_usd": {
+     "2026-10-12": 10.15,
+     "2026-10-13": 0.0,
+     "2026-10-14": 0.0
+    },
+    "final": {
+     "realized_pnl_usd": 0.15,
+     "fees_total_usd": 0.0,
+     "open_legs_not_written_off": [
+      "mB|mB-Y"
+     ],
+     "written_off_unsettled_legs": [],
+     "writeoff_count": 1
+    },
+    "halted": null,
+    "bus": {
+     "semantics": "at_least_once_consumer_dedupe_by_key",
+     "keys_required": [
+      "writeoff-3685d951dece907830eccd13c26b7475"
+     ],
+     "model_emissions_by_key": {
+      "writeoff-3685d951dece907830eccd13c26b7475": 1
+     },
+     "consumer_deduped_count_by_key": {
+      "writeoff-3685d951dece907830eccd13c26b7475": 1
+     }
+    }
+   },
+   "dev_current": {
+    "steps": [
+     {
+      "t": "2026-10-12T08:00:30Z",
+      "day": "2026-10-12",
+      "daily_loss_usd": 0.25,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.25
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.65,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.8,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.1
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T12:01:00Z",
+      "day": "2026-10-12",
+      "daily_loss_usd": 10.15,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 10.15
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.65,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.8,
+        "value_usd": 9.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.3
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T12:01:40Z",
+      "day": "2026-10-12",
+      "daily_loss_usd": 10.15,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 10.15
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.65,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.8,
+        "value_usd": 9.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.3
+       }
+      ]
+     },
+     {
+      "t": "2026-10-13T00:00:30Z",
+      "day": "2026-10-13",
+      "daily_loss_usd": 9.85,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 9.85
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.65,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.5,
+        "value_usd": 9.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       }
+      ]
+     },
+     {
+      "t": "2026-10-14T13:00:00Z",
+      "day": "2026-10-14",
+      "daily_loss_usd": 0.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.0
+      },
+      "realized_gain_usd": 0.15,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 1,
+       "usd": 9.8,
+       "legs": [
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [
+       "settle-3685d951dece907830eccd13c26b7475"
+      ],
+      "marks": [
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.5,
+        "value_usd": 9.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       }
+      ]
+     }
+    ],
+    "day_end_daily_loss_usd": {
+     "2026-10-12": 10.15,
+     "2026-10-13": 9.85,
+     "2026-10-14": 0.0
+    },
+    "final": {
+     "realized_pnl_usd": 0.15,
+     "fees_total_usd": 0.0,
+     "open_legs_not_written_off": [
+      "mB|mB-Y"
+     ],
+     "written_off_unsettled_legs": [],
+     "writeoff_count": 0
+    }
+   },
+   "uses_second_source": false,
+   "differs_from_dev": true,
+   "diffs": [
+    "2026-10-13T00:00:30Z:daily_loss_usd 9.85 -> 0.0",
+    "2026-10-14T13:00:00Z:realized_gain_usd 0.15 -> 10.0"
+   ],
+   "invariants_checked": [
+    "INV-1",
+    "INV-2",
+    "INV-3",
+    "INV-4",
+    "INV-6",
+    "INV-9",
+    "INV-10",
+    "INV-11",
+    "INV-13"
+   ]
+  },
+  {
+   "id": "WO-27-ONTIME",
+   "category": "day_start_control",
+   "description": "#225 对照：同 WO-27，但 harness 在 2026-10-14T00:00:30Z（UTC 日界后 30s，准时）先写日初快照；13:00 的 mB 浮亏按准时日初标价计，期望 0。",
+   "issue_refs": [
+    "#197",
+    "#225"
+   ],
+   "inputs": {
+    "ledger": [
+     {
+      "fill_id": "a1",
+      "ts": "2026-10-12T08:00:00Z",
+      "market": "mA",
+      "token_id": "mA-Y",
+      "condition_id": "0xc-mA",
+      "side": "buy",
+      "shares": 10.0,
+      "effective_price": 0.985,
+      "notional_usd": 9.85,
+      "fee_usd": 0.0,
+      "hypothetical": false,
+      "counts_toward_risk": true,
+      "risk_decision": "allow"
+     },
+     {
+      "fill_id": "b1",
+      "ts": "2026-10-12T08:00:00Z",
+      "market": "mB",
+      "token_id": "mB-Y",
+      "condition_id": "0xc-mB",
+      "side": "buy",
+      "shares": 10.0,
+      "effective_price": 0.98,
+      "notional_usd": 9.8,
+      "fee_usd": 0.0,
+      "hypothetical": false,
+      "counts_toward_risk": true,
+      "risk_decision": "allow"
+     }
+    ],
+    "steps": [
+     {
+      "t": "2026-10-12T08:00:30Z",
+      "books": {
+       "mA|mA-Y": {
+        "book_ts": "2026-10-12T08:00:20Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       },
+       "mB|mB-Y": {
+        "book_ts": "2026-10-12T08:00:20Z",
+        "bids": [
+         [
+          0.97,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.99,
+          500.0
+         ]
+        ]
+       }
+      }
+     },
+     {
+      "t": "2026-10-12T12:01:00Z",
+      "books": {
+       "mA|mA-Y": null,
+       "mB|mB-Y": {
+        "book_ts": "2026-10-12T12:00:50Z",
+        "bids": [
+         [
+          0.95,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.97,
+          500.0
+         ]
+        ]
+       }
+      },
+      "gamma": {
+       "mA": {
+        "closed": true,
+        "acceptingOrders": false,
+        "closedTime": "2026-10-12T12:00:00Z",
+        "active": true,
+        "umaResolutionStatus": "resolved"
+       },
+       "mB": {
+        "closed": false,
+        "acceptingOrders": true,
+        "closedTime": null,
+        "active": true,
+        "umaResolutionStatus": null
+       }
+      }
+     },
+     {
+      "t": "2026-10-12T12:01:40Z",
+      "books": {
+       "mB|mB-Y": {
+        "book_ts": "2026-10-12T12:01:30Z",
+        "bids": [
+         [
+          0.95,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.97,
+          500.0
+         ]
+        ]
+       }
+      },
+      "gamma": {
+       "mA": {
+        "closed": true,
+        "acceptingOrders": false,
+        "closedTime": "2026-10-12T12:00:00Z",
+        "active": true,
+        "umaResolutionStatus": "resolved"
+       },
+       "mB": {
+        "closed": false,
+        "acceptingOrders": true,
+        "closedTime": null,
+        "active": true,
+        "umaResolutionStatus": null
+       }
+      }
+     },
+     {
+      "t": "2026-10-13T00:00:30Z",
+      "books": {
+       "mB|mB-Y": {
+        "book_ts": "2026-10-13T00:00:20Z",
+        "bids": [
+         [
+          0.95,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.97,
+          500.0
+         ]
+        ]
+       }
+      }
+     },
+     {
+      "t": "2026-10-14T00:00:30Z",
+      "books": {
+       "mB|mB-Y": {
+        "book_ts": "2026-10-14T00:00:20Z",
+        "bids": [
+         [
+          0.95,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.97,
+          500.0
+         ]
+        ]
+       }
+      }
+     },
+     {
+      "t": "2026-10-14T13:00:00Z",
+      "books": {
+       "mB|mB-Y": {
+        "book_ts": "2026-10-14T12:59:50Z",
+        "bids": [
+         [
+          0.95,
+          500.0
+         ]
+        ],
+        "asks": [
+         [
+          0.97,
+          500.0
+         ]
+        ]
+       }
+      },
+      "resolution": {
+       "condition_id": "0xc-mA",
+       "market": "mA",
+       "winning_token_id": "mA-Y",
+       "outcome_token_ids": [
+        "mA-Y",
+        "mA-N"
+       ],
+       "status": "resolved",
+       "uma_checked": true,
+       "closed_ts": "2026-10-12T12:00:00Z"
+      }
+     }
+    ],
+    "late_days": [],
+    "start_of_day_snapshots": [
+     {
+      "day": "2026-10-12",
+      "created_at": "2026-10-12T08:00:30Z",
+      "late": false,
+      "legs": []
+     },
+     {
+      "day": "2026-10-13",
+      "created_at": "2026-10-13T00:00:30Z",
+      "late": false,
+      "legs": [
+       {
+        "leg_key": "mA|mA-Y",
+        "shares": 10.0,
+        "cost_basis_usd": 9.85,
+        "mark_usd": 0.0,
+        "mark_source": "invalid_book",
+        "book_ts": null,
+        "mark_invalid": true
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "shares": 10.0,
+        "cost_basis_usd": 9.8,
+        "mark_usd": 9.5,
+        "mark_source": "bid_ladder",
+        "book_ts": "2026-10-13T00:00:20Z",
+        "mark_invalid": false
+       }
+      ]
+     },
+     {
+      "day": "2026-10-14",
+      "created_at": "2026-10-14T13:00:00Z",
+      "late": false,
+      "legs": [
+       {
+        "leg_key": "mA|mA-Y",
+        "shares": 10.0,
+        "cost_basis_usd": 9.85,
+        "mark_usd": 0.0,
+        "mark_source": "invalid_book",
+        "book_ts": null,
+        "mark_invalid": true
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "shares": 10.0,
+        "cost_basis_usd": 9.8,
+        "mark_usd": 9.5,
+        "mark_source": "bid_ladder",
+        "book_ts": "2026-10-14T12:59:50Z",
+        "mark_invalid": false
+       }
+      ]
+     }
+    ]
+   },
+   "checks": [],
+   "expected": {
+    "steps": [
+     {
+      "t": "2026-10-12T08:00:30Z",
+      "day": "2026-10-12",
+      "close_reasons": {},
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 0,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.65,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.25,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.25
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.15
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.8,
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.1
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T12:01:00Z",
+      "day": "2026-10-12",
+      "close_reasons": {
+       "mA": "awaiting_confirmation",
+       "mB": "not_closed"
+      },
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 0,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.65,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 10.15,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 10.15
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.8,
+        "value_usd": 9.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.3
+       }
+      ]
+     },
+     {
+      "t": "2026-10-12T12:01:40Z",
+      "day": "2026-10-12",
+      "close_reasons": {
+       "mA": "writeoff_confirmed_reread",
+       "mB": "not_closed"
+      },
+      "writeoff_emitted": true,
+      "writeoff_events": [
+       "writeoff-3685d951dece907830eccd13c26b7475"
+      ],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [
+       {
+        "event_id": "writeoff-3685d951dece907830eccd13c26b7475",
+        "replay": false
+       }
+      ],
+      "bus_keys_required_by_now": [
+       "writeoff-3685d951dece907830eccd13c26b7475"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.65,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 9.85,
+      "daily_loss_usd": 10.15,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 9.85,
+       "unrealized_usd": 0.3
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.8,
+        "value_usd": 9.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "cost",
+        "loss_usd": 0.3
+       }
+      ]
+     },
+     {
+      "t": "2026-10-13T00:00:30Z",
+      "day": "2026-10-13",
+      "close_reasons": {},
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-3685d951dece907830eccd13c26b7475"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.65,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.5,
+        "value_usd": 9.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       }
+      ]
+     },
+     {
+      "t": "2026-10-14T00:00:30Z",
+      "day": "2026-10-14",
+      "close_reasons": {},
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-3685d951dece907830eccd13c26b7475"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.65,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
+      "daily_loss_usd": 0.0,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 0.0
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "settlement_booked": [],
+      "settlement_problems": [],
+      "marks": [
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.5,
+        "value_usd": 9.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       }
+      ]
+     },
+     {
+      "t": "2026-10-14T13:00:00Z",
+      "day": "2026-10-14",
+      "close_reasons": {},
+      "writeoff_emitted": false,
+      "writeoff_events": [],
+      "ledger_writeoff_rows": 1,
+      "duplicate_writeoff_rows_ignored": 0,
+      "bus_emitted": [],
+      "bus_keys_required_by_now": [
+       "writeoff-3685d951dece907830eccd13c26b7475"
+      ],
+      "crash_after_ledger_write": false,
+      "occupancy": {
+       "count": 1,
+       "usd": 9.8,
+       "legs": [
+        "mB|mB-Y"
+       ]
+      },
+      "operator_resume": null,
+      "settlement_blocked_markets": [],
+      "settlement_skipped_blocked": [],
+      "risk_state": "ok",
+      "realized_writeoff_usd": 0.0,
       "daily_loss_usd": 0.0,
       "parts": {
        "fees_usd": 0.0,
@@ -26829,12 +27744,12 @@
       "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
-      "daily_loss_usd": 0.0,
+      "daily_loss_usd": 0.15,
       "parts": {
        "fees_usd": 0.0,
        "realized_loss_usd": 0.0,
        "writeoff_usd": 0.0,
-       "unrealized_usd": 0.0
+       "unrealized_usd": 0.15
       },
       "realized_gain_usd": 0.0,
       "max_daily_loss_veto": false,
@@ -26885,12 +27800,12 @@
       ],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
-      "daily_loss_usd": 0.0,
+      "daily_loss_usd": 0.15,
       "parts": {
        "fees_usd": 0.0,
        "realized_loss_usd": 0.0,
        "writeoff_usd": 0.0,
-       "unrealized_usd": 0.0
+       "unrealized_usd": 0.15
       },
       "realized_gain_usd": 0.0,
       "max_daily_loss_veto": false,
