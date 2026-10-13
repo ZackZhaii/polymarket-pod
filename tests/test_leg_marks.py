@@ -251,13 +251,13 @@ def test_load_state_on_time_snapshot_then_a_ten_dollar_drop(env, monkeypatch):
     monkeypatch.setattr(paper_ledger, "_LAST_EVAL_DAY", "2026-08-31")  # running at the day roll
     env["clock"]["now"] = "2026-09-01T00:00:10Z"
     _books(env["books"], book(0.50, ask=0.52, ts="2026-09-01T00:00:05Z"))
-    first = paper_ledger.load_state("x", "t")
+    first = paper_ledger.load_state("x", "t", clock_ok=True)
     assert first["daily_marks_late"] is False and first["daily_unrealized_loss_usd"] == 0.0
     snap = json.loads((env["marks"] / f"{TODAY}.json").read_text())
     assert snap["legs"][0]["mark_usd"] == pytest.approx(50.0) and snap["late"] is False
     env["clock"]["now"] = NOW
     _books(env["books"], book(0.40, ask=0.42, ts=FRESH))
-    state = paper_ledger.load_state("x", "t")
+    state = paper_ledger.load_state("x", "t", clock_ok=True)
     assert state["daily_unrealized_loss_usd"] == pytest.approx(10.0)
     assert state["daily_loss_usd"] == pytest.approx(10.0)
     assert state["daily_marks"][0]["ref_source"] == "start_mark"
@@ -352,11 +352,11 @@ def test_crossing_utc_midnight_starts_a_new_snapshot_without_counting_yesterday_
     _book_fills(env["ledger"], [fill("buy", 100, 0.5, "2026-08-31T10:00:00Z")])
     env["clock"]["now"] = "2026-08-31T23:59:50Z"
     _books(env["books"], book(0.40, ask=0.42, ts="2026-08-31T23:59:45Z"))
-    yesterday = paper_ledger.load_state("x", "t")
+    yesterday = paper_ledger.load_state("x", "t", clock_ok=True)
     assert yesterday["daily_unrealized_loss_usd"] == pytest.approx(10.0)  # opened that day: ref = cost
     env["clock"]["now"] = "2026-09-01T00:00:10Z"
     _books(env["books"], book(0.40, ask=0.42, ts="2026-09-01T00:00:05Z"))
-    today = paper_ledger.load_state("x", "t")
+    today = paper_ledger.load_state("x", "t", clock_ok=True)
     assert today["daily_marks_late"] is False  # this process evaluated on 08-31
     assert today["daily_unrealized_loss_usd"] == 0.0  # yesterday's 10 is not counted again
     assert sorted(p.name for p in env["marks"].glob("*.json")) == ["2026-08-31.json", "2026-09-01.json"]

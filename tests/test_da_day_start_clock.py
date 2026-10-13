@@ -59,10 +59,10 @@ def test_d4_non_true_clock_flag_is_late(leg, bad):
     assert _snap(leg)["late"] is True
 
 
-def test_d5_preflight_takes_a_clock_ok_flag_default_true():
+def test_d5_preflight_takes_a_clock_ok_flag_default_false():
     import inspect
     assert "clock_ok" in inspect.signature(m2_runner.preflight).parameters
-    assert inspect.signature(m2_runner.preflight).parameters["clock_ok"].default is True
+    assert inspect.signature(m2_runner.preflight).parameters["clock_ok"].default is False
 
 
 @pytest.mark.parametrize("reason,ok", [(None, True), ("clock_skew", False), ("clock_unverified", False)])
@@ -70,3 +70,31 @@ def test_d6_runner_clock_ok_from_clock_anomaly(tmp_path, reason, ok):
     state = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(tmp_path))
     state.clock_anomaly = reason
     assert m2_runner.runner_clock_ok(state) is ok
+
+
+# --- Poly风控 ruling on #274: fail closed until the first clock check passes ----------------------------
+
+def test_d8_fresh_runner_clock_is_not_ok_before_any_clock_check(tmp_path):
+    state = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(tmp_path))
+    assert state.clock_anomaly == "clock_unverified"
+    assert m2_runner.runner_clock_ok(state) is False
+
+
+def test_d9_default_clock_state_snapshot_at_0001_is_late(leg):
+    """No clock state given (as right after startup): the 00:01 snapshot is late."""
+    rows, ids = _rows(leg)
+    risk = paper_ledger.daily_risk_loss(rows, ids, ROLL_0001)
+    assert _snap(leg)["late"] is True and risk["marks"]["late"] is True
+
+
+@pytest.mark.parametrize("fn", ["daily_risk_loss", "daily_unrealized"])
+def test_d10_paper_ledger_clock_ok_defaults_false(fn):
+    import inspect
+    assert inspect.signature(getattr(paper_ledger, fn)).parameters["clock_ok"].default is False
+
+
+def test_d11_load_state_defaults_to_an_unverified_clock(leg):
+    """Task DC: the commit path (load_state) has no clock check of its own: by default a 00:01 snapshot is late."""
+    leg["clock"]["now"] = ROLL_0001
+    state = paper_ledger.load_state("x", "t")
+    assert state["daily_marks_late"] is True and _snap(leg)["late"] is True

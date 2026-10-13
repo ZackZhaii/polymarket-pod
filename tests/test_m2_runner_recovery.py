@@ -367,20 +367,18 @@ def test_progress_reports_resume_count(env):
 def test_da_clock_skew_tick_then_next_preflight_evaluates_with_clock_not_ok(env, monkeypatch):
     """E2E: a clock_skew tick; the next tick's daily-loss evaluation gets clock_ok=False (day start late),
     and that survives a different preflight pause; after a clean decide it is True again."""
-    from src import paper_ledger
-
     seen: list[bool] = []
-    real = paper_ledger.daily_risk_loss
+    real = m2_runner.preflight
 
-    def spy(rows, ids, now, *, clock_ok=True):
-        seen.append(clock_ok)
-        return real(rows, ids, now, clock_ok=clock_ok)
+    def spy(*args, **kwargs):
+        seen.append(kwargs["clock_ok"])
+        return real(*args, **kwargs)
 
-    monkeypatch.setattr(paper_ledger, "daily_risk_loss", spy)
+    monkeypatch.setattr(m2_runner, "preflight", spy)
     clock, fake, state = _skew_rig(env)
     report = _tick(state, clock, fake)
     assert report.paused_reason == "clock_skew" and state.clock_anomaly == "clock_skew"
-    assert seen[-1] is True  # first tick: the skew is seen only after the daily-loss evaluation
+    assert seen[-1] is False  # first tick: no clock check has passed yet (fail closed, Poly风控 on #274)
     _tick(state, clock, fake, 60.0)
     assert seen[-1] is False
     fake.skew_s = None
@@ -388,3 +386,101 @@ def test_da_clock_skew_tick_then_next_preflight_evaluates_with_clock_not_ok(env,
     assert state.clock_anomaly is None
     _tick(state, clock, fake, 60.0)
     assert seen[-1] is True
+
+
+def test_da_after_startup_before_any_clock_check_the_snapshot_is_late(env, monkeypatch):
+    """Poly风控 on #274: right after startup no clock check has passed, so preflight evaluates with
+    clock_ok=False and a start-of-day snapshot written then is late; a passed check makes it True."""
+    seen: list[bool] = []
+    real = m2_runner.preflight
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs["clock_ok"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(m2_runner, "preflight", spy)
+    clock, fake, state = _skew_rig(env)
+    fake.skew_s = None  # sane books: the first decide passes the clock check
+    assert m2_runner.runner_clock_ok(state) is False
+    _tick(state, clock, fake)
+    assert seen[-1] is False and state.clock_anomaly is None
+    _tick(state, clock, fake, 60.0)
+    assert seen[-1] is True
+
+
+class _Empty(rig.FakeGetters):
+    """A tick that fetches no book at all (every book read fails)."""
+
+    def book(self, url: str):
+        raise OSError("no book")
+
+
+def test_dc_an_empty_tick_during_an_anomaly_does_not_clear_it(env):
+    clock, fake, state = _skew_rig(env)
+    _tick(state, clock, fake)
+    assert state.clock_anomaly == "clock_skew"
+    empty = _Empty(clock.now())
+    for _ in range(3):
+        clock.advance_wall(60.0)
+        clock.mono += 60.0
+        m2_runner.iteration(state, now=clock.now(), getters=empty.getters())
+        assert state.clock_anomaly == "clock_skew" and m2_runner.runner_clock_ok(state) is False
+
+
+def test_dc_an_empty_tick_after_startup_stays_unverified(env):
+    clock, _, state = _skew_rig(env)
+    empty = _Empty(clock.now())
+    m2_runner.iteration(state, now=clock.now(), getters=empty.getters())
+    assert state.clock_anomaly == "clock_unverified"
+
+
+class _BadTs(rig.FakeGetters):
+    """Books whose exchange timestamp is missing or invalid (Poly风控 P1 on #275)."""
+
+    def __init__(self, now: datetime, ts: object) -> None:
+        super().__init__(now)
+        self.ts = ts
+
+    def book(self, url: str):
+        body = dict(super().book(url))
+        body.pop("book_ts", None)
+        if self.ts is _MISSING:
+            body.pop("timestamp", None)
+        else:
+            body["timestamp"] = self.ts
+        return body
+
+
+_MISSING = object()
+_BAD_TS = [pytest.param(_MISSING, id="missing"), pytest.param("garbage", id="unparseable"),
+           pytest.param("nan", id="nan"), pytest.param("inf", id="inf")]
+
+
+@pytest.mark.parametrize("ts", _BAD_TS)
+def test_dc_an_invalid_book_ts_after_a_skew_tick_does_not_clear_the_anomaly(env, ts):
+    clock, fake, state = _skew_rig(env)
+    _tick(state, clock, fake)
+    assert state.clock_anomaly == "clock_skew"
+    bad = _BadTs(clock.now(), ts)
+    for _ in range(2):
+        clock.advance_wall(60.0)
+        clock.mono += 60.0
+        m2_runner.iteration(state, now=clock.now(), getters=bad.getters())
+        assert state.tick_clock_verified is False
+        assert state.clock_anomaly == "clock_skew" and m2_runner.runner_clock_ok(state) is False
+
+
+@pytest.mark.parametrize("ts", _BAD_TS)
+def test_dc_an_invalid_book_ts_after_startup_stays_unverified(env, ts):
+    clock, _, state = _skew_rig(env)
+    bad = _BadTs(clock.now(), ts)
+    m2_runner.iteration(state, now=clock.now(), getters=bad.getters())
+    assert state.tick_clock_verified is False
+    assert state.clock_anomaly == "clock_unverified" and m2_runner.runner_clock_ok(state) is False
+
+
+def test_dc_a_small_future_skew_within_bound_verifies(env):
+    clock, fake, state = _skew_rig(env)
+    fake.skew_s = CLOCK_SKEW_MAX_S - 1
+    _tick(state, clock, fake)
+    assert state.tick_clock_verified is True and state.clock_anomaly is None
