@@ -64,6 +64,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 import os
 import platform
 import shutil
@@ -248,7 +249,12 @@ class RunnerState:
     paused_since: str | None = None
     # Task DA (#225 follow-up): the clock anomaly the runner currently holds ("clock_skew"; #253 can set
     # "clock_unverified"). Kept apart from paused_reason so a later preflight pause does not forget it.
-    clock_anomaly: str | None = None
+    # Task DC (Poly风控 on #274): fail closed from startup / restart: "clock_unverified" until a tick fetched at
+    # least one book within CLOCK_SKEW_MAX_S of the local clock (and did not re-pause).
+    clock_anomaly: str | None = "clock_unverified"
+    # set during a tick when a fetched book passed the skew check; only such a tick may clear clock_anomaly
+    tick_clock_verified: bool = False
+    tick_clock_vetoed: bool = False  # Poly风控 P1 on #275: any book with an invalid book_ts this tick
     counters: dict[str, int] = field(default_factory=lambda: {
         "forecasts_sealed_total": 0, "forecasts_rejected_total": 0, "intents_built_total": 0, "allows_total": 0,
         "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0})
@@ -358,11 +364,12 @@ def live_flag_problems(risk_path: Path | None = None) -> list[str]:
 
 
 def runner_clock_ok(state: "RunnerState") -> bool:
-    """Task DA: True only when the runner holds no clock anomaly (generic: any non-None reason is not ok)."""
+    """Task DA: True only after a clock check has passed and while the runner holds no clock anomaly (generic:
+    any non-None reason is not ok). Before the first check (right after startup) it is False: fail closed."""
     return state.clock_anomaly is None
 
 
-def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = None, clock_ok: bool = True,
+def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = None, clock_ok: bool = False,
               ledger_path: Path | None = None, settle: Callable[[], list[str]] | None = None) -> Preflight:
     """The C.2 checks, in order; the first failing one decides. Writes no fill itself.
 
@@ -583,14 +590,21 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
                 break
             snap = book_snapshot_from_clob(raw, market_id, token)
             age = _book_age_s(snap.book_ts, fetched_at)
-            if age is not None and age > MAX_BOOK_AGE_S:
+            skew = _book_skew_s(snap.book_ts, fetched_at)
+            if age is None or skew is None:
+                # Poly风控 P1 on #275: a missing / unparseable / non-finite book_ts proves nothing about the
+                # clock; refuse the book (like RiskGate) and veto this tick's clock verification.
+                book_refused = ["missing_book_ts"]
+                state.tick_clock_vetoed = True
+                break
+            if age > MAX_BOOK_AGE_S:
                 book_refused = ["stale_book"]
                 break
-            skew = _book_skew_s(snap.book_ts, fetched_at)
-            if skew is not None and skew > CLOCK_SKEW_MAX_S:
+            if skew > CLOCK_SKEW_MAX_S:
                 skew_pause = True
                 break
             books[token] = snap
+            state.tick_clock_verified = True  # Task DC: a clock check passed (this book's skew is in range)
         if skew_pause:
             state.clock_anomaly = "clock_skew"  # Task DA: the next ticks' day-start reference is late
             # Issue #238: like the preflight pause, stamp paused_since (and log the event) only when the pause
@@ -663,13 +677,19 @@ def _skip(state: RunnerState, now: datetime, report: IterationReport, item: Pend
 
 def _book_age_s(book_ts: object, now: datetime) -> float | None:
     parsed = heartbeat.parse_stamp(book_ts) if isinstance(book_ts, str) else None
-    return None if parsed is None else round((now - parsed).total_seconds(), 3)
+    if parsed is None:
+        return None
+    age = round((now - parsed).total_seconds(), 3)
+    return age if math.isfinite(age) else None
 
 
 def _book_skew_s(book_ts: object, now: datetime) -> float | None:
     """Absolute |book_ts − local| in seconds (issue #120 clock skew)."""
     parsed = heartbeat.parse_stamp(book_ts) if isinstance(book_ts, str) else None
-    return None if parsed is None else round(abs((now - parsed).total_seconds()), 3)
+    if parsed is None:
+        return None
+    skew = round(abs((now - parsed).total_seconds()), 3)
+    return skew if math.isfinite(skew) else None
 
 
 
@@ -836,6 +856,8 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     """One loop step: the checks first (settlement inside them, issue #206); only when they all pass, scan /
     inbox / decisions."""
     state.iteration += 1
+    state.tick_clock_verified = False  # Task DC: per tick
+    state.tick_clock_vetoed = False
     gamma = GuardedGetter(getters.gamma)  # one guarded Gamma getter per tick: settlement, scan, fee
     try:
         check = preflight(state.paths, now=now, risk_path=state.risk_path, clock_ok=runner_clock_ok(state),
@@ -907,10 +929,13 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
         state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return IterationReport(ACT_WRITE_FAILED, [str(exc)])
     state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
-    # clear clock_skew pause only after a decide that did not re-pause
-    if report.action == ACT_RUN and state.paused_reason == "clock_skew":
+    if state.tick_clock_vetoed:  # one invalid book_ts vetoes the whole tick's clock verification
+        state.tick_clock_verified = False
+    # clear clock_skew pause only after a decide that did not re-pause and verified the clock (Task DC)
+    if report.action == ACT_RUN and state.tick_clock_verified and state.paused_reason == "clock_skew":
         state.paused_reason = state.paused_since = None
-    if report.action == ACT_RUN and state.clock_anomaly == "clock_skew":
+    # Task DC: an empty tick (no book fetched) proves nothing about the clock and never clears the anomaly
+    if report.action == ACT_RUN and state.tick_clock_verified:
         state.clock_anomaly = None
     return report
 

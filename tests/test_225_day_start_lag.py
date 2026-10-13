@@ -111,11 +111,11 @@ def test_g1_on_time_snapshot_at_the_roll_is_not_late(env, monkeypatch):
     monkeypatch.setattr(paper_ledger, "_LAST_EVAL_DAY", YDAY)
     env["clock"]["now"] = "2026-09-01T00:00:10Z"
     _books(env["books"], book(0.50, ask=0.52, ts="2026-09-01T00:00:05Z"))
-    first = paper_ledger.load_state("x", "t")
+    first = paper_ledger.load_state("x", "t", clock_ok=True)
     assert first["daily_marks_late"] is False and first["daily_unrealized_loss_usd"] == 0.0
     env["clock"]["now"] = NOW
     _books(env["books"], book(0.40, ask=0.42))
-    assert paper_ledger.load_state("x", "t")["daily_unrealized_loss_usd"] == pytest.approx(10.0)
+    assert paper_ledger.load_state("x", "t", clock_ok=True)["daily_unrealized_loss_usd"] == pytest.approx(10.0)
 
 
 def test_g2_restart_without_yesterday_is_late_and_uses_cost(env):
@@ -129,10 +129,10 @@ def test_g3_midnight_cross_does_not_count_yesterday_twice(env):
     _book_fills(env["ledger"], [fill("buy", 100, 0.5, "2026-08-31T10:00:00Z")])
     env["clock"]["now"] = "2026-08-31T23:59:50Z"
     _books(env["books"], book(0.40, ask=0.42, ts="2026-08-31T23:59:45Z"))
-    paper_ledger.load_state("x", "t")
+    paper_ledger.load_state("x", "t", clock_ok=True)
     env["clock"]["now"] = "2026-09-01T00:00:10Z"
     _books(env["books"], book(0.40, ask=0.42, ts="2026-09-01T00:00:05Z"))
-    assert paper_ledger.load_state("x", "t")["daily_unrealized_loss_usd"] == 0.0
+    assert paper_ledger.load_state("x", "t", clock_ok=True)["daily_unrealized_loss_usd"] == 0.0
 
 
 def test_g4_leg_opened_today_uses_todays_cost(env, monkeypatch):
@@ -213,7 +213,7 @@ def test_a2_snapshot_written_at_0159_is_on_time_and_at_0201_is_late(env, monkeyp
     monkeypatch.setattr(paper_ledger, "_LAST_EVAL_DAY", YDAY)
     env["clock"]["now"] = now
     _books(env["books"], book(0.50, ask=0.52, ts="2026-09-01T00:01:00Z"))
-    state = paper_ledger.load_state("x", "t")
+    state = paper_ledger.load_state("x", "t", clock_ok=True)
     snap = json.loads((env["marks"] / f"{TODAY}.json").read_text())
     assert snap["late"] is late and state["daily_marks_late"] is late
 
