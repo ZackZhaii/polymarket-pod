@@ -160,7 +160,7 @@ def test_a_single_stale_check_is_still_blocked_per_check(paper):
     while Sentinel has not alarmed yet (streak 1)."""
     watch = _watch(paper)
     assert watch.check("m1", STALE, NOW)["halt"] is None
-    state = {"open_positions": 0, "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
+    state = {"open_positions": 0, "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0,
              "recent_fills": [], "own_quotes": []}
     assert evaluate(_intent(FRESH), load_risk(), state, now=NOW).allow is True
     decision = evaluate(_intent(STALE), load_risk(), state, now=NOW)
