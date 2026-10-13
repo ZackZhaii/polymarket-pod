@@ -187,9 +187,14 @@ heartbeat. Acceptance 2: the ledger must pass `ledger_store.verify` first (only 
 and the bus is parsed strictly — bad JSON, non-object rows, a torn tail and unreadable files are
 named failures. Acceptance 3: each joined fill's full payload and the message's outer `market` are
 compared with a type-sensitive normalized JSON comparison (key order / formatting normalized;
-`10` / `10.0` / `true` / `"10.0"` stay distinct); the outer `bus.ts` is ignored. Review P1 on PR
-#202: the remaining checks (sender roles, duplicate / conflict copies, UNKNOWN markers, SHA256) are
-later acceptance items, so the tool never reports PASS — a problem-free run ends verdict `unknown`.
+`10` / `10.0` / `true` / `"10.0"` stay distinct); the outer `bus.ts` is ignored. Acceptance 4 +
+NEW-3b: every bus fill must be the Executor→Sentinel message the pipeline writes; identical
+duplicate copies count once (the extra-copy count is reported) while copies that contradict each
+other are a named `duplicate_conflict`; orphans on either side fail; settlement rows (`kind`
+"settlement", ledger-only by design) are counted separately (`ledger.settlements`), are not
+orphans, must still carry a fill_id, and a bus fill with a settlement's fill_id is a named
+problem. Review P1 on PR #202: the remaining checks (UNKNOWN markers, SHA256 and counts) are later
+acceptance items, so the tool never reports PASS — a problem-free run ends verdict `unknown`.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|

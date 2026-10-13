@@ -15,18 +15,28 @@ UTF-8 JSONL — a bad JSON line, a non-object line, a torn last line or an unrea
 named failure; no lenient reader that skips bad lines is used. Only a ledger that verifies is
 joined, by explicit ``fill_id``.
 
-Honesty rule (review P1 on PR #202): the deep equality checks — sender roles, duplicate / conflict
-copy policy, the UNKNOWN markers and input SHA256 — are the later acceptance items of issue #69 and
-are not implemented yet, so this tool never reports PASS: a run without problems still ends with
-verdict ``unknown`` and a non-zero exit, and the report names every check that remains unverified.
+Honesty rule (review P1 on PR #202): the UNKNOWN markers and the input SHA256 / counts of the
+report are the later acceptance items of issue #69 and are not implemented yet, so this tool never
+reports PASS: a run without problems still ends with verdict ``unknown`` and a non-zero exit, and
+the report names every check that remains unverified.
 
-Acceptance 3 of issue #69 (this change): every joined fill is compared in full. The ledger row and
+Acceptance 3 of issue #69: every joined fill is compared in full. The ledger row and
 the Executor fill's ``payload`` must be equal under a type-sensitive normalized JSON comparison —
 key order and JSON formatting are normalized away, but ``10``, ``10.0``, ``true`` and ``"10.0"``
 stay distinct (Python ``==`` would call the first three equal) — and the message's outer ``market``
 must name the fill's market. The outer ``bus.ts`` is the bus write time and is deliberately
 ignored. A drifted copy, a missing field, a non-finite number or a wrong outer market is a named
 problem and a non-zero exit.
+
+Acceptance 4 of issue #69 (this change): the sender roles of every bus fill must be exactly the
+ones the pipeline writes — ``from`` Executor ``to`` Sentinel (paper_ledger is the only fill emitter
+and podlib refuses a fill from anyone else); bus copies of one fill that are fully identical
+(payload, outer market, roles — the outer ``bus.ts`` write time is ignored) count once and the
+extra-copy count is reported, while copies that contradict each other are a named conflict; an
+orphan on either side is a named failure. NEW-3b (ruled into #69): settlement rows (``kind``
+"settlement") are booked to the ledger only and never have a bus fill, so they are counted
+separately (``ledger.settlements``) and are not orphans; a settlement row without a fill_id, or a
+bus fill carrying a settlement's fill_id, is a named problem.
 
 Exit codes: 0 reserved for the fully checked pass (not reachable until those acceptance items
 land); 1 a problem — the ledger failed ``ledger_store.verify``, an orphan, a content mismatch or a
@@ -50,13 +60,16 @@ EXIT_USAGE = 2
 
 BUS_FILL_TYPE = "fill"
 FILL_ID_FIELD = "fill_id"
+# Acceptance 4: the only fill emitter is paper_ledger (src/paper_ledger.py:671), always
+# bus("Executor", "Sentinel", "fill", ...); podlib.bus itself refuses a fill from anyone else.
+BUS_FILL_FROM = "Executor"
+BUS_FILL_TO = "Sentinel"
 
 # Review P1 on PR #202: until these later acceptance items of issue #69 land, a clean fill_id join
 # with equal payloads is not proof that the two logs agree, so the verdict stays "unknown" and the
-# exit stays non-zero. Acceptance 3 (full payload, outer market) is checked and no longer listed.
+# exit stays non-zero. Acceptance 3 (full payload, outer market) and acceptance 4 (sender roles,
+# duplicate / conflict copies) are checked and no longer listed.
 UNVERIFIED_CHECKS = (
-    "bus_sender_roles",                 # acceptance 4: from / to sender roles on the bus message
-    "duplicate_and_conflict_copies",    # acceptance 4: bus-side duplicate / conflict policy
     "legacy_and_hypothetical_unknown",  # acceptance 5: UNKNOWN markers for unjoinable rows
     "input_sha256_and_counts",          # acceptance 6: input hashes, verified / unverified counts
 )
@@ -180,10 +193,21 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
 
     ledger_ids: list[str] = []
     ledger_by_id: dict[str, dict[str, Any]] = {}
+    settlement_ids: set[str] = set()
+    settlements = 0
     for row in ledger_read.rows:
         fill_id = _fill_id(row.get(FILL_ID_FIELD))
         if fill_id is None:
-            report["problems"].append("ledger:row_without_fill_id")  # legacy history: not guessed
+            # NEW-3b: a settlement row without a fill_id gets its own name (ledger_store itself
+            # only reports a generic missing fill_id, and a legacy settlement row passes verify).
+            report["problems"].append("ledger:settlement_without_fill_id"
+                                      if ledger_store.is_settlement(row)
+                                      else "ledger:row_without_fill_id")  # legacy history: not guessed
+        elif ledger_store.is_settlement(row):
+            # NEW-3b: settlement rows are booked to the ledger only and never have a bus fill, so
+            # they are counted separately and never read as ledger-only orphans.
+            settlements += 1
+            settlement_ids.add(fill_id)
         else:
             ledger_ids.append(fill_id)
             ledger_by_id[fill_id] = row
@@ -198,12 +222,29 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
         fill_id = _fill_id(payload.get(FILL_ID_FIELD)) if isinstance(payload, dict) else None
         if fill_id is None:
             report["problems"].append("bus:fill_without_fill_id")
-        else:
-            bus_ids.append(fill_id)
-            bus_by_id.setdefault(fill_id, []).append(row)
+            continue
+        # Acceptance 4: a fill is always the Executor → Sentinel message paper_ledger writes.
+        if row.get("from") != BUS_FILL_FROM or row.get("to") != BUS_FILL_TO:
+            report["problems"].append(f"sender_role_mismatch:{fill_id}")
+        # NEW-3b: a settlement is ledger-only; a bus fill with its id contradicts that.
+        if fill_id in settlement_ids:
+            report["problems"].append(f"settlement_with_bus_fill:{fill_id}")
+        bus_ids.append(fill_id)
+        bus_by_id.setdefault(fill_id, []).append(row)
     report["bus"]["fills"] = bus_fills
     report["ledger"]["fills"] = len(ledger_ids)
-    report["bus"]["duplicate_fills"] = len(bus_ids) - len(set(bus_ids))  # judged in acceptance 4
+    report["ledger"]["settlements"] = settlements
+    report["bus"]["duplicate_fills"] = len(bus_ids) - len(set(bus_ids))  # extra copies, reported
+    # Acceptance 4: copies of one fill that contradict each other are a named conflict, even when
+    # one of them equals the booked row. The outer bus.ts is the write time and is ignored, so
+    # copies written at different times are still identical when nothing else drifted.
+    for fill_id, messages in sorted(bus_by_id.items()):
+        if len(messages) < 2:
+            continue
+        identities = {_canonical({name: message[name] for name in message if name != "ts"})
+                      for message in messages}
+        if len(identities) > 1:
+            report["problems"].append(f"duplicate_conflict:{fill_id}")
     report["ledger_only"] = sorted(set(ledger_ids) - set(bus_ids))
     report["bus_only"] = sorted(set(bus_ids) - set(ledger_ids))
     report["matched"] = len(set(ledger_ids) & set(bus_ids))
@@ -211,7 +252,7 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
     # Acceptance 3 of issue #69: every joined fill's full payload and the message's outer market.
     # The comparison is type-sensitive normalized JSON (see _canonical); the outer bus.ts is the
     # bus write time and is deliberately ignored. Every copy of a fill is compared, so a drifted
-    # second copy fails too. Sender roles stay acceptance 4 and are not checked here.
+    # second copy fails too (acceptance 4 names the pair a duplicate_conflict as well).
     for fill_id in sorted(set(ledger_ids) & set(bus_ids)):
         ledger_row = ledger_by_id[fill_id]
         for message in bus_by_id[fill_id]:
