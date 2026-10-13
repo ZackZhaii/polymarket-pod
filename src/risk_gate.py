@@ -41,6 +41,7 @@ from src import fees  # Task AE: the one fee module (stress_fee / ledger_fee)
 from src import halt_store  # Task AL: the halt consumer (persisted Sentinel / Executor halts)
 from src import category  # issue #131: tags -> category, fail closed
 from src import podlib  # issue #76: the decision clock is read through podlib.datetime
+from src.structural_gate import STRUCTURAL_ARB_DISABLED  # Task DD (#237): the one reason code
 from src.book_staleness import book_age_problem, parse_book_ts
 from src.podlib import PAPER_EQUITY_USD, pin_problems
 from src.thresholds import EDGE_TOLERANCE, MAX_BOOK_AGE_S, MIN_EDGE  # Task AC: values in src/thresholds.py
@@ -270,7 +271,7 @@ def open_leg_problems(side: object, state: dict) -> list[str]:
     """
     if side == "buy" and opposite_leg_blocked(state):
         # Issue #237: buying the other token while one is held builds the full set leg by leg (#141).
-        return ["structural_arb_disabled"]
+        return [STRUCTURAL_ARB_DISABLED]
     if state.get("leg_already_open") is not True:
         return ["sell_requires_position"] if side == "sell" else []
     net = _finite_number(state.get("leg_net_shares"))

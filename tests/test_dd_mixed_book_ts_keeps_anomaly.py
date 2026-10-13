@@ -18,7 +18,10 @@ def test_one_valid_and_one_invalid_book_ts_keeps_the_clock_anomaly(env, bad_ts):
     sane = fake.book
 
     def mixed(url: str):
-        body = dict(sane(url))
+        body = sane(url)
+        if url == "https://clob.polymarket.com/time":  # #253: the independent clock source, left clean
+            return body
+        body = dict(body)
         calls["n"] += 1
         if calls["n"] % 2 == 0:  # every second book of the tick has an invalid timestamp
             if bad_ts is None:

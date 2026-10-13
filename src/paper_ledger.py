@@ -65,6 +65,7 @@ from src.ledger_store import counts as _counts  # noqa: E402 - Task AF: moved, s
 from src.risk_gate import Decision, Intent, evaluate  # noqa: E402
 from src.daily_loss import daily_loss  # noqa: E402 - Task AR: fees + realized losses
 from src.expiry_rule import hours_to_expiry, parse_end_date  # noqa: E402 - Task BA: hours at entry
+from src.structural_gate import STRUCTURAL_ARB_DISABLED  # noqa: E402 - Task DD (#237)
 from src import wash_detect  # noqa: E402 - Task CH (#145): the market's token pair
 from src import day_boundary  # noqa: E402 - Task CX (#225): the one day-boundary rule
 from src import daily_marks, leg_marks  # noqa: E402 - Task CF (#124): unrealized loss in the daily loss
@@ -401,16 +402,20 @@ def pair_of(market: str) -> tuple[str, str] | None:
 
 
 def _opposite_pending_buys(market: str, token_id: str, quotes: Any) -> int | None:
-    """Task DD (#237): own open (not cancelled) buy quotes in ``market`` on a token other than ``token_id``."""
+    """Task DD (#237): own open (not cancelled) buy quotes in ``market`` on a token other than ``token_id``.
+
+    None (RiskGate refuses) when the history is not a list, or any record is not a dict or lacks a str market,
+    status, side or token_id (Poly风控 on #280: a malformed record is not skipped, and nothing is str()-coerced).
+    """
     if not isinstance(quotes, list):
         return None
     count = 0
     for row in quotes:
-        if not isinstance(row, dict):
+        if not isinstance(row, dict) or not wash_detect._quote_fields_are_str(row, unknown_token_ok=False):
             return None
-        if str(row.get("market")) != str(market) or row.get("status") in wash_detect.CLOSED_STATUSES:
+        if row["market"] != market or row["status"] in wash_detect.CLOSED_STATUSES:
             continue
-        if row.get("side") == "buy" and str(row.get("token_id")) != str(token_id):
+        if row["side"] == "buy" and row["token_id"] != token_id:
             count += 1
     return count
 
@@ -442,8 +447,12 @@ def load_state(market: str, token_id: str = "", *, clock_ok: bool = False) -> di
     if quote_problems:
         own_quotes = None  # issue #56: a partial quote history is not this history (fail closed)
     # Issue #145 (Task CH): the market's two tokens, read only when an own open quote rests on another token.
-    market_pair = pair_of(market) if own_quotes is not None and wash_detect.pair_quotes(market, token_id, own_quotes) \
-        else None
+    try:
+        market_pair = pair_of(market) if own_quotes is not None and wash_detect.pair_quotes(market, token_id, own_quotes) \
+            else None
+    except TypeError:
+        # Task DD (#280) backstop: a quote history the checks cannot read is unusable -> wash_input_invalid.
+        own_quotes, quote_problems, market_pair = None, list(quote_problems) + ["quote_type_error"], None
     bad_rows = non_finite_ledger_rows(rows)
     problems = ledger_store.verify(ledger)
     if bad_rows or problems:
@@ -515,7 +524,7 @@ def load_state(market: str, token_id: str = "", *, clock_ok: bool = False) -> di
     }
 
 
-COMMIT_LOCK_TIMEOUT_S = 5.0  # Task DD: how long a commit waits for the ledger commit mutex (not a risk threshold)
+from src.thresholds import COMMIT_LOCK_TIMEOUT_S  # noqa: E402,F401 - Task DD: the commit mutex wait (THRESHOLDS.md)
 
 
 def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
@@ -528,7 +537,7 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id
     lock.path = Path(str(PAPER_PATH) + ".commit.lock")  # not ledger_store's <ledger>.lock (taken inside book)
     if not lock.acquire(timeout_s=COMMIT_LOCK_TIMEOUT_S):
         summary = {"forecast_id": intent.forecast_id, "strategy": intent.strategy,
-                   "reasons": ["structural_arb_disabled", "commit_lock_unavailable"],
+                   "reasons": [STRUCTURAL_ARB_DISABLED, "commit_lock_unavailable"],
                    "hypothetical": intent.hypothetical, "risk_decision": "veto", "decision": "veto",
                    "note": DIRECTIONAL}
         bus("RiskGate", "Executor", "veto", intent.market, summary)
