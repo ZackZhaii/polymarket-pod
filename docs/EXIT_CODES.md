@@ -163,12 +163,18 @@ never feed a decision, a pause or a halt (no new alert either; alert thresholds 
   seconds (including the ±1 s server quantization) and `rtt_s` the request time, rounded to ms; the three are
   `null` when the check could not measure (unreachable / malformed /time, unusable local clock).
 
+Issue #247 (Task DK): when `runs/m2/KILL` stops the runner it appends one line to `logs/alerts.jsonl` (the Sentinel's
+alerts file, same row shape): `{"ts", "from": "m2_runner", "alert": "kill_file", "severity": "info", "proc":
+"m2_runner", "detail", "exchange_action": "none"}`, at most once per stop (each start that finds KILL writes its own).
+A record only: the exit code stays 0 and recovery is unchanged; nothing restarts the runner (auto-restart is KEY
+#243). If that line cannot be written the runner does not drop it silently: it exits 4 like any other write failure.
+
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | `runs/m2/KILL` found, `--max-runtime` reached or `--once` done | - |
+| 0 | `EXIT_OK` | `runs/m2/KILL` found (one `kill_file` line in `logs/alerts.jsonl`, #247), `--max-runtime` reached or `--once` done | - |
 | 2 | `EXIT_USAGE` | usage error (an unknown argument, `--max-runtime` not > 0) | alert |
 | 3 | `EXIT_ALREADY_RUNNING` | another m2_runner holds `runner.lock` (no heartbeat written, nothing done) | alert |
-| 4 | `EXIT_WRITE_FAILED` | a journal / events / candidates write failed | global halt |
+| 4 | `EXIT_WRITE_FAILED` | a journal / events / candidates write failed, or the KILL alert line could not be written (#247) | global halt |
 | 6 | `EXIT_PIN_OR_LIVE` | config/risk.toml off its pins or a live flag (`live_enabled` not false, `mode` not paper, `require_human_gate` not true); global halt recorded (`risk_toml_pin_drift` / `m2_live_flag`) | global halt |
 | 7 | `EXIT_SELF_CHECK` | the start self-check failed (run dir or inbox not writable) | alert |
 

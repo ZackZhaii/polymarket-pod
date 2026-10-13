@@ -11,7 +11,8 @@ C.4, C.6, C.8; Poly执行's no-live audit F2 / T1-T13 on the issue):
 
 **Every iteration starts with the checks, before any getter, seal or commit** (``preflight``). In this order:
 
-1. ``<run dir>/KILL`` (the Operator's file): stop. Heartbeat ``finished``, exit 0.
+1. ``<run dir>/KILL`` (the Operator's file): stop. One alert line ``kill_file`` in logs/alerts.jsonl (issue #247),
+   heartbeat ``finished``, exit 0.
 2. config/risk.toml: ``live_enabled is False``, ``mode == "paper"`` and ``require_human_gate is True``, else a
    global halt ``m2_live_flag`` is recorded and the runner exits 6.
 3. ``pins.risk_file_problems()`` on every iteration (not PinWatch's 60 s throttle): drift records the global halt
@@ -59,7 +60,7 @@ not-committed reconciled to the ledger), ``unique_decision_id=True`` on every co
 ``intent_builder.book_snapshot_from_clob``). Brier backfill is #121.
 
 Exit codes (docs/EXIT_CODES.md): 0 KILL or --max-runtime reached or --once done; 2 usage; 3 another runner holds
-the lock; 4 a journal / event / candidates write failed; 6 risk.toml off its pins or a live flag (global halt
+the lock; 4 a journal / event / candidates / KILL alert write failed; 6 risk.toml off its pins or a live flag (global halt
 recorded); 7 the start self-check failed (run dir not writable).
 """
 from __future__ import annotations
@@ -101,6 +102,7 @@ from src import (  # noqa: E402
     resolution_watch,
     scanner,
     sentinel,
+    sentinel_tick,
 )
 from src.daily_loss import daily_loss  # noqa: E402
 from src.book_staleness import INVALID_BOOK_TS, MISSING_BOOK_TS, book_age_problem, parse_book_ts  # noqa: E402
@@ -133,6 +135,7 @@ EXIT_PIN_OR_LIVE = 6
 EXIT_SELF_CHECK = 7
 
 LIVE_HALT_REASON = "m2_live_flag"
+KILL_ALERT = "kill_file"  # issue #247: the alert code written to logs/alerts.jsonl when KILL stops the runner
 LEDGER_HALT_REASON = "invalid_risk_state"
 
 ACT_RUN = "run"
@@ -163,7 +166,7 @@ class RefusedURL(RuntimeError):
 
 
 class WriteFailed(RuntimeError):
-    """A journal / event / candidates write failed (exit 4)."""
+    """A journal / event / candidates / KILL alert write failed (exit 4)."""
 
 
 def url_allowed(url: object) -> bool:
@@ -280,6 +283,7 @@ class RunnerState:
     last_resume_at: datetime | None = None  # books fetched before this are refused
     resume_count: int = 0
     force_rescan: bool = False
+    kill_alerted: bool = False  # issue #247: the KILL alert line was written for this stop (at most once)
 
 
 @dataclass
@@ -329,6 +333,21 @@ def journal(state: RunnerState, step: str, now: datetime, **fields: Any) -> None
 
 def event(state: RunnerState, kind: str, now: datetime, **fields: Any) -> None:
     append_synced(state.paths.events, {"ts": _stamp(now), "event": kind, **fields})
+
+
+def kill_alert(state: RunnerState, now: datetime) -> None:
+    """Issue #247 (Task DK): one line in the Sentinel's logs/alerts.jsonl (``sentinel_tick.ALERTS_PATH``, the same
+    row shape as ``sentinel_tick.Tick.alert``) when KILL stops the runner, at most once per stop. Only a record:
+    the exit code stays 0, nothing is resumed or restarted (auto-restart is KEY #243). Raises WriteFailed."""
+    if state.kill_alerted:
+        return
+    row = {"ts": _stamp(now), "from": PROC, "alert": KILL_ALERT, "severity": "info", "proc": PROC,
+           "detail": f"{state.paths.kill_file} found; runner stopped, exit_code={EXIT_OK}", "exchange_action": "none"}
+    try:
+        podlib.append_jsonl(Path(sentinel_tick.ALERTS_PATH), row)
+    except OSError as exc:
+        raise WriteFailed(f"alerts.jsonl: {type(exc).__name__}") from exc
+    state.kill_alerted = True
 
 
 def _risk_cfg(risk_path: Path | None) -> dict[str, Any]:
@@ -923,6 +942,12 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     state.ledger_rows = check.ledger_rows if check.ledger_rows is not None else state.ledger_rows
     if check.action != ACT_RUN:
         report = IterationReport(check.action, check.reasons)
+        if check.action == ACT_FINISH and check.reasons[:1] == ["kill_file"]:
+            try:
+                kill_alert(state, now)  # issue #247: a record only; the exit code stays 0
+            except WriteFailed as exc:
+                state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
+                return IterationReport(ACT_WRITE_FAILED, [str(exc)])
         if check.action == ACT_PAUSE:
             if state.paused_reason != check.reasons[0]:
                 # PR #253 review: clock_unverified <-> clock_skew is one clock pause episode (keep paused_since)
