@@ -99,6 +99,7 @@ from src.ws_recorder import (  # noqa: E402
     RawBookSink,
     Recorder,
     RotatingJsonl,
+    SinkClosed,  # Issue #82: write after RotatingJsonl / RawBookSink close (an OSError: exit 4)
     Transport,
     TransportUnavailable,
     WebsocketsTransport,

@@ -969,9 +969,20 @@ def _line_bytes(row: dict[str, Any]) -> int:
     return len(json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")) + 1
 
 
+class SinkClosed(OSError):
+    """Issue #82: a write to a RotatingJsonl (or the RawBookSink on top of it) after close().
+
+    An OSError on purpose: a write that cannot land is a write failure, so every existing write-failure
+    path (m1_run, ws_recorder, the REST sampler's failure) maps it to EXIT_WRITE_FAILED=4 instead of
+    crashing past them or being mistaken for a bad row (TypeError / ValueError are row problems)."""
+
+
 class RotatingJsonl:
     """Append-only JSONL in ``folder/prefix-NNNNNN.jsonl``; a new file before ``max_bytes`` would be
-    passed or once the current file has been open ``max_age_s`` (monotonic). Thread-safe."""
+    passed or once the current file has been open ``max_age_s`` (monotonic). Thread-safe.
+
+    Issue #82: close() is idempotent and permanent. Every later write raises SinkClosed and changes
+    nothing: no file is reopened (``_rotate`` is never called), the bytes, ``rows`` and ``files`` stay."""
 
     def __init__(self, folder: Path, prefix: str, max_bytes: int, max_age_s: float,
                  monotonic: Callable[[], float] = time.monotonic) -> None:
@@ -987,7 +998,13 @@ class RotatingJsonl:
         self._current: JsonlAppender | None = None
         self._size = 0
         self._opened = 0.0
+        self._closed = False
         self._lock = threading.Lock()
+
+    @property
+    def closed(self) -> bool:
+        with self._lock:
+            return self._closed
 
     def _rotate(self) -> None:
         if self._current is not None:
@@ -999,8 +1016,13 @@ class RotatingJsonl:
         self._opened = self.monotonic()
 
     def write(self, row: dict[str, Any]) -> None:
+        with self._lock:
+            if self._closed:
+                raise SinkClosed(f"{self.folder.name}/{self.prefix}: write after close")
         size = _line_bytes(row)  # also refuses NaN before anything is written
         with self._lock:
+            if self._closed:  # closed while the row was being sized
+                raise SinkClosed(f"{self.folder.name}/{self.prefix}: write after close")
             if (self._current is None or (self._size and self._size + size > self.max_bytes)
                     or self.monotonic() - self._opened >= self.max_age_s):
                 self._rotate()
@@ -1009,17 +1031,20 @@ class RotatingJsonl:
             self.rows += 1
 
     def close(self) -> None:
+        """Close for good (issue #82). Idempotent; closed even if closing the file raises."""
         with self._lock:
-            if self._current is not None:
-                self._current.close()
-                self._current = None
+            self._closed = True
+            current, self._current = self._current, None
+            if current is not None:
+                current.close()
 
 
 class RawBookSink:
     """Task AY: capped raw book frames in ``raw_books/raw_books-NNNNNN.jsonl`` (whole-line appends).
 
     No file passes ``file_max_bytes``; the run stops saving once ``run_max_bytes`` would be passed. A frame
-    that is not strict JSON, or alone bigger than a file, is dropped. Drops are counted, never raised."""
+    that is not strict JSON, or alone bigger than a file, is dropped. Drops are counted, never raised.
+    Issue #82: after close() every write raises SinkClosed before anything is counted or written."""
 
     def __init__(self, folder: Path, file_max_bytes: int, run_max_bytes: int, max_age_s: float,
                  monotonic: Callable[[], float] = time.monotonic,
@@ -1036,6 +1061,8 @@ class RawBookSink:
         self.dropped: Counter = Counter()
 
     def write(self, row: dict[str, Any]) -> None:
+        if self.files.closed:
+            raise SinkClosed(f"{RAW_BOOKS}: write after close")
         try:
             size = _line_bytes(row)
         except (TypeError, ValueError):

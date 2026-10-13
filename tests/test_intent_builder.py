@@ -158,6 +158,7 @@ def test_to_risk_intent_matches_the_harness_shape():
         "shares": 24.39, "limit_price": 0.41,  # issue #104: intent_builder's size, RiskGate only shrinks it
         # Task CE (#119): fee provenance, set by the M2 runner after building; None from to_risk_intent.
         "fee_source": None, "fee_gamma_fetched_at": None, "fee_schedule_sha": None,
+        "min_order_size": 5.0,  # issue #226: the chosen book's minimum, re-checked on RiskGate's final shares
     }
     assert intent.kelly_fraction_used == oi.kelly_fraction and intent.best_ask == oi.best_ask
     assert intent.kelly_frac_raw == pytest.approx(0.055 / (1 - 0.415))
@@ -818,7 +819,12 @@ def test_properties_p2_p3_p5(tmp_path):
             if produced <= 400:  # P3: RiskGate on the same intent never vetoes for edge/price/book reasons
                 decision = gate(result.intent, cfg=cfg, tmp=tmp_path)
                 assert decision.edge == result.intent.edge
-                assert decision.allow, decision.reasons
+                # Issue #226 (D3): the one allowed exception is RiskGate's own all-in clip shrinking the builder's
+                # shares below the book's min_order_size (size_below_min_order): a veto, never a bigger order.
+                below_min = (decision.reasons == ["size_below_min_order"]
+                             and decision.shares < result.intent.shares
+                             and decision.shares < result.intent.min_order_size)
+                assert decision.allow or below_min, decision.reasons
     assert produced > 100
 
 

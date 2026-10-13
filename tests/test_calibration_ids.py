@@ -263,6 +263,7 @@ def _ok_intent(**kw) -> Intent:
                 kelly_frac_raw=0.1, fill_context="intent_builder")  # Task BC
     base.update(kw)
     base.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
+    base.setdefault("min_order_size", 5.0)  # issue #226: a book minimum (missing vetoes)
     return Intent(**base)
 
 

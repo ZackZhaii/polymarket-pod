@@ -285,6 +285,98 @@ def test_rotation_refuses_nan_before_writing(tmp_path):
     assert sink.files == []
 
 
+def _snapshot(folder):
+    return {p.name: p.read_bytes() for p in sorted(folder.glob("*"))} if folder.exists() else None
+
+
+def test_rotation_close_is_idempotent_and_permanent(tmp_path, monkeypatch):
+    """Issue #82 (2): after close a write fails explicitly; files, bytes, rows and the list stay unchanged."""
+    clock = Clock()
+    sink = r.RotatingJsonl(tmp_path / "books", "books", max_bytes=10**6, max_age_s=60, monotonic=clock.monotonic)
+    sink.write({"n": 1})
+    sink.write({"n": 2})
+    sink.close()
+    before = _snapshot(tmp_path / "books")
+    assert sink.closed and sink.files == ["books/books-000001.jsonl"] and sink.rows == 2
+    sink.close()  # idempotent: a second close is a no-op, not an error
+
+    def no_reopen(self):
+        raise AssertionError("_rotate called after close")
+    monkeypatch.setattr(r.RotatingJsonl, "_rotate", no_reopen)
+    clock.t = 3600.0  # past max_age_s: an open sink would rotate into a new file here
+    for row in ({"n": 3}, {"big": "x" * 10**6}, {"p": float("nan")}):
+        with pytest.raises(r.SinkClosed):
+            sink.write(row)
+    assert sink.closed and sink.files == ["books/books-000001.jsonl"] and sink.rows == 2
+    assert _snapshot(tmp_path / "books") == before
+    assert [row["n"] for row in read_jsonl(tmp_path / sink.files[0])] == [1, 2]
+
+
+def test_rotation_close_before_any_write_never_opens_a_file(tmp_path):
+    sink = r.RotatingJsonl(tmp_path / "rest", "rest", max_bytes=100, max_age_s=10, monotonic=lambda: 0.0)
+    sink.close()
+    with pytest.raises(r.SinkClosed):
+        sink.write({"a": 1})
+    sink.close()
+    assert sink.files == [] and sink.rows == 0 and not (tmp_path / "rest").exists()
+
+
+def test_rotation_stays_closed_when_closing_the_file_fails(tmp_path, monkeypatch):
+    sink = r.RotatingJsonl(tmp_path / "books", "books", max_bytes=10**6, max_age_s=60, monotonic=lambda: 0.0)
+    sink.write({"n": 1})
+
+    def broken(self):
+        raise OSError("close failed")
+    monkeypatch.setattr(w.JsonlAppender, "close", broken)
+    with pytest.raises(OSError):
+        sink.close()
+    monkeypatch.undo()
+    assert sink.closed
+    with pytest.raises(r.SinkClosed):
+        sink.write({"n": 2})
+    sink.close()  # still a no-op: nothing is left open to close again
+    assert sink.files == ["books/books-000001.jsonl"] and sink.rows == 1
+
+
+def test_sink_closed_is_a_write_failure_re_exported_by_m1_run():
+    assert r.SinkClosed is w.SinkClosed  # one class: m1_run re-exports the ws_recorder writer's error
+    assert issubclass(r.SinkClosed, OSError)  # every existing write-failure path maps it to EXIT_WRITE_FAILED=4
+
+
+def test_raw_book_sink_refuses_every_write_after_close(tmp_path):
+    events: list[dict] = []
+    row = {"ts": "t", "asset_id": A, "frame": {"n": 0}}
+    line = r._line_bytes(row)
+    sink = r.RawBookSink(tmp_path / "raw_books", file_max_bytes=line * 2, run_max_bytes=line * 2, max_age_s=3600,
+                         on_event=events.append, now=lambda: "t")
+    sink.write(row)
+    sink.close()
+    before = _snapshot(tmp_path / "raw_books")
+    state = (list(sink.files.files), sink.files.rows, sink.saved, sink.bytes, dict(sink.dropped))
+    # a fitting frame, an unserialisable one, an oversized one and one past the run cap: all refused, none counted
+    for late in (row, {"frame": float("nan")}, {"frame": "x" * (line * 3)}, row, row):
+        with pytest.raises(r.SinkClosed):
+            sink.write(late)
+    sink.close()
+    assert (list(sink.files.files), sink.files.rows, sink.saved, sink.bytes, dict(sink.dropped)) == state
+    assert _snapshot(tmp_path / "raw_books") == before and events == []
+
+
+@pytest.mark.parametrize("stream", ["books", "rest"])
+def test_a_write_to_a_closed_sink_exits_4(tmp_path, monkeypatch, stream):
+    real = r.RotatingJsonl.write
+
+    def write(self, row):
+        if self.prefix == stream:
+            self.close()  # the sink was closed under the writer: the write must fail, never reopen a file
+        real(self, row)
+    monkeypatch.setattr(r.RotatingJsonl, "write", write)
+    code, out, _, _, _ = _main(tmp_path, [[_book()]], ["--assets", A])
+    manifest = _manifest(out)
+    assert code == r.EXIT_WRITE_FAILED and manifest["status"] == "failed" and manifest["exit_code"] == 4
+    assert manifest["files"][stream] == [] and not (out / stream).exists()
+
+
 # --- REST sampler -----------------------------------------------------------------------------------
 
 

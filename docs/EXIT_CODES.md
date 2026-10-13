@@ -146,14 +146,16 @@ paper ledger against Executor bus fills, joined by explicit fill_id (issue #69).
 and first-party `src` only, no network, no halt, nothing written; the report goes to stdout. No
 heartbeat. Acceptance 2: the ledger must pass `ledger_store.verify` first (only then is it joined),
 and the bus is parsed strictly — bad JSON, non-object rows, a torn tail and unreadable files are
-named failures. Review P1 on PR #202: the deep equality checks (payload, roles, duplicate /
-conflict copies, UNKNOWN markers, SHA256) are later acceptance items, so the tool never reports
-PASS — a problem-free run ends verdict `unknown`.
+named failures. Acceptance 3: each joined fill's full payload and the message's outer `market` are
+compared with a type-sensitive normalized JSON comparison (key order / formatting normalized;
+`10` / `10.0` / `true` / `"10.0"` stay distinct); the outer `bus.ts` is ignored. Review P1 on PR
+#202: the remaining checks (sender roles, duplicate / conflict copies, UNKNOWN markers, SHA256) are
+later acceptance items, so the tool never reports PASS — a problem-free run ends verdict `unknown`.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | reserved for the fully checked pass (every #69 check, payload equality included); not reachable before those acceptance items land | - |
-| 1 | `EXIT_MISMATCH` | a problem (the ledger failed `ledger_store.verify`, an orphan / join problem on either side), or no problem but verdict `unknown` (the two logs are not validated as agreeing) | - |
+| 0 | `EXIT_OK` | reserved for the fully checked pass (every #69 check); not reachable before the remaining acceptance items land | - |
+| 1 | `EXIT_MISMATCH` | a problem (the ledger failed `ledger_store.verify`, an orphan / join problem on either side, a payload or outer-market mismatch, a non-finite number), or no problem but verdict `unknown` (the two logs are not validated as agreeing) | - |
 | 2 | `EXIT_USAGE` | usage error, or an input that cannot be read in full (missing, unreadable, undecodable bytes, a malformed or non-object line, a torn last row, a conflicting fill_id) | - |
 
 ## `src/paper_cycle.py`
@@ -162,7 +164,7 @@ PASS — a problem-free run ends verdict `unknown`.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | ran | - |
+| 0 | `EXIT_OK` | ran (issue #75: a round whose markets/books input is still changing after the one bounded re-read is skipped, `ok=false reason=input_pending`, and exits 0 too: a transient append is never a halt) | - |
 | 1 | `EXIT_PIN` | a phase-0 pin failed: the in-memory config, or (Task AS) the risk file before a cycle (global halt recorded) | global halt |
 | 2 | `EXIT_USAGE` | usage error | alert |
 
