@@ -237,6 +237,25 @@ def exposure_state_problems(state: dict) -> list[str]:
     return problems
 
 
+def opposite_leg_blocked(state: dict) -> bool:
+    """Issue #237 (Task DD): True when a buy must be refused as structural_arb_disabled.
+
+    Fail closed: opposite_leg_shares (long shares on the market's other tokens) must be a finite number >= 0;
+    missing, None, nan, inf, negative or non-numeric blocks. A value > 0 blocks. opposite_pending_buys (own open
+    buy quotes on the other tokens, i.e. unfilled orders) blocks when > 0 or, if the key is present, invalid.
+    """
+    if state.get("open_positions") is None and (state.get("ledger_problems") or state.get("non_finite_ledger_rows")):
+        return False  # an unusable ledger state already vetoes invalid_risk_state (one reason, as before)
+    shares = _finite_number(state.get("opposite_leg_shares"))
+    if shares is None or shares < 0 or shares > 0:
+        return True
+    if "opposite_pending_buys" in state:
+        pending = _finite_number(state.get("opposite_pending_buys"))
+        if pending is None or pending != 0:
+            return True
+    return False
+
+
 def open_leg_problems(side: object, state: dict) -> list[str]:
     """Issue #123: a same-direction order on a leg that is already open vetoes add_to_open_leg.
 
@@ -252,8 +271,7 @@ def open_leg_problems(side: object, state: dict) -> list[str]:
     Issue #237: a buy while the same market's other token is held long (state["opposite_leg_shares"] > 0)
     vetoes structural_arb_disabled.
     """
-    opposite = _finite_number(state.get("opposite_leg_shares"))
-    if side == "buy" and opposite is not None and opposite > 0:
+    if side == "buy" and opposite_leg_blocked(state):
         # Issue #237: buying the other token while one is held builds the full set leg by leg (#141).
         return ["structural_arb_disabled"]
     if state.get("leg_already_open") is not True:

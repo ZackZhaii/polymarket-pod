@@ -57,7 +57,7 @@ def _quote(side="buy", token=YES, price=0.60, status="open", market=MARKET) -> d
 
 def _state(quotes=(), fills=(), pair=(YES, NO)) -> dict:
     return {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0,
-            "daily_loss_usd": 0.0, "recent_fills": list(fills), "own_quotes": list(quotes), MARKET_PAIR_KEY: pair}
+            "opposite_leg_shares": 0.0, "daily_loss_usd": 0.0, "recent_fills": list(fills), "own_quotes": list(quotes), MARKET_PAIR_KEY: pair}
 
 
 def _eval(intent: Intent, state: dict):

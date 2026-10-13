@@ -400,6 +400,21 @@ def pair_of(market: str) -> tuple[str, str] | None:
     return wash_detect.binary_pair(found[-1]) if found else None
 
 
+def _opposite_pending_buys(market: str, token_id: str, quotes: Any) -> int | None:
+    """Task DD (#237): own open (not cancelled) buy quotes in ``market`` on a token other than ``token_id``."""
+    if not isinstance(quotes, list):
+        return None
+    count = 0
+    for row in quotes:
+        if not isinstance(row, dict):
+            return None
+        if str(row.get("market")) != str(market) or row.get("status") in wash_detect.CLOSED_STATUSES:
+            continue
+        if row.get("side") == "buy" and str(row.get("token_id")) != str(token_id):
+            count += 1
+    return count
+
+
 def load_state(market: str, token_id: str = "", *, clock_ok: bool = False) -> dict[str, Any]:
     """Risk state for an intent on one leg (market + token_id).
 
@@ -480,6 +495,9 @@ def load_state(market: str, token_id: str = "", *, clock_ok: bool = False) -> di
         "opposite_leg_shares": sum(leg["shares"] for key, leg in legs.items()
                                    if key[0] == leg_key(market, token_id)[0] and key != leg_key(market, token_id)
                                    and leg["shares"] > OPEN_EPS),
+        # Task DD (#237, Codex P1): own open buy quotes on the other tokens are pending opposite holdings
+        # (None: the quote history is unreadable -> RiskGate fails closed).
+        "opposite_pending_buys": _opposite_pending_buys(market, token_id, own_quotes),
         "daily_loss_usd": risk["loss_usd"],
         "daily_fees_usd": day.fees_usd,
         "daily_unrealized_loss_usd": marks["loss_usd"],  # Task CF: diagnosis (already in daily_loss_usd)
@@ -497,7 +515,42 @@ def load_state(market: str, token_id: str = "", *, clock_ok: bool = False) -> di
     }
 
 
+COMMIT_LOCK_TIMEOUT_S = 5.0  # Task DD: how long a commit waits for the ledger commit mutex (not a risk threshold)
+
+
 def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
+    """Task DD (#237, Codex P1): the whole load_state -> RiskGate -> book path runs under one cross-process
+    mutex on ``<PAPER_PATH>.commit.lock``, so two interleaved commits (e.g. YES and NO of one market) cannot both read
+    a state without the other's fill. A mutex that cannot be taken refuses the order (fail closed)."""
+    from src import halt_store
+
+    lock = halt_store.StateLock(PAPER_PATH)
+    lock.path = Path(str(PAPER_PATH) + ".commit.lock")  # not ledger_store's <ledger>.lock (taken inside book)
+    if not _acquire_within(lock, COMMIT_LOCK_TIMEOUT_S):
+        summary = {"forecast_id": intent.forecast_id, "strategy": intent.strategy,
+                   "reasons": ["structural_arb_disabled", "commit_lock_unavailable"],
+                   "hypothetical": intent.hypothetical, "risk_decision": "veto", "decision": "veto",
+                   "note": DIRECTIONAL}
+        bus("RiskGate", "Executor", "veto", intent.market, summary)
+        return {"allow": False, "decision": summary}
+    try:
+        return _commit_locked(intent, cfg, unique_decision_id=unique_decision_id)
+    finally:
+        lock.release()
+
+
+def _acquire_within(lock: Any, timeout_s: float) -> bool:
+    from src import halt_store
+
+    original = halt_store.HALT_STATE_LOCK_TIMEOUT_S
+    halt_store.HALT_STATE_LOCK_TIMEOUT_S = timeout_s
+    try:
+        return lock.acquire()
+    finally:
+        halt_store.HALT_STATE_LOCK_TIMEOUT_S = original
+
+
+def _commit_locked(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
     """Ask RiskGate. Append a paper fill only when the same call allows it.
 
     Task AF: the fill gets a fill_id and the post-fill cash / leg state, and is written atomically

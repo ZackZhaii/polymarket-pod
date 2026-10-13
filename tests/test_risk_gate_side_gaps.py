@@ -18,7 +18,7 @@ import src.risk_gate as risk_gate
 from src.podlib import load_risk, utc_now
 from src.risk_gate import Intent, evaluate
 
-STATE = {"open_positions": 0, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
+STATE = {"open_positions": 0, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "daily_loss_usd": 0.0,
          "recent_fills": [], "own_quotes": []}
 
 BAD_SIDES = ["hold", "both", "BUY", "", None]

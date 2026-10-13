@@ -10,7 +10,7 @@ import src.risk_gate as risk_gate
 from src.podlib import RISK_PATH, load_risk, utc_now
 from src.risk_gate import Intent, evaluate, gate_thresholds
 
-STATE = {"open_positions": 0, "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
+STATE = {"open_positions": 0, "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 def _intent(**overrides: object) -> Intent:

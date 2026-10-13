@@ -21,7 +21,7 @@ from src.risk_gate import evaluate, exposure_state_problems, open_leg_problems
 from tests.test_single_leg_exposure import MARKET, NO, YES, _intent, _ledger, _row
 
 CLEAN = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0,
-         "leg_net_shares": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
+         "leg_net_shares": 0.0, "opposite_leg_shares": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 def _open(net: float) -> dict:

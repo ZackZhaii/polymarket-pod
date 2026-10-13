@@ -16,7 +16,7 @@ import src.sports_devig as sports_devig
 from src.podlib import RISK_PATH, load_risk, read_jsonl, utc_now
 from src.risk_gate import Intent, evaluate
 
-STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
+STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "daily_loss_usd": 0.0,
          "recent_fills": [], "own_quotes": []}
 NON_FINITE = [float("nan"), float("inf"), float("-inf")]
 FIELDS = ["model_prob", "market_price", "assumed_slippage", "fee_rate"]
