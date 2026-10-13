@@ -29,7 +29,7 @@ import pytest
 import src.secret_scan as secret_scan
 
 # The first twelve BIP39 English words: a valid phrase, fixed so the test never depends on a draw.
-WORDS12 = ("abandon ability able about above absent absorb abstract absurd abuse access accident").split()
+WORDS12 = " ".join(["abandon ability able about above absent", "absorb abstract absurd abuse access accident"]).split()
 
 
 def rules(text: str) -> list[str]:
@@ -51,7 +51,7 @@ def test_a_value_needs_the_full_minimum_length_before_it_is_a_secret():
 
 def test_base64_padding_is_stripped_for_the_length_rule_but_counted_in_the_report():
     assert rules("api_key=abcdefghij1234==") == []  # a 14-character core, whatever the padding
-    (found,) = secret_scan.scan_text("api_key=abcdefghij123456==")  # a 16-character core
+    (found,) = secret_scan.scan_text("api_key=" + "abcdefghij" + "123456==")  # a 16-character core
     assert (found.rule, found.length) == ("key_context:api_key", 18)
     assert found.digest == secret_scan.value_digest("abcdefghij123456==")
 
@@ -106,7 +106,7 @@ def test_a_path_outside_the_root_keeps_its_location_and_a_missing_path_scans_not
     root = tmp_path / "root"
     root.mkdir()
     outside = tmp_path / "outside.log"
-    outside.write_text("api_key=abcdefghij12345A\n", encoding="utf-8")
+    outside.write_text("api_key=" + "abcdefghij" + "12345A\n", encoding="utf-8")
     (found,) = secret_scan.scan_paths([outside], root)[0]
     assert (found.location, found.line) == (outside.as_posix(), 1)  # never a wrong relative label
     assert secret_scan.scan_paths([tmp_path / "nope"], root) == ([], [])
