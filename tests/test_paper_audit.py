@@ -7,10 +7,17 @@ is parsed strictly (bad JSON, non-object rows, a torn tail and unreadable files 
 failures; no lenient reader that skips bad lines). Acceptance 3: every joined fill's full payload
 and the message's outer ``market`` are compared with a type-sensitive normalized JSON comparison
 (1 != 1.0 != true != "1"; key order and formatting normalized; the outer ``bus.ts`` deliberately
-ignored). Review P1: the remaining checks are still later acceptance items, so even a clean join
-ends verdict ``unknown`` with a non-zero exit and never claims PASS; review P2: damaged ledgers
-(tampered content, missing or mistyped risk-control fields, non-finite numbers, a conflicting
-duplicate) must fail with a non-zero exit.
+ignored). Acceptance 4: every bus fill must be the Executor-to-Sentinel message the pipeline writes
+(``src/paper_ledger.py`` is the only fill emitter); identical duplicate copies count once and the
+extra-copy count is reported; copies of one fill that differ from each other, orphans on either
+side and wrong sender roles are named failures. NEW-3b (Poly指挥, merged into #69): settlement rows
+(``kind`` "settlement") are booked to the ledger only — they never have a bus fill by design — so
+they are counted separately (``ledger.settlements``) and are not orphans; a settlement row without
+a fill_id, or a bus fill carrying a settlement's fill_id, is a named problem. Review P1: the
+remaining checks (UNKNOWN markers, SHA256 and counts) are still later acceptance items, so even a
+clean join ends verdict ``unknown`` with a non-zero exit and never claims PASS; review P2: damaged
+ledgers (tampered content, missing or mistyped risk-control fields, non-finite numbers, a
+conflicting duplicate) must fail with a non-zero exit.
 """
 from __future__ import annotations
 
@@ -42,9 +49,25 @@ def bus_fill(row: dict, ts: str = "2026-10-12T00:00:01Z") -> dict:
     """The Executor bus message paper_ledger writes after the book (src/podlib.py bus()).
 
     The outer ``ts`` is the bus write time, never the fill's own ``ts``; acceptance 3 says the
-    audit ignores it. The payload is the booked row exactly (paper_ledger: ``fill = booked``)."""
+    audit ignores it. The payload is the booked row exactly (paper_ledger: ``fill = booked``).
+    Acceptance 4: the sender roles are exactly ``from`` Executor ``to`` Sentinel — paper_ledger
+    (src/paper_ledger.py:671) is the only fill emitter and podlib refuses a fill from anyone else."""
     return {"ts": ts, "from": "Executor", "to": "Sentinel", "type": "fill",
             "market": row["market"], "payload": row}
+
+
+def settlement_row(market: str = "m1", token: str = "t1", shares: float = 10.0,
+                   payout: float = 1.0) -> dict:
+    """One legal settlement row (issue #126 / NEW-3b): closes the whole open leg exactly.
+
+    Must follow a counted buy of ``shares`` of ``token`` in ``market`` (the ``book_fill`` helper
+    books exactly that), or ledger_store refuses it (``settlement_not_closing``)."""
+    return {"ts": "2026-10-12T00:00:00Z", "market": market, "token_id": token, "side": "sell",
+            "shares": shares, "notional_usd": shares * payout, "fee_rate": 0.0, "fee_usd": 0.0,
+            "market_price": payout, "effective_price": payout, "hypothetical": False,
+            "counts_toward_risk": True, "risk_decision": "settlement", "kind": "settlement",
+            "condition_id": "0xc1", "winning_token_id": token, "settlement_payout": payout,
+            "closed_ts": "2026-10-11T00:00:00Z"}
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -87,7 +110,8 @@ def test_a_clean_join_is_verdict_unknown_not_pass(tmp_path, capsys):
     assert report["matched"] == 2 and report["ledger_only"] == [] and report["bus_only"] == []
     assert report["problems"] == []  # equal payloads and outer markets: acceptance 3 is checked
     assert "payload_equality_by_fill_id" not in report["unverified"]  # it is verified now
-    assert "bus_sender_roles" in report["unverified"]  # acceptance 4 is still unverified
+    assert "bus_sender_roles" not in report["unverified"]  # acceptance 4 is verified now too
+    assert "legacy_and_hypothetical_unknown" in report["unverified"]  # acceptance 5 is not
 
 
 def test_a_changed_payload_field_on_the_bus_side_fails(tmp_path, capsys):
@@ -349,3 +373,98 @@ def test_usage_error_for_bad_flags(capsys):
     assert paper_audit.main(["--bogus"]) == paper_audit.EXIT_USAGE
     assert paper_audit.main([]) == paper_audit.EXIT_USAGE  # both paths are required
     assert paper_audit.main(["--help"]) == 0
+
+
+# --- acceptance 4: sender roles, duplicate / conflict copies, settlement rows (NEW-3b) ----------
+
+
+@pytest.mark.parametrize("roles", [{"from": "RiskGate"}, {"to": "Operator"},
+                                   {"from": "Sentinel", "to": "Executor"}])
+def test_wrong_sender_roles_on_a_bus_fill_fail(tmp_path, capsys, roles):
+    """Acceptance 4: 错误发送角色均失败并返回非零. paper_ledger is the only fill emitter and its
+    fills are always Executor → Sentinel (podlib.bus refuses a fill from anyone else)."""
+    ledger = tmp_path / "paper.jsonl"
+    row = book_fill(ledger)
+    bus = tmp_path / "bus.jsonl"
+    message = bus_fill(row)
+    message.update(roles)
+    write_jsonl(bus, [message])
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
+    assert f"sender_role_mismatch:{row['fill_id']}" in report["problems"]
+
+
+def test_identical_duplicate_bus_copies_count_once_and_report_the_count(tmp_path, capsys):
+    """Acceptance 4: 完全一致的重复副本只计一次并报告数量. Two copies written at different bus
+    times (the outer ts is the write time and is ignored) are still one identical copy."""
+    ledger = tmp_path / "paper.jsonl"
+    row = book_fill(ledger)
+    bus = tmp_path / "bus.jsonl"
+    write_jsonl(bus, [bus_fill(row, ts="2026-10-12T00:00:01Z"),
+                      bus_fill(row, ts="2026-10-12T00:00:09Z")])
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1  # unknown, not pass: acceptance 5-6 remain
+    assert report["verdict"] == "unknown" and report["problems"] == []
+    assert report["matched"] == 1 and report["bus"]["duplicate_fills"] == 1
+    assert "duplicate_and_conflict_copies" not in report["unverified"]
+
+
+def test_conflicting_duplicate_bus_copies_fail(tmp_path, capsys):
+    """Acceptance 4: 冲突重复均失败并返回非零. One copy equals the booked row, the second drifted:
+    even though one copy matches, the pair contradicts itself."""
+    ledger = tmp_path / "paper.jsonl"
+    row = book_fill(ledger)
+    bus = tmp_path / "bus.jsonl"
+    write_jsonl(bus, [bus_fill(row), bus_fill(dict(row, shares=row["shares"] + 1.0))])
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
+    assert f"duplicate_conflict:{row['fill_id']}" in report["problems"]
+
+
+def test_settlement_rows_are_counted_separately_and_are_not_orphans(tmp_path, capsys):
+    """NEW-3b: 带 kind=settlement 的账本行单独计数，不进入 ledger_only. The M2 runner books a
+    settlement to the ledger only (no bus fill by design), so it must not read as an orphan."""
+    ledger = tmp_path / "paper.jsonl"
+    row = book_fill(ledger, market="m1", token="t1")
+    settle = ledger_store.book(ledger, settlement_row(market="m1", token="t1"))
+    bus = tmp_path / "bus.jsonl"
+    write_jsonl(bus, [bus_fill(row)])  # the settlement has no bus copy, on purpose
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1  # unknown, not pass: acceptance 5-6 remain
+    assert report["verdict"] == "unknown" and report["problems"] == []
+    assert report["ledger"]["settlements"] == 1 and report["matched"] == 1
+    assert report["ledger_only"] == [] and report["bus_only"] == []
+
+
+def test_a_bus_fill_with_a_settlements_fill_id_fails(tmp_path, capsys):
+    """NEW-3b: bus 上出现带同一 fill_id 的 fill 则报 problem（结算不应有 bus fill）."""
+    ledger = tmp_path / "paper.jsonl"
+    row = book_fill(ledger, market="m1", token="t1")
+    settle = ledger_store.book(ledger, settlement_row(market="m1", token="t1"))
+    bus = tmp_path / "bus.jsonl"
+    write_jsonl(bus, [bus_fill(row), bus_fill(settle)])
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
+    assert f"settlement_with_bus_fill:{settle['fill_id']}" in report["problems"]
+
+
+def test_a_settlement_row_without_a_fill_id_is_a_named_problem(tmp_path, capsys):
+    """NEW-3b: 结算行仍需有 fill_id，缺失照样报 problem. Both rows below are pre-Task-AF legacy
+    rows (no fill_id), so ledger_store.verify passes and the audit itself must name the defect."""
+    ledger = tmp_path / "paper.jsonl"
+    legacy_buy = {"ts": "2026-10-11T00:00:00Z", "market": "m1", "token_id": "t1", "side": "buy",
+                  "shares": 10.0, "notional_usd": 5.0, "fee_rate": 0.0, "fee_usd": 0.0,
+                  "market_price": 0.5, "effective_price": 0.5}
+    legacy_settle = dict(settlement_row(), ts="2026-10-12T00:00:00Z")
+    write_jsonl(ledger, [legacy_buy, legacy_settle])
+    bus = tmp_path / "bus.jsonl"
+    bus.write_bytes(b"")  # no bus fill at all
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
+    assert "ledger:settlement_without_fill_id" in report["problems"]
