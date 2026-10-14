@@ -63,6 +63,9 @@ Issue #75 criterion 3 (tightening only): a rotated book file that was enumerated
 the glob listed it, the read cannot find it, or it is deleted while it is being read -- is the rotation
 changing, not an empty file: the round is skipped the same way (``input_pending``, problem ``vanished``,
 the path reported), never silently read as no rows, which would have made every leg missing_book.
+Issue #75 criterion 5: a refused round (``input_invalid``) ends the heartbeat and the run -- ``--loop``
+included -- with its own ``EXIT_INPUT_INVALID`` (3), which the Sentinel maps to a global halt like the
+pin's 1; only a still-changing input (``input_pending``) keeps the heartbeat and waits for the next round.
 Issue #277 (Task DF, tightening only): consecutive ``input_pending`` rounds are no longer silent. Each one
 adds 1 to ``input_pending_streak`` in the StaleWatch state (next to ``all_stale_streak``; the per-market
 streaks are still neither advanced nor reset). At ALL_STALE_CONSECUTIVE_CYCLES rounds in a row it takes the
@@ -847,6 +850,9 @@ def _assert_risk_unchanged(before: bytes) -> None:
 EXIT_OK = 0
 EXIT_PIN = 1  # a phase-0 pin failed (in-memory config or, Task AS, the risk file: a global halt is recorded)
 EXIT_USAGE = 2
+# Issue #75: stable corrupt or unreadable markets/books input. Its own code, not the pin's 1: the
+# Sentinel maps it to a global halt too (src/sentinel_tick.py EXIT_EVENTS, docs/EXIT_CODES.md).
+EXIT_INPUT_INVALID = 3
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -856,7 +862,9 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Exit codes: 0 ran (a round skipped on a still-changing input: ok=false reason=input_pending; "
                "ALL_STALE_CONSECUTIVE_CYCLES such rounds in a row are an all_markets_stale global halt); "
                "1 a phase-0 pin failed (the risk file is checked before every cycle; "
-               "global halt recorded); 2 usage error. See docs/EXIT_CODES.md.",
+               "global halt recorded); 2 usage error; 3 the markets/books input is corrupt or unreadable "
+               "(ok=false reason=input_invalid, issue #75: the round is refused with zero gaps and fills; "
+               "a global halt for the Sentinel, like the pin). See docs/EXIT_CODES.md.",
     )
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--books", type=Path, default=None, help="book rows JSONL (default data/books.jsonl)")
@@ -920,6 +928,13 @@ def main(argv: list[str] | None = None, *, sleep=time.sleep, monotonic=time.mono
                 # exits EXIT_OK; --loop falls through, keeps the heartbeat and waits for the next round.
                 hb.finish(EXIT_OK, progress)
                 return EXIT_OK
+            if result["reason"] == INPUT_INVALID:
+                # Issue #75: a stable input failure (corrupt or unreadable markets/books, refused with
+                # zero gaps and fills) ends the heartbeat and exits with its own code: 3 is a global
+                # halt for the Sentinel; the pin's 1 keeps its meaning. --loop stops here too: only a
+                # still-changing input (input_pending) waits for the next round.
+                hb.finish(EXIT_INPUT_INVALID, progress)
+                return EXIT_INPUT_INVALID
             if not result["ok"] and result["reason"] != INPUT_PENDING:
                 hb.finish(EXIT_PIN, progress)
                 return EXIT_PIN

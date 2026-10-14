@@ -1633,6 +1633,21 @@ Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@a0569a2). Follow-up of T
   `src/m2_runner.py` (comment) and `docs/EXIT_CODES.md`. Task DQ of KEY PR #314 untouched. No behaviour change.
 - Tests: `tests/test_dr_305_pin_first_kill_alert.py` section 3 (offline).
 
+## Task DT — ledger_store.book() post-write check by fill_id, not "last line"
+
+Status: done.
+
+Claimed by Poly桥接 (Poly指挥 ruling on the ledger post-write false alarm). Done by grok-bot on the box.
+Ledger fix, so Poly风控 must comment “通过” on the head before merge.
+
+- `src/ledger_store.py` `book`: after the locked replace, our row no longer has to be the last line (another
+  process may append right after us). The re-read ledger must verify clean, contain our `fill_id`, and the
+  stored row must equal what we wrote field by field (`_post_write_row_problems`). Missing is
+  `post_write:not_appended:<id>`; a differing, missing or extra field is `post_write:row_mismatch:<field>:<id>`.
+  Fail closed as before; the lock is not widened.
+- Tests: `tests/test_dt_ledger_post_write_verify.py` (offline); `tests/test_ledger_concurrent_book.py` unchanged
+  and green under repeated runs.
+
 ## Task DQ — Poly哨兵 on #309: public_get deadline, /time 429 not retried, in-tick heartbeats
 
 Status: done (PR is KEY + HOLD: Poly风控 and Poly哨兵 both 通过, then 家伟 approves in chat before merge).
@@ -1658,6 +1673,10 @@ Claimed by Poly桥接. Done by grok-bot (dev@3a31906). Follows Task DP (#309 kep
 - 2026-10-14: Task DQ (Poly哨兵 on #309, KEY): one public_get call bounded by PUBLIC_GET_DEADLINE_S = 30 s
   (M2 pending), /time does not retry 429, m2_runner beats between GETs, m1_run clock check beats per asset;
   429-storm regressions (< 120 s). risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DT: ledger book() post-write check finds our row by fill_id and compares it field by field
+  (a later append by another process is no longer a false not_appended). risk.toml unchanged (0aea23af…bc04),
+  `live_enabled=false`.
 
 - 2026-10-14: Task DS: offline tests for paper_session's reread-then-refuse branch (file gone / edited / directory /
   reread raising after a passing pin check is `risk_toml_pin_drift` with a halt, nothing written); #305 Task DQ

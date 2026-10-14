@@ -139,6 +139,9 @@ EXIT_EVENTS: dict[tuple[str, int], str] = {
     ("loop_claim", 2): GLOBAL,
     # Task AS (gaps 4, 5): refused to start / stopped on risk.toml pin drift (docs/EXIT_CODES.md).
     ("scanner", 6): GLOBAL, ("ws_recorder", 6): GLOBAL, ("m1_run", 6): GLOBAL, ("paper_cycle", 1): GLOBAL,
+    # Issue #75: paper_cycle 3 = stable corrupt/unreadable markets/books input (ok=false
+    # reason=input_invalid; the refused round is a global halt, the pin keeps code 1).
+    ("paper_cycle", 3): GLOBAL,
     # Task AV: resolutions' old exit 4 split. 6 = pin drift (as scanner); 5 = the snapshot clock is not a
     # zoned timestamp. No design row for the clock; the stricter action (a broken clock, like a heartbeat
     # with a bad time, is a global halt).

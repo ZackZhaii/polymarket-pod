@@ -593,6 +593,15 @@
       "surface": "grok-bot"
     },
     {
+      "id": "DT",
+      "status": "done",
+      "title": "ledger_store.book() post-write check by fill_id + field-by-field match, not last line",
+      "finish": "src/ledger_store.py book: after atomic_append the re-read ledger must verify clean, contain our fill_id, and the stored row must equal the written row field by field; missing -> post_write:not_appended, differing/missing/extra field -> post_write:row_mismatch. Lock not widened. Offline tests tests/test_dt_ledger_post_write_verify.py; tests/test_ledger_concurrent_book.py green under repeated runs. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DT. Needs Poly风控 approval on head (ledger). Done by grok-bot on the box.",
+      "done_at": "2026-10-14T07:00:00Z",
+      "surface": "grok-bot"
+    },
+    {
       "id": "DQ",
       "status": "done",
       "title": "Poly哨兵 on #309: public_get total deadline (PUBLIC_GET_DEADLINE_S), /time 429 not retried, m2_runner / m1_run heartbeats between GETs",
