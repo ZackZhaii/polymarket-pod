@@ -1551,7 +1551,24 @@ Non-KEY part split from KEY #243, claimed by Poly桥接. Done by grok-bot on dev
 - A failed alert write is `WriteFailed`: exit 4 like a journal / events write, never dropped silently.
 - docs/EXIT_CODES.md notes it. Tests: `tests/test_m2_runner_kill_alert.py` (offline).
 
+## Task DM — Issue #293: make m2_runner_clock tests deterministic
+
+Status: done.
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@ffe32ab).
+
+- Flaky under full-suite load: `test_bad_book_skips_one_signal_and_the_next_signal_can_commit[-6-future_book_ts]`
+  and `test_malformed_book_skips_one_signal_without_blocking_the_next[None]` (alone 70/70; under load fail once then pass).
+- Cause: `env` captured wall `datetime.now` for runner `clock`, but `paper_ledger.commit_if_allowed` →
+  `RiskGate.evaluate(now=None)` reads live `podlib` / `book_staleness` / `wash_detect` datetime; wall drift past
+  `INTENT_TTL_S` (or past a synthetic `future_book_ts`) broke the second-signal allow.
+- Fix (tests only): fixed `FROZEN_NOW` plus `_freeze_wall` on those three modules in `tests/test_m2_runner_clock.py`
+  `env` fixture. No `src/`, threshold, or `config/risk.toml` change.
+
 ## Latest
+
+- 2026-10-14: Task DM (issue #293): freeze podlib/book_staleness/wash_detect clock in m2_runner_clock tests so
+  RiskGate commit path matches runner fixture time. Tests only. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 - 2026-10-14: Task DK (issue #247): m2_runner writes one `kill_file` line to `logs/alerts.jsonl` on KILL; exit
   code stays 0, no auto-restart (KEY #243). risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.

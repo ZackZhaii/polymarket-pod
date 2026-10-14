@@ -8,16 +8,49 @@ from datetime import datetime, timedelta, timezone, tzinfo
 import pytest
 
 from scripts import guard
-from src import heartbeat, m2_runner, paper_ledger, podlib
+from src import book_staleness, heartbeat, m2_runner, paper_ledger, podlib, wash_detect
 from tests import m2_runner_rig as rig
 
 TIME_URL = "https://clob.polymarket.com/time"
+# commit_if_allowed -> RiskGate.evaluate(now=None) reads podlib/book_staleness/wash_detect datetime.now.
+# Under full-suite load a wall-only fixture now drifts past INTENT_TTL_S (or past a synthetic
+# future_book_ts), so the second signal flake-fails. Freeze those three modules (e2e pattern) to
+# the fixture clock; do not freeze heartbeat — the autouse Sentinel beat is stamped on the real
+# clock just before this fixture runs.
+_REAL_DATETIME = datetime
+
+
+class _FrozenMeta(type):
+    def __instancecheck__(cls, instance):
+        return isinstance(instance, _REAL_DATETIME)
+
+    def __subclasscheck__(cls, sub):
+        return issubclass(sub, _REAL_DATETIME)
+
+
+def _freeze_wall(monkeypatch, moment: datetime) -> None:
+    """Freeze RiskGate / book_age_problem / wash clocks; leave heartbeat on the wall for Sentinel."""
+
+    class Frozen(_REAL_DATETIME, metaclass=_FrozenMeta):
+        @classmethod
+        def now(cls, tz=None):
+            return moment.astimezone(tz) if tz is not None else moment.replace(tzinfo=None)
+
+        @classmethod
+        def utcnow(cls):
+            return moment.astimezone(timezone.utc).replace(tzinfo=None)
+
+    monkeypatch.setattr(podlib, "datetime", Frozen)
+    monkeypatch.setattr(book_staleness, "datetime", Frozen)
+    monkeypatch.setattr(wash_detect, "datetime", Frozen)
 
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     paths = rig.isolate(monkeypatch, tmp_path)
+    # Second precision matches book stamps built from this same now; freeze so RiskGate cannot drift.
     now = datetime.now(timezone.utc).replace(microsecond=0)
+    _freeze_wall(monkeypatch, now)
     paths["run"].mkdir(parents=True)
     state = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(paths["run"]), clock=lambda: now,
                                   monotonic=lambda: now.timestamp())
