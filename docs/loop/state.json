@@ -578,9 +578,18 @@
       "id": "DR",
       "status": "done",
       "title": "Issue #305: paper_session pin check first (missing/unreadable risk.toml is risk_toml_pin_drift); kill_alert any Exception -> exit 4",
-      "finish": "src/paper_session.py run: pins.refuse_start is the first step, before any risk.toml read; missing/unreadable file, a directory or a sha computation that raises returns ok=False reason=risk_toml_pin_drift with a global halt record, no markets/books/sessions write and no getter call. The before snapshot, the loaded config (parsed from the checked bytes, re-read sha must be pinned) and the pin check share one path (risk_path, else RISK_PATH). src/m2_runner.py kill_alert converts any Exception (not KeyboardInterrupt/SystemExit) to WriteFailed (exit 4). docs/EXIT_CODES.md notes both. Offline tests tests/test_dq_305_pin_first_kill_alert.py. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "finish": "src/paper_session.py run: pins.refuse_start is the first step, before any risk.toml read; missing/unreadable file, a directory or a sha computation that raises returns ok=False reason=risk_toml_pin_drift with a global halt record, no markets/books/sessions write and no getter call. The before snapshot, the loaded config (parsed from the checked bytes, re-read sha must be pinned) and the pin check share one path (risk_path, else RISK_PATH). src/m2_runner.py kill_alert converts any Exception (not KeyboardInterrupt/SystemExit) to WriteFailed (exit 4). docs/EXIT_CODES.md notes both. Offline tests tests/test_dr_305_pin_first_kill_alert.py. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
       "note": "Claimed by Poly桥接 as Task DR (Refs #305). Needs Poly风控 approval on head (pin path). Done by grok-bot on NoisePC.",
       "done_at": "2026-10-14T04:40:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "DS",
+      "status": "done",
+      "title": "paper_session reread-then-refuse offline tests; rename #305 Task DQ leftovers to DR",
+      "finish": "tests/test_dr_305_pin_first_kill_alert.py section 3: the real pins.refuse_start passes, then the risk file is deleted, edited off its sha, replaced by a directory, or the reread raises before paper_session._pinned_snapshot reads it again; each returns ok=False reason=risk_toml_pin_drift with exactly one global halt (recorded by the reread, none by the passing check), no markets/books/sessions write, no getter call, no parse. tests/test_dq_305_pin_first_kill_alert.py renamed to tests/test_dr_305_pin_first_kill_alert.py; #305 Task DQ -> Task DR in src/paper_session.py, src/m2_runner.py comments and docs/EXIT_CODES.md (KEY #314 Task DQ untouched). No behaviour change. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DS (follow-up of Task DR / #315). Tests and docs only. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T06:40:00Z",
       "surface": "grok-bot"
     },
     {

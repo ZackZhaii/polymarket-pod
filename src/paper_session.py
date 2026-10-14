@@ -16,7 +16,7 @@ Task DH (#233): start also verifies the full committed risk.toml sha256 and
 RISK_FILE_PINS via src.pins.risk_file_problems (not only podlib.PINS); drift
 refuses before any markets/books/sessions write.
 
-Task DQ (#305): the pin check runs first, before anything reads risk.toml, through
+Task DR (#305): the pin check runs first, before anything reads risk.toml, through
 src.pins.refuse_start (like m2_runner / paper_cycle / book): a missing or unreadable file,
 a directory, or a sha computation that raises is risk_toml_pin_drift with a global halt
 record and ok=False, never an uncaught exception. The unchanged-file snapshot (before),
@@ -36,7 +36,7 @@ if str(ROOT) not in sys.path:
 
 from src import paper_cycle, scanner  # noqa: E402
 from src.book import record as record_books  # noqa: E402
-from src.pins import (  # noqa: E402 - Task DH (#233), Task DQ (#305)
+from src.pins import (  # noqa: E402 - Task DH (#233), Task DR (#305)
     PIN_HALT_REASON,
     PINNED_RISK_SHA256,
     record_drift,
@@ -90,7 +90,7 @@ def run(
     check m2_runner / paper_cycle / book already use. Pre-start drift refuses with
     reason=risk_toml_pin_drift and writes nothing.
 
-    Task DQ (#305): that check is the very first step (nothing reads risk.toml before it) and
+    Task DR (#305): that check is the very first step (nothing reads risk.toml before it) and
     goes through pins.refuse_start, so a missing / unreadable file or a check that raises is
     drift too (halt recorded, ok=False). before, the loaded config and the check share one path.
     """
@@ -198,7 +198,7 @@ def run(
 
 
 def _pinned_snapshot(path: Path) -> bytes | list[str]:
-    """Task DQ (#305): the bytes of the just-checked risk file, or drift problems. Never raises."""
+    """Task DR (#305): the bytes of the just-checked risk file, or drift problems. Never raises."""
     try:
         raw = path.read_bytes()
         if hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest() != PINNED_RISK_SHA256:
@@ -211,7 +211,7 @@ def _pinned_snapshot(path: Path) -> bytes | list[str]:
 
 
 def _assert_risk_unchanged(path: Path, before: bytes) -> None:
-    """Task DQ (#305): compares the same file the pin check read (risk_path, else RISK_PATH)."""
+    """Task DR (#305): compares the same file the pin check read (risk_path, else RISK_PATH)."""
     if Path(path).read_bytes() != before:
         raise RuntimeError("risk.toml changed during paper session")
 
