@@ -978,6 +978,27 @@ def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def run_cli_intent(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, Any]:
+    # Issue #210 / #147: operator CLI tighten-only — never silent fee_rate=0, and never book
+    # without book depth/levels. Prefer refusing without levels over adding --asks.
+    reasons: list[str] = []
+    if getattr(args, "fee_rate", None) is None:
+        reasons.append("missing_fee_data")
+    # CLI carries no ask levels today (NO_BOOK_CONTEXTS). An optional args.asks (unused by the
+    # parser) is the only depth evidence accepted here; without it, refuse before RiskGate.
+    asks = getattr(args, "asks", None)
+    if not asks:
+        reasons.append("missing_book_levels")
+    if reasons:
+        summary = {
+            "strategy": getattr(args, "strategy", None) or "",
+            "reasons": reasons,
+            "hypothetical": False,
+            "risk_decision": "veto",
+            "decision": "veto",
+            "note": "Operator CLI refused: fee-rate and book depth/levels required (#210).",
+        }
+        return {"allow": False, "decision": summary}
+
     intent = Intent(
         strategy=args.strategy,
         market=args.market,
@@ -1023,7 +1044,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--market-price", type=float, default=None)
     parser.add_argument("--slippage", type=slippage_arg, default=ASSUMED_SLIPPAGE,
                         help=f"Assumed slippage, price units per share; at least ASSUMED_SLIPPAGE={ASSUMED_SLIPPAGE}.")
-    parser.add_argument("--fee-rate", type=float, default=0.0)
+    parser.add_argument("--fee-rate", type=float, default=None,
+                        help="Fee rate [0,1]. Required for operator intents (#210); no silent 0.0. Explicit 0 is allowed for free markets when book levels are also supplied.")
     parser.add_argument("--liquidity", type=float, default=None)
     parser.add_argument("--spread", type=float, default=None)
     parser.add_argument("--token-id", default="")
