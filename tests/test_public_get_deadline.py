@@ -765,3 +765,155 @@ def test_slow_https_headers_free_every_slot_and_healthy_requests_recover(monkeyp
         assert elapsed < 1.0, elapsed
         _wait_no_workers(1.0)
         assert not any(t.name == "public_get" for t in threading.enumerate())
+
+
+# ---------------------------------------------------------------- Task DY (#330): bound JSON-parse overrun
+
+
+def _near_cap_json_bytes() -> bytes:
+    """Valid JSON array just under _MAX_BODY_BYTES (ints: dense, deterministic size)."""
+    budget = podlib._MAX_BODY_BYTES - 64
+    # "[" + "0,"*(n-1) + "0]" has length 2*n + 1
+    n = max(1, (budget - 1) // 2)
+    while 2 * n + 1 > budget:
+        n -= 1
+    return ("[" + "0," * (n - 1) + "0]").encode("ascii")
+
+
+def _gamma_like_cap_json_bytes() -> bytes:
+    """Near-cap Gamma-like object array (realistic parse cost for the wall-clock bound)."""
+    item = (
+        '{"id":"' + ("x" * 20) + '","question":"' + ("q" * 80)
+        + '","outcomePrices":"[0.5,0.5]","volume":"12345.67","liquidity":"999.99"}'
+    )
+    item_b = len(item.encode("ascii"))
+    n = max(1, (podlib._MAX_BODY_BYTES - 64) // (item_b + 1))
+    raw = ("[" + ",".join(item for _ in range(n)) + "]").encode("ascii")
+    assert len(raw) <= podlib._MAX_BODY_BYTES, len(raw)
+    return raw
+
+
+def _measure_decode_loads_s(body: bytes) -> float:
+    text = body.decode("utf-8")
+    t0 = time.perf_counter()
+    podlib.json.loads(text)
+    return time.perf_counter() - t0
+
+
+def test_parse_budget_scales_with_body_size():
+    assert podlib._PARSE_BUDGET_S_AT_CAP == 1.0
+    assert podlib._parse_budget_s(0) == 0.0
+    assert podlib._parse_budget_s(podlib._MAX_BODY_BYTES) == pytest.approx(1.0)
+    assert podlib._parse_budget_s(podlib._MAX_BODY_BYTES // 2) == pytest.approx(0.5)
+
+
+def test_ensure_parse_budget_refuses_when_too_little_time_left():
+    now = podlib._monotonic()
+    with pytest.raises(podlib._DeadlineExceeded):
+        podlib._ensure_parse_budget(podlib._MAX_BODY_BYTES, started=now, budget=0.4)
+    podlib._ensure_parse_budget(podlib._MAX_BODY_BYTES, started=now, budget=1.5)  # enough
+    podlib._ensure_parse_budget(100, started=now, budget=0.05)  # tiny body: almost free
+
+
+def test_precheck_refuses_near_cap_parse_when_little_deadline_left(clock, monkeypatch):
+    """Fake clock: body arrives at 29.5 s of a 30 s deadline; left 0.5 s < 1.0 s budget → fail closed, no loads."""
+    body = _near_cap_json_bytes()
+    assert podlib._parse_budget_s(len(body)) > 0.5
+    clock["set"]((29.5, body))
+    calls = {"n": 0}
+    real_loads = podlib.json.loads
+
+    def counting_loads(text, *args, **kwargs):
+        calls["n"] += 1
+        return real_loads(text, *args, **kwargs)
+
+    monkeypatch.setattr(podlib.json, "loads", counting_loads)
+    with pytest.raises(podlib.PublicGetError) as info:
+        podlib.public_get(GAMMA_URL, timeout=60.0, deadline_s=30.0, attempts=1)
+    assert isinstance(info.value.__cause__, podlib._DeadlineExceeded)
+    assert calls["n"] == 0  # never started the GIL-holding parse
+
+
+def test_near_cap_body_with_enough_deadline_still_parses(clock):
+    body = _near_cap_json_bytes()
+    clock["set"]((1.0, body))
+    assert isinstance(podlib.public_get(GAMMA_URL, deadline_s=30.0, attempts=1), list)
+
+
+class _FixedBodyServer:
+    """127.0.0.1 HTTP/1.1 server that sends ``body`` in one shot (real sockets, offline)."""
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+        self.stop = threading.Event()
+        self.sock = socket.create_server(("127.0.0.1", 0))
+        self.sock.settimeout(0.1)
+        self.port = self.sock.getsockname()[1]
+        self.thread = threading.Thread(target=self._serve, name="fixed-body", daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
+        self.thread.join(5)
+        self.sock.close()
+        return False
+
+    def _serve(self) -> None:
+        while not self.stop.is_set():
+            try:
+                conn, _ = self.sock.accept()
+            except (socket.timeout, OSError):
+                continue
+            threading.Thread(target=self._answer, args=(conn,), daemon=True).start()
+
+    def _answer(self, conn) -> None:
+        try:
+            conn.settimeout(5)
+            request = b""
+            while b"\r\n\r\n" not in request:
+                got = conn.recv(4096)
+                if not got:
+                    return
+                request += got
+            head = (
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                + b"Content-Length: %d\r\nConnection: close\r\n\r\n" % len(self.body)
+            )
+            conn.sendall(head + self.body)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+
+
+def test_wall_clock_overrun_bounded_by_one_cap_parse(local):
+    """#330: real wall clock, real local HTTP server, no fake clock.
+
+    A near-cap body with a short deadline must fail closed (never a late OK), and the caller's elapsed
+    time stays <= deadline + time to parse one cap-size body (+ margin for a loaded machine).
+    """
+    body = _gamma_like_cap_json_bytes()
+    parse_s = _measure_decode_loads_s(body)
+    # Slack for thread start-up, scheduler jitter and a loaded CI/dev box.
+    margin_s = max(0.75, 3.0 * parse_s)
+    deadline_s = 0.05  # short: connect+read of ~8 MiB locally is fast; parse may start near/past deadline
+    with _FixedBodyServer(body) as server:
+        local(server)
+        result, elapsed = _timed_public_get(timeout=5.0, deadline_s=deadline_s, attempts=1)
+    assert isinstance(result, podlib.PublicGetError), result
+    assert elapsed <= deadline_s + parse_s + margin_s, (
+        f"elapsed={elapsed:.4f} deadline={deadline_s} parse_s={parse_s:.4f} margin={margin_s:.4f}"
+    )
+
+
+def test_wall_clock_near_cap_inside_deadline_still_returns(local):
+    """A near-cap body with a generous deadline still parses successfully (no behaviour change)."""
+    body = _gamma_like_cap_json_bytes()
+    with _FixedBodyServer(body) as server:
+        local(server)
+        result, elapsed = _timed_public_get(timeout=10.0, deadline_s=30.0, attempts=1)
+    assert isinstance(result, list) and len(result) > 0, type(result)
+    assert elapsed < 10.0, elapsed
