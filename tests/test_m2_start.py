@@ -140,7 +140,8 @@ def test_start_order_sentinel_first_then_m1_run_then_paper_cycle(rig, no_sentine
     assert 0 < int(m1[m1.index("--max-runtime") + 1]) <= (
         datetime(2099, 1, 1, tzinfo=timezone.utc) - datetime.now(timezone.utc)).total_seconds() + 1
     (row,) = _chain(rig.root)
-    assert set(row) == set(m2_start.CHAIN_FIELDS)
+    # #329 adds classifier_errors (observability); CHAIN_FIELDS stays the required core set so older rows still read.
+    assert set(m2_start.CHAIN_FIELDS) <= set(row) and row["classifier_errors"] == 0
     assert row["run_dir"] == run_dir and row["reason"] == "boot" and row["m2_end"] == "2099-01-01T00:00:00.000Z"
     assert row["max_runtime_s"] == int(m1[m1.index("--max-runtime") + 1])
     assert row["sentinel_pid"] == os.getpid()  # the pid the (fake) Sentinel's heartbeat carries
