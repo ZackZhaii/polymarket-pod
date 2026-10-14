@@ -1582,7 +1582,28 @@ Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@043e9ce).
 - Tests: `tests/test_public_get_retry.py` (offline; urlopen mocked, `_sleep` recorded). The old case that pinned
   429 as not retried is replaced by the 429 cases.
 
+## Task DQ — Issue #305: paper_session pin check first; kill_alert Exception → exit 4
+
+Status: done.
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@3a31906). Follow-up of Poly风控's #292 / #295 reviews.
+Tightening only; pin path change, so Poly风控 must comment “通过” on the head before merge.
+
+- `src/paper_session.py` `run`: the pin check is the first step, through `pins.refuse_start` (like m2_runner /
+  paper_cycle / book), before any risk.toml read. A missing or unreadable file, a directory, or a sha computation
+  that raises is `reason=risk_toml_pin_drift` with a global halt record and `ok=False` (was an uncaught
+  `FileNotFoundError` / `RuntimeError`); no markets / books / sessions write, no getter call.
+- The unchanged-file snapshot (`before`), the loaded config and the pin check use one path (`risk_path`, else
+  `RISK_PATH`); the config is parsed from the checked bytes (re-read sha must still be pinned, else drift).
+- `src/m2_runner.py` `kill_alert`: any `Exception` while building or writing the alert line becomes `WriteFailed`
+  (exit 4), not only `OSError`; KeyboardInterrupt / SystemExit pass through. docs/EXIT_CODES.md notes both.
+- Tests: `tests/test_dq_305_pin_first_kill_alert.py` (offline).
+
 ## Latest
+
+- 2026-10-14: Task DQ (issue #305): paper_session runs the pin check first (missing / unreadable risk.toml is
+  `risk_toml_pin_drift` with a halt, not an exception; one path for snapshot and check); m2_runner kill_alert
+  turns any Exception into exit 4. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 - 2026-10-14: Task DP (issue #199): public_get retries HTTP 429, waiting Retry-After integer seconds (capped at
   30 s, backoff fallback) inside the same PUBLIC_GET_ATTEMPTS budget; other 4xx still raise at once. risk.toml
