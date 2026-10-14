@@ -13,11 +13,15 @@ extra-copy count is reported; copies of one fill that differ from each other, or
 side and wrong sender roles are named failures. NEW-3b (Poly指挥, merged into #69): settlement rows
 (``kind`` "settlement") are booked to the ledger only — they never have a bus fill by design — so
 they are counted separately (``ledger.settlements``) and are not orphans; a settlement row without
-a fill_id, or a bus fill carrying a settlement's fill_id, is a named problem. Review P1: the
-remaining checks (UNKNOWN markers, SHA256 and counts) are still later acceptance items, so even a
-clean join ends verdict ``unknown`` with a non-zero exit and never claims PASS; review P2: damaged
-ledgers (tampered content, missing or mistyped risk-control fields, non-finite numbers, a
-conflicting duplicate) must fail with a non-zero exit.
+a fill_id, or a bus fill carrying a settlement's fill_id, is a named problem. Acceptance 5: a modern
+hypothetical fill joins and takes part in the copy checks like any modern fill (counted in
+``ledger.hypothetical_fills``); a ledger row without fill_id is pre-Task-AF history — it is never
+guessed into a join, is reported UNKNOWN (``unknowns``, the derived ``legacy:`` id as a stable
+name) and counted (``ledger.legacy_rows``); the coverage gate keeps all-empty or nothing-verified
+runs at verdict ``unknown``, never PASS. Review P1: the remaining check (SHA256, counts, reasons) is
+still a later acceptance item, so even a clean join ends verdict ``unknown`` with a non-zero exit
+and never claims PASS; review P2: damaged ledgers (tampered content, missing or mistyped
+risk-control fields, non-finite numbers, a conflicting duplicate) must fail with a non-zero exit.
 """
 from __future__ import annotations
 
@@ -111,7 +115,9 @@ def test_a_clean_join_is_verdict_unknown_not_pass(tmp_path, capsys):
     assert report["problems"] == []  # equal payloads and outer markets: acceptance 3 is checked
     assert "payload_equality_by_fill_id" not in report["unverified"]  # it is verified now
     assert "bus_sender_roles" not in report["unverified"]  # acceptance 4 is verified now too
-    assert "legacy_and_hypothetical_unknown" in report["unverified"]  # acceptance 5 is not
+    assert "legacy_and_hypothetical_unknown" not in report["unverified"]  # acceptance 5 is too
+    assert "input_sha256_and_counts" in report["unverified"]  # acceptance 6 is not
+    assert report["unknowns"] == [] and report["ledger"]["legacy_rows"] == 0
 
 
 def test_a_changed_payload_field_on_the_bus_side_fails(tmp_path, capsys):
@@ -468,3 +474,96 @@ def test_a_settlement_row_without_a_fill_id_is_a_named_problem(tmp_path, capsys)
     report = json.loads(capsys.readouterr().out)
     assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
     assert "ledger:settlement_without_fill_id" in report["problems"]
+
+
+# --- acceptance 5: hypothetical copies join; legacy rows are UNKNOWN, never guessed --------------
+
+
+def legacy_row(**extra) -> dict:
+    """One pre-Task-AF fill: no fill_id and none of the modern risk-control fields.
+
+    ledger_store accepts such rows only before the first id'd row (the legacy prefix), and its
+    replay still counts them, so this shape is legal history that passes ledger_store.verify."""
+    row = {"ts": "2026-10-11T00:00:00Z", "market": "m1", "token_id": "t1", "side": "buy",
+           "shares": 10.0, "notional_usd": 5.0, "fee_rate": 0.0, "fee_usd": 0.0,
+           "market_price": 0.5, "effective_price": 0.5}
+    row.update(extra)
+    return row
+
+
+def test_a_modern_hypothetical_fill_joins_and_participates_in_the_copy_check(tmp_path, capsys):
+    """Acceptance 5: 现代假设成交也参与副本检查. A hypothetical fill (hypothetical true /
+    counts_toward_risk false) carries a fill_id like every modern fill and is written to both logs,
+    so it joins and its identical duplicate copies count once, exactly like a real fill's."""
+    ledger = tmp_path / "paper.jsonl"
+    row = book_fill(ledger, market="m1", hypothetical=True, counts_toward_risk=False)
+    assert row["hypothetical"] is True and row["counts_toward_risk"] is False
+    bus = tmp_path / "bus.jsonl"
+    write_jsonl(bus, [bus_fill(row, ts="2026-10-12T00:00:01Z"),
+                      bus_fill(row, ts="2026-10-12T00:00:09Z")])  # identical extra copy
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1  # unknown, not pass: acceptance 6 remains
+    assert report["verdict"] == "unknown" and report["problems"] == []
+    assert report["matched"] == 1 and report["bus"]["duplicate_fills"] == 1
+    assert report["ledger"]["hypothetical_fills"] == 1
+
+
+def test_a_drifted_extra_copy_of_a_hypothetical_fill_fails(tmp_path, capsys):
+    """Acceptance 5: the copy check does not stop at joining — a second, drifted copy of a
+    hypothetical fill contradicts the first one and is a named conflict with a non-zero exit."""
+    ledger = tmp_path / "paper.jsonl"
+    row = book_fill(ledger, hypothetical=True, counts_toward_risk=False)
+    bus = tmp_path / "bus.jsonl"
+    write_jsonl(bus, [bus_fill(row), bus_fill(dict(row, shares=row["shares"] + 1.0))])
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
+    assert f"duplicate_conflict:{row['fill_id']}" in report["problems"]
+
+
+def test_legacy_rows_without_fill_id_are_unknown_and_counted_not_guessed(tmp_path, capsys):
+    """Acceptance 5: 无 fill_id 的历史成交报告 UNKNOWN 和未核验数量，不猜测关联. A legacy row has
+    no honest join: it is not named a problem, not joined and not an orphan — it is UNKNOWN with
+    its derived legacy id (a stable name, never a join key) and the unverified count."""
+    ledger = tmp_path / "paper.jsonl"
+    write_jsonl(ledger, [legacy_row(), legacy_row(market="m2", token_id="t2")])
+    bus = tmp_path / "bus.jsonl"
+    bus.write_bytes(b"")
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1  # unknown: unverified history is never a pass
+    assert report["verdict"] == "unknown" and report["problems"] == []
+    assert report["ledger"]["legacy_rows"] == 2 and len(report["unknowns"]) == 2
+    assert all(name.startswith("legacy:") for name in report["unknowns"])
+    assert report["matched"] == 0 and report["ledger_only"] == [] and report["bus_only"] == []
+
+
+def test_a_legacy_prefix_with_a_modern_fill_on_top_reports_both(tmp_path, capsys):
+    """A ledger may legally start with legacy rows (before the first id'd one). The modern fill
+    booked on top joins normally; the legacy row stays UNKNOWN and is never read as an orphan."""
+    ledger = tmp_path / "paper.jsonl"
+    write_jsonl(ledger, [legacy_row()])
+    row = book_fill(ledger, market="m1", token="t1")  # booked on top of the legacy prefix
+    bus = tmp_path / "bus.jsonl"
+    write_jsonl(bus, [bus_fill(row)])
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1  # unknown: the legacy row is unverified history
+    assert report["matched"] == 1 and report["ledger"]["legacy_rows"] == 1
+    assert report["ledger_only"] == [] and report["bus_only"] == [] and report["problems"] == []
+
+
+def test_all_empty_inputs_are_unknown_not_a_full_pass(tmp_path, capsys):
+    """Acceptance 5: 覆盖不足或全空输入不能报告全量 PASS. Two empty logs verify trivially and have
+    no problem at all, but nothing was cross-checked, so the verdict is unknown with a non-zero
+    exit — never a pass, even once the later acceptance items land."""
+    ledger = tmp_path / "paper.jsonl"
+    bus = tmp_path / "bus.jsonl"
+    ledger.write_bytes(b"")
+    bus.write_bytes(b"")
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1
+    assert report["verdict"] == "unknown" and report["matched"] == 0 and report["problems"] == []
+    assert report["ledger"]["rows"] == 0 and report["bus"]["rows"] == 0
