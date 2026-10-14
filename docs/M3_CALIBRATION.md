@@ -293,6 +293,8 @@ git-ignored. Exit codes: `docs/EXIT_CODES.md` (0 written, 2 usage, 3 corrupt inp
   most `CALIBRATION_MAX_DECISIONS_PER_MARKET` decisions per market. p = the first fill's `model_prob`, q =
   its `market_mid` (Task BC, step 2c; `market_price` only for a pre-Task BA fill). Expected `E = sum(edge x shares)`; realized
   `R = (bought - sold shares) x y + sell proceeds - buy cost` (fees included).
+  Issue #70: every fill of a decision must satisfy `forecast.ts <= fill.ts < closed_ts` (the joined
+  forecast row's `ts`, never a fill's copy), else the whole decision sample is dropped.
 
 A label is used only when the resolution row is `status=resolved`, `uma_checked=true`, its prices are one
 1.0 and the rest 0.0, and the forecast's `outcome_index` and `token_id` agree with it (the winning index
@@ -304,6 +306,14 @@ written in any offset is the same moment. A forecast whose time cannot be proved
 as a zoned ISO time) or that was sealed at the close or after it is dropped and counted
 (`forecast_ts_invalid`, `forecast_not_before_close`); nothing is imputed and an unprovable row never takes
 the market's first-forecast slot.
+
+A trade sample proves the same order per fill, against its joined forecast row's `ts` (never a fill's copy
+of it) and `resolution.closed_ts`: every fill must satisfy `forecast.ts <= fill.ts < closed_ts`, the same
+instant in any offset counting as equal. A decision whose forecast time or any of whose fills cannot be
+placed in that window (missing, unparseable or unzoned time, a fill before its forecast, a fill at or after
+the close) is dropped and counted as a whole
+(`fill_forecast_ts_invalid`, `fill_ts_invalid`, `fill_before_forecast`, `fill_not_before_close`); nothing is
+imputed and such a decision never takes a re-entry slot.
 
 ### Dropped and counted, never imputed
 
@@ -322,6 +332,10 @@ with its reason.
 | `fill_calibration_problems` | A | stored or recomputed `fill_problems` (plus a missing / unknown stored `fill_context`) non-empty (counted per problem) |
 | `decision_inconsistent` | A | fills of one decision_id disagree on forecast, token, condition or outcome |
 | `fill_forecast_not_found` / `fill_forecast_mismatch` | A | its forecast_id is not on file / points at another market |
+| `fill_forecast_ts_invalid` | A | issue #70: the joined forecast row's `ts` does not parse as a zoned ISO time, so the fills' order against it cannot be proved |
+| `fill_ts_invalid` | A | issue #70: a fill's `ts` does not parse as a zoned ISO time (missing, unparseable, or no timezone) |
+| `fill_before_forecast` | A | issue #70: a fill's `ts` is strictly before the joined forecast row's `ts` |
+| `fill_not_before_close` | A | issue #70: a fill's `ts` is at or after `resolution.closed_ts` (the same instant in any offset counting as equal; a close that cannot be parsed is unproven too) |
 | `resolution_pending` | A, B | no resolution row for the condition |
 | `resolution_not_uma_resolved` | A, B | `status=closed` (UMA not confirmed) |
 | `resolution_ambiguous_status` | A, B | any other status |

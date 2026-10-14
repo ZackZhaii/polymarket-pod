@@ -49,7 +49,11 @@ the snapshot is dropped and counted by reason in the report. Issue #70: a foreca
 only when its ts provably precedes resolution.closed_ts (zoned ISO times compared as UTC) — an
 unparseable or unzoned ts drops as forecast_ts_invalid, and a forecast sealed at or after the close
 (as the same instant in any offset) drops as forecast_not_before_close, so a result is never
-scored against a prediction made after it was known. A corrupt input file (torn line,
+scored against a prediction made after it was known. A trade sample proves the same order per fill
+against its joined forecast row's ts (never a fill's copy): every fill must satisfy
+forecast.ts <= fill.ts < closed_ts, or the whole decision sample is dropped and counted
+(fill_forecast_ts_invalid, fill_ts_invalid, fill_before_forecast, fill_not_before_close), so a
+result is never scored against a trade placed outside the window either. A corrupt input file (torn line,
 bad JSON, wrong schema, conflicting duplicate) is an error exit and no report is written; a
 ledger that fails ledger_store.verify is its own error exit. Below the M3-pending minimums
 (src/thresholds.py CALIBRATION_*) a section is "insufficient" and carries no verdict.
@@ -122,6 +126,10 @@ NOTES = (
     "A forecast sample must be sealed strictly before resolution.closed_ts (zoned ISO times compared as UTC): "
     "an unparseable or unzoned ts is dropped (forecast_ts_invalid), a forecast at or after the close "
     "(forecast_not_before_close). No time is ever imputed.",
+    "A trade sample proves the same order per fill against its joined forecast row's ts: every fill must fall "
+    "at or after the forecast and strictly before the close (zoned ISO times compared as UTC), else the whole "
+    "decision sample is dropped (fill_forecast_ts_invalid, fill_ts_invalid, fill_before_forecast, "
+    "fill_not_before_close). No time is ever imputed.",
     "UMA dispute status not checked (beyond umaResolutionStatus=resolved).",
     "Not a promise of profit. Paper only. This report proposes nothing and changes no setting.",
     "q is the first fill's market_mid (price_source=market_mid). Only a fill booked before Task BA, with no "
@@ -729,6 +737,11 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
         if reason:
             drop(ref, reason, len(rows))
             continue
+        # issue #70: prove every fill sits between the forecast and the close before it can be scored.
+        time_reason = fill_time_problem(forecast, rows, resolution)
+        if time_reason:
+            drop(ref, time_reason, len(rows))
+            continue
         if per_market[condition] >= CALIBRATION_MAX_DECISIONS_PER_MARKET:
             drop(ref, "re_entry_cap", len(rows))
             continue
@@ -758,6 +771,33 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
                          "event_id": trade_event(first, forecast),  # Task BF
                          "resolution_day": resolution["closed_ts"][:10]})  # type: ignore[index]
     return eligible, dropped, reasons, problem_counts
+
+
+def fill_time_problem(forecast: Mapping[str, Any], rows: Sequence[Mapping[str, Any]],
+                      resolution: Mapping[str, Any] | None) -> str | None:
+    """issue #70: why this decision cannot be placed between its forecast and the close, else None.
+
+    Uses the joined forecast row's ts (never a fill's copy of it) and resolution.closed_ts, both parsed
+    to UTC by ``_parse_ts``, so one instant written in any offset compares equal. Every fill of the
+    decision must satisfy forecast.ts <= fill.ts < closed_ts: a missing, unparseable or unzoned time, a
+    fill before its forecast, or a fill at or after the close proves nothing, and the whole decision
+    sample is dropped. Nothing is ever imputed.
+    """
+    sealed = _parse_ts(forecast.get("ts"))
+    if sealed is None:
+        return "fill_forecast_ts_invalid"
+    closed = _parse_ts(resolution.get("closed_ts")) if resolution is not None else None
+    if closed is None:
+        return "fill_not_before_close"  # a close that cannot be parsed proves nothing: fail closed
+    for row in rows:
+        ts = _parse_ts(row.get("ts"))
+        if ts is None:
+            return "fill_ts_invalid"
+        if ts < sealed:
+            return "fill_before_forecast"
+        if ts >= closed:
+            return "fill_not_before_close"
+    return None
 
 
 def trade_event(fill: Mapping[str, Any], forecast: Mapping[str, Any]) -> str | None:

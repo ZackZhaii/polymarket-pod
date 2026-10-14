@@ -182,7 +182,7 @@ def test_an_unusable_mid_does_not_use_up_a_re_entry_slot():
     f0 = forecast(0, 0.6)
     fs = [f0, forecast(0, 0.6, ts="2026-10-02T00:00:00Z"), forecast(0, 0.6, ts="2026-10-03T00:00:00Z")]
     fills = [_mid_fill(fs[0], None, ts=fs[0]["ts"])] + [_mid_fill(f, 0.5, ts=f["ts"]) for f in fs[1:]]
-    t = build(fs, [resolution(0, 0)], fills)[0]["trades"]
+    t = build(fs, [resolution(0, 0, day=5)], fills)[0]["trades"]  # close 2026-10-05: all fills before it
     assert t["eligible"] == 2 and t["dropped_by_reason"] == {"fill_market_mid_missing": 1}
 
 
