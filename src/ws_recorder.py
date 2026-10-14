@@ -344,6 +344,13 @@ class AssetBook:
         self.removed = None
 
 
+# Task EB (issue #223): the internal counts (#185 Task CC, #201 Task CM) that say why no gap resync fired. Each is
+# also counted per asset (Outcome / RunReport ``asset_counts``) so m1_run can persist them in manifest
+# ``counts.recorder.<asset>.<name>``. Observability only: no check, threshold or resync rule depends on them.
+RECORDER_ASSET_COUNTS = ("duplicate_level_removal", "group_held", "group_resolved", "group_unresolved",
+                         "group_replaced_by_book", "stale_resubscribe_snapshot")
+
+
 @dataclass
 class Outcome:
     rows: list[dict[str, Any]] = field(default_factory=list)
@@ -351,6 +358,12 @@ class Outcome:
     counts: Counter = field(default_factory=Counter)
     raw_books: list[dict[str, Any]] = field(default_factory=list)  # Task AY: book frames as received
     business: int = 0  # Task BK: event objects with a non-empty event_type in the frame (market traffic)
+    asset_counts: dict[str, Counter] = field(default_factory=dict)  # Task EB: RECORDER_ASSET_COUNTS per asset
+
+    def tally(self, name: str, asset: str) -> None:
+        """Task EB: one of RECORDER_ASSET_COUNTS, in ``counts`` (as before) and in ``asset_counts[asset]``."""
+        self.counts[name] += 1
+        self.asset_counts.setdefault(asset, Counter())[name] += 1
 
 
 class _Reject(Exception):
@@ -574,7 +587,7 @@ class BookCore:
                     # Issue #182 (C): the asset already recovered from a newer exchange book; the snapshot our
                     # resubscribe asked for came after deltas we applied since. Dropped, not a gap.
                     book.resubscribe = None
-                    out.counts["stale_resubscribe_snapshot"] += 1
+                    out.tally("stale_resubscribe_snapshot", asset)
                     return
                 raise _Reject("timestamp_regression")
             bids = _levels(message.get("bids"))
@@ -603,7 +616,7 @@ class BookCore:
             return
         if book.pending is not None:  # Issue #182 (A): the snapshot is authoritative over an open group
             book.pending = None
-            out.counts["group_replaced_by_book"] += 1
+            out.tally("group_replaced_by_book", asset)
         if book.resubscribe is not None:
             if book.state == LIVE:  # the one further snapshot expected after a recovery has come
                 book.resubscribe = None
@@ -689,7 +702,7 @@ class BookCore:
                             key = (side, price)
                             if key in removed_add or (removed_now is not None and key in removed_now):
                                 # Task CM: the same removal at the same exchange timestamp, already applied.
-                                out.counts["duplicate_level_removal"] += 1
+                                out.tally("duplicate_level_removal", asset)
                                 continue
                             raise _Reject("unknown_level_removed")
                         del levels[price]
@@ -708,11 +721,11 @@ class BookCore:
                 # the group closes instead of resyncing on an intermediate state.
                 book.pending = {"bids": bids, "asks": asks, "stamp": stamp, "reported": reported,
                                 "reason": problem, "since": group["since"] if group is not None else mono}
-                out.counts["group_held"] += 1
+                out.tally("group_held", asset)
                 continue
             if group is not None:
                 book.pending = None
-                out.counts["group_resolved"] += 1
+                out.tally("group_resolved", asset)
             book.bids, book.asks = bids, asks
             book.last_ms, book.last_iso = stamp
             book.reported_top = reported
@@ -729,7 +742,7 @@ class BookCore:
     def _close_group(self, book: AssetBook, ts: str, mono: float | None, out: Outcome) -> None:
         """Issue #182 (A): an open group closes without having become consistent: the asset resyncs."""
         reason = book.pending["reason"] if book.pending is not None else "crossed_book"
-        out.counts["group_unresolved"] += 1
+        out.tally("group_unresolved", book.asset_id)
         self._resync(book.asset_id, reason, ts, mono, out)
 
     def _late_resubscribe_snapshot(self, book: AssetBook, stamp_ms: int, mono: float | None) -> bool:
@@ -1252,6 +1265,19 @@ class RunReport:
     clock_jumps_in_backoff: int = 0  # Task BL: suspend / wake seen while waiting to reconnect
     unmapped_assets: list[str] = field(default_factory=list)
     ended_by: str = ""  # "deadline" or "stopped" (Task AI)
+    asset_counts: dict[str, Counter] = field(default_factory=dict)  # Task EB: RECORDER_ASSET_COUNTS per asset
+
+
+def recorder_asset_counts(report: RunReport, assets: Iterable[str]) -> dict[str, dict[str, int]]:
+    """Task EB (issue #223): ``{asset: {name: count}}`` for every given asset and every RECORDER_ASSET_COUNTS name
+    (0 when never counted), as m1_run writes it to manifest ``counts.recorder``. Only reads (one dict ``get`` per
+    asset, one Counter ``get`` per name), so the progress thread and the console handler can call it while the
+    recorder runs."""
+    snapshot: dict[str, dict[str, int]] = {}
+    for asset in assets:
+        counter = report.asset_counts.get(asset) or {}
+        snapshot[asset] = {name: int(counter.get(name, 0)) for name in RECORDER_ASSET_COUNTS}
+    return snapshot
 
 
 def _nearest_rank(values: list[float], q: float) -> float | None:
@@ -1455,6 +1481,8 @@ class Recorder:
             self.sink.write(row)
             self.report.rows += 1
         self.report.counts.update(out.counts)
+        for asset, counter in out.asset_counts.items():  # Task EB
+            self.report.asset_counts.setdefault(asset, Counter()).update(counter)
         escalate = False
         for asset, reason in out.resyncs:
             if not reason.startswith("disconnect_") and reason not in NOT_A_GAP:

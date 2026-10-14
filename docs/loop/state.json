@@ -654,6 +654,15 @@
       "note": "Claimed by Poly指挥 as Task DZ (issue #210). Tighten-only, non-KEY. Done by grok-bot on NoisePC.",
       "done_at": "2026-10-14T20:24:42Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "EB",
+      "status": "done",
+      "title": "Issue #223: m1_run manifest counts.recorder persists ws_recorder internal counts per asset (observability only)",
+      "finish": "src/ws_recorder.py: RECORDER_ASSET_COUNTS (duplicate_level_removal, group_held, group_resolved, group_unresolved, group_replaced_by_book, stale_resubscribe_snapshot) are also counted per asset (Outcome/RunReport asset_counts; global counts unchanged); recorder_asset_counts() snapshot. src/m1_run.py writes counts.recorder.<asset>.<name> in the final manifest, every progress snapshot and the console-close partial counts (same atomic ManifestWriter path as counts.resyncs). src/m1_report.py only displays them (recorder_counts in report.json, a table in Connection and resyncs; N/A for runs without the field or malformed values; no criterion). tests/test_m1_run_recorder_counts.py: tests/fixtures/ws_resync vectors, per-asset sums equal global counts, manifest equals in-memory counts (final, progress, console close), report N/A for older runs. docs/M1_ACCEPTANCE.md documents the fields. No resync rule, threshold or M1 criterion changed. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass. Closes #223.",
+      "note": "Claimed by Poly指挥 as Task EB (issue #223). Observability only, non-KEY. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T23:40:00Z",
+      "surface": "grok-bot"
     }
   ]
 }
