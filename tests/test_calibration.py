@@ -48,7 +48,9 @@ def resolution(i: int, winner: int, *, day: int | None = None, status: str = "re
 
 
 def fill(f: dict, *, side: str = "buy", shares: float = 10.0, price: float = 0.4, edge: float = 0.05,
-         fee: float = 0.01, fill_id: str | None = None, ts: str = "2026-10-02T00:00:00Z", **over) -> dict:
+         fee: float = 0.01, fill_id: str | None = None, ts: str = "2026-10-01T06:00:00Z", **over) -> dict:
+    # issue #70: the default fill sits between the default forecast ts (00:0x) and the earliest default
+    # close (2026-10-01T12:00:00Z), so a plain fixture fill is provably in the window.
     row = {"fill_id": fill_id or f"f-{f['forecast_id'][:10]}-{side}-{shares}", "ts": ts, "strategy": f["strategy"],
            "market": f["market_id"], "token_id": f["token_id"], "side": side, "model_prob": f["model_prob"],
            "market_price": price, "edge": edge, "fee_usd": fee, "notional_usd": round(shares * price, 8),
@@ -416,7 +418,7 @@ def test_a_third_entry_on_one_market_is_capped():
     f0 = forecast(0, 0.6)
     fs = [f0, forecast(0, 0.6, ts="2026-10-02T00:00:00Z"), forecast(0, 0.6, ts="2026-10-03T00:00:00Z")]
     fills = [fill(f, ts=f["ts"]) for f in fs]
-    t = build(fs, [resolution(0, 0)], fills)[0]["trades"]
+    t = build(fs, [resolution(0, 0, day=5)], fills)[0]["trades"]  # close 2026-10-05: all fills provably before it
     assert t["eligible"] == 2 and t["dropped_by_reason"] == {"re_entry_cap": 1}
     assert t["metrics"]["re_entries"] == 1
 
@@ -435,6 +437,97 @@ def test_trade_verdict_needs_the_minimums():
         "better_than_market", "worse_than_market", "inconclusive"}
     low, high = m["delta_brier_ci"]
     assert low <= m["delta_brier"] <= high
+
+
+# ------------------------------------------------------------------ causal fill time (issue #70)
+
+
+def test_a_fill_between_its_forecast_and_the_close_is_kept():
+    f = forecast(0, 0.7, ts="2026-10-01T00:00:00Z")  # close 2026-10-01T12:00:00Z
+    t = build([f], [resolution(0, 0, day=1)], [fill(f, ts="2026-10-01T06:00:00Z")])[0]["trades"]
+    assert t["eligible"] == 1 and t["dropped"] == 0 and t["dropped_by_reason"] == {}
+
+
+def test_a_fill_at_its_forecast_moment_is_kept_but_at_the_close_is_dropped():
+    f0 = forecast(0, 0.7, ts="2026-10-01T10:00:00Z")
+    f1 = forecast(1, 0.99, ts="2026-10-01T00:00:00Z")
+    fills = [fill(f0, ts="2026-10-01T10:00:00Z"),  # sealed and filled at the same instant: still causal
+             fill(f1, ts="2026-10-01T12:00:00Z")]  # exactly resolution(1).closed_ts: not before it
+    t = build([f0, f1], [resolution(i, 0, day=1) for i in range(2)], fills)[0]["trades"]
+    assert t["eligible"] == 1 and t["dropped_by_reason"] == {"fill_not_before_close": 1}
+
+
+def test_a_fill_after_the_settlement_is_never_a_sample():
+    f = forecast(0, 0.99, ts="2026-10-01T00:00:00Z")
+    t = build([f], [resolution(0, 0, day=10)], [fill(f, ts="2026-10-20T00:00:00Z")])[0]["trades"]
+    assert t["eligible"] == 0 and t["dropped_by_reason"] == {"fill_not_before_close": 1}
+
+
+def test_a_fill_before_its_forecast_is_dropped():
+    f = forecast(0, 0.7, ts="2026-10-01T06:00:00Z")
+    t = build([f], [resolution(0, 0, day=1)], [fill(f, ts="2026-10-01T05:59:59Z")])[0]["trades"]
+    assert t["eligible"] == 0 and t["dropped_by_reason"] == {"fill_before_forecast": 1}
+
+
+@pytest.mark.parametrize("ts", ["yesterday", "2026-10-01", "2026-10-01T00:00:00", "2026-10-01T25:00:00Z", ""])
+def test_a_fill_whose_time_cannot_be_proved_is_dropped(ts):
+    f = forecast(0, 0.7)
+    t = build([f], [resolution(0, 0)], [fill(f, ts=ts)])[0]["trades"]
+    assert t["eligible"] == 0 and t["dropped_by_reason"] == {"fill_ts_invalid": 1}
+
+
+def test_an_unprovable_forecast_time_rejects_its_trades():
+    f = forecast(0, 0.7, ts="2026-10-01T00:00:00")  # no timezone: the fills' order cannot be proved
+    t = build([f], [resolution(0, 0)], [fill(f)])[0]["trades"]
+    assert t["eligible"] == 0 and t["dropped_by_reason"] == {"fill_forecast_ts_invalid": 1}
+
+
+def test_the_same_moment_in_another_offset_is_counted_once():
+    # close 2026-10-01T12:00:00Z: 14:00+02:00 and 07:00-05:00 are that moment, 18:30+08:00 is 10:30Z
+    fs = [forecast(i, 0.99, ts="2026-10-01T00:00:00Z") for i in range(3)]
+    fills = [fill(fs[0], ts="2026-10-01T14:00:00+02:00"), fill(fs[1], ts="2026-10-01T07:00:00-05:00"),
+             fill(fs[2], ts="2026-10-01T18:30:00+08:00")]
+    t = build(fs, [resolution(i, 0, day=1) for i in range(3)], fills)[0]["trades"]
+    assert t["eligible"] == 1 and t["dropped_by_reason"] == {"fill_not_before_close": 2}
+
+
+def test_one_unprovable_fill_rejects_the_whole_decision_and_counts_every_fill():
+    f = forecast(0, 0.7, ts="2026-10-01T06:00:00Z")
+    fills = [fill(f, fill_id="good", ts="2026-10-01T08:00:00Z"),
+             fill(f, fill_id="early", ts="2026-10-01T05:00:00Z")]  # before its own forecast
+    report, samples = build([f], [resolution(0, 0, day=1)], fills)
+    t = report["trades"]
+    assert t["eligible"] == 0 and t["dropped_by_reason"] == {"fill_before_forecast": 2}
+    dropped = [s for s in samples if s.get("kind") == "trade" and not s["eligible"]]
+    assert len(dropped) == 1 and dropped[0]["fills"] == 2 and dropped[0]["reason"] == "fill_before_forecast"
+
+
+def test_mixed_fill_times_drop_exactly_and_match_samples_jsonl(tmp_path):
+    fs = [forecast(i, 0.7, ts="2026-10-01T00:00:00Z") for i in range(6)]
+    rs = [resolution(i, 0, day=1) for i in range(6)]  # every close 2026-10-01T12:00:00Z
+    fills = [fill(fs[0], fill_id="ok", ts="2026-10-01T06:00:00Z"),           # in the window: kept
+             fill(fs[1], fill_id="late", ts="2026-10-01T12:00:00Z"),         # at the close
+             fill(fs[2], fill_id="early", ts="2026-09-30T23:00:00Z"),        # before its forecast
+             fill(fs[3], fill_id="bad", ts="yesterday"),                     # unparseable
+             fill(fs[4], fill_id="unzoned", ts="2026-10-01T06:00:00"),       # no timezone
+             fill(fs[5], fill_id="two-ok", ts="2026-10-01T07:00:00Z"),       # one decision, two fills:
+             fill(fs[5], fill_id="two-late", ts="2026-10-01T14:00:00+02:00")]  # the close in another offset
+    report, samples = build(fs, rs, fills)
+    t = report["trades"]
+    assert t["eligible"] == 1 and t["dropped"] == 6
+    assert t["dropped_by_reason"] == {"fill_before_forecast": 1, "fill_not_before_close": 3,
+                                      "fill_ts_invalid": 2}
+    folder = cal.write_report(tmp_path / "out", report, samples)  # the report writer, minus the CLI readers
+    written = [json.loads(line) for line
+               in (folder / "samples.jsonl").read_text(encoding="utf-8").splitlines()]
+    trade_rows = [s for s in written if s.get("kind") == "trade"]
+    assert sum(1 for s in trade_rows if s["eligible"]) == t["eligible"]
+    assert sum(s.get("fills", 1) for s in trade_rows if not s["eligible"]) == t["dropped"]
+    reasons = {}
+    for s in trade_rows:
+        if not s["eligible"]:
+            reasons[s["reason"]] = reasons.get(s["reason"], 0) + s.get("fills", 1)
+    assert reasons == t["dropped_by_reason"]
 
 
 # ------------------------------------------------------------------ CLI
@@ -530,11 +623,11 @@ def test_trade_groups_follow_the_design_tiers():
     assert cal.tier(None, th.CALIBRATION_EDGE_TIERS) == "(unknown)"
     assert cal.price_band(0.97) == "[0.9, 1]" and cal.price_band(0.1) == "[0.1, 0.2)"
     fs, rs = world(2)
-    fills = [fill(fs[0], edge=0.05, ts="2026-10-02T00:00:00Z"), fill(fs[1], side="sell", edge=0.1)]
+    fills = [fill(fs[0], edge=0.05), fill(fs[1], side="sell", edge=0.1)]
     report, samples = build(fs, rs, fills)
     t = report["trades"]
     assert set(t["by_side"]) == {"buy", "sell"} and set(t["by_edge_tier"]) == {"[0.04, 0.08)", ">=0.08"}
-    assert set(t["by_expiry_tier"]) == {">=336h"}  # 2026-10-02 -> 2026-10-20
+    assert set(t["by_expiry_tier"]) == {">=336h"}  # 2026-10-01T06:00Z -> 2026-10-20
     assert all(g["status"] == "insufficient" and g["brier"] is None for g in t["by_side"].values())
     assert report["group_count"] >= 6
     m = t["metrics"]
