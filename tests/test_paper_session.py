@@ -9,6 +9,9 @@ import inspect
 import json
 from pathlib import Path
 
+import pytest
+
+import src.paper_cycle as paper_cycle
 import src.paper_session as paper_session
 from src import pins
 from src.podlib import RISK_PATH, read_jsonl
@@ -245,4 +248,87 @@ def test_clean_pinned_config_still_starts(tmp_path):
     assert result["reason"] == "signals_only"
     assert result["fills"] == 0
     assert (tmp_path / "sessions.jsonl").exists()
+    assert RISK_PATH.read_bytes() == before
+
+
+# --- Issue #75 criterion 6: the cycle's input refusal propagates to the session ---
+
+_BROKEN = b"{not json}\n"
+
+
+@pytest.mark.parametrize("which", ["markets", "books"])
+def test_a_corrupt_cycle_input_propagates_and_writes_no_sessions_record(tmp_path, which):
+    """A bad line in the session's own markets/books file: ok=False reason=input_invalid, no sessions row.
+
+    The caller propagation of the cycle's refusal (path, line and problem code only); the damaged
+    source file is reported, never repaired or truncated.
+    """
+    before = RISK_PATH.read_bytes()
+    markets = tmp_path / "markets.jsonl"
+    books = tmp_path / "books.jsonl"
+    sessions = tmp_path / "sessions.jsonl"
+    target = books if which == "books" else markets
+    target.write_bytes(_BROKEN)
+
+    result = paper_session.run(
+        raw_markets=[RAW, *REJECTED],
+        book_getter=_book,
+        markets_path=markets,
+        books_path=books,
+        bus_path=tmp_path / "bus.jsonl",
+        sessions_path=sessions,
+        now="2026-10-08T06:00:00Z",
+        clock=lambda: CLOCK,
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == paper_cycle.INPUT_INVALID
+    assert (result["gaps"], result["stale"], result["fills"]) == (0, 0, 0)
+    assert result["input_problems"] == [{"path": str(target), "line": 1, "problem": "bad_json"}]
+    assert not sessions.exists()  # a refused round never writes a success sessions record
+    assert _BROKEN in target.read_bytes()
+    assert RISK_PATH.read_bytes() == before
+
+
+def test_a_still_changing_cycle_input_propagates_as_pending_and_writes_no_sessions_record(tmp_path, monkeypatch):
+    """A markets/books file still changing after the bounded re-read: ok=False reason=input_pending.
+
+    A transient append is a skip, not a halt: zero gaps and fills, no sessions record. The one
+    pending-round record is stubbed so the test never touches the real sentinel state.
+    """
+    before = RISK_PATH.read_bytes()
+    books = tmp_path / "books.jsonl"
+    sessions = tmp_path / "sessions.jsonl"
+    real = paper_cycle._file_signature
+    state = {"looks": 0}
+
+    def signature(path):
+        base = real(path)
+        if Path(path) != books or base is None:
+            return base
+        state["looks"] += 1
+        return (base[0] + state["looks"], base[1] + state["looks"])  # every look sees a new append
+
+    monkeypatch.setattr(paper_cycle, "_file_signature", signature)
+    monkeypatch.setattr(
+        paper_cycle, "_record_input_pending",
+        lambda *args, **kwargs: {"state_problem": None, "write_problem": None,
+                                 "input_pending_streak": 1, "input_pending_halt": False})
+
+    result = paper_session.run(
+        raw_markets=[RAW, *REJECTED],
+        book_getter=_book,
+        markets_path=tmp_path / "markets.jsonl",
+        books_path=books,
+        bus_path=tmp_path / "bus.jsonl",
+        sessions_path=sessions,
+        now="2026-10-08T06:00:00Z",
+        clock=lambda: CLOCK,
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == paper_cycle.INPUT_PENDING
+    assert (result["gaps"], result["stale"], result["fills"]) == (0, 0, 0)
+    assert result["input_problems"] == [{"path": str(books), "line": None, "problem": "changing"}]
+    assert not sessions.exists()
     assert RISK_PATH.read_bytes() == before

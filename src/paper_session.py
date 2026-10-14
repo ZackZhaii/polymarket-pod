@@ -21,6 +21,10 @@ src.pins.refuse_start (like m2_runner / paper_cycle / book): a missing or unread
 a directory, or a sha computation that raises is risk_toml_pin_drift with a global halt
 record and ok=False, never an uncaught exception. The unchanged-file snapshot (before),
 the loaded config and the pin check all use the same path (risk_path, else RISK_PATH).
+
+Issue #75 criterion 6: a cycle round refused on its input (input_invalid / input_pending)
+propagates to the caller as ok=False with that reason and the cycle's input_problems (path,
+line, problem code only), with zero gaps and fills and no success sessions record.
 """
 from __future__ import annotations
 
@@ -173,6 +177,9 @@ def run(
         "gaps": cycle["gaps"],
         "stale": cycle["stale"],
         "fills": 0,
+        # Issue #75 criterion 6: the refusal of an input-refused round (input_invalid /
+        # input_pending) reaches the caller with the path / line / problem code it reported.
+        "input_problems": list(cycle.get("input_problems") or []),
         "scanned": result["scanned"],
         "evaluated_at": evaluated_at,
     }
