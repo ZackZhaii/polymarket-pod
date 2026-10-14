@@ -446,6 +446,7 @@ def load_state(market: str, token_id: str = "", *, clock_ok: bool = False,
     """
     _, ledger = ledger_store.read_ledger(PAPER_PATH)
     rows = ledger.rows
+    # PR #310 review: the maker passes the quotes file it actually checks and writes (default QUOTES_PATH).
     own_quotes, quote_problems = read_quotes(Path(quotes_path) if quotes_path is not None else QUOTES_PATH)
     if quote_problems:
         own_quotes = None  # issue #56: a partial quote history is not this history (fail closed)
