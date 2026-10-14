@@ -15,10 +15,21 @@ UTF-8 JSONL — a bad JSON line, a non-object line, a torn last line or an unrea
 named failure; no lenient reader that skips bad lines is used. Only a ledger that verifies is
 joined, by explicit ``fill_id``.
 
-Honesty rule (review P1 on PR #202): the UNKNOWN markers and the input SHA256 / counts of the
-report are the later acceptance items of issue #69 and are not implemented yet, so this tool never
-reports PASS: a run without problems still ends with verdict ``unknown`` and a non-zero exit, and
-the report names every check that remains unverified.
+Honesty rule (review P1 on PR #202): the input SHA256 / counts / reasons of the report are the
+later acceptance items of issue #69 and are not implemented yet, so this tool never reports PASS:
+a run without problems still ends with verdict ``unknown`` and a non-zero exit, and the report
+names every check that remains unverified.
+
+Acceptance 5 of issue #69 (this change): a modern hypothetical fill (``hypothetical`` true,
+``counts_toward_risk`` false) carries a ``fill_id`` like every modern fill and is written to both
+logs, so it joins and its duplicate copies are checked exactly like a real fill's (counted in
+``ledger.hypothetical_fills``). A ledger row without ``fill_id`` is pre-Task-AF history —
+ledger_store accepts such rows only before the first id'd one — and has no honest join, so none is
+guessed: the row is reported UNKNOWN (``unknowns``, its derived ``legacy:`` id used as a stable
+name, never a join key) and counted (``ledger.legacy_rows``), not named a problem. Coverage gate:
+a run that cross-checked no fill at all (all-empty inputs, or nothing joinable) or that still has
+unverified legacy rows proved nothing about the logs as a whole, so it can never report the full
+pass — verdict ``unknown`` (which additionally stays behind acceptance 6).
 
 Acceptance 3 of issue #69: every joined fill is compared in full. The ledger row and
 the Executor fill's ``payload`` must be equal under a type-sensitive normalized JSON comparison —
@@ -38,10 +49,11 @@ orphan on either side is a named failure. NEW-3b (ruled into #69): settlement ro
 separately (``ledger.settlements``) and are not orphans; a settlement row without a fill_id, or a
 bus fill carrying a settlement's fill_id, is a named problem.
 
-Exit codes: 0 reserved for the fully checked pass (not reachable until those acceptance items
-land); 1 a problem — the ledger failed ``ledger_store.verify``, an orphan, a content mismatch or a
-join problem on either side — or verdict ``unknown`` (the logs are not validated as agreeing); 2
-usage error, or an input that cannot be read in full (bad flags, a missing or unreadable file,
+Exit codes: 0 reserved for the fully checked pass (not reachable until the acceptance 6 items
+land, and the coverage gate above keeps an empty or legacy-only run at ``unknown`` even then); 1 a
+problem — the ledger failed ``ledger_store.verify``, an orphan, a content mismatch or a join
+problem on either side — or verdict ``unknown`` (the logs are not validated as agreeing); 2 usage
+error, or an input that cannot be read in full (bad flags, a missing or unreadable file,
 undecodable bytes, a malformed or non-object line, a torn last line). Registry: docs/EXIT_CODES.md.
 """
 from __future__ import annotations
@@ -67,11 +79,11 @@ BUS_FILL_TO = "Sentinel"
 
 # Review P1 on PR #202: until these later acceptance items of issue #69 land, a clean fill_id join
 # with equal payloads is not proof that the two logs agree, so the verdict stays "unknown" and the
-# exit stays non-zero. Acceptance 3 (full payload, outer market) and acceptance 4 (sender roles,
-# duplicate / conflict copies) are checked and no longer listed.
+# exit stays non-zero. Acceptance 3 (full payload, outer market), acceptance 4 (sender roles,
+# duplicate / conflict copies) and acceptance 5 (hypothetical copies join; legacy rows are UNKNOWN,
+# never guessed; the coverage gate) are checked and no longer listed.
 UNVERIFIED_CHECKS = (
-    "legacy_and_hypothetical_unknown",  # acceptance 5: UNKNOWN markers for unjoinable rows
-    "input_sha256_and_counts",          # acceptance 6: input hashes, verified / unverified counts
+    "input_sha256_and_counts",  # acceptance 6: input hashes, verified / unverified counts, reasons
 )
 
 
@@ -154,7 +166,7 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
     report: dict[str, Any] = {"ledger": {"path": str(ledger_path)}, "bus": {"path": str(bus_path)},
                               "matched": 0, "ledger_only": [], "bus_only": [], "problems": [],
                               "input_problems": [], "ledger_verified": False, "verdict": "fail",
-                              "unverified": list(UNVERIFIED_CHECKS)}
+                              "unknowns": [], "unverified": list(UNVERIFIED_CHECKS)}
     try:
         ledger_data = ledger_path.read_bytes()
     except OSError as exc:
@@ -195,14 +207,21 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
     ledger_by_id: dict[str, dict[str, Any]] = {}
     settlement_ids: set[str] = set()
     settlements = 0
-    for row in ledger_read.rows:
+    hypotheticals = 0
+    legacy_rows = 0
+    for row, derived_id in zip(ledger_read.rows, ledger_read.ids):
         fill_id = _fill_id(row.get(FILL_ID_FIELD))
-        if fill_id is None:
+        if fill_id is None and ledger_store.is_settlement(row):
             # NEW-3b: a settlement row without a fill_id gets its own name (ledger_store itself
             # only reports a generic missing fill_id, and a legacy settlement row passes verify).
-            report["problems"].append("ledger:settlement_without_fill_id"
-                                      if ledger_store.is_settlement(row)
-                                      else "ledger:row_without_fill_id")  # legacy history: not guessed
+            report["problems"].append("ledger:settlement_without_fill_id")
+        elif fill_id is None:
+            # Acceptance 5: a row without fill_id is pre-Task-AF history (ledger_store accepts
+            # such rows only before the first id'd one); there is no honest join for it, so none
+            # is guessed. It is UNKNOWN and counted, its derived legacy id used as a stable name,
+            # never a join key, and the row is never read as a ledger_only orphan either.
+            legacy_rows += 1
+            report["unknowns"].append(derived_id)
         elif ledger_store.is_settlement(row):
             # NEW-3b: settlement rows are booked to the ledger only and never have a bus fill, so
             # they are counted separately and never read as ledger-only orphans.
@@ -211,6 +230,10 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
         else:
             ledger_ids.append(fill_id)
             ledger_by_id[fill_id] = row
+            if row.get("hypothetical") is True:
+                # Acceptance 5: a modern hypothetical fill joins and takes part in the copy checks
+                # exactly like a real fill (verify already proved the field is a bool).
+                hypotheticals += 1
     bus_ids: list[str] = []
     bus_by_id: dict[str, list[dict[str, Any]]] = {}
     bus_fills = 0
@@ -234,6 +257,8 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
     report["bus"]["fills"] = bus_fills
     report["ledger"]["fills"] = len(ledger_ids)
     report["ledger"]["settlements"] = settlements
+    report["ledger"]["hypothetical_fills"] = hypotheticals
+    report["ledger"]["legacy_rows"] = legacy_rows  # acceptance 5: the unverified count
     report["bus"]["duplicate_fills"] = len(bus_ids) - len(set(bus_ids))  # extra copies, reported
     # Acceptance 4: copies of one fill that contradict each other are a named conflict, even when
     # one of them equals the booked row. The outer bus.ts is the write time and is ignored, so
@@ -267,10 +292,16 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
             outer_market = _canonical(message.get("market"))
             if outer_market is None or outer_market != _canonical(ledger_row.get("market")):
                 report["problems"].append(f"outer_market_mismatch:{fill_id}")
-    # P1: "pass" is deliberately not assigned here; without the unverified checks above it would
-    # claim more than this tool proved. It appears only with the later acceptance items of #69.
-    report["verdict"] = ("fail" if report["problems"] or report["ledger_only"] or report["bus_only"]
-                         else "unknown")
+    # Acceptance 5, coverage gate: a run that cross-checked no fill at all (all-empty inputs, or
+    # nothing joinable) or that still has unverified legacy rows proved nothing about the logs as a
+    # whole, so it can never report the full pass. "pass" additionally stays behind acceptance 6
+    # (the input SHA256 / counts / reasons above), which is why it is unreachable today.
+    if report["problems"] or report["ledger_only"] or report["bus_only"]:
+        report["verdict"] = "fail"
+    elif report["unverified"] or report["unknowns"] or report["matched"] == 0:
+        report["verdict"] = "unknown"
+    else:
+        report["verdict"] = "pass"
     return report
 
 
@@ -303,6 +334,8 @@ def main(argv: list[str] | None = None) -> int:
               f"verdict={report['verdict']}")
         for name in report["unverified"]:
             print(f"  unverified {name}")
+        for name in report["unknowns"]:
+            print(f"  unknown {name}")
         for problem in report["problems"]:
             print(f"  problem {problem}")
     if report["input_problems"]:

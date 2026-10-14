@@ -195,8 +195,15 @@ duplicate copies count once (the extra-copy count is reported) while copies that
 other are a named `duplicate_conflict`; orphans on either side fail; settlement rows (`kind`
 "settlement", ledger-only by design) are counted separately (`ledger.settlements`), are not
 orphans, must still carry a fill_id, and a bus fill with a settlement's fill_id is a named
-problem. Review P1 on PR #202: the remaining checks (UNKNOWN markers, SHA256 and counts) are later
-acceptance items, so the tool never reports PASS — a problem-free run ends verdict `unknown`.
+problem. Acceptance 5: a modern hypothetical fill joins and takes part in the copy checks like any
+modern fill (counted in `ledger.hypothetical_fills`); a ledger row without `fill_id` is
+pre-Task-AF history with no honest join — none is guessed, the row is reported UNKNOWN
+(`unknowns`, its derived `legacy:` id as a stable name, never a join key) and counted
+(`ledger.legacy_rows`), not named a problem; the coverage gate keeps a run that cross-checked no
+fill at all (all-empty inputs, or nothing joinable) or with unverified legacy rows at verdict
+`unknown`, never PASS. Review P1 on PR #202: the remaining check (input SHA256, counts, reasons) is
+a later acceptance item, so the tool still never reports PASS — a problem-free run ends verdict
+`unknown`.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
