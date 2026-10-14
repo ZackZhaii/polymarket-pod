@@ -112,8 +112,7 @@ _MISSING = object()
 @pytest.mark.parametrize("field, value", [
     ("tags", "politics"), ("tags", {"politics": True}), ("tags", None), ("tags", ["politics", 7]),
     ("tags", [None]), ("tags", _MISSING),
-    ("category", ""), ("category", "   "), ("category", None), ("category", 3), ("category", ["politics"]),
-    ("category", _MISSING),
+    ("category", ""), ("category", "   "), ("category", 3), ("category", ["politics"]),
 ])
 def test_unknown_or_malformed_classification_fails_closed(tmp_path, field, value):
     """Task DI (#137, Codex P1): a market whose tags / category cannot be read is never treated as non-sports."""
@@ -128,7 +127,8 @@ def test_unknown_or_malformed_classification_fails_closed(tmp_path, field, value
         assert why is None and _ids(assets) == [2]
 
 
-def test_both_fields_missing_fails_closed(tmp_path):
+def test_tags_missing_fails_closed_even_without_category(tmp_path):
+    """Task DN: category is optional, but tags must still be a list of str."""
     bad = _row(1, "2099-01-01T00:00:00Z")
     del bad["tags"], bad["category"]
     assets, why = m2_start.boot_selection(_root(tmp_path, [bad]), NOW, END)
