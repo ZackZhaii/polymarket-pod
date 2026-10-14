@@ -205,11 +205,13 @@ def test_the_event_never_changes_the_intent():
 def test_risk_gate_never_reads_the_event():
     src = (ROOT / "src" / "risk_gate.py").read_text(encoding="utf-8")
     assert "event_id" not in src[src.index("def evaluate"):] and "event_slug" not in src[src.index("def evaluate"):]
-    now = datetime.now(timezone.utc)
+    # Issue #262: one shared book_ts with the fixed now (utc_now truncates to whole seconds).
+    from tests.test_calibration_ids import _stable_book_and_now
+    book_ts, now = _stable_book_and_now()
     cfg = load_risk()
-    base = dataclasses.asdict(evaluate(_ok_intent(), cfg, dict(STATE), now=now))
+    base = dataclasses.asdict(evaluate(_ok_intent(book_ts=book_ts), cfg, dict(STATE), now=now))
     for extra in (dict(event_id="9001", event_slug="x"), dict(event_id=None), dict(event_id=["junk"])):
-        assert dataclasses.asdict(evaluate(_ok_intent(**extra), cfg, dict(STATE), now=now)) == base
+        assert dataclasses.asdict(evaluate(_ok_intent(book_ts=book_ts, **extra), cfg, dict(STATE), now=now)) == base
 
 
 # ------------------------------------------------------------------ calibration cluster key

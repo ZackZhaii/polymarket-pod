@@ -171,6 +171,8 @@ def test_scanner_success_age(env):
     # Task AS (gaps 4 and 5): pin drift codes are global halts; loop_claim usage moved to 5 (an alert)
     ("paper_cycle", 1, True, "exit_1"), ("scanner", 6, True, "exit_6"), ("ws_recorder", 6, True, "exit_6"),
     ("m1_run", 6, True, "exit_6"), ("paper_cycle", 2, False, "exit_2"), ("loop_claim", 5, False, "exit_5"),
+    # Issue #75: stable corrupt/unreadable markets/books input is its own code, still a global halt
+    ("paper_cycle", 3, True, "exit_3"),
     # Task AV: resolutions' old 4 split into 6 (pin drift) and 5 (bad snapshot clock), both global halts
     ("resolutions", 6, True, "exit_6"), ("resolutions", 5, True, "exit_5"), ("resolutions", 3, False, "exit_3"),
     ("resolutions", 4, False, "exit_4"),

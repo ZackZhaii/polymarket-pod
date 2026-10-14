@@ -36,9 +36,24 @@ markets of one event are drawn together. ``bootstrap_cluster_key`` (event_id / c
 ``bootstrap_clusters`` on both sections and on every judged group's ``intervals`` say what was resampled.
 Same seed and resample count; samples without an event id resample exactly as before (one market each).
 
+Task DB (issue #266): reliability() refuses a p that is not a finite probability in [0, 1] or a y outside
+{0, 1} with a ValueError (never a bare StopIteration or a hit rate above 1). A bin's mean_p is the correctly
+rounded mean of its p values and mean_p_outside_wilson is decided exactly, not by a float sum / n that can
+round across the Wilson bound. trades.metrics.brier_skill is never clipped; ``brier_skill_flag`` says
+``degenerate_market_reference`` when the market Brier is below CALIBRATION_LOGLOSS_CLIP ** 2 (the skill is
+then dominated by a near-zero reference, e.g. q = 1e-9 gives about -1e16), ``ok`` otherwise, None without one.
+
 Fail closed. Nothing is imputed: a row with calibration_problems, a missing join, a pending,
 UMA-unconfirmed, disputed, void or ambiguous resolution, or a token / outcome that disagrees with
-the snapshot is dropped and counted by reason in the report. A corrupt input file (torn line,
+the snapshot is dropped and counted by reason in the report. Issue #70: a forecast sample is kept
+only when its ts provably precedes resolution.closed_ts (zoned ISO times compared as UTC) — an
+unparseable or unzoned ts drops as forecast_ts_invalid, and a forecast sealed at or after the close
+(as the same instant in any offset) drops as forecast_not_before_close, so a result is never
+scored against a prediction made after it was known. A trade sample proves the same order per fill
+against its joined forecast row's ts (never a fill's copy): every fill must satisfy
+forecast.ts <= fill.ts < closed_ts, or the whole decision sample is dropped and counted
+(fill_forecast_ts_invalid, fill_ts_invalid, fill_before_forecast, fill_not_before_close), so a
+result is never scored against a trade placed outside the window either. A corrupt input file (torn line,
 bad JSON, wrong schema, conflicting duplicate) is an error exit and no report is written; a
 ledger that fails ledger_store.verify is its own error exit. Below the M3-pending minimums
 (src/thresholds.py CALIBRATION_*) a section is "insufficient" and carries no verdict.
@@ -57,6 +72,7 @@ import random
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from fractions import Fraction
 from pathlib import Path
 from statistics import NormalDist
 from typing import Any, Iterable, Mapping, Sequence
@@ -107,6 +123,13 @@ RESOLUTION_FIELDS = ("condition_id", "winning_token_id", "outcome_prices_final",
 LEGACY_RESOLUTION_FIELDS = RESOLUTION_FIELDS[:-1]
 NOTES = (
     "Labels are only data/resolutions.jsonl rows with uma_checked=true and status=resolved; nothing is imputed.",
+    "A forecast sample must be sealed strictly before resolution.closed_ts (zoned ISO times compared as UTC): "
+    "an unparseable or unzoned ts is dropped (forecast_ts_invalid), a forecast at or after the close "
+    "(forecast_not_before_close). No time is ever imputed.",
+    "A trade sample proves the same order per fill against its joined forecast row's ts: every fill must fall "
+    "at or after the forecast and strictly before the close (zoned ISO times compared as UTC), else the whole "
+    "decision sample is dropped (fill_forecast_ts_invalid, fill_ts_invalid, fill_before_forecast, "
+    "fill_not_before_close). No time is ever imputed.",
     "UMA dispute status not checked (beyond umaResolutionStatus=resolved).",
     "Not a promise of profit. Paper only. This report proposes nothing and changes no setting.",
     "q is the first fill's market_mid (price_source=market_mid). Only a fill booked before Task BA, with no "
@@ -250,11 +273,11 @@ def _parse_ts(value: object) -> datetime | None:
         text = text[:-1] + "+00:00"
     try:
         parsed = datetime.fromisoformat(text)
-    except ValueError:
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError):  # Task DV: 0001-01-01+01:00 / 9999-12-31-01:00 overflow in UTC
         return None
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        return None
-    return parsed.astimezone(timezone.utc)
 
 
 # ------------------------------------------------------------------ labels
@@ -322,8 +345,39 @@ def wilson(hits: int, n: int) -> list[float] | None:
     return [low, high]
 
 
+def _check_pairs(pairs: Sequence[tuple[float, int]]) -> None:
+    """Task DB (#266 F-06..F-10, F-14): every p a finite probability in [0, 1], every y 0 or 1, else ValueError."""
+    for p, y in pairs:
+        if isinstance(p, bool) or not isinstance(p, (int, float)) or not math.isfinite(p) or not 0.0 <= p <= 1.0:
+            raise ValueError(f"reliability: p={p!r} is not a finite probability in [0, 1]")
+        if isinstance(y, bool) or not isinstance(y, (int, float)) or y not in (0, 1):
+            raise ValueError(f"reliability: y={y!r} is not an outcome in {{0, 1}}")
+
+
+def _exact_sum(values: Iterable[float]) -> Fraction:
+    """Task DB (#266 W-16): the exact sum of floats (integer arithmetic on their binary fractions)."""
+    ratios = [float(v).as_integer_ratio() for v in values]
+    if not ratios:
+        return Fraction(0)
+    shift = max(d.bit_length() - 1 for _, d in ratios)
+    return Fraction(sum(n << (shift - (d.bit_length() - 1)) for n, d in ratios), 1 << shift)
+
+
+def _outside_wilson(mean: Fraction, hits: float, n: int) -> bool:
+    """Task DB (#266 W-16): ``mean`` outside wilson(hits, n), decided exactly.
+
+    The Wilson interval is the set of p0 with n * (hits/n - p0)**2 <= z**2 * p0 * (1 - p0) (score test), so
+    the exact mean is compared without a square root or a rounded bound (z is the float wilson() uses)."""
+    z2 = Fraction(_z()) ** 2
+    phat = Fraction(hits) / n
+    return n * (phat - mean) ** 2 > z2 * mean * (1 - mean)
+
+
 def reliability(pairs: Sequence[tuple[float, int]]) -> dict[str, Any]:
-    """Fixed design bins at >= CALIBRATION_FIXED_BINS_MIN_SAMPLES samples, else equal-frequency bins."""
+    """Fixed design bins at >= CALIBRATION_FIXED_BINS_MIN_SAMPLES samples, else equal-frequency bins.
+
+    Task DB: a p outside [0, 1] (or not finite) or a y outside {0, 1} raises ValueError (_check_pairs)."""
+    _check_pairs(pairs)
     n = len(pairs)
     bins: list[dict[str, Any]] = []
     if n >= CALIBRATION_FIXED_BINS_MIN_SAMPLES:
@@ -331,8 +385,10 @@ def reliability(pairs: Sequence[tuple[float, int]]) -> dict[str, Any]:
         edges = CALIBRATION_BIN_EDGES
         groups: list[list[tuple[float, int]]] = [[] for _ in edges[:-1]]
         for p, y in pairs:
-            index = next(i for i in range(len(edges) - 1)
-                         if edges[i] <= p < edges[i + 1] or (i == len(edges) - 2 and p == edges[-1]))
+            index = next((i for i in range(len(edges) - 1)
+                          if edges[i] <= p < edges[i + 1] or (i == len(edges) - 2 and p == edges[-1])), None)
+            if index is None:  # unreachable after _check_pairs; never a bare StopIteration
+                raise ValueError(f"reliability: p={p!r} falls in no bin of {list(edges)}")
             groups[index].append((p, y))
         ranges = [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
     else:
@@ -345,14 +401,15 @@ def reliability(pairs: Sequence[tuple[float, int]]) -> dict[str, Any]:
     for (low, high), group in zip(ranges, groups):
         size = len(group)
         hits = sum(y for _, y in group)
-        mean_p = sum(p for p, _ in group) / size if size else None
+        exact_mean = _exact_sum(p for p, _ in group) / size if size else None
+        mean_p = float(exact_mean) if exact_mean is not None else None  # Task DB: correctly rounded
         rate = hits / size if size else None
         interval = wilson(hits, size)
         if size:
             ece += size / n * abs(mean_p - rate)  # type: ignore[operator]
         judged = size >= CALIBRATION_GROUP_MIN_SAMPLES
         bins.append({"range": [low, high], "n": size, "mean_p": mean_p, "hit_rate": rate, "wilson": interval,
-                     "mean_p_outside_wilson": (not interval[0] <= mean_p <= interval[1])  # type: ignore[index]
+                     "mean_p_outside_wilson": _outside_wilson(exact_mean, hits, size)  # type: ignore[arg-type]
                      if judged and interval is not None else None})
     return {"kind": kind, "bins": bins, "ece": ece if n else None}
 
@@ -588,6 +645,17 @@ def forecast_samples(forecasts: Mapping[str, dict[str, Any]], resolutions: Mappi
             problem_counts.update(problems)
             drop(row, "forecast_calibration_problems")
             continue
+        # issue #70: prove the forecast predates the close before it can become a sample at all.
+        ts = _parse_ts(row["ts"])
+        if ts is None:
+            drop(row, "forecast_ts_invalid")  # unparseable or unzoned: when it was sealed cannot be proved
+            continue
+        resolution = resolutions.get(row["condition_id"])
+        if resolution is not None:
+            closed = _parse_ts(resolution["closed_ts"])
+            if closed is None or ts >= closed:
+                drop(row, "forecast_not_before_close")  # at/after the close (or unprovable close): no result leak
+                continue
         candidates.append(row)
     seen: set[str] = set()
     eligible: list[dict[str, Any]] = []
@@ -620,6 +688,9 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
     problem_counts: Counter = Counter()
     dropped: list[dict[str, Any]] = []
     decisions: dict[str, list[dict[str, Any]]] = {}
+    # Task DV (#321 P1): every counted fill of a decision, before any other filter, so a fill already
+    # dropped for another reason still rejects its whole decision when it is out of the time bounds.
+    all_fills: dict[str, list[dict[str, Any]]] = {}
 
     def drop(ref: Mapping[str, Any], reason: str, count: int = 1) -> None:
         reasons[reason] += count
@@ -629,6 +700,8 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
     for row in fills:
         if not ledger_store.counts(row) or row.get("risk_decision") != "allow":
             continue  # not a trade sample at all (hypothetical / not counted); not a drop
+        if isinstance(row.get("decision_id"), str):
+            all_fills.setdefault(row["decision_id"], []).append(row)
         if row.get("fill_context") in calibration_ids.NO_BOOK_CONTEXTS:
             drop(row, "no_book_context")  # Task BC: stamped at fill time; never inferred from missing fields
             continue
@@ -669,6 +742,11 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
         if reason:
             drop(ref, reason, len(rows))
             continue
+        # issue #70: prove every fill sits between the forecast and the close before it can be scored.
+        time_reason = fill_time_problem(forecast, all_fills.get(decision_id, rows), resolution)
+        if time_reason:
+            drop(ref, time_reason, len(rows))
+            continue
         if per_market[condition] >= CALIBRATION_MAX_DECISIONS_PER_MARKET:
             drop(ref, "re_entry_cap", len(rows))
             continue
@@ -698,6 +776,33 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
                          "event_id": trade_event(first, forecast),  # Task BF
                          "resolution_day": resolution["closed_ts"][:10]})  # type: ignore[index]
     return eligible, dropped, reasons, problem_counts
+
+
+def fill_time_problem(forecast: Mapping[str, Any], rows: Sequence[Mapping[str, Any]],
+                      resolution: Mapping[str, Any] | None) -> str | None:
+    """issue #70: why this decision cannot be placed between its forecast and the close, else None.
+
+    Uses the joined forecast row's ts (never a fill's copy of it) and resolution.closed_ts, both parsed
+    to UTC by ``_parse_ts``, so one instant written in any offset compares equal. Every fill of the
+    decision must satisfy forecast.ts <= fill.ts < closed_ts: a missing, unparseable or unzoned time, a
+    fill before its forecast, or a fill at or after the close proves nothing, and the whole decision
+    sample is dropped. Nothing is ever imputed.
+    """
+    sealed = _parse_ts(forecast.get("ts"))
+    if sealed is None:
+        return "fill_forecast_ts_invalid"
+    closed = _parse_ts(resolution.get("closed_ts")) if resolution is not None else None
+    if closed is None:
+        return "fill_not_before_close"  # a close that cannot be parsed proves nothing: fail closed
+    for row in rows:
+        ts = _parse_ts(row.get("ts"))
+        if ts is None:
+            return "fill_ts_invalid"
+        if ts < sealed:
+            return "fill_before_forecast"
+        if ts >= closed:
+            return "fill_not_before_close"
+    return None
 
 
 def trade_event(fill: Mapping[str, Any], forecast: Mapping[str, Any]) -> str | None:
@@ -789,6 +894,15 @@ def _skill(drawn: Sequence[Mapping[str, Any]]) -> float | None:
     return None if not market else 1.0 - brier(_pairs(drawn, "p")) / market  # type: ignore[operator]
 
 
+def brier_skill_flag(bs_market: float | None, skill: float | None) -> str | None:
+    """Task DB (#266): None without a skill; ``degenerate_market_reference`` when the market Brier is below
+    CALIBRATION_LOGLOSS_CLIP ** 2 (below what a market clipped to [clip, 1 - clip] reaches even when always
+    right, so 1 - BS_p / BS_q is dominated by a near-zero reference); else ``ok``. The skill is never changed."""
+    if skill is None or bs_market is None:
+        return None
+    return "degenerate_market_reference" if bs_market < CALIBRATION_LOGLOSS_CLIP ** 2 else "ok"
+
+
 def trade_section(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
     model = _pairs(samples, "p")
     market = _pairs(samples, "q")
@@ -797,11 +911,13 @@ def trade_section(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
     bs_model, bs_market = brier(model), brier(market)
     expected = sum(s["expected_usd"] for s in samples)
     realized = sum(s["realized_usd"] for s in samples)
+    skill = (1.0 - bs_model / bs_market) if bs_model is not None and bs_market else None
     section: dict[str, Any] = {
         **gate,
         "brier_model": bs_model, "brier_market": bs_market,
         "delta_brier": None if bs_model is None else bs_model - bs_market,  # type: ignore[operator]
-        "brier_skill": (1.0 - bs_model / bs_market) if bs_model is not None and bs_market else None,
+        "brier_skill": skill,
+        "brier_skill_flag": brier_skill_flag(bs_market, skill),  # Task DB: reported unchanged, flagged
         "log_loss_model": log_loss(model), "log_loss_market": log_loss(market),
         "mean_r_minus_e": ((realized - expected) / len(samples)) if samples else None,
         "expected_usd": expected, "realized_usd": realized,
@@ -939,6 +1055,12 @@ def _cluster_line(metrics: Mapping[str, Any]) -> str:
             f"({metrics.get('bootstrap_clusters', '-')} clusters)")  # Task BG
 
 
+def _skill_marker(metrics: Mapping[str, Any]) -> str:
+    """Task DB: the brier_skill_flag beside the skill when it is not ``ok`` (the number itself is unchanged)."""
+    flag = metrics.get("brier_skill_flag")
+    return "" if flag in (None, "ok") else f" **[{flag}: market Brier near zero, skill not comparable]**"
+
+
 def render_markdown(report: Mapping[str, Any]) -> str:
     f, t = report["forecasts"], report["trades"]
     fm, tm = f["metrics"], t["metrics"]
@@ -966,8 +1088,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
               f"{json.dumps(t['dropped_by_reason'], sort_keys=True)}",
               f"- market probability q by source: {json.dumps(t.get('price_sources', {}), sort_keys=True)}",
               f"- Brier model {_fmt(tm['brier_model'])}, market {_fmt(tm['brier_market'])}, delta "
-              f"{_fmt(tm['delta_brier'])} (CI {_fmt(tm.get('delta_brier_ci'))}), skill {_fmt(tm['brier_skill'])} "
-              f"(CI {_fmt(tm.get('brier_skill_ci'))})",
+              f"{_fmt(tm['delta_brier'])} (CI {_fmt(tm.get('delta_brier_ci'))}), skill {_fmt(tm['brier_skill'])}"
+              f"{_skill_marker(tm)} (CI {_fmt(tm.get('brier_skill_ci'))})",
               f"- log loss model {_fmt(tm['log_loss_model'])}, market {_fmt(tm['log_loss_market'])}",
               f"- expected {_fmt(tm['expected_usd'])} USD, realized {_fmt(tm['realized_usd'])} USD, realization "
               f"{_fmt(tm['realization'])}; mean(R-E) {_fmt(tm['mean_r_minus_e'])} "

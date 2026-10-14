@@ -740,11 +740,14 @@ def test_booked_fee_is_never_lower_and_recomputes_exactly(ledger, side, model_pr
     intent = _intent(side=side, model_prob=model_prob if side == "buy" else max(price - 0.3, 0.01),
                      market_price=price if side == "sell" else min(price, model_prob - 0.1), fee_rate=rate,
                      market=f"{side}-{rate}-{price}")
-    decision = evaluate(intent, load_risk(), _state("none", "none"))
+    if side == "sell":  # issue #226 (D4): the sell reduces an old long leg (100 @ 0.05) instead of opening a short
+        _rewrite(ledger, [_row("buy", 100.0, 5.0, rate=rate, price=0.05, market=intent.market, token="t",
+                               ts="2026-01-01T00:00:00Z")])
+    decision = evaluate(intent, load_risk(), _state(intent.market, intent.token_id))
     result = paper_ledger.commit_if_allowed(intent, load_risk())
     if side == "sell" and price == 0.13:
-        # Issue #127 (Task CA): an opening short of ~80 shares at 0.125 can lose ~$70 (> the $30 daily cap),
-        # so it is now vetoed before any fill (tightening; nothing is booked).
+        # Issue #127 (Task CA): a sell of ~80 shares at 0.125 can lose ~$70 (> the $30 daily cap; the sell worst case
+        # is priced like a short), so it is vetoed before any fill (tightening; nothing is booked).
         assert decision.reasons == ["max_daily_loss_projected"] and result["allow"] is False
         assert "fill" not in result or result["fill"] is None
         return
@@ -793,8 +796,10 @@ def test_ledger_store_is_standard_library_only_and_adds_no_number():
         elif isinstance(node, ast.ImportFrom):
             modules.add(node.module or "")
     assert modules == {"__future__", "hashlib", "json", "math", "os", "uuid", "dataclasses", "pathlib", "typing",
+                       "datetime",  # issue #126 (PR #194 review): a settlement row's closed_ts must be zoned
                        "src.fees", "src.thresholds",
-                       "src.halt_store"}  # issue #64: the issue #52 cross-process mutex (StateLock)
+                       "src.halt_store",  # issue #64: the issue #52 cross-process mutex (StateLock)
+                       "src.atomic_replace"}  # issue #268: bounded Windows PermissionError retry of os.replace
     numbers = {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
                and isinstance(node.value, (int, float)) and not isinstance(node.value, bool)}
     assert numbers <= {0.0, 1, 1.0}  # empty totals, line numbers from 1, 1 USD per share (as leg_positions)

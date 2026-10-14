@@ -14,8 +14,10 @@ import src.risk_gate as risk_gate
 from src.podlib import RISK_PATH, load_risk, utc_now
 from src.risk_gate import Intent, evaluate
 
-STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
+STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0,
          "recent_fills": [], "own_quotes": []}
+# Issue #226 (D4): a sell needs an open long leg (no naked short); the net is large so it never caps the size.
+HELD = dict(STATE, open_positions=1, leg_already_open=True, leg_net_shares=1_000_000.0)
 
 
 def _intent(side: str = "buy", **overrides: object) -> Intent:
@@ -26,6 +28,7 @@ def _intent(side: str = "buy", **overrides: object) -> Intent:
     }
     fields.update(overrides)
     fields.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
+    fields.setdefault("min_order_size", 5.0)  # issue #226: a book minimum (missing vetoes)
     return Intent(**fields)  # type: ignore[arg-type]
 
 
@@ -48,7 +51,7 @@ def test_min_edge_is_a_code_constant_not_in_risk_toml():
 )
 def test_edge_threshold(side, model_prob, edge, allowed):
     before = RISK_PATH.read_bytes()
-    decision = evaluate(_intent(side, model_prob=model_prob), load_risk(), STATE)
+    decision = evaluate(_intent(side, model_prob=model_prob), load_risk(), HELD if side == "sell" else STATE)
     assert decision.edge == pytest.approx(edge, abs=1e-9)
     assert decision.allow is allowed, decision.reasons
     assert ("edge_below_min" in decision.reasons) is (not allowed)

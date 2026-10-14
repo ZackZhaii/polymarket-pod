@@ -18,7 +18,7 @@ import src.risk_gate as risk_gate
 from src.podlib import load_risk, utc_now
 from src.risk_gate import Intent, evaluate
 
-STATE = {"open_positions": 0, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
+STATE = {"open_positions": 0, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0,
          "recent_fills": [], "own_quotes": []}
 
 BAD_SIDES = ["hold", "both", "BUY", "", None]
@@ -40,6 +40,7 @@ def _intent(**overrides: object) -> Intent:
     }
     fields.update(overrides)
     fields.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
+    fields.setdefault("min_order_size", 5.0)  # issue #226: a book minimum (missing vetoes)
     return Intent(**fields)  # type: ignore[arg-type]
 
 
@@ -58,7 +59,9 @@ def test_buy_and_sell_are_the_only_sides_that_can_pass():
     assert (buy.allow, buy.reasons, buy.formula) == (True, [], risk_gate.EDGE_FORMULA_BUY)
     assert buy.effective_price == pytest.approx(0.405) and buy.shares > 0
 
-    sell = evaluate(_intent(side="sell", model_prob=0.40, market_price=0.55), cfg, STATE)
+    # Issue #226 (D4): a sell needs an open long leg (no naked short); the net is large so it never caps the size.
+    held = _state(open_positions=1, leg_already_open=True, leg_net_shares=1_000_000.0)
+    sell = evaluate(_intent(side="sell", model_prob=0.40, market_price=0.55), cfg, held)
     assert (sell.allow, sell.reasons, sell.formula) == (True, [], risk_gate.EDGE_FORMULA_SELL)
     assert sell.effective_price == pytest.approx(0.545) and sell.shares > 0
 

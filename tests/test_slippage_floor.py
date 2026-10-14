@@ -18,8 +18,10 @@ from src.thresholds import ASSUMED_SLIPPAGE, INTENT_ASSUMED_SLIPPAGE, SPORTS_DEV
 
 NOW = "2026-10-08T08:00:00Z"
 NOW_DT = datetime(2026, 10, 8, 8, tzinfo=timezone.utc)
-STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
+STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0,
          "recent_fills": [], "own_quotes": []}
+# Issue #226 (D4): a sell needs an open long leg (no naked short); the net is large so it never caps the size.
+HELD = dict(STATE, open_positions=1, leg_already_open=True, leg_net_shares=1_000_000.0)
 
 
 @pytest.fixture(autouse=True)
@@ -37,11 +39,12 @@ def intent(slippage, side="buy", **kw):
                 spread=0.01, token_id="t", book_ts=NOW)
     base.update(kw)
     base.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
+    base.setdefault("min_order_size", 5.0)  # issue #226: a book minimum (missing vetoes)
     return Intent(**base)
 
 
 def decide(slippage, side="buy", **kw):
-    return evaluate(intent(slippage, side, **kw), load_risk(), dict(STATE), now=NOW_DT)
+    return evaluate(intent(slippage, side, **kw), load_risk(), dict(HELD if side == "sell" else STATE), now=NOW_DT)
 
 
 def test_the_floor_is_the_one_slippage():

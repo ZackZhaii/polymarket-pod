@@ -104,9 +104,10 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 | 1 | `EXIT_NO_ROWS` | no book snapshot recorded | alert |
 | 2 | `EXIT_USAGE` | usage error | alert |
 | 3 | `EXIT_NO_WEBSOCKETS` | the optional websockets package is missing | alert |
-| 4 | `EXIT_WRITE_FAILED` | writing the run directory failed | global halt |
+| 4 | `EXIT_WRITE_FAILED` | writing the run directory failed, or (issue #82) the REST sampler thread was still alive after the 120 s finishing join (`rest_join_timeout` event, manifest `failed`; the thread is sealed, not killed) | global halt |
 | 5 | `EXIT_INTERRUPTED` | stopped by SIGINT/SIGTERM/SIGBREAK or Ctrl+C/Ctrl+Break (Operator stop). Task BT: a Windows console close / logoff / shutdown also finishes the manifest `interrupted` with exit_code 5, but the m1_run heartbeat ends `crashed` (global halt), not this log-only exit | log |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins at start (no run dir created) or while running (PIN_RECHECK_S); global halt recorded | global halt |
+| 7 | `EXIT_CLOCK_BEHIND` | Task CM: refused to start (no run dir): the local clock is behind the exchange by more than `M1_MAX_CLOCK_BEHIND_S` (max of `book_ts` - local receive time over one public `/book` read per asset), or no `/book` answer was usable to check it. Sync the host clock and start again | alert |
 
 ## `src/m2_start.py`
 
@@ -118,7 +119,7 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 |---|---|---|---|
 | 0 | `EXIT_OK` | every step started and passed its check (`--dry-run`: the plan passed the refusals) | - |
 | 2 | `EXIT_USAGE` | usage error: blank --reason, no or bad --m2-end, --m2-end differs from the chain | - |
-| 3 | `EXIT_REFUSED` | refused before anything started: M1 clone, runs/m2/KILL, bad chain, M2 window over, a process already running, run dir exists, m2_runner not watched | - |
+| 3 | `EXIT_REFUSED` | refused before anything started: M1 clone, runs/m2/KILL, bad chain (incl. missing/malformed/inconsistent `assets`, #276), no usable boot assets, M2 window over, a process already running, run dir exists, m2_runner not watched | - |
 | 4 | `EXIT_SENTINEL_NOT_FRESH` | the launched Sentinel never beat fresh within SENTINEL_HEARTBEAT_TIMEOUT_S; nothing else started | - |
 | 5 | `EXIT_NOT_READY` | the chain append or a runs/m2/current.json write failed, or a later process was not ready within its Sentinel timeout; nothing after it started | - |
 | 6 | `EXIT_PIN_DRIFT` | config/risk.toml off its pins; refused, global halt recorded (`--dry-run`: none recorded) | - |
@@ -129,14 +130,79 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 KILL, the live flags, the risk.toml pins, halts, the ledger, the daily loss breaker and disk before any read, seal or commit.
 Heartbeat every HEARTBEAT_RUNNER_EVERY_S (`paused` while paused); single instance by `runs/m2/runner.lock`. Paper only, no executor.
 
+Tick order: KILL / live / pins / halts / ledger, then settlement (#206), then the independent clock check, then the daily
+loss breaker, disk, and only then scan / decide. Clock check (C222, #222 option B): one public read-only GET of the CLOB
+`https://clob.polymarket.com/time` (exact URL only; guard and `podlib.public_get` refuse every variant). The whole
+local-minus-server uncertainty interval (request round trip plus ±1 s rounding of the integer seconds) must fit inside
+±`CLOCK_SKEW_MAX_S` (5 s). Two pause reasons, neither an exit code (the runner keeps beating `paused`, nothing is scanned or
+decided, settlement still runs that tick):
+
+- `clock_unverified`: /time unreachable or malformed (timeout, HTTP error, non-numeric, bool, NaN/inf, out of range), an
+  unusable local clock, or an interval too wide to certify either way. Fail closed.
+- `clock_skew`: the whole interval lies beyond ±5 s, a confirmed skew. Sync the host clock.
+
+Switching between `clock_unverified` and `clock_skew` is one clock pause episode: `paused_since` keeps its first stamp (a
+`paused` event is still written on each switch), so the Sentinel's `runner_paused_too_long` (`RUNNER_PAUSED_ALERT_S`, 6 h)
+fires on a flapping clock too. `paused_since` clears only when a tick runs again; any other pause reason restamps it.
+
+Issue #289 (Task DJ): the runner heartbeat `progress` also carries three read-only clock observation fields. They
+never feed a decision, a pause or a halt (no new alert either; alert thresholds on them are M2 pending, #289 item 2):
+
+- `clock_anomaly`: the clock anomaly the runner currently holds, `null` when clear, else `clock_unverified` or
+  `clock_skew` (the value that makes the day-start snapshot late, `clock_ok=False`). It can stay set while the runner
+  is **not** paused: from startup (fail closed, #275) and after a clock pause it clears only on a tick with a clean
+  CLOB /time check and at least one fresh book with a valid book_ts, so a run with no pending signal, no readable
+  book, or a missing / invalid book_ts keeps it set with `paused_reason` null.
+- `clock_anomaly_since`: UTC stamp of when the current anomaly episode began (`null` when `clock_anomaly` is null).
+  The startup `clock_unverified` is stamped at runner start (`recover`), a later anomaly at the tick that set it.
+  Like `paused_since`, a switch between `clock_unverified` and `clock_skew` is the same episode and keeps the first
+  stamp; it resets only when the anomaly clears, and a later anomaly gets a new stamp.
+- `last_time_check`: the last CLOB /time check, `null` before the first one (a tick stopped earlier, e.g. by KILL, a
+  halt or a pin, keeps the previous value). An object `{ts, result, low_s, high_s, rtt_s}`: `ts` the tick's stamp,
+  `result` `ok` / `clock_unverified` / `clock_skew`, `low_s` / `high_s` the certified local-minus-server interval in
+  seconds (including the ±1 s server quantization) and `rtt_s` the request time, rounded to ms; the three are
+  `null` when the check could not measure (unreachable / malformed /time, unusable local clock).
+
+Issue #247 (Task DK): when `runs/m2/KILL` stops the runner it appends one line to `logs/alerts.jsonl` (the Sentinel's
+alerts file, same row shape): `{"ts", "from": "m2_runner", "alert": "kill_file", "severity": "info", "proc":
+"m2_runner", "detail", "exchange_action": "none"}`, at most once per stop (each start that finds KILL writes its own).
+A record only: the exit code stays 0 and recovery is unchanged; nothing restarts the runner (auto-restart is KEY
+#243). If that line cannot be written the runner does not drop it silently: it exits 4 like any other write failure.
+Issue #305 (Task DR): any `Exception` while building or writing that line (not only `OSError`) is that write
+failure (exit 4); KeyboardInterrupt / SystemExit are not caught.
+
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | `runs/m2/KILL` found, `--max-runtime` reached or `--once` done | - |
+| 0 | `EXIT_OK` | `runs/m2/KILL` found (one `kill_file` line in `logs/alerts.jsonl`, #247), `--max-runtime` reached or `--once` done | - |
 | 2 | `EXIT_USAGE` | usage error (an unknown argument, `--max-runtime` not > 0) | alert |
 | 3 | `EXIT_ALREADY_RUNNING` | another m2_runner holds `runner.lock` (no heartbeat written, nothing done) | alert |
-| 4 | `EXIT_WRITE_FAILED` | a journal / events / candidates write failed | global halt |
+| 4 | `EXIT_WRITE_FAILED` | a journal / events / candidates write failed, or the KILL alert line could not be written (#247) | global halt |
 | 6 | `EXIT_PIN_OR_LIVE` | config/risk.toml off its pins or a live flag (`live_enabled` not false, `mode` not paper, `require_human_gate` not true); global halt recorded (`risk_toml_pin_drift` / `m2_live_flag`) | global halt |
 | 7 | `EXIT_SELF_CHECK` | the start self-check failed (run dir or inbox not writable) | alert |
+
+## `src/paper_audit.py`
+
+`python -m src.paper_audit --ledger PATH --bus PATH [--json]`: offline, read-only cross-check of the
+paper ledger against Executor bus fills, joined by explicit fill_id (issue #69). Standard library
+and first-party `src` only, no network, no halt, nothing written; the report goes to stdout. No
+heartbeat. Acceptance 2: the ledger must pass `ledger_store.verify` first (only then is it joined),
+and the bus is parsed strictly — bad JSON, non-object rows, a torn tail and unreadable files are
+named failures. Acceptance 3: each joined fill's full payload and the message's outer `market` are
+compared with a type-sensitive normalized JSON comparison (key order / formatting normalized;
+`10` / `10.0` / `true` / `"10.0"` stay distinct); the outer `bus.ts` is ignored. Acceptance 4 +
+NEW-3b: every bus fill must be the Executor→Sentinel message the pipeline writes; identical
+duplicate copies count once (the extra-copy count is reported) while copies that contradict each
+other are a named `duplicate_conflict`; orphans on either side fail; settlement rows (`kind`
+"settlement", ledger-only by design) are counted separately (`ledger.settlements`), are not
+orphans, must still carry a fill_id, and a bus fill with a settlement's fill_id is a named
+problem. Review P1 on PR #202: the remaining checks (UNKNOWN markers, SHA256 and counts) are later
+acceptance items, so the tool never reports PASS — a problem-free run ends verdict `unknown`.
+
+| Code | Name | Meaning | Sentinel |
+|---|---|---|---|
+| 0 | `EXIT_OK` | reserved for the fully checked pass (every #69 check); not reachable before the remaining acceptance items land | - |
+| 1 | `EXIT_MISMATCH` | a problem (the ledger failed `ledger_store.verify`, an orphan / join problem on either side, a payload or outer-market mismatch, a non-finite number), or no problem but verdict `unknown` (the two logs are not validated as agreeing) | - |
+| 2 | `EXIT_USAGE` | usage error, or an input that cannot be read in full (missing, unreadable, undecodable bytes, a malformed or non-object line, a torn last row, a conflicting fill_id) | - |
 
 ## `src/paper_cycle.py`
 
@@ -144,9 +210,10 @@ Heartbeat every HEARTBEAT_RUNNER_EVERY_S (`paused` while paused); single instanc
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | ran | - |
+| 0 | `EXIT_OK` | ran (issue #75: a round whose markets/books input is still changing after the one bounded re-read is skipped, `ok=false reason=input_pending`, and exits 0 too: a single transient append is never a halt; issue #277: consecutive such rounds are counted as `input_pending_streak` in the StaleWatch state and the heartbeat progress, cleared by a normal cycle, and at `ALL_STALE_CONSECUTIVE_CYCLES` in a row they raise the `all_markets_stale` global halt, the reason naming input_pending and the count; the exit code stays 0 and `--loop` keeps running) | - |
 | 1 | `EXIT_PIN` | a phase-0 pin failed: the in-memory config, or (Task AS) the risk file before a cycle (global halt recorded) | global halt |
 | 2 | `EXIT_USAGE` | usage error | alert |
+| 3 | `EXIT_INPUT_INVALID` | issue #75: the markets/books input is corrupt or unreadable (a blank line, bad JSON, a non-object, invalid UTF-8, a torn tail or a read failure): the round is refused with `ok=false reason=input_invalid`, zero gaps and fills, the path / line / problem code in `input_problems`; the heartbeat ends and the run stops (`--loop` included — only a still-changing input waits for the next round); the source file is reported, never repaired | global halt |
 
 ## `src/paper_ledger.py`
 
@@ -161,6 +228,9 @@ Heartbeat every HEARTBEAT_RUNNER_EVERY_S (`paused` while paused); single instanc
 ## `src/paper_session.py`
 
 `python -m src.paper_session`: one offline paper session. No heartbeat.
+Issue #305 (Task DR): the risk.toml pin check (`pins.refuse_start`) runs before anything reads the file; a
+missing / unreadable file, a directory or a check that raises is `reason=risk_toml_pin_drift` (global halt
+recorded, nothing written), exit 1.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
@@ -181,19 +251,25 @@ Heartbeat every HEARTBEAT_RUNNER_EVERY_S (`paused` while paused); single instanc
 
 ## `src/replay_intent.py`
 
-`python -m src.replay_intent --bundle path/to/bundle.json` (issue #80 step 1): one single-shot offline
-Intent-builder replay on one fixed bundle (schema_version 1: one raw bus signal row, one scanner market
-row, that market's book rows, strategy, fee_rate, a zoned now). One signal and one run only, no bus, no
-ledger, no halt, no RiskGate, no executor and no network; it prints the intent or the complete ordered
-rejection reasons. The pin check is read only, so drift is refused here without recording a global halt.
+`python -m src.replay_intent --bundle path/to/bundle.json [--out path/to/result.json]` (issue #80):
+one single-shot offline Intent-builder replay on one fixed bundle (schema_version 1: one raw bus
+signal row, one scanner market row, that market's book rows, strategy, fee_rate, a zoned now). One
+signal and one run only, no bus, no ledger, no halt, no RiskGate, no executor and no network; it
+prints the intent or the complete ordered rejection reasons, with the SHA256 of the bundle's raw
+bytes (`input_sha256`). With `--out` the same JSON is published atomically (temp file, fsync,
+hardlink into place): an existing output is refused, never overwritten, and never into config/, a
+.toml or src/thresholds.py. The pin check is read only, so drift is refused here without recording
+a global halt.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | the single replay ran; the printed JSON holds an intent or the builder's ordered reasons | - |
-| 2 | `EXIT_USAGE` | usage error (missing `--bundle`; `--help` exits 0) | - |
+| 0 | `EXIT_OK` | the single replay ran; the printed JSON holds an intent or the builder's ordered reasons (with `--out`: also published) | - |
+| 2 | `EXIT_USAGE` | usage error (missing `--bundle`; `--help` exits 0), or `--out` points into config/, a .toml or src/thresholds.py | - |
 | 3 | `EXIT_CORRUPT_BUNDLE` | bundle unreadable, not JSON, wrong `schema_version`, missing keys, bad types, or a `now` without a timezone | - |
 | 4 | `EXIT_UNSUPPORTED_BUNDLE` | not a single-shot bundle: extra keys (history, loop), a list of signals, or a book row for another market | - |
+| 5 | `EXIT_OUTPUT_EXISTS` | refused: `--out` already exists; nothing overwritten, no result published | - |
 | 6 | `EXIT_PIN_DRIFT` | refused: config/risk.toml off its pins (read-only check; this entry records no halt); nothing replayed | - |
+| 7 | `EXIT_WRITE_FAILED` | refused: publishing the result JSON failed (e.g. no such folder); the destination is untouched | - |
 
 ## `src/reflector.py`
 

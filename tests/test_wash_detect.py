@@ -60,6 +60,7 @@ def _intent(**overrides: object) -> Intent:
     }
     fields.update(overrides)
     fields.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
+    fields.setdefault("min_order_size", 5.0)  # issue #226: a book minimum (missing vetoes)
     return Intent(**fields)  # type: ignore[arg-type]
 
 
@@ -67,7 +68,7 @@ def _state(fills: list | None = None, quotes: list | None = None) -> dict:
     return {
         "open_positions": 0,
         "leg_already_open": False,
-        "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
+        "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0,
         "recent_fills": [] if fills is None else fills,
         "own_quotes": [] if quotes is None else quotes,
     }

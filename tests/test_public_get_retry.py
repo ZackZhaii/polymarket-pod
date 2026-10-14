@@ -1,10 +1,13 @@
-"""Offline tests for public_get retry/backoff (Task K). No network: urlopen is mocked, sleep is recorded."""
+"""Offline tests for public_get retry/backoff (Task K; HTTP 429 Retry-After: Task DP, issue #199).
+
+No network: urlopen is mocked, sleep is recorded."""
 from __future__ import annotations
 
 import io
 import json
 import socket
 import ssl
+from email.message import Message
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -57,9 +60,17 @@ def fake_net(monkeypatch):
     return state
 
 
+def _http_error(code: int, retry_after: str | None = None) -> HTTPError:
+    headers = Message()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    return HTTPError(GAMMA_URL, code, "error", headers, io.BytesIO(b""))
+
+
 def test_retry_constants_are_small():
     assert 2 <= podlib.PUBLIC_GET_ATTEMPTS <= 5
     assert 0 < podlib.PUBLIC_GET_BACKOFF_S <= 2
+    assert 0 < podlib.PUBLIC_GET_RETRY_AFTER_MAX_S <= 60
 
 
 def test_ssl_eof_then_success(fake_net):
@@ -96,7 +107,7 @@ def test_http_5xx_is_retried(fake_net):
     assert len(fake_net["calls"]) == 2
 
 
-@pytest.mark.parametrize("code", [400, 404, 422, 429])
+@pytest.mark.parametrize("code", [400, 401, 403, 404, 422])
 def test_http_4xx_is_not_retried(fake_net, code):
     fake_net["set"](HTTPError(GAMMA_URL, code, "client error", {}, io.BytesIO(b"")), then={"ok": 0})
     with pytest.raises(HTTPError) as info:
@@ -104,6 +115,115 @@ def test_http_4xx_is_not_retried(fake_net, code):
     assert info.value.code == code
     assert len(fake_net["calls"]) == 1
     assert fake_net["sleeps"] == []
+
+
+@pytest.mark.parametrize("code", [400, 401, 403])
+def test_http_4xx_with_retry_after_is_still_not_retried(fake_net, code):
+    # Only 429 reads Retry-After; any other 4xx is raised at once even when the header is set.
+    fake_net["set"](_http_error(code, "1"), then={"ok": 0})
+    with pytest.raises(HTTPError) as info:
+        podlib.public_get(GAMMA_URL)
+    assert info.value.code == code
+    assert len(fake_net["calls"]) == 1
+    assert fake_net["sleeps"] == []
+
+
+# --- Task DP (issue #199): HTTP 429 is retried, waiting Retry-After seconds -----------------------------
+
+
+def test_http_429_with_retry_after_waits_then_succeeds(fake_net):
+    fake_net["set"](_http_error(429, "1"), {"ok": 6})
+    assert podlib.public_get(GAMMA_URL) == {"ok": 6}
+    assert len(fake_net["calls"]) == 2
+    assert fake_net["sleeps"] == [1.0]
+
+
+def test_http_429_with_retry_after_on_data_api_status(fake_net):
+    fake_net["set"](_http_error(429, " 2 "), {"status": "ok"})
+    assert podlib.public_get(podlib.DATA_API_STATUS_URL) == {"status": "ok"}
+    assert fake_net["calls"] == [podlib.DATA_API_STATUS_URL] * 2
+    assert fake_net["sleeps"] == [2.0]
+
+
+def test_http_429_retry_after_zero_retries_without_waiting(fake_net):
+    fake_net["set"](_http_error(429, "0"), {"ok": 7})
+    assert podlib.public_get(GAMMA_URL) == {"ok": 7}
+    assert fake_net["sleeps"] == [0.0]
+
+
+def test_http_429_without_retry_after_backs_off_and_exhausts(fake_net):
+    fake_net["set"](_http_error(429))
+    with pytest.raises(podlib.PublicGetError) as info:
+        podlib.public_get(GAMMA_URL)
+    assert len(fake_net["calls"]) == podlib.PUBLIC_GET_ATTEMPTS
+    base = podlib.PUBLIC_GET_BACKOFF_S
+    assert fake_net["sleeps"] == [base * (2 ** n) for n in range(podlib.PUBLIC_GET_ATTEMPTS - 1)]
+    assert isinstance(info.value.__cause__, HTTPError) and info.value.__cause__.code == 429
+    assert "429" in str(info.value)
+
+
+def test_http_429_without_retry_after_then_success(fake_net):
+    fake_net["set"](_http_error(429), {"ok": 8})
+    assert podlib.public_get(GAMMA_URL) == {"ok": 8}
+    assert fake_net["sleeps"] == [podlib.PUBLIC_GET_BACKOFF_S]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "soon", "-1", "1.5", "+3", "1e2", "\u00b2", "Wed, 21 Oct 2026 07:28:00 GMT"],
+)
+def test_http_429_invalid_retry_after_falls_back_to_backoff(fake_net, value):
+    fake_net["set"](_http_error(429, value), {"ok": 9})
+    assert podlib.public_get(GAMMA_URL) == {"ok": 9}
+    assert fake_net["sleeps"] == [podlib.PUBLIC_GET_BACKOFF_S]
+
+
+def test_http_429_retry_after_is_capped(fake_net):
+    # Task DQ: a wider deadline than the default so the 30 s cap itself is visible (the default 30 s deadline
+    # refuses a 30 s wait; see tests/test_public_get_deadline.py).
+    fake_net["set"](_http_error(429, "3600"), {"ok": 10})
+    assert podlib.public_get(GAMMA_URL, deadline_s=120.0) == {"ok": 10}
+    assert fake_net["sleeps"] == [podlib.PUBLIC_GET_RETRY_AFTER_MAX_S]
+
+
+def test_http_429_retry_after_and_backoff_respect_custom_backoff(fake_net):
+    fake_net["set"](_http_error(429, "4"), _http_error(429), {"ok": 11})
+    assert podlib.public_get(GAMMA_URL, backoff_s=0.1) == {"ok": 11}
+    assert fake_net["sleeps"] == [4.0, 0.2]
+
+
+def test_http_429_counts_against_the_shared_attempt_budget(fake_net):
+    # 429, 503 and an SSL EOF share PUBLIC_GET_ATTEMPTS: the third failure ends the call.
+    fake_net["set"](_http_error(429, "2"), HTTPError(GAMMA_URL, 503, "busy", {}, io.BytesIO(b"")), _ssl_eof(), then={"ok": 0})
+    with pytest.raises(podlib.PublicGetError) as info:
+        podlib.public_get(GAMMA_URL)
+    assert len(fake_net["calls"]) == podlib.PUBLIC_GET_ATTEMPTS == 3
+    assert fake_net["sleeps"] == [2.0, podlib.PUBLIC_GET_BACKOFF_S * 2]
+    assert isinstance(info.value.__cause__, ssl.SSLEOFError)
+
+
+def test_http_429_single_attempt_is_not_retried(fake_net):
+    fake_net["set"](_http_error(429, "1"), then={"ok": 0})
+    with pytest.raises(podlib.PublicGetError):
+        podlib.public_get(GAMMA_URL, attempts=1)
+    assert len(fake_net["calls"]) == 1
+    assert fake_net["sleeps"] == []
+
+
+def test_http_429_then_other_4xx_raises_at_once(fake_net):
+    fake_net["set"](_http_error(429, "1"), _http_error(403), then={"ok": 0})
+    with pytest.raises(HTTPError) as info:
+        podlib.public_get(GAMMA_URL)
+    assert info.value.code == 403
+    assert len(fake_net["calls"]) == 2
+    assert fake_net["sleeps"] == [1.0]
+
+
+def test_http_5xx_ignores_retry_after(fake_net):
+    # 5xx keeps Task K's exponential backoff; only 429 reads Retry-After.
+    fake_net["set"](_http_error(503, "7"), {"ok": 12})
+    assert podlib.public_get(GAMMA_URL) == {"ok": 12}
+    assert fake_net["sleeps"] == [podlib.PUBLIC_GET_BACKOFF_S]
 
 
 def test_all_attempts_fail_raises_clear_error(fake_net):
@@ -147,6 +267,14 @@ def test_scanner_exits_3_when_all_attempts_hit_ssl_eof(tmp_path, fake_net, capsy
 def test_scanner_exits_3_when_all_attempts_hit_urlerror(tmp_path, fake_net):
     code, markets, bus_path = _scanner_exit(tmp_path, fake_net, URLError("connection refused"))
     assert code == scanner.EXIT_INCOMPLETE
+    assert not markets.exists() and not bus_path.exists()
+
+
+def test_scanner_exits_3_when_all_attempts_hit_429(tmp_path, fake_net):
+    code, markets, bus_path = _scanner_exit(tmp_path, fake_net, _http_error(429, "1"))
+    assert code == scanner.EXIT_INCOMPLETE
+    assert len(fake_net["calls"]) == podlib.PUBLIC_GET_ATTEMPTS
+    assert fake_net["sleeps"] == [1.0] * (podlib.PUBLIC_GET_ATTEMPTS - 1)
     assert not markets.exists() and not bus_path.exists()
 
 

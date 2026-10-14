@@ -13,8 +13,15 @@ Start order (issue #129, Poly指挥: the Sentinel first, nothing else before its
    (halt_store.sentinel_heartbeat_problem() is None). An old heartbeat file never counts. If that
    never happens, nothing else is started: exit 4 with the reason.
 2. One line appended to ``runs/m2-chain.jsonl``: ts, run_dir, git_sha, reason, m2_end, max_runtime_s,
-   host, the Sentinel's pid. A failed append starts nothing else (exit 5).
-3. ``python -m src.m1_run --out runs/m2/m1-<UTC stamp> --max-runtime <seconds left until --m2-end>``.
+   host, the Sentinel's pid, assets (#276: the token ids chosen once at the first start by
+   m1_run.select_assets from data/markets.jsonl, same-day sports singles dropped; every later start reuses
+   them, never re-picks; a market that closes mid-run stays listed and counts as a gap; runs/m2/current.json
+   keeps a copy; a missing, malformed or inconsistent chain ``assets`` refuses, exit 3, no migration). A failed append starts nothing else (exit 5).
+   The row (and runs/m2/current.json) also carries ``classifier_errors`` (#329, observability only): on the
+   boot start, the number of latest-batch markets whose boot classification raised (counted and dropped,
+   Task DN); ``null`` on every later start, which reuses the chain's assets and classifies nothing. It
+   changes no selection, adds no halt, and older chain rows without it are still read.
+3. ``python -m src.m1_run --out runs/m2/m1-<UTC stamp> --max-runtime <seconds left> --assets <frozen ids>``.
    The run dir is new on every start (m1_run never reuses a non-empty one) and lives under #119's
    fixed ``runs/m2/``. Ready = a fresh m1_run heartbeat from this launch, a valid manifest and at least
    one books file, within m1_run's Sentinel timeout (PROC_SPECS). Not ready: exit 5, nothing after it.
@@ -63,6 +70,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src import halt_store, heartbeat, paper_cycle, pins  # noqa: E402
+from src.expiry_rule import parse_end_date  # noqa: E402
+from src.book_staleness import parse_book_ts  # noqa: E402
+from src.m1_run import select_assets  # noqa: E402
+from src.podlib import read_jsonl  # noqa: E402
+from src.thresholds import M1_TOP_MARKETS  # noqa: E402
 from src.sentinel_tick import PROC_SPECS  # noqa: E402
 from src.thresholds import SENTINEL_HEARTBEAT_TIMEOUT_S  # noqa: E402
 
@@ -82,7 +94,9 @@ CHAIN_PATH = RUNS_DIR / "m2-chain.jsonl"
 CURRENT_NAME = "current.json"  # runs/m2/current.json: this start's run dir and processes (read-only for monitors)
 CURRENT_SCHEMA = "m2_current/1"
 KILL_NAME = "KILL"
-CHAIN_FIELDS = ("ts", "run_dir", "git_sha", "reason", "m2_end", "max_runtime_s", "host", "sentinel_pid")
+CHAIN_FIELDS = ("ts", "run_dir", "git_sha", "reason", "m2_end", "max_runtime_s", "host", "sentinel_pid", "assets")
+MARKETS_NAME = "data/markets.jsonl"  # the scanner output the boot start selects its assets from (as m1_run does)
+SPORTS_SLUG = "sports"
 LIVE_STATES = (heartbeat.STATE_STARTING, heartbeat.STATE_RUNNING, heartbeat.STATE_PAUSED)
 WATCHED = ("m1_run", "paper_cycle", "m2_runner")  # a second copy of these must never start
 
@@ -119,6 +133,116 @@ def in_m1_clone(root: Path) -> bool:
     return here == clone or here.startswith(clone + "\\")
 
 
+def assets_problem(value: object) -> str | None:
+    """None for a non-empty list of distinct, non-blank token-id strings without whitespace; else why."""
+    if not isinstance(value, list) or not value:
+        return "assets_missing_or_not_a_list"
+    if not all(isinstance(a, str) and a and a == a.strip() and not any(c.isspace() for c in a) for a in value):
+        return "assets_bad_token_id"
+    if len(set(value)) != len(value):
+        return "assets_duplicate_token_id"
+    return None
+
+
+# Task DN (#291 acceptance): common sports tag slugs besides ``sports`` (compared stripped, lower case).
+# A market carrying any of them, or a non-empty ``gameId`` / ``game_id``, counts as sports.
+SPORTS_TAG_BLOCKLIST: frozenset[str] = frozenset({
+    SPORTS_SLUG, "esports", "tennis", "nfl", "nba", "wnba", "ncaa", "ncaab", "ncaaf", "cfb", "soccer", "football",
+    "mlb", "baseball", "nhl", "hockey", "basketball", "mma", "ufc", "boxing", "cricket", "golf", "pga", "f1",
+    "formula-1", "nascar", "rugby", "epl", "premier-league", "la-liga", "champions-league", "mls", "games",
+})
+
+
+def _has_game_id(row: dict[str, Any]) -> bool:
+    for key in ("gameId", "game_id"):
+        value = row.get(key)
+        if value is not None and value is not False and value != 0 and not (isinstance(value, str) and not value.strip()):
+            return True
+    return False
+
+
+def is_sports(row: dict[str, Any]) -> bool:
+    """A sports market: a tag slug in SPORTS_TAG_BLOCKLIST, Gamma category ``sports`` (case and whitespace
+    insensitive), or a non-empty ``gameId`` (Task DN)."""
+    tags = row.get("tags") if isinstance(row.get("tags"), list) else []
+    category = row.get("category")
+    return (any(isinstance(t, str) and t.strip().lower() in SPORTS_TAG_BLOCKLIST for t in tags)
+            or (isinstance(category, str) and category.strip().lower() == SPORTS_SLUG)
+            or _has_game_id(row))
+
+
+def classification_ok(row: dict[str, Any]) -> bool:
+    """Task DI (#137) / DN: the market's sports classification is readable: ``tags`` is a list of str.
+    ``category`` may be missing or None (the Gamma keyset never returns it); when present it must be a
+    str that is non-empty after strip. Anything else is unknown and the boot selection drops it."""
+    tags = row.get("tags")
+    if not (isinstance(tags, list) and all(isinstance(t, str) for t in tags)):
+        return False
+    category = row.get("category")
+    return category is None or (isinstance(category, str) and category.strip() != "")
+
+
+def same_day_sports(row: dict[str, Any], now: datetime) -> bool:
+    """Task DE (#276): a sports market (tag slug or Gamma category ``sports``) whose end date falls on the
+    start's UTC day: a single game that resolves before the M2 window has really begun."""
+    end = parse_end_date(row.get("end_date"))
+    return is_sports(row) and end is not None and end.date() == now.astimezone(timezone.utc).date()
+
+
+def ends_before(row: dict[str, Any], m2_end: datetime) -> bool:
+    """Task DI (#137): the market's end date is before the M2 end, or missing / unparseable (fail closed)."""
+    end = parse_end_date(row.get("end_date"))
+    return end is None or end < m2_end
+
+
+def boot_eligible(row: dict[str, Any], m2_end: datetime | None) -> bool:
+    """Task DI/DN: the row survives the boot classification, sports and M2-end filters."""
+    return classification_ok(row) and not is_sports(row) and not (m2_end is not None and ends_before(row, m2_end))
+
+
+def boot_selection_detail(root: Path, now: datetime, m2_end: datetime | None = None) -> dict[str, Any]:
+    """boot_selection plus counters: ``assets``, ``why`` and ``classifier_errors`` (Task DN: a market whose
+    classification raises is counted and dropped; startup never crashes on it). The boot start records
+    ``classifier_errors`` in its chain row and runs/m2/current.json (#329); later starts record null."""
+    path = root / MARKETS_NAME
+    try:
+        rows = read_jsonl(path) if path.exists() else []
+    except (OSError, ValueError) as exc:
+        return {"assets": [], "why": f"{MARKETS_NAME} unreadable ({type(exc).__name__})", "classifier_errors": 0}
+    stamps = [parse_book_ts(row.get("ts")) for row in rows if isinstance(row, dict)]
+    latest = max((stamp for stamp in stamps if stamp is not None), default=None)
+    # Pin the latest batch first: filtering must never make an older scan the "latest" one.
+    errors = 0
+    kept = []
+    for row in rows:
+        if not isinstance(row, dict) or parse_book_ts(row.get("ts")) != latest:
+            continue
+        try:
+            ok = boot_eligible(row, m2_end)
+        except Exception:  # noqa: BLE001 - fail safe: drop and count, never crash the start
+            errors += 1
+            continue
+        if ok:
+            kept.append(row)
+    if errors:
+        print(f"WARN boot_selection: {errors} market(s) dropped on classifier error", file=sys.stderr)
+    assets = select_assets(kept, M1_TOP_MARKETS)["assets"]
+    if assets_problem(assets) is not None:
+        return {"assets": [], "why": f"no usable assets in {MARKETS_NAME}; run python -m src.scanner first",
+                "classifier_errors": errors}
+    return {"assets": list(assets), "why": None, "classifier_errors": errors}
+
+
+def boot_selection(root: Path, now: datetime, m2_end: datetime | None = None) -> tuple[list[str], str | None]:
+    """E1: the first start's assets, chosen once by m1_run.select_assets (N = M1_TOP_MARKETS) from the
+    latest scanner batch. Task DI (#137): every sports market is dropped (Gamma puts a tennis single's
+    endDate about a week after the match, so the end date cannot tell a single game apart), and, given
+    ``m2_end``, every market ending before it (or without a usable end date). ``([], why)`` when nothing
+    is usable. Malformed classification is dropped; a classifier exception is counted and dropped (DN)."""
+    detail = boot_selection_detail(root, now, m2_end)
+    return detail["assets"], detail["why"]
+
+
 def read_chain(path: Path) -> tuple[list[dict[str, Any]], str | None]:
     """The chain rows, or a problem (unreadable, a line that is not a chain object, mixed M2 ends)."""
     if not path.exists():
@@ -138,9 +262,14 @@ def read_chain(path: Path) -> tuple[list[dict[str, Any]], str | None]:
         if not isinstance(row, dict) or any(field not in row for field in CHAIN_FIELDS) \
                 or parse_utc(row["m2_end"]) is None:
             return [], f"chain_malformed:line {number}"
+        problem = assets_problem(row["assets"])
+        if problem is not None:
+            return [], f"chain_{problem}:line {number}"
         rows.append(row)
     if len({parse_utc(row["m2_end"]) for row in rows}) > 1:
         return [], "chain_m2_end_inconsistent"
+    if any(row["assets"] != rows[0]["assets"] for row in rows):
+        return [], "chain_assets_inconsistent"
     return rows, None
 
 
@@ -239,7 +368,9 @@ class Current:
     Written whole on every change through the repo's atomic writer (heartbeat.write_record: temp
     file in the same folder, fsync, os.replace), so a reader sees the old or the new file, never a
     torn one. Fields: schema, status (starting / started / failed), updated_ts, run_dir (null until
-    the chain line is written), m2_end, reason, git_sha, host, failure, and processes[]: name, pid
+    the chain line is written), m2_end, reason, git_sha, host, failure, assets, assets_source,
+    classifier_errors (#329: the boot selection's classifier error count on the boot start, null on a
+    later start that reuses the chain's assets), and processes[]: name, pid
     (the launched or kept process), started_ts, state (starting / ready / not_ready / kept) and
     heartbeat_pid (the pid in its heartbeat once ready; on Windows a venv launcher's child may
     differ). A failed write is reported and stops the start order (fail closed), never skipped.
@@ -265,10 +396,13 @@ class Current:
 
 # ---------------------------------------------------------------- the orchestration
 
-def plan_commands(python: str, run_dir_arg: str, max_runtime_s: int, with_runner: bool) -> list[tuple[str, list[str]]]:
-    """(proc, argv) in start order after the Sentinel. Paper only: no live flag exists to pass."""
+def plan_commands(python: str, run_dir_arg: str, max_runtime_s: int, with_runner: bool,
+                  assets: list[str]) -> list[tuple[str, list[str]]]:
+    """(proc, argv) in start order after the Sentinel. Paper only: no live flag exists to pass. m1_run always
+    gets the frozen ``--assets`` (#276), never a fresh --top selection."""
     steps = [
-        ("m1_run", [python, "-m", "src.m1_run", "--out", run_dir_arg, "--max-runtime", str(max_runtime_s)]),
+        ("m1_run", [python, "-m", "src.m1_run", "--out", run_dir_arg, "--max-runtime", str(max_runtime_s),
+                    "--assets", ",".join(assets)]),
         ("paper_cycle", [python, "-m", "src.paper_cycle", "--loop", "--recording-dir", run_dir_arg]),
     ]
     if with_runner:
@@ -339,9 +473,23 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
     if drift:
         return refuse(EXIT_PIN_DRIFT, f"config/risk.toml off its pins: {', '.join(drift[:5])}")
 
+    # E1-E3 (#276): the boot start picks the asset set once; every later start reuses the chain's (read_chain
+    # already refused a missing, malformed or inconsistent one). E4: closed assets stay listed (gaps).
+    # #329: classifier_errors is observability only (chain row + current.json); it never changes the
+    # selection or halts. Null on a later start: the chain's assets are reused and nothing is classified.
+    classifier_errors: int | None = None
+    if rows:
+        assets, assets_source = list(rows[0]["assets"]), "chain"
+    else:
+        detail = boot_selection_detail(root, moment, end)
+        assets, why, classifier_errors = detail["assets"], detail["why"], detail["classifier_errors"]
+        if why is not None:
+            return refuse(EXIT_REFUSED, why)
+        assets_source = "boot selection"
+
     run_arg = rel(run_dir, root)
     logs_dir = m2_dir / "start-logs" / stamp(moment)
-    steps = plan_commands(python, run_arg, max_runtime_s, with_runner)
+    steps = plan_commands(python, run_arg, max_runtime_s, with_runner, assets)
     if argv_for is not None:
         steps = [(proc, argv_for(proc, argv)) for proc, argv in steps]
     sentinel_argv = [python, "-m", "src.sentinel_tick"]
@@ -349,7 +497,12 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
         sentinel_argv = argv_for("sentinel", sentinel_argv)
     say(f"root={root} m2_end={heartbeat.utc_stamp(end)} max_runtime_s={max_runtime_s} run_dir={run_arg} "
         f"m2_runner={'yes' if with_runner else 'not in this checkout (#119)'} live=none")
+    say(f"assets ({len(assets)}, from {assets_source}): {','.join(assets)}")
+    if classifier_errors is not None:
+        say(f"boot selection: classifier_errors={classifier_errors} (markets dropped on a classifier error)")
     current = Current(m2_dir / CURRENT_NAME, m2_end=heartbeat.utc_stamp(end), reason=reason.strip(), now=now)
+    current.data["assets"], current.data["assets_source"] = list(assets), assets_source
+    current.data["classifier_errors"] = classifier_errors
     current_rel = rel(current.path, root)
 
     def publish(failing: str | None = None) -> bool:
@@ -400,7 +553,8 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
     chain_row = {"ts": heartbeat.utc_stamp(now()), "run_dir": run_arg, "git_sha": heartbeat.git_sha(),
                  "reason": reason.strip(), "m2_end": heartbeat.utc_stamp(end), "max_runtime_s": max_runtime_s,
                  "host": socket.gethostname(),
-                 "sentinel_pid": sentinel_record["pid"] if sentinel_record is not None else None}
+                 "sentinel_pid": sentinel_record["pid"] if sentinel_record is not None else None,
+                 "assets": list(assets), "classifier_errors": classifier_errors}
     line = json.dumps(chain_row, ensure_ascii=False, sort_keys=True)
     if dry_run:
         say(f"step 2 chain: would append to {rel(chain_path, root)}: {line}")

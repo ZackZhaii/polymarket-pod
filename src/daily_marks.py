@@ -8,9 +8,14 @@ Poly风控's ruling, point 5. One file per UTC day, written once and never overw
 * written by the first risk evaluation of the UTC day: a temp file in the same folder (fsynced), then an
   exclusive create of the day's name (``os.link``: it fails when the name exists), so a second write the
   same day is refused (``SnapshotExists``) and never replaces the first;
-* ``late`` is True when the writing process did not evaluate on the previous UTC day (it was not running
-  at the day roll, e.g. after a restart): every leg held at the start of the day then uses its cost as
-  ``ref`` (src/leg_marks.py), so the loss between 00:00 and the late write is never hidden;
+* ``late`` is True when the snapshot is written more than ``DAY_START_MAX_LAG_S`` after the UTC day's
+  00:00, or under a clock anomaly (Task CX, #225: ``src/day_boundary.day_start_late``; whether this
+  process evaluated yesterday no longer matters). A late snapshot stores, per leg, the previous UTC day's
+  last valid mark (``mark_source`` ``prev_day_last_mark``) when there is one; every leg held at the start
+  of the day then uses max(cost, that mark) as ``ref`` (signed, the tighter one; src/leg_marks.py), so the
+  loss between 00:00 and the late write is never hidden;
+* ``last_marks/<UTC day>.json`` (Task CX) keeps each leg's last valid book mark of that day (per share),
+  replaced atomically on every evaluation; a file that cannot be read or verified is a problem too;
 * read back with every field checked: a file that cannot be read or parsed, a wrong ``day``, a sha256
   that does not match or a bad leg is a problem. The caller then reports invalid_risk_state (a global
   halt, Task AL); the file is never deleted or rebuilt here.
@@ -134,3 +139,63 @@ def create_snapshot(folder: Path, day: str, created_at: str, late: bool, legs: l
         finally:
             os.close(fd)
     return payload
+
+
+# --- Task CX (#225): each day's last valid mark per leg ------------------------------------------------
+LAST_FIELDS = ("day", "updated_at", "legs", "sha256")
+LAST_LEG_FIELDS = ("per_share_usd", "book_ts", "at")
+
+
+def last_marks_path(folder: Path, day: str) -> Path:
+    return Path(folder) / "last_marks" / f"{day}.json"
+
+
+def read_last_marks(folder: Path, day: str) -> tuple[dict[str, dict[str, Any]] | None, list[str]]:
+    """``(None, [])`` when the day has no file; ``(legs, [])`` when intact; else ``(None, problems)``."""
+    path = last_marks_path(folder, day)
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError:
+        return None, []
+    except OSError as exc:
+        return None, [f"daily_marks_last_unreadable:{type(exc).__name__}"]
+    try:
+        body = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None, ["daily_marks_last_unparseable"]
+    if not isinstance(body, dict) or set(body) != set(LAST_FIELDS):
+        return None, ["daily_marks_last_bad_fields"]
+    try:
+        sha_ok = isinstance(body["sha256"], str) and digest(body) == body["sha256"]
+    except ValueError:
+        sha_ok = False
+    if body["day"] != day or not isinstance(body["updated_at"], str) or not sha_ok:
+        return None, ["daily_marks_last_bad_header"]
+    legs = body["legs"]
+    if not isinstance(legs, dict):
+        return None, ["daily_marks_last_bad_legs"]
+    for key, leg in legs.items():
+        ok = (isinstance(key, str) and isinstance(leg, dict) and set(leg) == set(LAST_LEG_FIELDS)
+              and _number(leg["per_share_usd"]) and 0.0 < leg["per_share_usd"] <= 1.0
+              and (leg["book_ts"] is None or isinstance(leg["book_ts"], str)) and isinstance(leg["at"], str))
+        if not ok:
+            return None, ["daily_marks_last_bad_legs"]
+    return legs, []
+
+
+def write_last_marks(folder: Path, day: str, updated_at: str, legs: dict[str, dict[str, Any]]) -> None:
+    """Replace the day's last-marks file atomically (temp file, fsync, os.replace). Raises OSError/ValueError."""
+    path = last_marks_path(folder, day)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {"day": day, "updated_at": updated_at, "legs": legs}
+    payload["sha256"] = digest(payload)
+    data = json.dumps(payload, sort_keys=True, indent=1, allow_nan=False).encode("utf-8") + b"\n"
+    tmp = path.parent / f".{day}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)

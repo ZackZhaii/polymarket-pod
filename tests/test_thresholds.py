@@ -22,10 +22,12 @@ EXPECTED = {
     "MIN_EDGE": 0.02,
     "EDGE_TOLERANCE": 1e-12,
     "PAPER_EQUITY_USD": 1000.0,
+    "DAY_START_MAX_LAG_S": 120.0,  # Task CX (#225): = MAX_BOOK_AGE_S
     "PAPER_CYCLE_STALE_AFTER_S": 120,
     "SENTINEL_STALE_S": 120.0,
     "SENTINEL_STALE_CONSECUTIVE": 2,
     "WASH_WINDOW_S": 300.0,
+    "PAIR_CROSS_TOLERANCE": 1e-9,  # Task CG (#145)
     "MIN_HOURS_TO_EXPIRY": 24.0,
     "SCANNER_MIN_PRICE": 0.03,
     "SCANNER_MAX_PRICE": 0.97,
@@ -75,6 +77,10 @@ EXPECTED = {
     "RUNNER_SCAN_MAX_AGE_S": 7200.0,  # Task CE #119 (M2 pending)
     "RUNNER_MAX_INGEST_PER_ITER": 20,  # Task CE #119 (M2 pending)
     "RUNNER_MAX_EVALS_PER_SIGNAL": 10,  # Task CE #119 (M2 pending)
+    "RUNNER_SUSPEND_GAP_S": 180.0,  # Task CJ #120 (M2 pending)
+    "RUNNER_WALL_MONO_SKEW_S": 30.0,  # Task CJ #120 (M2 pending)
+    "CLOCK_SKEW_MAX_S": 5.0,  # Task CJ #120 (M2 pending)
+    "M1_MAX_CLOCK_BEHIND_S": 0.1,  # Task CM (M2 pending, tightening)
     "DISK_MIN_FREE_GB": 2.0,  # Task CE #119 (M2 pending)
     "RUNNER_DISK_BUDGET_GB": 5.0,  # Task CE #119 (M2 pending)
     "M1_RUN_TARGET_S": 21600.0,  # KEY-approved 2026-10-11 家伟批准
@@ -140,6 +146,10 @@ EXPECTED = {
     "CALIBRATION_BOOTSTRAP_SEED": 20261009,
     "CALIBRATION_CI_LEVEL": 0.95,
     "CALIBRATION_LOGLOSS_CLIP": 0.01,
+    # Task AZ: M3 calibration bin / group-tier tuples (M3 pending; not used in M2).
+    "CALIBRATION_BIN_EDGES": (0.0, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 1.0),
+    "CALIBRATION_EDGE_TIERS": (0.02, 0.04, 0.08),
+    "CALIBRATION_EXPIRY_TIERS_H": (24.0, 72.0, 336.0),
     # Task BD: largest event-cluster share (M3 pending).
     "CALIBRATION_MAX_CLUSTER_SHARE": 0.30,
     # Task BB: M3 Reflector proposal rules (M3 pending).
@@ -156,6 +166,8 @@ EXPECTED = {
     "REFLECTOR_EDGE_TIER_REALIZATION_MAX": 0.25,
     # issue #52: the halt-state read-modify-write mutex (M2 pending).
     "HALT_STATE_LOCK_TIMEOUT_S": 5.0,
+    "COMMIT_LOCK_TIMEOUT_S": 5.0,  # Task DD (#280): moved from src/paper_ledger.py, value unchanged
+    "PUBLIC_GET_DEADLINE_S": 30.0,  # Task DQ (Poly哨兵 on #309): new, one public_get call's total budget
     "HALT_STATE_LOCK_POLL_S": 0.05,
 }
 
@@ -167,12 +179,14 @@ REEXPORTS = {
     "risk_gate.MIN_EDGE": "MIN_EDGE",
     "risk_gate.EDGE_TOLERANCE": "EDGE_TOLERANCE",
     "podlib.PAPER_EQUITY_USD": "PAPER_EQUITY_USD",
+    "podlib.PUBLIC_GET_DEADLINE_S": "PUBLIC_GET_DEADLINE_S",
     "risk_gate.PAPER_EQUITY_USD": "PAPER_EQUITY_USD",
     "maker.PAPER_EQUITY_USD": "PAPER_EQUITY_USD",
     "paper_cycle.STALE_AFTER_S": "PAPER_CYCLE_STALE_AFTER_S",
     "sentinel.SENTINEL_STALE_S": "SENTINEL_STALE_S",
     "sentinel.SENTINEL_STALE_CONSECUTIVE": "SENTINEL_STALE_CONSECUTIVE",
     "wash_detect.WASH_WINDOW_S": "WASH_WINDOW_S",
+    "wash_detect.PAIR_CROSS_TOLERANCE": "PAIR_CROSS_TOLERANCE",
     "expiry_rule.MIN_HOURS_TO_EXPIRY": "MIN_HOURS_TO_EXPIRY",
     "scanner.MIN_HOURS_TO_EXPIRY": "MIN_HOURS_TO_EXPIRY",
     "endgame_scan.MIN_HOURS_TO_EXPIRY": "MIN_HOURS_TO_EXPIRY",
@@ -192,7 +206,8 @@ REEXPORTS = {
     "resolutions.RESOLUTION_HOLD_HOURS": "RESOLUTION_HOLD_HOURS",
 }
 
-M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
+M2_PENDING = {"MAX_BOOK_AGE_S", "DAY_START_MAX_LAG_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_CONSECUTIVE", "WASH_WINDOW_S",
+              "PAIR_CROSS_TOLERANCE",  # Task CG (#145)
               "MIN_HOURS_TO_EXPIRY", "WS_ROW_REFRESH_S",
               # Task AI: the M1 acceptance criteria (conservative first values for the user at M2).
               "M1_MIN_COVERAGE", "M1_MAX_RECONNECTS", "M1_MAX_GAP_RESYNCS_PER_ASSET",
@@ -206,7 +221,9 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               # Task CE (#119, M2-C1): the paper runner.
               "RUNNER_LOOP_S", "HEARTBEAT_RUNNER_EVERY_S", "HEARTBEAT_RUNNER_TIMEOUT_S", "RUNNER_PAUSED_ALERT_S",
               "RUNNER_SCAN_EVERY_S", "RUNNER_SCAN_MAX_AGE_S", "RUNNER_MAX_INGEST_PER_ITER",
-              "RUNNER_MAX_EVALS_PER_SIGNAL", "DISK_MIN_FREE_GB", "RUNNER_DISK_BUDGET_GB",
+              "RUNNER_MAX_EVALS_PER_SIGNAL", "RUNNER_SUSPEND_GAP_S", "RUNNER_WALL_MONO_SKEW_S",
+              "CLOCK_SKEW_MAX_S", "DISK_MIN_FREE_GB", "RUNNER_DISK_BUDGET_GB",
+              "M1_MAX_CLOCK_BEHIND_S",  # Task CM
               # Task AK: Data API v2 reconciliation.
               "RECONCILE_SHARES_TOL", "DATA_API_POSITIONS_DUST_SHARES", "DATA_API_TRADES_MIN_SHARES",
               "DATA_API_MAX_LAG_S", "DATA_API_IDENTITY_TOL_USDC",
@@ -242,6 +259,8 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               "CALIBRATION_EQUAL_FREQ_BINS", "CALIBRATION_EQUAL_FREQ_MIN_PER_BIN", "CALIBRATION_BOOTSTRAP_RESAMPLES",
               "CALIBRATION_MAX_DECISIONS_PER_MARKET",
               "CALIBRATION_BOOTSTRAP_SEED", "CALIBRATION_CI_LEVEL", "CALIBRATION_LOGLOSS_CLIP",
+              # Task AZ: M3 calibration bin / group-tier tuples (not used in M2).
+              "CALIBRATION_BIN_EDGES", "CALIBRATION_EDGE_TIERS", "CALIBRATION_EXPIRY_TIERS_H",
               # Task BD: largest event-cluster share.
               "CALIBRATION_MAX_CLUSTER_SHARE",
               # Task BB: M3 Reflector proposals; the daily cap is now M3 pending too.
@@ -252,7 +271,11 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "MIN_EDGE", "SENTINEL_STALE_S", "SENTINEL_STALE_
               # Task BE: edge-tier realization rule.
               "REFLECTOR_EDGE_TIER_REALIZATION_MAX",
               # issue #52: the halt-state read-modify-write mutex.
-              "HALT_STATE_LOCK_TIMEOUT_S", "HALT_STATE_LOCK_POLL_S"}
+              "HALT_STATE_LOCK_TIMEOUT_S", "HALT_STATE_LOCK_POLL_S",
+              # Task DD (#280): the ledger commit mutex wait.
+              "COMMIT_LOCK_TIMEOUT_S",
+              # Task DQ (Poly哨兵 on #309): one public_get call's total budget.
+              "PUBLIC_GET_DEADLINE_S"}
 HEADER = ["Name", "Value", "Unit", "Meaning", "Where", "Source", "M2 pending"]
 
 
@@ -288,7 +311,7 @@ def _module_constants() -> dict[str, object]:
         name: value
         for name, value in vars(thresholds).items()
         if name.isupper() and not name.startswith("_")
-        and isinstance(value, (int, float)) and not isinstance(value, bool)
+        and isinstance(value, (int, float, tuple)) and not isinstance(value, bool)
     }
 
 
@@ -372,6 +395,7 @@ def test_doc_names_the_pinned_risk_sha():
 def test_relations_hold():
     assert thresholds.consistency_problems() == []
     assert thresholds.SENTINEL_STALE_S == thresholds.MAX_BOOK_AGE_S
+    assert thresholds.DAY_START_MAX_LAG_S == thresholds.MAX_BOOK_AGE_S  # Task CX (#225)
     assert thresholds.PAPER_CYCLE_STALE_AFTER_S == thresholds.MAX_BOOK_AGE_S
 
 
@@ -411,6 +435,12 @@ def test_relations_hold():
         ("RUNNER_SCAN_MAX_AGE_S = 7200.0", "RUNNER_SCAN_MAX_AGE_S = 1800.0"),  # Task CE
         ("RUNNER_MAX_INGEST_PER_ITER = 20", "RUNNER_MAX_INGEST_PER_ITER = 0"),  # Task CE
         ("RUNNER_MAX_EVALS_PER_SIGNAL = 10", "RUNNER_MAX_EVALS_PER_SIGNAL = True"),  # Task CE
+        ("RUNNER_SUSPEND_GAP_S = 180.0", "RUNNER_SUSPEND_GAP_S = 30.0"),  # Task CJ: must stay above loop
+        ("RUNNER_WALL_MONO_SKEW_S = 30.0", "RUNNER_WALL_MONO_SKEW_S = 0.0"),  # Task CJ
+        ("CLOCK_SKEW_MAX_S = 5.0", "CLOCK_SKEW_MAX_S = 120.0"),  # Task CJ: must stay below MAX_BOOK_AGE_S
+        ("M1_MAX_CLOCK_BEHIND_S = 0.1", "M1_MAX_CLOCK_BEHIND_S = 0.0"),  # Task CM: must be > 0
+        ("M1_MAX_CLOCK_BEHIND_S = 0.1", "M1_MAX_CLOCK_BEHIND_S = 1.0"),  # Task CM: below M1_REPORT_STEP_S
+        ("M1_MAX_CLOCK_BEHIND_S = 0.1", "M1_MAX_CLOCK_BEHIND_S = 0"),  # Task CM: a float
         ("DISK_MIN_FREE_GB = 2.0", "DISK_MIN_FREE_GB = -1.0"),  # Task CE
         ("RUNNER_DISK_BUDGET_GB = 5.0", "RUNNER_DISK_BUDGET_GB = float('nan')"),  # Task CE
         ("WS_GROUP_FLUSH_S = 0.25", "WS_GROUP_FLUSH_S = 0.0"),  # Task CC: must be > 0
@@ -478,6 +508,9 @@ def test_relations_hold():
         # issue #52: the halt-state mutex constants.
         ("HALT_STATE_LOCK_TIMEOUT_S = 5.0", "HALT_STATE_LOCK_TIMEOUT_S = 0.0"),
         ("HALT_STATE_LOCK_POLL_S = 0.05", "HALT_STATE_LOCK_POLL_S = 5.0"),
+        # Task CG (#145): the complementary-leg pairing allowance.
+        ("PAIR_CROSS_TOLERANCE = 1e-9", "PAIR_CROSS_TOLERANCE = 0.0"),
+        ("PAIR_CROSS_TOLERANCE = 1e-9", "PAIR_CROSS_TOLERANCE = 0.05"),
     ],
 )
 def test_an_inconsistent_edit_fails_at_import(line, replacement):

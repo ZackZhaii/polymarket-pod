@@ -35,7 +35,7 @@ market halt         one asset with RECORDER_GAP_RESYNC_HALT_COUNT gap resyncs in
 alert               scanner exit 1 / 2; scanner exit 3 SCANNER_INCOMPLETE_CONSECUTIVE times in a
                     row; scanner / endgame_scan / loop_claim / resolutions start with no finish after
                     SCANNER_HANG_S; no successful scan for SCANNER_MAX_SUCCESS_AGE_S; m1_run exit
-                    1 / 2 / 3; m1_rest heartbeat stale (HEARTBEAT_REST_TIMEOUT_S) or non-zero exit;
+                    1 / 2 / 3 / 7; m1_rest heartbeat stale (HEARTBEAT_REST_TIMEOUT_S) or non-zero exit;
                     paper_cycle heartbeat stale (HEARTBEAT_PAPER_CYCLE_TIMEOUT_S) or crash;
                     RECORDER_RECONNECT_ALERT_COUNT reconnects in the window; any other non-zero
                     exit; a crash of a process not listed above; m2_runner paused longer than
@@ -134,10 +134,14 @@ EXIT_EVENTS: dict[tuple[str, int], str] = {
     ("scanner", 1): ALERT, ("scanner", 2): ALERT,
     ("ws_recorder", 1): ALERT, ("ws_recorder", 2): ALERT, ("ws_recorder", 3): ALERT, ("ws_recorder", 4): GLOBAL,
     ("m1_run", 1): ALERT, ("m1_run", 2): ALERT, ("m1_run", 3): ALERT, ("m1_run", 4): GLOBAL, ("m1_run", 5): LOG,
+    ("m1_run", 7): ALERT,  # Task CM: refused to start, host clock behind the exchange (no run dir)
     ("endgame_scan", 4): GLOBAL,
     ("loop_claim", 2): GLOBAL,
     # Task AS (gaps 4, 5): refused to start / stopped on risk.toml pin drift (docs/EXIT_CODES.md).
     ("scanner", 6): GLOBAL, ("ws_recorder", 6): GLOBAL, ("m1_run", 6): GLOBAL, ("paper_cycle", 1): GLOBAL,
+    # Issue #75: paper_cycle 3 = stable corrupt/unreadable markets/books input (ok=false
+    # reason=input_invalid; the refused round is a global halt, the pin keeps code 1).
+    ("paper_cycle", 3): GLOBAL,
     # Task AV: resolutions' old exit 4 split. 6 = pin drift (as scanner); 5 = the snapshot clock is not a
     # zoned timestamp. No design row for the clock; the stricter action (a broken clock, like a heartbeat
     # with a bad time, is a global halt).

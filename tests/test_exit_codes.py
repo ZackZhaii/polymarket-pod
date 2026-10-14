@@ -44,7 +44,7 @@ def test_the_real_registry_matches_the_code():
 
 def test_every_entry_point_is_registered():
     found = exit_codes.entry_points(ROOT)
-    assert len(found) == 24  # Task CE (#119): + src/m2_runner.py; issue #80: + src/replay_intent.py; Task BR: + src/m2_start.py; Task BB: + src/reflector_proposals.py;  # Task AY: src/ws_hash_check.py; Task AZ: src/calibration.py
+    assert len(found) == 25  # issue #69: + src/paper_audit.py; Task CE (#119): + src/m2_runner.py; issue #80: + src/replay_intent.py; Task BR: + src/m2_start.py; Task BB: + src/reflector_proposals.py;  # Task AY: src/ws_hash_check.py; Task AZ: src/calibration.py
     assert {"src/scanner.py", "src/m1_run.py", "src/sentinel_tick.py", "scripts/guard.py",
             "scripts/e2e_offline.py"} <= set(found)
     sections, problems = exit_codes.parse_registry((ROOT / exit_codes.REGISTRY_REL).read_text(encoding="utf-8"))
@@ -79,6 +79,18 @@ def test_resolutions_exit_3_registers_the_history_failure():
     name, meaning, word = rows[3]
     assert name == "EXIT_INCOMPLETE" and word == "alert"
     assert "paging" in meaning and "history" in meaning
+
+
+def test_paper_cycle_input_invalid_is_its_own_global_halt_code():
+    # Issue #75: stable corrupt/unreadable input exits 3 (a global halt for the Sentinel);
+    # the pin keeps exit 1 unchanged, a still-changing input stays exit 0
+    events, _ = exit_codes.sentinel_matrix(ROOT)
+    assert events[("paper_cycle", 3)] == "global halt" and events[("paper_cycle", 1)] == "global halt"
+    sections, problems = exit_codes.parse_registry((ROOT / exit_codes.REGISTRY_REL).read_text(encoding="utf-8"))
+    assert problems == []
+    rows = {code: (name, word) for code, name, _, word in sections["src/paper_cycle.py"]}
+    assert rows[3] == ("EXIT_INPUT_INVALID", "global halt")
+    assert exit_codes.module_constants(ROOT, "src/paper_cycle.py")["EXIT_INPUT_INVALID"] == 3
 
 
 def test_constants_resolve_through_imports():

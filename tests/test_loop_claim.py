@@ -11,6 +11,12 @@ from src.podlib import RISK_PATH
 NOW = datetime(2026, 10, 8, 8, 0, tzinfo=timezone.utc)
 
 
+def test_surfaces_registry_is_the_five_entrances():
+    assert loop_claim.SURFACES == frozenset(
+        {"grok-build-local", "grok-web", "grok-bot", "codex-local", "dsh"}
+    )
+
+
 def _state() -> dict:
     return {
         "schema": 1,

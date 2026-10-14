@@ -41,6 +41,7 @@ from src.podlib import (  # noqa: E402
     PAPER_EQUITY_USD,
     PAPER_PATH,
     QUOTES_PATH,
+    RESOLUTIONS_PATH,
     RISK_PATH,
     bus,
     load_risk,
@@ -64,12 +65,19 @@ from src.ledger_store import counts as _counts  # noqa: E402 - Task AF: moved, s
 from src.risk_gate import Decision, Intent, evaluate  # noqa: E402
 from src.daily_loss import daily_loss  # noqa: E402 - Task AR: fees + realized losses
 from src.expiry_rule import hours_to_expiry, parse_end_date  # noqa: E402 - Task BA: hours at entry
+from src.structural_gate import STRUCTURAL_ARB_DISABLED  # noqa: E402 - Task DD (#237)
+from src import wash_detect  # noqa: E402 - Task CH (#145): the market's token pair
+from src import day_boundary  # noqa: E402 - Task CX (#225): the one day-boundary rule
 from src import daily_marks, leg_marks  # noqa: E402 - Task CF (#124): unrealized loss in the daily loss
 
 # Task CF (#124): the start-of-day leg marks (one file per UTC day, never overwritten) and the books the
 # open legs are valued from (the recorder's books file; a leg without a fresh usable book is worth 0).
 DAILY_MARKS_DIR = ROOT / "runs" / "m2" / "daily_marks"
 MARK_BOOKS_PATH = BOOKS_PATH
+# Issue #126 (Task CG): the confirmed settlement snapshots open legs are settled from (src/settlement.py).
+SETTLEMENT_RESOLUTIONS_PATH = RESOLUTIONS_PATH
+# Issue #145 (Task CH): the scanner rows the complementary-leg pair check reads a market's two tokens from.
+PAIR_MARKETS_PATH = MARKETS_PATH
 # The UTC day of this process's last risk evaluation. A day's snapshot is on time (late=False) only when
 # this process also evaluated on the previous UTC day, i.e. it was running at the day roll.
 _LAST_EVAL_DAY: str | None = None
@@ -181,16 +189,57 @@ def _previous_day(day: str) -> str | None:
     return (stamp - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
+def _previous_day_marks(today: str, start: dict, current: dict) -> tuple[dict, list[str]]:
+    """Task CX (#225, D3): for a late snapshot, each start leg's previous-UTC-day last valid mark, if any."""
+    prev = _previous_day(today)
+    if prev is None:
+        return current, []
+    legs, problems = daily_marks.read_last_marks(DAILY_MARKS_DIR, prev)
+    if problems or not legs:
+        return current, problems
+    out = dict(current)
+    for key, leg in start.items():
+        entry = legs.get(leg_marks.leg_id(key))
+        if entry is not None and abs(leg.shares) > OPEN_EPS:
+            out[key] = leg_marks.Mark(float(entry["per_share_usd"]) * leg.shares, leg_marks.SOURCE_PREV_DAY_LAST,
+                                      entry["book_ts"], False)
+    return out, []
+
+
+def _record_last_marks(today: str, now: str, marks: dict) -> list[str]:
+    """Task CX (#225): keep today's last valid book mark per leg (read back as the next day's late reference)."""
+    fresh = {leg_marks.leg_id(key): {"per_share_usd": abs(mark.value_usd) / abs(shares), "book_ts": mark.book_ts, "at": now}
+             for key, (mark, shares) in marks.items()
+             if not mark.mark_invalid and mark.source in (leg_marks.SOURCE_BID_LADDER, leg_marks.SOURCE_ASK_LADDER)
+             and abs(shares) > OPEN_EPS and 0.0 < abs(mark.value_usd) / abs(shares) <= 1.0}
+    if not fresh:
+        return []
+    legs, problems = daily_marks.read_last_marks(DAILY_MARKS_DIR, today)
+    if problems:
+        return problems
+    merged = dict(legs or {})
+    merged.update(fresh)
+    try:
+        daily_marks.write_last_marks(DAILY_MARKS_DIR, today, now, merged)
+    except (OSError, ValueError) as exc:
+        return [f"daily_marks_last_write_failed:{type(exc).__name__}"]
+    return []
+
+
 def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
-                     books: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
+                     books: dict[tuple[str, str], dict[str, Any]] | None = None, *,
+                     clock_ok: bool = False) -> dict[str, Any]:
     """Task CF (#124): today's unrealized loss on open legs (Poly风控's ruling, src/leg_marks.py).
 
-    Reads (or, on the day's first evaluation, writes once) the start-of-day snapshot. Returns
-    ``{"loss_usd", "legs", "late", "problems"}``; any problem (positions, books cannot be valued, snapshot
-    corrupt or not writable, an exception) makes ``loss_usd`` None: the caller reports invalid_risk_state.
+    Reads (or, on the day's first evaluation, writes once) the start-of-day snapshot, also for closed parts.
+    ``clock_ok`` (Task DA, #225 follow-up): the caller's clock state; anything but True (a clock anomaly such as
+    the runner's clock_skew, or #253's clock_unverified) makes a snapshot written now late (fail closed). It defaults
+    to False (Poly风控 on #274): a caller that has not verified the clock writes a late snapshot.
+    Returns ``{"loss_usd", "realized_topup_usd", "legs", "late", "problems"}``; any problem (positions,
+    valuation, corrupt or unwritable snapshot, an exception) makes the loss unavailable: invalid_risk_state.
     """
     global _LAST_EVAL_DAY
-    result: dict[str, Any] = {"loss_usd": None, "legs": [], "late": None, "problems": []}
+    result: dict[str, Any] = {"loss_usd": None, "realized_topup_usd": None, "legs": [], "late": None, "problems": []}
     try:
         today = now[:10]
         now_dt = parse_book_ts(now)
@@ -209,7 +258,14 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
         if snap is None:
             start_marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt)
                            for key, leg in pos.start.items()}
-            late = _LAST_EVAL_DAY is None or _LAST_EVAL_DAY != _previous_day(today)
+            # Task CX (#225, D1/D2): late = written more than DAY_START_MAX_LAG_S after today's 00:00 UTC
+            # (or a clock anomaly), whatever this process did yesterday.
+            late = day_boundary.day_start_late(now, clock_ok=clock_ok)
+            if late:
+                start_marks, problems = _previous_day_marks(today, pos.start, start_marks)
+                if problems:
+                    result["problems"] = problems
+                    return result
             try:
                 snap = daily_marks.create_snapshot(DAILY_MARKS_DIR, today, now, late,
                                                    leg_marks.snapshot_legs(pos.start, start_marks))
@@ -223,11 +279,16 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
                 return result
         _LAST_EVAL_DAY = today
         marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt) for key, leg in pos.now.items()}
+        problems = _record_last_marks(today, now, {key: (marks[key], leg.shares) for key, leg in pos.now.items()})
+        if problems:
+            result["problems"] = problems
+            return result
         unrealized = leg_marks.unrealized_loss(pos, marks, snap)
         result["late"] = snap.get("late")
         if unrealized.problems:
             result["problems"] = unrealized.problems
             return result
+        result["realized_topup_usd"] = leg_marks.closed_loss_topup(pos, snap)
         result["loss_usd"] = unrealized.loss_usd
         result["legs"] = unrealized.legs
         return result
@@ -237,14 +298,138 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
         return result
 
 
-def load_state(market: str, token_id: str = "") -> dict[str, Any]:
+def daily_risk_loss(rows: list[dict[str, Any]], ids: list[str], now: str, *,
+                    clock_ok: bool = False) -> dict[str, Any]:
+    """One UTC evaluation: fees + gross cost losses + closed reference topups + open-leg losses.
+
+    ``clock_ok`` is passed to daily_unrealized (Task DA): False while the caller knows of a clock anomaly."""
+    day = daily_loss(rows, now[:10], ids)
+    marks = (daily_unrealized(rows, ids, now, clock_ok=clock_ok) if not day.problems
+             else {"loss_usd": None, "realized_topup_usd": None, "legs": [], "late": None, "problems": []})
+    problems = list(day.problems) + list(marks["problems"])
+    total = None if problems else day.total_usd + marks["realized_topup_usd"] + marks["loss_usd"]
+    return {"loss_usd": total, "day": day, "marks": marks, "problems": problems}
+
+
+def read_settlements() -> tuple[list[dict[str, Any]] | None, list[str]]:
+    """Issue #126: the settlement snapshots, read strictly (resolutions.read_history). Absent file: none."""
+    from src import resolutions  # local: keeps paper_ledger's import time unchanged
+
+    try:
+        return resolutions.read_history(Path(SETTLEMENT_RESOLUTIONS_PATH)), []
+    except resolutions.HistoryError as exc:
+        return None, [f"resolutions_unreadable:{type(exc).__name__}"]
+    except OSError as exc:
+        return None, [f"resolutions_unreadable:{type(exc).__name__}"]
+
+
+def settlement_blocked_markets() -> frozenset[str]:
+    """PR #211: markets under a market halt whose reason says their own close / settlement data contradicts
+    itself (src/settlement.blocks_settlement). Other market halts do not block settlement."""
+    from src import halt_store, settlement
+
+    return frozenset(str(record.get("market")) for record in halt_store.active_halts()
+                     if record.get("scope") == halt_store.SCOPE_MARKET and record.get("market")
+                     and settlement.blocks_settlement(record.get("reason")))
+
+
+def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | None = None) -> dict[str, Any]:
+    """Issue #126 (Task CG): book a settlement row for every open leg of a market with a confirmed settlement.
+
+    Idempotent (the row's fill_id is derived from the settlement; a booked one is never booked again). A ledger
+    that does not verify is left to load_state (invalid_risk_state, as before) and nothing is booked here.
+    Returns {"booked": [fill rows], "unsettled_closed_legs": [...], "problems": [...]}; any problem (an
+    unreadable resolutions file, two confirmed snapshots that disagree, a failed or refused write) must stop the
+    caller from booking anything else.
+    """
+    from src import settlement
+
+    out: dict[str, Any] = {"booked": [], "unsettled_closed_legs": [], "problems": []}
+    if skip_markets is None:  # PR #211: the commit path honours the same blocking market halts as the runner
+        try:
+            skip_markets = settlement_blocked_markets()
+        except Exception as exc:  # noqa: BLE001 - an unreadable halt state: settle nothing (the caller halts)
+            out["problems"] = [f"settlement_halt_state_unreadable:{type(exc).__name__}"]
+            return out
+    snaps, problems = read_settlements()
+    if problems:
+        out["problems"] = problems
+        return out
+    if not snaps:
+        return out  # nothing can settle: the ledger is not even read (the commit path reads it as before)
+    _, ledger = ledger_store.read_ledger(PAPER_PATH)
+    if ledger_store.verify(ledger) or non_finite_ledger_rows(ledger.rows):
+        return out
+    planned = settlement.plan(ledger.rows, list(ledger.ids), snaps or [], now or utc_now())
+    out["unsettled_closed_legs"] = planned.unsettled_closed_legs
+    if planned.problems:
+        out["problems"] = planned.problems
+        return out
+    for row in planned.rows:
+        if str(row.get("market")) in skip_markets:
+            # PR #211: the market's own close / settlement data is under a market halt (settlement.blocks_settlement)
+            out.setdefault("skipped_markets", []).append(str(row.get("market")))
+            continue
+        try:
+            out["booked"].append(ledger_store.book(PAPER_PATH, row))
+        except LedgerIntegrityError as exc:
+            out["problems"] = [f"settlement_refused:{problem}" for problem in exc.problems]
+            return out
+        except OSError as exc:
+            out["problems"] = [f"settlement_write_failed:{type(exc).__name__}"]
+            return out
+    return out
+
+
+def _unsettled_closed_legs(rows: list[dict[str, Any]]) -> list[str] | None:
+    """Issue #126: open legs whose market closed but whose settlement is not confirmed (None: unreadable)."""
+    from src import settlement
+
+    snaps, problems = read_settlements()
+    if problems or not snaps:
+        return None if problems else []
+    return settlement.plan(rows, [], snaps, utc_now()).unsettled_closed_legs
+
+
+def pair_of(market: str) -> tuple[str, str] | None:
+    """Issue #145: the two token ids of ``market`` from the newest scanner row (None: unknown -> fail closed)."""
+    try:
+        rows = read_jsonl(PAIR_MARKETS_PATH)
+    except (OSError, UnicodeDecodeError):
+        return None
+    found = [row for row in rows if isinstance(row, dict) and str(row.get("id")) == str(market)]
+    return wash_detect.binary_pair(found[-1]) if found else None
+
+
+def _opposite_pending_buys(market: str, token_id: str, quotes: Any) -> int | None:
+    """Task DD (#237): own open (not cancelled) buy quotes in ``market`` on a token other than ``token_id``.
+
+    None (RiskGate refuses) when the history is not a list, or any record is not a dict or lacks a str market,
+    status, side or token_id (Poly风控 on #280: a malformed record is not skipped, and nothing is str()-coerced).
+    """
+    if not isinstance(quotes, list):
+        return None
+    count = 0
+    for row in quotes:
+        if not isinstance(row, dict) or not wash_detect._quote_fields_are_str(row, unknown_token_ok=False):
+            return None
+        if row["market"] != market or row["status"] in wash_detect.CLOSED_STATUSES:
+            continue
+        if row["side"] == "buy" and row["token_id"] != token_id:
+            count += 1
+    return count
+
+
+def load_state(market: str, token_id: str = "", *, clock_ok: bool = False,
+               quotes_path: Path | None = None) -> dict[str, Any]:
     """Risk state for an intent on one leg (market + token_id).
 
     open_positions counts open legs, not markets. leg_already_open is True only
     when this exact token already has an open position; another leg of the same
     market does not count. exposure_usd is the gross sum over open legs. leg_net_shares is this
     leg's net shares (buys minus sells; issue #123: RiskGate reads its sign to tell an add from a
-    reduction, and vetoes a same-direction add as add_to_open_leg).
+    reduction, and vetoes a same-direction add as add_to_open_leg; issue #226: a reduction books at most |net|,
+    and a sell on a leg that is not open vetoes sell_requires_position).
     recent_fills (every ledger row) and own_quotes (every paper quote row) are the
     history RiskGate's structured wash / self-trade check reads (Task S).
     Task AF: rows come from the strict ledger reader, deduped by fill_id. Any integrity problem
@@ -256,12 +441,22 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
     Issue #56: own_quotes comes from the strict quotes reader, once, for every return path. A
     quotes file that cannot be read in full is not a short history: own_quotes is None,
     quote_problems names the lines, and RiskGate vetoes the existing wash_input_invalid.
+    Poly风控 on #310 (Task DO): quotes_path (default QUOTES_PATH) names the quotes file own_quotes is read from, so
+    maker.quote checks the opposite-leg veto on the same file it writes to.
     """
     _, ledger = ledger_store.read_ledger(PAPER_PATH)
     rows = ledger.rows
-    own_quotes, quote_problems = read_quotes(QUOTES_PATH)
+    # PR #310 review: the maker passes the quotes file it actually checks and writes (default QUOTES_PATH).
+    own_quotes, quote_problems = read_quotes(Path(quotes_path) if quotes_path is not None else QUOTES_PATH)
     if quote_problems:
         own_quotes = None  # issue #56: a partial quote history is not this history (fail closed)
+    # Issue #145 (Task CH): the market's two tokens, read only when an own open quote rests on another token.
+    try:
+        market_pair = pair_of(market) if own_quotes is not None and wash_detect.pair_quotes(market, token_id, own_quotes) \
+            else None
+    except TypeError:
+        # Task DD (#280) backstop: a quote history the checks cannot read is unusable -> wash_input_invalid.
+        own_quotes, quote_problems, market_pair = None, list(quote_problems) + ["quote_type_error"], None
     bad_rows = non_finite_ledger_rows(rows)
     problems = ledger_store.verify(ledger)
     if bad_rows or problems:
@@ -278,17 +473,14 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
             "duplicate_fill_rows": ledger.duplicates_ignored,
             "recent_fills": rows,
             "own_quotes": own_quotes,
+            "market_pair": market_pair,  # issue #145
             "quote_problems": quote_problems,
         }
     legs = leg_positions(rows)
-    # Task AR (backlog #4): today's booked fees plus today's gross realized losses (UTC day).
-    day = daily_loss(rows, utc_now()[:10], ledger.ids)
-    # Task CF (#124): plus each open leg's loss since the start of the UTC day (liquidation value, no netting).
-    # Only when the realized part is valid: a bad row is reported once, by daily_loss, as before.
-    marks = (daily_unrealized(rows, list(ledger.ids), utc_now()) if not day.problems
-             else {"loss_usd": None, "legs": [], "late": None, "problems": []})
-    if day.problems or marks["problems"]:
-        problems_today = list(day.problems) + list(marks["problems"])
+    risk = daily_risk_loss(rows, list(ledger.ids), utc_now(), clock_ok=clock_ok)  # Task DC: fail closed by default
+    day, marks = risk["day"], risk["marks"]
+    if risk["problems"]:
+        problems_today = risk["problems"]
         return {
             "open_positions": None,
             "leg_already_open": False,
@@ -302,6 +494,7 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
             "duplicate_fill_rows": ledger.duplicates_ignored,
             "recent_fills": rows,
             "own_quotes": own_quotes,
+            "market_pair": market_pair,  # issue #145
             "quote_problems": quote_problems,
         }
     own = legs.get(leg_key(market, token_id))
@@ -311,28 +504,75 @@ def load_state(market: str, token_id: str = "") -> dict[str, Any]:
         "exposure_usd": sum(leg["exposure_usd"] for leg in legs.values()),
         "leg_exposure_usd": 0.0 if own is None else own["exposure_usd"],
         "leg_net_shares": 0.0 if own is None else own["shares"],  # issue #123: the open leg's direction
-        "daily_loss_usd": None if day.total_usd is None else day.total_usd + marks["loss_usd"],
+        # Issue #237: long holdings on the same market's other tokens (a buy here would assemble a complete set).
+        "opposite_leg_shares": sum(leg["shares"] for key, leg in legs.items()
+                                   if key[0] == leg_key(market, token_id)[0] and key != leg_key(market, token_id)
+                                   and leg["shares"] > OPEN_EPS),
+        # Task DD (#237, Codex P1): own open buy quotes on the other tokens are pending opposite holdings
+        # (None: the quote history is unreadable -> RiskGate fails closed).
+        "opposite_pending_buys": _opposite_pending_buys(market, token_id, own_quotes),
+        "daily_loss_usd": risk["loss_usd"],
         "daily_fees_usd": day.fees_usd,
         "daily_unrealized_loss_usd": marks["loss_usd"],  # Task CF: diagnosis (already in daily_loss_usd)
         "daily_marks": marks["legs"],
         "daily_marks_late": marks["late"],
+        "unsettled_closed_legs": _unsettled_closed_legs(rows),  # issue #126: diagnosis only
         "daily_realized_loss_usd": day.realized_loss_usd,
         "daily_realized_gain_usd": day.realized_gain_usd,
         "ledger_problems": [],
         "duplicate_fill_rows": ledger.duplicates_ignored,
         "recent_fills": rows,
         "own_quotes": own_quotes,
+        "market_pair": market_pair,  # issue #145
         "quote_problems": quote_problems,
     }
 
 
-def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
+from src.thresholds import COMMIT_LOCK_TIMEOUT_S  # noqa: E402,F401 - Task DD: the commit mutex wait (THRESHOLDS.md)
+
+
+def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
+    """Task DD (#237, Codex P1): the whole load_state -> RiskGate -> book path runs under one cross-process
+    mutex on ``<PAPER_PATH>.commit.lock``, so two interleaved commits (e.g. YES and NO of one market) cannot both read
+    a state without the other's fill. A mutex that cannot be taken refuses the order (fail closed)."""
+    from src import halt_store
+
+    lock = halt_store.StateLock(PAPER_PATH)
+    lock.path = Path(str(PAPER_PATH) + ".commit.lock")  # not ledger_store's <ledger>.lock (taken inside book)
+    if not lock.acquire(timeout_s=COMMIT_LOCK_TIMEOUT_S):
+        summary = {"forecast_id": intent.forecast_id, "strategy": intent.strategy,
+                   "reasons": [STRUCTURAL_ARB_DISABLED, "commit_lock_unavailable"],
+                   "hypothetical": intent.hypothetical, "risk_decision": "veto", "decision": "veto",
+                   "note": DIRECTIONAL}
+        bus("RiskGate", "Executor", "veto", intent.market, summary)
+        return {"allow": False, "decision": summary}
+    try:
+        return _commit_locked(intent, cfg, unique_decision_id=unique_decision_id)
+    finally:
+        lock.release()
+
+
+def _commit_locked(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
     """Ask RiskGate. Append a paper fill only when the same call allows it.
 
     Task AF: the fill gets a fill_id and the post-fill cash / leg state, and is written atomically
-    by ledger_store.book after the whole ledger is re-verified. An integrity problem halts (a halt
+    by ledger_store.book after the whole ledger is re-verified. Issue #120: ``unique_decision_id`` is
+    passed through (default False); when True and the decision_id is already booked, returns
+    ``allow True`` with the existing fill and ``already_booked True``, without writing again. An integrity problem halts (a halt
     bus message, allow False, nothing booked); a failed write leaves the old ledger intact.
     """
+    # Issue #126 (Task CG): settle resolved legs first, so a settled loss is realized once and the leg is gone.
+    settled = apply_settlements()
+    if settled["problems"]:
+        problems = [str(p) for p in settled["problems"]]
+        summary = {"forecast_id": intent.forecast_id, "strategy": intent.strategy, "reasons": ["invalid_risk_state"],
+                   "hypothetical": intent.hypothetical, "risk_decision": "veto", "decision": "halt",
+                   "settlement_problems": problems, "note": DIRECTIONAL}
+        sentinel.halt(reason="invalid_risk_state", market=intent.market, scope="global",
+                      quotes_path=QUOTES_PATH, emit=_emit,
+                      extra={"ledger_problems": problems, "strategy": intent.strategy, "token_id": intent.token_id})
+        return {"allow": False, "decision": summary, "halted": True, "halt_reason": "invalid_risk_state",
+                "ledger_problems": problems}
     state = load_state(intent.market, intent.token_id)
     decision = evaluate(intent, cfg, state)
     summary = _decision_payload(intent, decision)
@@ -423,11 +663,15 @@ def commit_if_allowed(intent: Intent, cfg: dict[str, Any]) -> dict[str, Any]:
     fill["calibration_problems"] = sorted(set(calibration_ids.fill_problems(fill)) | set(market_problems)
                                           | set(context_problems))
     try:
-        fill = ledger_store.book(PAPER_PATH, fill)
+        booked = ledger_store.book(PAPER_PATH, fill, unique_decision_id=unique_decision_id)
     except LedgerIntegrityError as exc:
         return _halt(intent, summary, "ledger_integrity", exc.problems)
     except OSError as exc:
         return _halt(intent, summary, "ledger_write_failed", [f"{type(exc).__name__}: {exc}"])
+    if booked.get("already_booked") is True:  # issue #120: same decision_id already on the ledger
+        existing = booked["fill"]
+        return {"allow": True, "fill": existing, "already_booked": True}
+    fill = booked
     bus("Executor", "Sentinel", "fill", intent.market, fill)
     return {"allow": True, "fill": fill}
 
@@ -593,6 +837,8 @@ def _intent(**kwargs: Any) -> Intent:
         "tags": ("phase0-gate-test",),
         # Synthetic gate-test touch, stamped now so only the check under test can veto.
         "book_ts": utc_now(),
+        # Issue #226: the synthetic gate-test book's minimum order size (RiskGate requires one).
+        "min_order_size": 5.0,
     }
     defaults.update(kwargs)
     return Intent(**defaults)
@@ -722,6 +968,7 @@ def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
             best_bid=book.get("best_bid"),
             best_ask=book.get("best_ask"),
             fill_context=calibration_ids.FILL_CONTEXT_GATE_CHECK,  # Task BC: a gate check, never a sample
+            min_order_size=book.get("min_order_size"),  # issue #226: the recorded book's; missing vetoes
             note="Public ask used as both model and price. Must not fill. Not a forecast.",
         ),
         cfg,
@@ -748,6 +995,8 @@ def run_cli_intent(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, A
         fill_context=calibration_ids.FILL_CONTEXT_OPERATOR_CLI,  # Task BC: no book context
         # Issue #131: the market's Gamma tag slugs; none given vetoes missing_category.
         tags=tuple(t.strip() for t in (getattr(args, "tags", None) or "").split(",") if t.strip()) or None,
+        # Issue #226: the market's minimum order size in shares; none given vetoes missing_min_order_size.
+        min_order_size=getattr(args, "min_order_size", None),
     )
     return commit_if_allowed(intent, cfg)
 
@@ -785,6 +1034,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--tags", default=None,
                         help="comma-separated Gamma tag slugs of the market (issue #131: none vetoes missing_category)")
+    parser.add_argument("--min-order-size", type=float, default=None,
+                        help="the market book's min_order_size in shares (issue #226: none vetoes missing_min_order_size)")
     parser.add_argument("--note", default="")
     parser.add_argument(
         "--self-check",

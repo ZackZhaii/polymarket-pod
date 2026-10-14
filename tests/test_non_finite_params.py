@@ -16,7 +16,7 @@ import src.sports_devig as sports_devig
 from src.podlib import RISK_PATH, load_risk, read_jsonl, utc_now
 from src.risk_gate import Intent, evaluate
 
-STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
+STATE = {"open_positions": 0, "leg_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0,
          "recent_fills": [], "own_quotes": []}
 NON_FINITE = [float("nan"), float("inf"), float("-inf")]
 FIELDS = ["model_prob", "market_price", "assumed_slippage", "fee_rate"]
@@ -30,6 +30,7 @@ def _intent(**overrides: object) -> Intent:
     }
     fields.update(overrides)
     fields.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
+    fields.setdefault("min_order_size", 5.0)  # issue #226: a book minimum (missing vetoes)
     return Intent(**fields)  # type: ignore[arg-type]
 
 

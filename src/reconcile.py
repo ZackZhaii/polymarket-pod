@@ -378,6 +378,10 @@ def ledger_view(path: Path) -> LedgerView:
         if shares is None or shares <= 0:
             view.problems.append(f"ledger_fill_invalid_shares:{fill_id}")
             continue
+        if ledger_store.is_settlement(row):
+            # issue #126: a paper settlement closes the position but is not a trade (no Data API row), so the
+            # Data API trade floor does not apply (PR #194 review: a partly closed leg can settle 0.0099... shares)
+            continue
         if shares < DATA_API_TRADES_MIN_SHARES:
             view.problems.append(f"ledger_fill_below_data_api_trade_floor:{fill_id}")
         side = "BUY" if row.get("side") == "buy" else "SELL"

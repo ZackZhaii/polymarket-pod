@@ -152,7 +152,7 @@ def test_boundary_matches_riskgate(paper):
 def _intent(book_ts: object) -> Intent:
     return Intent(strategy="paper-gap-check", market="m1", side="buy", model_prob=0.70, market_price=0.40,
                   assumed_slippage=0.005, fee_rate=0.0, liquidity_usd=20000.0, spread=0.01, book_ts=book_ts,
-                  tags=("test-market",))  # issue #131
+                  tags=("test-market",), min_order_size=5.0)  # issue #131, #226
 
 
 def test_a_single_stale_check_is_still_blocked_per_check(paper):
@@ -160,7 +160,7 @@ def test_a_single_stale_check_is_still_blocked_per_check(paper):
     while Sentinel has not alarmed yet (streak 1)."""
     watch = _watch(paper)
     assert watch.check("m1", STALE, NOW)["halt"] is None
-    state = {"open_positions": 0, "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
+    state = {"open_positions": 0, "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0,
              "recent_fills": [], "own_quotes": []}
     assert evaluate(_intent(FRESH), load_risk(), state, now=NOW).allow is True
     decision = evaluate(_intent(STALE), load_risk(), state, now=NOW)
@@ -197,7 +197,8 @@ def test_state_round_trips_across_runs(paper):
     watch = _watch(paper)
     watch.check("m1", STALE, NOW)
     saved = json.loads(json.dumps(watch.to_dict()))
-    assert saved == {"max_age_s": 120.0, "consecutive": 2, "streaks": {"m1": 1}, "alarmed": [], "all_stale_streak": 0}
+    assert saved == {"max_age_s": 120.0, "consecutive": 2, "streaks": {"m1": 1}, "alarmed": [], "all_stale_streak": 0,
+                     "input_pending_streak": 0}
     again = sentinel.StaleWatch.from_dict(saved, bus_path=paper["bus"], quotes_path=paper["quotes"])
     assert again.check("m1", STALE, NOW)["halt"] is not None
     after = sentinel.StaleWatch.from_dict(again.to_dict(), bus_path=paper["bus"], quotes_path=paper["quotes"])

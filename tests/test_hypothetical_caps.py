@@ -12,7 +12,7 @@ import src.paper_ledger as paper_ledger
 from src.podlib import PAPER_EQUITY_USD, RISK_PATH, load_risk, utc_now
 from src.risk_gate import Intent, evaluate, risk_caps
 
-FRESH = {"open_positions": 0, "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
+FRESH = {"open_positions": 0, "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 def _intent(**overrides: object) -> Intent:
@@ -31,16 +31,17 @@ def _intent(**overrides: object) -> Intent:
     }
     fields.update(overrides)
     fields.setdefault("tags", ("test-market",))  # issue #131: a tagged market (missing tags veto)
+    fields.setdefault("min_order_size", 5.0)  # issue #226: a book minimum (missing vetoes)
     return Intent(**fields)  # type: ignore[arg-type]
 
 
 def _full_state(cfg: dict) -> dict:
-    return {"open_positions": int(cfg["max_open_positions"]), "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
+    return {"open_positions": int(cfg["max_open_positions"]), "market_already_open": False, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": 0.0, "recent_fills": [], "own_quotes": []}
 
 
 def _loss_state(cfg: dict) -> dict:
     return {"open_positions": 0, "market_already_open": False,
-            "daily_loss_usd": PAPER_EQUITY_USD * float(cfg["max_daily_loss_pct"]), "recent_fills": [], "own_quotes": []}
+            "opposite_leg_shares": 0.0, "opposite_pending_buys": 0, "daily_loss_usd": PAPER_EQUITY_USD * float(cfg["max_daily_loss_pct"]), "recent_fills": [], "own_quotes": []}
 
 
 def test_hypothetical_happy_path_still_allows():

@@ -537,6 +537,114 @@
       "note": "Requested by Poly指挥 from Poly盘口's review of BI / BK. Done by grok-bot.",
       "done_at": "2026-10-10T14:40:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "DK",
+      "status": "done",
+      "title": "Issue #247: m2_runner writes one kill_file alert line to logs/alerts.jsonl on KILL (exit code stays 0)",
+      "finish": "src/m2_runner.py: when preflight finds <run dir>/KILL, iteration calls kill_alert, which appends one row to the Sentinel's logs/alerts.jsonl (sentinel_tick.ALERTS_PATH via podlib.append_jsonl, Sentinel row shape: ts, from m2_runner, alert kill_file, severity info, proc m2_runner, detail, exchange_action none), at most once per stop (RunnerState.kill_alerted). Exit code on KILL stays 0, no getter is called, recovery unchanged, no auto-restart (KEY #243). A failed alert write raises WriteFailed: exit 4 like a journal / events write, never dropped silently. docs/EXIT_CODES.md notes it. Offline tests tests/test_m2_runner_kill_alert.py. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Non-KEY part split from #243, claimed by Poly桥接 as Task DK. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-13T21:30:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "DM",
+      "status": "done",
+      "title": "Issue #293: make m2_runner_clock offline tests deterministic under full-suite load",
+      "finish": "tests/test_m2_runner_clock.py only: env fixture freezes podlib/book_staleness/wash_detect datetime to the runner fixture clock (e2e metaclass pattern) so commit_if_allowed/RiskGate.evaluate(now=None) cannot drift past INTENT_TTL_S under full-suite load; fixes flaky future_book_ts and malformed-book second-signal allows. No src/, threshold, or config/risk.toml change. live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DM. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-13T23:30:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "DP",
+      "status": "done",
+      "title": "Issue #199: public_get retries HTTP 429 using Retry-After (integer seconds, capped), other 4xx still raised at once",
+      "finish": "src/podlib.py: _retryable treats HTTP 429 as retryable; public_get waits _retry_after_s (Retry-After as ASCII integer seconds, capped at PUBLIC_GET_RETRY_AFTER_MAX_S = 30.0) via the patchable _sleep, falling back to PUBLIC_GET_BACKOFF_S * 2**n when the header is missing or not an integer; 429 shares the PUBLIC_GET_ATTEMPTS budget with network/TLS errors and 5xx and raises PublicGetError when exhausted (Scanner exit 3). Other 4xx still raise at once; 5xx and network retries unchanged. docs/THRESHOLDS.md operational row for the cap. Offline tests in tests/test_public_get_retry.py. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DP. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T01:30:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "DO",
+      "status": "done",
+      "title": "Issue #237: maker paper buy re-checked under the commit lock (fail closed); bids over 1 record a skip",
+      "finish": "src/maker.py quote buy path takes paper_ledger commit.lock, then inside it re-checks book_problem (MAX_BOOK_AGE_S), pair_problem and opposite_leg_blocked on load_state with the actual quotes_path; lock timeout, unreadable state or ledger_problems / non-finite ledger rows refuse with structural_arb_disabled and write nothing; a buy whose quotes_path is not paper_ledger.QUOTES_PATH is refused before any write (reverse bypass). Paper cycle records a skip when best bids sum above 1; a best_bid/best_ask too large for float skips the market as invalid_book_price (no crash, no buy). Poly套利's 8 tests unchanged; tests/test_310_maker_ledger_fail_closed.py and tests/test_310_maker_book_age_in_lock.py. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass. PR #310 HOLD until Poly风控 pass.",
+      "note": "Claimed by Poly桥接 as Task DO (PR #310). Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T04:00:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "DR",
+      "status": "done",
+      "title": "Issue #305: paper_session pin check first (missing/unreadable risk.toml is risk_toml_pin_drift); kill_alert any Exception -> exit 4",
+      "finish": "src/paper_session.py run: pins.refuse_start is the first step, before any risk.toml read; missing/unreadable file, a directory or a sha computation that raises returns ok=False reason=risk_toml_pin_drift with a global halt record, no markets/books/sessions write and no getter call. The before snapshot, the loaded config (parsed from the checked bytes, re-read sha must be pinned) and the pin check share one path (risk_path, else RISK_PATH). src/m2_runner.py kill_alert converts any Exception (not KeyboardInterrupt/SystemExit) to WriteFailed (exit 4). docs/EXIT_CODES.md notes both. Offline tests tests/test_dr_305_pin_first_kill_alert.py. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DR (Refs #305). Needs Poly风控 approval on head (pin path). Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T04:40:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "DS",
+      "status": "done",
+      "title": "paper_session reread-then-refuse offline tests; rename #305 Task DQ leftovers to DR",
+      "finish": "tests/test_dr_305_pin_first_kill_alert.py section 3: the real pins.refuse_start passes, then the risk file is deleted, edited off its sha, replaced by a directory, or the reread raises before paper_session._pinned_snapshot reads it again; each returns ok=False reason=risk_toml_pin_drift with exactly one global halt (recorded by the reread, none by the passing check), no markets/books/sessions write, no getter call, no parse. tests/test_dq_305_pin_first_kill_alert.py renamed to tests/test_dr_305_pin_first_kill_alert.py; #305 Task DQ -> Task DR in src/paper_session.py, src/m2_runner.py comments and docs/EXIT_CODES.md (KEY #314 Task DQ untouched). No behaviour change. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DS (follow-up of Task DR / #315). Tests and docs only. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T06:40:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "DT",
+      "status": "done",
+      "title": "ledger_store.book() post-write check by fill_id + field-by-field match, not last line",
+      "finish": "src/ledger_store.py book: after atomic_append the re-read ledger must verify clean, contain our fill_id, and the stored row must equal the written row field by field; missing -> post_write:not_appended, differing/missing/extra field -> post_write:row_mismatch. Lock not widened. Offline tests tests/test_dt_ledger_post_write_verify.py; tests/test_ledger_concurrent_book.py green under repeated runs. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DT. Needs Poly风控 approval on head (ledger). Done by grok-bot on the box.",
+      "done_at": "2026-10-14T07:00:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "DQ",
+      "status": "done",
+      "title": "Poly哨兵 on #309: public_get total deadline (PUBLIC_GET_DEADLINE_S), /time 429 not retried, m2_runner / m1_run heartbeats between GETs",
+      "finish": "src/thresholds.py PUBLIC_GET_DEADLINE_S = 30.0 (M2 pending, <= HEARTBEAT_RUNNER_TIMEOUT_S / 4, re-exported as podlib.PUBLIC_GET_DEADLINE_S); podlib.public_get clips each attempt's timeout to the time left and refuses a wait that would end past the deadline (PublicGetError); CLOB /time never retries a 429. m2_runner GuardedGetter(after=...) beats the heartbeat (throttled) after every GET of a tick; m1_run clock_check(beat=...) beats after each asset. KILL at most one tick late (documented). SKILL.md api-health-ratelimit, docs/RECONCILE.md and docs/THRESHOLDS.md match the code. Offline tests tests/test_public_get_deadline.py and tests/test_ratelimit_storm.py (429 storm: one runner tick and m1_run start-up < 120 s). config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DQ. KEY + HOLD: needs Poly风控 and Poly哨兵 通过, then 家伟's approval in chat. Done by grok-bot.",
+      "done_at": "2026-10-14T05:00:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "DV",
+      "status": "done",
+      "title": "calibration: out-of-bounds fill rejects whole decision even if dropped by another filter; _parse_ts boundary OverflowError dropped (#321 follow-up)",
+      "finish": "src/calibration.py trade_samples checks forecast.ts <= fill.ts < closed_ts on every counted fill of the decision before other filters can hide it; _parse_ts catches OverflowError (0001-01-01+01:00, 9999-12-31-01:00) and returns None so the row is dropped and counted. tests/test_calibration.py Task DV section; tests/test_dt_ledger_post_write_verify.py asserts exact post_write:row_mismatch:<field>:<fill_id>. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DV (follow-up of #321 Codex review). Paper-only, calibration-only. Done by grok-bot on the box.",
+      "done_at": "2026-10-14T09:50:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "DU",
+      "status": "done",
+      "title": "Issue #316: public_get hard wall-clock deadline (connect, headers, body read); deadline_s must be finite and > 0",
+      "finish": "src/podlib.py public_get: each attempt runs in a daemon worker the caller waits for at most the time left; the body is read in chunks (read1) with the socket timeout re-clipped to the time left and a deadline check after every chunk; past the deadline PublicGetError at once (not retried), never partial data. deadline_s NaN/inf/<=0/bool/str raise ValueError before any network call. PUBLIC_GET_DEADLINE_S unchanged (30.0); 429/Retry-After and /time 429 not retried unchanged. tests/test_public_get_deadline.py Task DU section: real 127.0.0.1 drip server (slow body Content-Length and chunked, slow headers) asserts PublicGetError within deadline + 0.75 s; fake-clock chunk reads; bad deadline_s values. docs/THRESHOLDS.md and SKILL.md api-health-ratelimit match the code. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DU (issue #316, Poly风控 / Codex follow-ups of #314). Tightening only, non-KEY; needs Poly风控 通过 on head. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T10:28:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "DW",
+      "status": "done",
+      "title": "Issue #329: m2_start boot classifier_errors in the chain row and runs/m2/current.json (observability only)",
+      "finish": "src/m2_start.py start: the boot start uses boot_selection_detail and writes classifier_errors into the runs/m2-chain.jsonl row and runs/m2/current.json (same atomic writes, same fail-closed exit 5); later starts reuse the chain's assets and write null. CHAIN_FIELDS unchanged (older rows still read); selection and halts unchanged. tests/test_m2_start_assets.py Task DW section: injected boot_eligible raise -> classifier_errors 1 in chain + current, assets identical to the clean run; zero errors -> 0; reboot null, no re-classify; old rows reboot; dry-run shows the field. docs/PHASE0_RUN.md updated. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DW (issue #329). Observability only, non-KEY. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T15:49:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "DX",
+      "status": "done",
+      "title": "Issue #141: reject multi-leg/complete-set signals (structural_arb_disabled); filter expired/UMA; close #141",
+      "finish": "Verify-and-close of #141 on NoisePC. Code already on dev from Task BX (#177): src/structural_gate.py + paper_cycle / arb_binary / neg_risk / scanner reject multi-leg complete-set gaps as structural_arb_disabled (bus + skips, never silent) and skip past-endDate / UMA-resolving markets (expired / market_expired_or_resolving) with no gap path. Proposal item 2 (re-enable conditions: event-group completeness gate and <=2s book_ts skew) intentionally not implemented. Offline tests/test_structural_arb_disabled.py and tests/test_structural_gate_gaps.py green; full pytest and guard --require-git pass. config/risk.toml unchanged, live_enabled false. Closes #141.",
+      "note": "Claimed by Poly桥接 as Task DX (issue #141). Non-KEY verify-and-close; code from Task BX (#177). Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T17:30:00Z",
+      "surface": "grok-bot"
     }
   ]
 }

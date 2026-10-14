@@ -22,6 +22,10 @@ MIN_EDGE = 0.02
 EDGE_TOLERANCE = 1e-12
 # Local paper bankroll used for sizing and the daily-loss ratio. Not a wallet.
 PAPER_EQUITY_USD = 1000.0
+# Task CX (#225, Poly风控 D1): a start-of-day snapshot taken more than this many seconds after the
+# UTC day's 00:00 is late (exactly this is on time). References MAX_BOOK_AGE_S, never its own number.
+# Raising it loosens the daily-loss check (needs KEY). M2 pending.
+DAY_START_MAX_LAG_S = MAX_BOOK_AGE_S
 
 # --- Paper cycle ---------------------------------------------------------------------------
 # Task D, aligned with MAX_BOOK_AGE_S in Tasks R/T: per-check BookWatcher stale signal (seconds).
@@ -33,6 +37,10 @@ SENTINEL_STALE_CONSECUTIVE = 2
 
 # --- Wash / self-trade (Task S, backlog #1) ------------------------------------------------
 WASH_WINDOW_S = 300.0
+# Issue #145 (Task CG): float allowance for the complementary-leg pairing test. A buy pairs (mints) with our own
+# resting buy on the other token when the prices sum to >= 1 - this; two sells pair (merge) at <= 1 + this.
+# The boundary itself counts as a pair (fail closed). M2 pending.
+PAIR_CROSS_TOLERANCE = 1e-9
 
 # --- Scanner -------------------------------------------------------------------------------
 # Task O (backlog #8): a market must end at least this many hours after now.
@@ -167,6 +175,12 @@ RUNNER_SCAN_MAX_AGE_S = 7200.0
 # At most this many inbox files are checked per iteration, and a sealed signal is evaluated at most this often.
 RUNNER_MAX_INGEST_PER_ITER = 20
 RUNNER_MAX_EVALS_PER_SIGNAL = 10
+# Issue #120 (Task CJ, M2-C2): wall-clock gap between iterations that counts as a suspend/resume.
+RUNNER_SUSPEND_GAP_S = 180.0
+# Wall vs monotonic delta above this also counts as a suspend (host slept).
+RUNNER_WALL_MONO_SKEW_S = 30.0
+# Independent server-clock uncertainty must fit within this; book freshness is checked separately.
+CLOCK_SKEW_MAX_S = 5.0
 # Disk: the runner pauses with less than DISK_MIN_FREE_GB free on the run dir's volume, or when the run dir
 # holds more than RUNNER_DISK_BUDGET_GB.
 DISK_MIN_FREE_GB = 2.0
@@ -190,6 +204,10 @@ M1_MIN_REST_MATCHED = 50
 M1_MAX_TOP_MISMATCH_RATE = 0.02
 # REST samples with no live WS row within the window (or an unusable REST book_ts)
 M1_MAX_REST_UNMATCHED_RATE = 0.10
+# Task CM (M2 pending, tightening): m1_run refuses to start when the local clock is behind the exchange by more
+# than this (lower bound from one public /book read per asset: max(book_ts - local receive time)). The failed
+# 6 h run started about 0.25 s slow and drifted ~0.1 s/h; any lag turns rows "future" (not fresh) in m1_report.
+M1_MAX_CLOCK_BEHIND_S = 0.1
 
 # --- Data API v2 reconciliation (Task AK) ------------------------------------------------------
 # M2 pending. Ledger vs Data API share amounts may differ by at most this (1e-6 = one on-chain base
@@ -292,6 +310,13 @@ ALL_STALE_CONSECUTIVE_CYCLES = 2
 # concurrent new global halt). Fail closed when the mutex cannot be taken within this long
 # (seconds): a resume releases nothing (halt_lock_failed), record_halt goes to logs/HALT.
 HALT_STATE_LOCK_TIMEOUT_S = 5.0
+# Task DD (#237/#280): wait for the ledger commit mutex in paper_ledger.commit_if_allowed; not acquired ->
+# the order is refused. Registered in docs/THRESHOLDS.md (value unchanged from the PR; M2 pending).
+COMMIT_LOCK_TIMEOUT_S = 5.0
+# Task DQ (Poly哨兵 on #309): total wall-time budget (seconds) of ONE podlib.public_get call, attempts, socket
+# timeouts and Retry-After / backoff waits together. A quarter of HEARTBEAT_RUNNER_TIMEOUT_S, so a 429 storm
+# cannot hold one GET long enough to stale a heartbeat. Must be > 0 and <= HEARTBEAT_RUNNER_TIMEOUT_S / 4. M2 pending.
+PUBLIC_GET_DEADLINE_S = 30.0
 # M2 pending. Retry step (seconds) while waiting for the halt-state mutex.
 HALT_STATE_LOCK_POLL_S = 0.05
 
@@ -351,6 +376,8 @@ def consistency_problems() -> list[str]:
         problems.append("SENTINEL_STALE_S must equal MAX_BOOK_AGE_S (Sentinel and RiskGate share one per-check limit)")
     if PAPER_CYCLE_STALE_AFTER_S != MAX_BOOK_AGE_S:
         problems.append("PAPER_CYCLE_STALE_AFTER_S must equal MAX_BOOK_AGE_S")
+    if not 0.0 < PAIR_CROSS_TOLERANCE < MIN_EDGE:  # Task CG (#145): a float allowance, far below any edge
+        problems.append("PAIR_CROSS_TOLERANCE must satisfy 0 < PAIR_CROSS_TOLERANCE < MIN_EDGE")
     if not (isinstance(SENTINEL_STALE_CONSECUTIVE, int) and SENTINEL_STALE_CONSECUTIVE >= 1):
         problems.append("SENTINEL_STALE_CONSECUTIVE must be a whole number >= 1")
     if not 0.0 <= SCANNER_MIN_PRICE < SCANNER_MAX_PRICE <= 1.0:
@@ -405,17 +432,27 @@ def consistency_problems() -> list[str]:
     if not (isinstance(FORECAST_MIN_HALF_WIDTH, float) and 0.0 < FORECAST_MIN_HALF_WIDTH < 0.5):
         problems.append("FORECAST_MIN_HALF_WIDTH must be a float in (0, 0.5)")
     runner_floats = ("RUNNER_LOOP_S", "HEARTBEAT_RUNNER_EVERY_S", "HEARTBEAT_RUNNER_TIMEOUT_S", "RUNNER_PAUSED_ALERT_S",
-                     "RUNNER_SCAN_EVERY_S", "RUNNER_SCAN_MAX_AGE_S", "DISK_MIN_FREE_GB", "RUNNER_DISK_BUDGET_GB")
+                     "RUNNER_SCAN_EVERY_S", "RUNNER_SCAN_MAX_AGE_S", "DISK_MIN_FREE_GB", "RUNNER_DISK_BUDGET_GB",
+                     "RUNNER_SUSPEND_GAP_S", "RUNNER_WALL_MONO_SKEW_S", "CLOCK_SKEW_MAX_S")
     for name in runner_floats:  # Task CE (#119)
         value = globals()[name]
         if not (isinstance(value, float) and 0.0 < value < float("inf")):
             problems.append(f"{name} must be a finite float > 0")
     if not HEARTBEAT_RUNNER_EVERY_S < HEARTBEAT_RUNNER_TIMEOUT_S <= RUNNER_PAUSED_ALERT_S:
         problems.append("need HEARTBEAT_RUNNER_EVERY_S < HEARTBEAT_RUNNER_TIMEOUT_S <= RUNNER_PAUSED_ALERT_S")
+    if not (isinstance(PUBLIC_GET_DEADLINE_S, float)
+            and 0.0 < PUBLIC_GET_DEADLINE_S <= HEARTBEAT_RUNNER_TIMEOUT_S / 4.0):  # Task DQ
+        problems.append("need 0 < PUBLIC_GET_DEADLINE_S <= HEARTBEAT_RUNNER_TIMEOUT_S / 4")
     if not RUNNER_LOOP_S < HEARTBEAT_RUNNER_TIMEOUT_S:
         problems.append("need RUNNER_LOOP_S < HEARTBEAT_RUNNER_TIMEOUT_S")
     if not RUNNER_SCAN_EVERY_S < RUNNER_SCAN_MAX_AGE_S:
         problems.append("need RUNNER_SCAN_EVERY_S < RUNNER_SCAN_MAX_AGE_S")
+    if not RUNNER_LOOP_S < RUNNER_SUSPEND_GAP_S:
+        problems.append("need RUNNER_LOOP_S < RUNNER_SUSPEND_GAP_S")
+    if not 0.0 < RUNNER_WALL_MONO_SKEW_S < RUNNER_SUSPEND_GAP_S:
+        problems.append("need 0 < RUNNER_WALL_MONO_SKEW_S < RUNNER_SUSPEND_GAP_S")
+    if not 0.0 < CLOCK_SKEW_MAX_S < MAX_BOOK_AGE_S:
+        problems.append("need 0 < CLOCK_SKEW_MAX_S < MAX_BOOK_AGE_S")
     for name in ("RUNNER_MAX_INGEST_PER_ITER", "RUNNER_MAX_EVALS_PER_SIGNAL"):
         value = globals()[name]
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -426,6 +463,10 @@ def consistency_problems() -> list[str]:
         problems.append("M1_ROTATE_S, M1_REST_EVERY_S and M1_MIN_RUN_S must be > 0")
     if not 0.0 < M1_REPORT_STEP_S <= WS_ROW_REFRESH_S:
         problems.append("M1_REPORT_STEP_S must satisfy 0 < M1_REPORT_STEP_S <= WS_ROW_REFRESH_S")
+    if not (isinstance(M1_MAX_CLOCK_BEHIND_S, float) and 0.0 < M1_MAX_CLOCK_BEHIND_S < M1_REPORT_STEP_S
+            and M1_MAX_CLOCK_BEHIND_S < CLOCK_SKEW_MAX_S):
+        problems.append("M1_MAX_CLOCK_BEHIND_S must be a float with 0 < M1_MAX_CLOCK_BEHIND_S < M1_REPORT_STEP_S "
+                        "and < CLOCK_SKEW_MAX_S (Task CM)")
     if not 0.0 < M1_MIN_COVERAGE <= 1.0:
         problems.append("M1_MIN_COVERAGE must satisfy 0 < M1_MIN_COVERAGE <= 1")
     if not (0.0 <= M1_MAX_TOP_MISMATCH_RATE < 1.0 and 0.0 <= M1_MAX_REST_UNMATCHED_RATE < 1.0):

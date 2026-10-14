@@ -33,6 +33,11 @@ nothing more. All of this is tightening only and fails closed. No orders, keys o
     read. The compare re-reads the ledger after the mutex is held, so a competing book that
     completed in the meantime is detected and kept (``LedgerIntegrityError``, our write is
     refused). A mutex that cannot be taken refuses the write too (``OSError``, fail closed).
+    Issue #268 (Task DL): that replace is ``src.atomic_replace.replace_with_retry``: on Windows only, a
+    ``PermissionError`` (another handle briefly holds the ledger) is retried a bounded number of times,
+    still under the mutex. Any other exception, and every exception elsewhere, propagates at once as
+    before; when the tries run out the ``PermissionError`` propagates unchanged, the temp file is removed
+    and the old ledger is intact (fail closed).
 
 (c) Conservation
     Replaying the counted rows (not hypothetical, counts_toward_risk not False; the same rows
@@ -58,6 +63,19 @@ nothing more. All of this is tightening only and fails closed. No orders, keys o
     or anything else (the truthy string ``'false'`` used to drop a fill from every risk total while
     its own conservation snapshot still verified). ``book`` refuses such a new row before it is
     applied or written. Legacy rows (no ``fill_id``) predate these fields and keep their old meaning.
+
+(e) Settlement rows (issue #126, Task CG)
+    A resolved market's open leg is closed by a settlement row: ``kind`` "settlement", ``risk_decision``
+    "settlement" (the only other legal value, and only on such a row), a real row (hypothetical false,
+    counts_toward_risk true), the closing side (a long is sold, a short bought back) at the payout (1 for
+    the winning token, 0 otherwise) as both ``market_price`` and ``effective_price``, ``notional_usd`` =
+    shares x payout, no fee (``fee_rate`` and ``fee_usd`` 0), and non-empty
+    ``condition_id`` / ``winning_token_id``, ``settlement_payout`` the same finite number as the price, and
+    ``closed_ts`` an ISO timestamp with a date, a time and a zone. It must close the whole open leg exactly (no partial close,
+    no flip): ``settlement_not_closing``. Any other ``kind`` value, or a settlement field that is not
+    exactly valid, is an integrity problem (``invalid_settlement``), so a damaged row is never replayed.
+    Its fill_id is derived from the settlement (src/settlement.py), so booking it twice is idempotent.
+    Its ``ts`` is checked like every counted row's, by src/daily_loss.py (an unusable ts is invalid_risk_state).
 """
 from __future__ import annotations
 
@@ -67,9 +85,11 @@ import math
 import os
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.atomic_replace import replace_with_retry  # issue #268: bounded Windows PermissionError retry
 from src.fees import booked_fee_usd, ledger_fee
 from src.halt_store import StateLock  # issue #64: the issue #52 cross-process mutex, reused as-is
 from src.thresholds import LEDGER_OPEN_EPS, PAPER_EQUITY_USD
@@ -82,6 +102,10 @@ LEG_COST_FIELD = "leg_cost_basis_after_usd"
 SNAPSHOT_FIELDS = (CASH_FIELD, LEG_SHARES_FIELD, LEG_COST_FIELD)
 LEDGER_NUMBER_FIELDS = ("shares", "notional_usd", "fee_usd")
 SIDES = ("buy", "sell")
+KIND_FIELD = "kind"  # issue #126: only settlement rows carry it
+SETTLEMENT_KIND = "settlement"
+SETTLEMENT_DECISION = "settlement"
+SETTLEMENT_PAYOUTS = (0.0, 1.0)
 
 
 class LedgerIntegrityError(RuntimeError):
@@ -127,11 +151,56 @@ def control_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
     if ("hypothetical" in values and "counts_toward_risk" in values
             and values["hypothetical"] == values["counts_toward_risk"]):
         problems.append(f"inconsistent_control_fields:{fill_id}")
+    settlement = KIND_FIELD in row
+    if settlement and row[KIND_FIELD] != SETTLEMENT_KIND:
+        problems.append(f"invalid_kind:{fill_id}")
     if "risk_decision" not in row:
         problems.append(f"missing_risk_decision:{fill_id}")
-    elif row["risk_decision"] != "allow":
+    elif row["risk_decision"] != (SETTLEMENT_DECISION if settlement else "allow"):
         problems.append(f"invalid_risk_decision:{fill_id}")
+    if settlement and row.get(KIND_FIELD) == SETTLEMENT_KIND:
+        problems.extend(settlement_field_problems(row, fill_id))
     return problems
+
+
+def is_settlement(row: dict[str, Any]) -> bool:
+    return row.get(KIND_FIELD) == SETTLEMENT_KIND
+
+
+def settlement_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
+    """Issue #126: a settlement row's own fields, exactly (see (e) in the module docstring)."""
+    def number(name: str) -> float | None:
+        return _finite(row.get(name))
+
+    shares, payout = number("shares"), number("market_price")
+    ok = (row.get("hypothetical") is False and row.get("counts_toward_risk") is True
+          and row.get("side") in SIDES and shares is not None and shares > 0
+          and payout in SETTLEMENT_PAYOUTS and number("effective_price") == payout
+          and number("fee_rate") == 0.0 and number("fee_usd") == 0.0
+          and number("notional_usd") is not None
+          and abs(number("notional_usd") - shares * payout) <= LEDGER_OPEN_EPS  # type: ignore[operator]
+          and all(isinstance(row.get(name), str) and row.get(name).strip()  # type: ignore[union-attr]
+                  for name in ("condition_id", "winning_token_id", "token_id"))
+          and (payout == 1.0) == (row.get("token_id") == row.get("winning_token_id"))
+          # PR #194 review: the payout is booked twice (market_price and settlement_payout); both must be the
+          # same finite number, and the market's close time must be a real zoned timestamp.
+          and number("settlement_payout") == payout
+          and _zoned_ts(row.get("closed_ts")))
+    return [] if ok else [f"invalid_settlement:{fill_id}"]
+
+
+def _zoned_ts(value: object) -> bool:
+    """A settlement row's closed_ts: an ISO 8601 string with a date, a time and a zone (Z or an offset)."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    text = value.strip()
+    if text[-1] in "Zz":
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
 def leg_key(market: object, token_id: object) -> tuple[str, str]:
@@ -295,6 +364,12 @@ def replay(rows: list[dict[str, Any]], ids: list[str]) -> tuple[float, dict[tupl
     legs: dict[tuple[str, str], dict[str, float]] = {}
     problems: list[str] = []
     for row, fill_id in zip(rows, ids):
+        if counts(row) and is_settlement(row):  # issue #126: it closes the whole open leg, exactly
+            held = legs.get(leg_key(row.get("market"), row.get("token_id")), {"shares": 0.0})["shares"]
+            closing = "sell" if held > 0 else "buy"
+            if (abs(held) <= LEDGER_OPEN_EPS or row.get("side") != closing
+                    or abs(abs(held) - float(row.get("shares") or 0.0)) > LEDGER_OPEN_EPS):
+                problems.append(f"settlement_not_closing:{fill_id}")
         if counts(row):
             cash = _apply(cash, legs, row)
         if FILL_ID_FIELD not in row:
@@ -357,7 +432,9 @@ def atomic_append(path: Path, expected: bytes, line: bytes) -> None:
     replace all run under the cross-process mutex (issue #52), so another process's completed
     book can neither slip in between them nor be overwritten by ours; a stale ``expected`` is a
     LedgerIntegrityError that keeps the other writer's rows, and a mutex we cannot take is an
-    OSError before anything is written (fail closed).
+    OSError before anything is written (fail closed). Issue #268: the replace retries a Windows
+    PermissionError a bounded number of times (src/atomic_replace.py); exhausted, it raises and the temp
+    file is removed as for any other failure.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
@@ -373,7 +450,7 @@ def atomic_append(path: Path, expected: bytes, line: bytes) -> None:
             current = path.read_bytes() if path.exists() else b""
             if current != expected:
                 raise LedgerIntegrityError(["ledger_changed_during_write"])
-            os.replace(tmp, path)
+            replace_with_retry(tmp, path)
         finally:
             mutex.release()
     except BaseException:
@@ -385,11 +462,17 @@ def atomic_append(path: Path, expected: bytes, line: bytes) -> None:
     _fsync_dir(path.parent)
 
 
-def book(path: Path, fill: dict[str, Any]) -> dict[str, Any]:
+def book(path: Path, fill: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
     """Verify the ledger, stamp the fill's id and post-fill state, write it atomically, re-verify.
 
     Raises LedgerIntegrityError (halt; nothing booked unless the problem is post_write) or OSError
     (write failed; old ledger intact). Returns the row as written.
+
+    Issue #120 (Task CJ): when ``unique_decision_id`` is True (M2 runner only), the same ``decision_id``
+    is booked at most once. An existing counted row with that id returns
+    ``{"already_booked": True, "fill": <existing row>}`` without writing and without raising. A missing
+    or blank ``decision_id`` is refused (M2 fills must be joinable). Default False keeps every older
+    call path and the e2e golden unchanged.
     """
     data, current = read_ledger(path)
     problems = verify(current)
@@ -398,6 +481,13 @@ def book(path: Path, fill: dict[str, Any]) -> dict[str, Any]:
     row = dict(fill)
     if FILL_ID_FIELD not in row:
         row = {FILL_ID_FIELD: new_fill_id(), **row}
+    if unique_decision_id:
+        decision_id = row.get("decision_id")
+        if not (isinstance(decision_id, str) and decision_id.strip()):
+            raise LedgerIntegrityError([f"missing_decision_id:{row[FILL_ID_FIELD]}"])
+        for existing in current.rows:
+            if counts(existing) and existing.get("decision_id") == decision_id:
+                return {"already_booked": True, "fill": existing}
     control = control_field_problems(row, row[FILL_ID_FIELD])  # issue #68
     if control:
         # Refused before the new row is replayed or written: the old ledger bytes stand.
@@ -422,8 +512,24 @@ def book(path: Path, fill: dict[str, Any]) -> dict[str, Any]:
     atomic_append(path, data, line)
     _, after = read_ledger(path)
     problems = verify(after)
-    if not problems and (not after.ids or after.ids[-1] != row[FILL_ID_FIELD]):
-        problems = [f"not_appended:{row[FILL_ID_FIELD]}"]
+    if not problems:
+        problems = _post_write_row_problems(after, row[FILL_ID_FIELD], json.loads(text))
     if problems:
         raise LedgerIntegrityError(["post_write:" + problem for problem in problems])
     return row
+
+
+def _post_write_row_problems(after: LedgerRead, fill_id: str, written: dict[str, Any]) -> list[str]:
+    """Task DT: our row must be present by fill_id and equal, field by field, to what we wrote.
+
+    It need not be the last line: another process may append right after our locked replace.
+    Missing -> ``not_appended``; any differing, missing or extra field -> ``row_mismatch`` (fail closed).
+    """
+    if fill_id not in after.ids:
+        return [f"not_appended:{fill_id}"]
+    stored = after.rows[after.ids.index(fill_id)]
+    fields = sorted(set(stored) | set(written))
+    for name in fields:
+        if name not in stored or name not in written or canonical({"v": stored[name]}) != canonical({"v": written[name]}):
+            return [f"row_mismatch:{name}:{fill_id}"]
+    return []

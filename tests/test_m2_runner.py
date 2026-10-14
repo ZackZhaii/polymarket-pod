@@ -21,7 +21,6 @@ import src.heartbeat as heartbeat
 import src.ledger_store as ledger_store
 import src.sentinel_tick as sentinel_tick
 from src import forecast_inbox, m2_runner, paper_ledger, podlib
-from src.daily_loss import DailyLoss
 from src.thresholds import HEARTBEAT_RUNNER_TIMEOUT_S, RUNNER_PAUSED_ALERT_S
 from tests import m2_runner_rig as rig
 
@@ -69,8 +68,8 @@ def test_once_scans_seals_reads_books_builds_and_books_one_allowed_fill(env):
     sealed = rig.read_jsonl(Path(m2_runner.forecaster.FORECASTS_PATH))
     assert len(sealed) == 1 and sealed[0]["forecast_id"] == fill["forecast_id"]
     # reads: one keyset page, one Gamma fee read, the two books; all allowlisted GETs
-    assert len(fake.gamma_urls) == 2 and len(fake.book_urls) == 2
-    assert all(m2_runner.url_allowed(url) for url in fake.gamma_urls + fake.book_urls)
+    assert len(fake.gamma_urls) == 2 and len(fake.book_urls) == 2 and fake.time_calls == [podlib.TIME_URL]
+    assert all(m2_runner.url_allowed(url) for url in fake.gamma_urls + fake.book_urls + fake.time_calls)
     _, read = ledger_store.read_ledger(env["paper"])
     assert ledger_store.verify(read) == []
     # Task CF (#124): RiskGate's start-of-day leg marks were written under the run dir, and the default restored
@@ -240,13 +239,13 @@ def test_the_daily_loss_breaker_pauses_today_and_resumes_the_next_utc_day(env, m
     pending = rig.deliver(env["run"], env["now"])
     today = env["now"].strftime("%Y-%m-%d")
 
-    def loss(rows, day, ids=None):
-        return DailyLoss(today=day, fees_usd=30.0 if day == today else 0.0)  # 0.03 x 1000 = the cap exactly
-    monkeypatch.setattr(m2_runner, "daily_loss", loss)
+    def loss(rows, ids, now, *, clock_ok=True):  # Task DA: preflight passes clock_ok
+        return {"loss_usd": 30.0 if now[:10] == today else 0.0, "problems": []}  # the cap exactly
+    monkeypatch.setattr(paper_ledger, "daily_risk_loss", loss)
     state = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(env["run"]))
     report = m2_runner.iteration(state, now=env["now"], getters=fake.getters())
     assert report.action == m2_runner.ACT_PAUSE and report.reasons[0] == "daily_loss_breaker"
-    assert fake.calls == 0 and pending.exists()
+    assert fake.time_calls == [podlib.TIME_URL] and fake.gamma_urls == fake.book_urls == [] and pending.exists()
     tomorrow = (env["now"] + timedelta(days=1)).replace(hour=0, minute=0, second=1)
     assert m2_runner.preflight(state.paths, now=tomorrow).action == m2_runner.ACT_RUN
 
@@ -285,7 +284,9 @@ def test_a_second_runner_exits_3_and_writes_no_heartbeat(env):
         assert rig.run_once(env["run"], fake) == m2_runner.EXIT_ALREADY_RUNNING
         assert fake.calls == 0
         assert not heartbeat.beat_path(m2_runner.PROC).exists()
-        info = json.loads(paths.lock_file.read_bytes()[1:].decode("utf-8"))
+        with paths.lock_file.open("rb", buffering=0) as handle:
+            handle.seek(1)  # Windows locks byte 0: skip it before any read, not after reading it.
+            info = json.loads(handle.read().decode("utf-8"))
         assert set(info) == {"pid", "host", "started_at"}
     finally:
         holder.release()
