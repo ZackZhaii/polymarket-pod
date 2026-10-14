@@ -1592,8 +1592,13 @@ Claimed by Poly桥接. Done by grok-bot on NoisePC.
   `paper_ledger.commit_if_allowed`), then re-checks inside it: book age (`book_problem`, `MAX_BOOK_AGE_S`), Issue #145
   `pair_problem`, and `opposite_leg_blocked(load_state(..., quotes_path=<actual path>))`. A lock timeout, unreadable
   state, or a state with `ledger_problems` / non-finite ledger rows refuses (`structural_arb_disabled`), nothing written.
-- Paper cycle records a skip when the best bids across a market's outcomes sum above 1.
+- A buy whose `quotes_path` does not resolve to `paper_ledger.QUOTES_PATH` (the only file `commit_if_allowed` reads)
+  is refused (`structural_arb_disabled`) before any file is written, closing the custom-file reverse bypass.
+- Paper cycle records a skip when the best bids across a market's outcomes sum above 1. A present best_bid / best_ask
+  too large for float marks the market `invalid_book_price` (skipped, no crash, no buy); NaN / inf / out-of-range
+  prices stay left out (no buy); `tests/test_310_paper_cycle_bad_bid.py`.
 - Tests: Poly套利's 8 #237 tests unchanged; `tests/test_310_maker_ledger_fail_closed.py`,
+  `tests/test_310_maker_custom_quotes_path.py` (custom file then default, and the reverse),
   `tests/test_310_maker_book_age_in_lock.py` (book 119 s before lock, 121 s after: refused, no quote line).
 
 ## Latest

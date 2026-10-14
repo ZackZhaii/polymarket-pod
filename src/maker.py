@@ -138,6 +138,16 @@ def quote(
         raise QuoteRefused(market, token_id, refused)  # Issue #125: fail closed, nothing written
     path = quotes_path or QUOTES_PATH
     if side == "buy":
+        # PR #310 review (Poly风控): paper_ledger's commit path reads only its QUOTES_PATH, so a buy in any other quotes
+        # file could pair with the default file unseen (reverse bypass). Refuse before any file is written.
+        try:
+            from src import paper_ledger
+
+            same_file = Path(path).resolve() == Path(paper_ledger.QUOTES_PATH).resolve()
+        except Exception:  # noqa: BLE001 - an unresolvable path refuses (fail closed)
+            same_file = False
+        if not same_file:
+            raise QuoteRefused(market, token_id, STRUCTURAL_ARB_DISABLED)
         # Issue #237 (Task DO): the opposite-leg veto runs under the ledger's commit lock (outer), the quotes lock
         # (append_jsonl) inside it, the same order as paper_ledger.commit_if_allowed. Lock or state trouble refuses.
         from src import paper_ledger

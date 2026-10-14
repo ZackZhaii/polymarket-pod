@@ -39,28 +39,26 @@ def _open_buys(path, token):
             and q.get("status") == "open"]
 
 
-def test_opposite_open_buy_in_explicit_quotes_path_refuses_buy(tmp_path, monkeypatch):
-    _ledger(tmp_path, monkeypatch, [])  # QUOTES_PATH -> tmp_path/quotes.jsonl (absent: no quotes there)
+def test_buy_to_explicit_quotes_path_is_refused_before_any_write(tmp_path, monkeypatch):
+    """PR #310 review (reverse bypass): a buy to any file other than paper_ledger.QUOTES_PATH is refused outright."""
+    _ledger(tmp_path, monkeypatch, [])
     alt = tmp_path / "alt_quotes.jsonl"
     assert alt != paper_ledger.QUOTES_PATH
     _write_quotes(alt, [_open_buy_row(NO)])
     with pytest.raises(maker.QuoteRefused) as info:
         _buy(tmp_path, YES, alt)
     assert info.value.reason == STRUCTURAL
-    assert _open_buys(alt, YES) == []
     assert len(read_jsonl(alt)) == 1  # nothing written
     assert not paper_ledger.QUOTES_PATH.exists()
 
 
-def test_opposite_open_buy_in_default_quotes_still_refuses_buy_to_explicit_path(tmp_path, monkeypatch):
-    """Tightening only: the default quotes file (the one commit_if_allowed reads) still vetoes too."""
+def test_opposite_open_buy_in_default_quotes_refuses_buy(tmp_path, monkeypatch):
     _ledger(tmp_path, monkeypatch, [])
     _write_quotes(paper_ledger.QUOTES_PATH, [_open_buy_row(NO)])
-    alt = tmp_path / "alt_quotes.jsonl"
     with pytest.raises(maker.QuoteRefused) as info:
-        _buy(tmp_path, YES, alt)
+        _buy(tmp_path, YES, paper_ledger.QUOTES_PATH)
     assert info.value.reason == STRUCTURAL
-    assert _open_buys(alt, YES) == []
+    assert _open_buys(paper_ledger.QUOTES_PATH, YES) == []
 
 
 def test_load_state_reads_given_quotes_path(tmp_path, monkeypatch):
@@ -71,10 +69,9 @@ def test_load_state_reads_given_quotes_path(tmp_path, monkeypatch):
     assert paper_ledger.load_state(MARKET, YES, quotes_path=alt)["opposite_pending_buys"] == 1
 
 
-# --- control (expected GREEN before and after) ----------------------------------------------------------
+# --- control ----------------------------------------------------------------------------------------------
 
-def test_control_explicit_quotes_path_empty_market_is_written(tmp_path, monkeypatch):
+def test_control_default_quotes_path_empty_market_is_written(tmp_path, monkeypatch):
     _ledger(tmp_path, monkeypatch, [])
-    alt = tmp_path / "alt_quotes.jsonl"
-    assert _buy(tmp_path, YES, alt)["payload"]["status"] == "open"
-    assert len(_open_buys(alt, YES)) == 1
+    assert _buy(tmp_path, YES, None)["payload"]["status"] == "open"
+    assert len(_open_buys(paper_ledger.QUOTES_PATH, YES)) == 1

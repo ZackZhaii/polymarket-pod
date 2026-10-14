@@ -77,6 +77,8 @@ progress carries ``input_pending_streak``. No new threshold: the same constant a
 """
 from __future__ import annotations
 
+import math
+
 import argparse
 import json
 import sys
@@ -159,6 +161,25 @@ class CorruptInput(Exception):
 
     def as_problem(self) -> dict:
         return {"path": self.path, "line": self.line, "problem": self.problem}
+
+
+INVALID_BOOK_PRICE = "invalid_book_price"
+
+
+def _unit_price(value: object) -> tuple[float | None, bool]:
+    """(price, bad): a number strictly in (0, 1) -> (price, False). A number float() cannot hold (OverflowError) ->
+    (None, True): the market is skipped as invalid_book_price. Anything else (absent, bool, non-number, NaN / inf — the
+    recorder's "no level" —, <= 0, >= 1) -> (None, False): that leg's price is left out as before (no ask: no buy;
+    no bid: no sell-set signal), so it can never make a buy."""
+    if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None, False
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        return None, True
+    if not math.isfinite(number) or not 0.0 < number < 1.0:
+        return None, False
+    return number, False
 
 
 def read_strict_jsonl(path: Path) -> list[dict]:
@@ -546,14 +567,23 @@ def run(
             sentinel_problem = problem or _row_book_problem(book, now_at, sentinel.SENTINEL_STALE_S)
             if sentinel_problem is not None:
                 sentinel_reasons.add(sentinel_problem)
-            bid = book.get("best_bid")
-            if isinstance(bid, (int, float)) and not isinstance(bid, bool) and 0.0 < float(bid) < 1.0:
-                bids.append(float(bid))  # Issue #237 (Task DO): sell-the-full-set side
-            ask = book.get("best_ask")
-            if isinstance(ask, (int, float)) and 0.0 < float(ask) < 1.0:
-                asks.append(float(ask))
+            # Codex P2 on #310: a huge price (float OverflowError) crashed the cycle; now the market is skipped
+            # (fail closed, no crash, no buy). Non-finite / out-of-range prices are left out as before (no buy).
+            bid, bid_bad = _unit_price(book.get("best_bid"))
+            ask, ask_bad = _unit_price(book.get("best_ask"))
+            if bid_bad or ask_bad:
+                stale_reasons.add(INVALID_BOOK_PRICE)
+                continue
+            if bid is not None:
+                bids.append(bid)  # Issue #237 (Task DO): sell-the-full-set side
+            if ask is not None:
+                asks.append(ask)
                 size = book.get("best_ask_size")
-                depths.append(float(size) if isinstance(size, (int, float)) else None)
+                try:
+                    size_f = float(size) if isinstance(size, (int, float)) and not isinstance(size, bool) else None
+                except (OverflowError, ValueError):
+                    size_f = None
+                depths.append(size_f if size_f is not None and math.isfinite(size_f) else None)
         if not tokens:
             stale_reasons.add(MISSING_BOOK)
             sentinel_reasons.add(MISSING_BOOK)
