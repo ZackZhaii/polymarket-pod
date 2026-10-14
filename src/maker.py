@@ -151,6 +151,10 @@ def quote(
         if not acquired:
             raise QuoteRefused(market, token_id, STRUCTURAL_ARB_DISABLED)
         try:
+            # PR #310 review (P2): the book may age past MAX_BOOK_AGE_S while waiting for the lock; re-check inside it.
+            refused = book_problem(market, token_id, books_path=books_path, recording_dir=recording_dir)
+            if refused is not None:
+                raise QuoteRefused(market, token_id, refused)
             paired = pair_problem(market, token_id, side, price, quotes_path=path, markets_path=markets_path)
             if paired is not None:
                 raise QuoteRefused(market, token_id, paired)  # Issue #145 reason kept first

@@ -1582,7 +1582,24 @@ Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@043e9ce).
 - Tests: `tests/test_public_get_retry.py` (offline; urlopen mocked, `_sleep` recorded). The old case that pinned
   429 as not retried is replaced by the 429 cases.
 
+## Task DO — Issue #237: maker paper buy checked under the commit lock; bids over 1 record a skip
+
+Status: done (PR #310, HOLD until Poly风控 「通过」 on head).
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC.
+
+- `src/maker.py` `quote` buy path takes the paper ledger's `commit.lock` (outer, same order as
+  `paper_ledger.commit_if_allowed`), then re-checks inside it: book age (`book_problem`, `MAX_BOOK_AGE_S`), Issue #145
+  `pair_problem`, and `opposite_leg_blocked(load_state(..., quotes_path=<actual path>))`. A lock timeout, unreadable
+  state, or a state with `ledger_problems` / non-finite ledger rows refuses (`structural_arb_disabled`), nothing written.
+- Paper cycle records a skip when the best bids across a market's outcomes sum above 1.
+- Tests: Poly套利's 8 #237 tests unchanged; `tests/test_310_maker_ledger_fail_closed.py`,
+  `tests/test_310_maker_book_age_in_lock.py` (book 119 s before lock, 121 s after: refused, no quote line).
+
 ## Latest
+
+- 2026-10-14: Task DO (issue #237, PR #310): maker paper buy re-checked under commit.lock (book age, pair,
+  opposite leg, ledger validity), fail closed; bids over 1 record a skip. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 - 2026-10-14: Task DP (issue #199): public_get retries HTTP 429, waiting Retry-After integer seconds (capped at
   30 s, backoff fallback) inside the same PUBLIC_GET_ATTEMPTS budget; other 4xx still raise at once. risk.toml
