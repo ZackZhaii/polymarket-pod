@@ -70,6 +70,34 @@ def test_cli_without_a_fee_rate_never_books_a_zero_fee(ledger):
     assert not ledger.exists() or ledger.read_text() == ""
 
 
+@pytest.mark.parametrize(
+    "asks",
+    [True, "levels", "0.4:100", [], [(0.4, 0.0)], [(0.4, float("nan"))], [(float("nan"), 100.0)], [(0.4, 1e-9)]],
+    ids=["true", "string", "string_levels", "empty", "zero_depth", "nan_size", "nan_price", "tiny_shares"],
+)
+def test_operator_cli_ignores_any_asks_and_books_nothing(ledger, asks):
+    """Poly风控 6178561328 / Codex P1 6178323003: no asks value (True, string, 0 depth, NaN, tiny size)
+    may reach commit; the CLI always vetoes missing_book_levels and books no ledger row."""
+    result = paper_ledger.run_cli_intent(_cli(asks=asks), load_risk())
+    assert result["allow"] is False
+    assert "missing_book_levels" in result["decision"]["reasons"]
+    assert not ledger.exists() or ledger.read_text() == ""
+
+
+def test_operator_cli_early_veto_is_written_to_the_bus(ledger, monkeypatch):
+    calls = []
+    monkeypatch.setattr(paper_ledger, "bus", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(paper_ledger, "commit_if_allowed",
+                        lambda *a, **k: pytest.fail("operator CLI reached commit_if_allowed"))
+    result = paper_ledger.run_cli_intent(_cli(asks=True), load_risk())
+    assert result["allow"] is False
+    assert len(calls) == 1
+    sender, receiver, kind, market, summary = calls[0]
+    assert (sender, receiver, kind, market) == ("RiskGate", "Executor", "veto", "m1")
+    assert summary["decision"] == "veto" and "missing_book_levels" in summary["reasons"]
+    assert not ledger.exists() or ledger.read_text() == ""
+
+
 _NAN = float("nan")
 _INF = float("inf")
 
@@ -81,10 +109,10 @@ _INF = float("inf")
     ids=["true", "string", "zero_depth", "tiny_size", "nan_price", "inf_price", "nan_size", "inf_size",
          "plausible_levels"],
 )
-def test_cli_programmatic_asks_never_count_as_depth(ledger, monkeypatch, asks):
+def test_cli_programmatic_asks_never_reach_commit(ledger, monkeypatch, asks):
     """PR #336 P1 (Poly risk option 1): any args.asks, junk or plausible, is not validated book
-    depth. The CLI refuses missing_book_levels and never reaches commit_if_allowed. Fee is present
-    so the refusal is about book levels, not fee."""
+    depth. With the fee present (so the refusal is about book levels, not fee) the CLI refuses
+    missing_book_levels and commit_if_allowed is never called."""
     calls = []
     monkeypatch.setattr(paper_ledger, "commit_if_allowed", lambda *a, **k: calls.append((a, k)) or {"allow": True})
     result = paper_ledger.run_cli_intent(_cli(asks=asks, fee_rate=0.04), load_risk())

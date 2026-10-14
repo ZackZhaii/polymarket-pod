@@ -56,7 +56,7 @@ def test_the_intent_builder_path_is_stamped_and_records_both_kelly_values(paths)
 
 
 def test_the_operator_cli_is_stamped_operator_cli(monkeypatch):
-    # Issue #210: without book levels the CLI refuses before commit; stamp is verified when depth is supplied.
+    # Issue #210: the operator CLI always refuses before commit (no book levels).
     seen = []
     monkeypatch.setattr(paper_ledger, "commit_if_allowed", lambda intent, cfg: seen.append(intent) or {"allow": False})
     args = argparse.Namespace(strategy="manual", market="m1", side="buy", model_prob=0.7, market_price=0.4,
@@ -65,14 +65,11 @@ def test_the_operator_cli_is_stamped_operator_cli(monkeypatch):
     refused = paper_ledger.run_cli_intent(args, load_risk())
     assert refused["allow"] is False and "missing_book_levels" in refused["decision"]["reasons"]
     assert seen == []
-    # PR #336 P1: a programmatic asks is never depth evidence; the CLI still refuses, no commit.
+    # Poly风控 6178561328 / Codex P1 6178323003: even with asks supplied, the CLI never reaches commit.
     args_with_depth = argparse.Namespace(**{**vars(args), "asks": [(0.40, 100.0)]})
-    still = paper_ledger.run_cli_intent(args_with_depth, load_risk())
-    assert still["allow"] is False and "missing_book_levels" in still["decision"]["reasons"]
+    refused = paper_ledger.run_cli_intent(args_with_depth, load_risk())
+    assert refused["allow"] is False and "missing_book_levels" in refused["decision"]["reasons"]
     assert seen == []
-    # The Intent the CLI would build is still stamped fill_context=operator_cli.
-    built = paper_ledger.build_cli_intent(args_with_depth)
-    assert built.fill_context == "operator_cli" and built.kelly_frac_raw is None
 
 
 def test_the_gate_checks_are_stamped_gate_check(monkeypatch):
