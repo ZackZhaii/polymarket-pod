@@ -3,16 +3,18 @@ from __future__ import annotations
 
 import http.client
 import json
+import math
 import socket
 import ssl
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
@@ -76,6 +78,11 @@ HTTP_TOO_MANY_REQUESTS = 429
 # PUBLIC_GET_DEADLINE_S (src/thresholds.py). Each attempt's socket timeout is clipped to the time left, and a
 # wait that would end past the deadline is not taken: PublicGetError at once. CLOB /time (TIME_URL) is never
 # retried on 429: a retried /time widens the sent/recv interval past the clock tolerance anyway.
+# Task DU (#316): the deadline is a hard wall-clock cap on one call, connect, headers and body read included.
+# Each attempt runs in a short-lived worker thread that the caller waits for at most the time left; the worker
+# reads the body in chunks of at most _READ_CHUNK_BYTES, re-clips the socket timeout to the time left before
+# every read and stops once the deadline has passed. Past the deadline: PublicGetError, never partial data.
+_READ_CHUNK_BYTES = 65536
 _sleep = time.sleep  # tests patch this so they never sleep
 _monotonic = time.monotonic  # tests patch this with a fake clock
 
@@ -255,6 +262,8 @@ def _check_resume(frm: str, to: str, kind: str, payload: dict[str, Any]) -> None
 
 
 def _retryable(exc: BaseException) -> bool:
+    if isinstance(exc, _BodyTooLarge):
+        return False
     if isinstance(exc, HTTPError):
         return exc.code >= 500 or exc.code == HTTP_TOO_MANY_REQUESTS
     return isinstance(exc, TRANSIENT_NETWORK_ERRORS)
@@ -280,6 +289,249 @@ def _retry_after_s(exc: BaseException) -> float | None:
     return min(float(int(text)), PUBLIC_GET_RETRY_AFTER_MAX_S)
 
 
+class _DeadlineExceeded(TimeoutError):
+    """Task DU: one public_get call passed its deadline. Never retried: public_get raises PublicGetError."""
+
+
+def _check_deadline_s(deadline_s: Any) -> float:
+    """Task DU (#316, Codex P2 on #314): the deadline must be a finite number > 0 (int or float, not bool)."""
+    if isinstance(deadline_s, bool) or not isinstance(deadline_s, (int, float)):
+        raise ValueError(f"public_get deadline_s must be a finite number > 0, got {deadline_s!r}")
+    budget = float(deadline_s)
+    if not math.isfinite(budget) or budget <= 0:
+        raise ValueError(f"public_get deadline_s must be a finite number > 0, got {deadline_s!r}")
+    return budget
+
+
+def _time_left(started: float, budget: float) -> float:
+    left = budget - (_monotonic() - started)
+    if left <= 0:
+        raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed during the read")
+    return left
+
+
+def _clip_socket_timeout(response: Any, seconds: float) -> None:
+    """Best effort: set the response socket's timeout so one recv cannot outlast the time left."""
+    sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+    if sock is None:
+        return
+    try:
+        sock.settimeout(max(seconds, 0.001))
+    except (OSError, ValueError):
+        pass
+
+
+# Task DU (Codex 6168938541 P1, optional): a body larger than this is refused before json.loads, which bounds the
+# parse time that runs after the deadline check. Internal safety cap, not a trading threshold.
+_MAX_BODY_BYTES = 8 * 1024 * 1024  # 8 MiB
+
+
+class _BodyTooLarge(http.client.HTTPException):
+    """Task DU: the answer is larger than _MAX_BODY_BYTES. Not retried (a retry would get the same size)."""
+
+
+def _read_body(response: Any, timeout: float, started: float, budget: float) -> bytes:
+    """Task DU: read the body in chunks, checking the deadline before and after every chunk."""
+    read1 = getattr(response, "read1", None)
+    if read1 is None:  # a response without read1 (test doubles): one read, then the deadline check
+        body = response.read()
+        _time_left(started, budget)
+        if len(body) > _MAX_BODY_BYTES:
+            raise _BodyTooLarge(f"public_get answer larger than {_MAX_BODY_BYTES} bytes")
+        return body
+    announced = getattr(response, "length", None)  # http.client: the Content-Length still to read
+    if isinstance(announced, int) and not isinstance(announced, bool) and announced > _MAX_BODY_BYTES:
+        raise _BodyTooLarge(f"public_get Content-Length {announced} > {_MAX_BODY_BYTES} bytes")
+    chunks = []
+    total = 0
+    while True:
+        _clip_socket_timeout(response, min(timeout, _time_left(started, budget)))
+        chunk = read1(_READ_CHUNK_BYTES)
+        _time_left(started, budget)  # a chunk that arrived past the deadline is not used
+        if not chunk:
+            # Task DU (Codex P1 on #328): read1 returns b"" when the peer closes early. With Content-Length,
+            # http.client still counts the missing bytes in .length; a short body fails closed like read() did.
+            missing = getattr(response, "length", None)
+            if isinstance(missing, int) and not isinstance(missing, bool) and missing > 0:
+                raise http.client.IncompleteRead(b"".join(chunks), missing)
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > _MAX_BODY_BYTES:
+            raise _BodyTooLarge(f"public_get answer larger than {_MAX_BODY_BYTES} bytes")
+        chunks.append(chunk)
+
+
+# Task DU (Codex P2 on #328): at most this many public_get worker threads exist at once in the process. A worker
+# left behind by a deadline has its socket shut down (see _attempt), so it frees its slot promptly; this caps how
+# many leftovers can exist at once. Internal implementation bound, not a trading threshold.
+_MAX_WORKERS = 4
+
+
+def _valid_max_workers(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 16
+
+
+assert _valid_max_workers(_MAX_WORKERS), f"_MAX_WORKERS must be an int in 1..16, got {_MAX_WORKERS!r}"
+_WORKER_SLOTS = threading.BoundedSemaphore(_MAX_WORKERS)
+
+# Task DU (Codex 6167868817 P2): each worker registers the sockets its connections open, so the caller can shut
+# them down at the deadline during the response-header stage too (not only the body read).
+_WORKER_LOCAL = threading.local()
+
+
+def _register_socket(sock: Any) -> None:
+    registry = getattr(_WORKER_LOCAL, "registry", None)
+    if registry is None or sock is None:
+        return
+    with registry["lock"]:
+        registry["sockets"].append(sock)
+        cancelled = registry["cancelled"]
+    if cancelled:  # the deadline already passed while this socket was connecting
+        _shutdown_quietly(sock)
+
+
+def _shutdown_quietly(sock: Any) -> None:
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+class _TrackSocketMixin:
+    """Task DU (Codex 6168938541 P2): register the raw TCP socket as soon as it exists, before the proxy CONNECT
+    tunnel and the TLS handshake, so a stall in either is cancelled at the deadline (shutting down the raw socket
+    also ends a TLS read on it)."""
+
+    def connect(self) -> None:
+        # http.client sets self._create_connection per instance (socket.create_connection), so wrap it here.
+        create = self._create_connection  # type: ignore[attr-defined]
+
+        def create_and_register(*args: Any, **kwargs: Any) -> Any:
+            sock = create(*args, **kwargs)
+            _register_socket(sock)
+            return sock
+
+        self._create_connection = create_and_register  # type: ignore[attr-defined]
+        try:
+            super().connect()  # type: ignore[misc]
+        finally:
+            self._create_connection = create  # type: ignore[attr-defined]
+        # Task DU (Codex 6169540943 P1): HTTPS wraps the raw socket in an SSLSocket, which detaches the raw
+        # socket's fd (its shutdown then does nothing). Register the socket in use now too.
+        _register_socket(self.sock)  # type: ignore[attr-defined]
+
+
+class _TrackedHTTPConnection(_TrackSocketMixin, http.client.HTTPConnection):
+    pass
+
+
+class _TrackedHTTPSConnection(_TrackSocketMixin, http.client.HTTPSConnection):
+    pass
+
+
+class _TrackedHTTPHandler(HTTPHandler):
+    def http_open(self, req):  # noqa: D102
+        return self.do_open(_TrackedHTTPConnection, req)
+
+
+class _TrackedHTTPSHandler(HTTPSHandler):
+    def https_open(self, req):  # noqa: D102
+        return self.do_open(_TrackedHTTPSConnection, req, context=self._context)
+
+
+def _make_opener(proxies: dict[str, str] | None = None):
+    handlers = [_TrackedHTTPHandler(), _TrackedHTTPSHandler()]
+    if proxies is not None:
+        handlers.insert(0, ProxyHandler(proxies))
+    return build_opener(*handlers)
+
+
+_OPENER = _make_opener()
+
+
+def urlopen(request: Request, timeout: float):
+    """urllib's urlopen, but every socket it connects is registered for deadline cancellation."""
+    return _OPENER.open(request, timeout=timeout)
+
+
+def _close_quietly(response: Any) -> None:
+    """Shut the response's socket (unblocks a pending recv) and close the response. Never raises."""
+    sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+    if sock is not None:
+        _shutdown_quietly(sock)
+    try:
+        response.close()
+    except Exception:  # noqa: BLE001 - best effort cleanup
+        pass
+
+
+def _attempt(request: Request, timeout: float, started: float, budget: float) -> bytes:
+    """Task DU: one GET (connect, headers, body) that returns or raises within the time left.
+
+    The request runs in a daemon worker thread holding one of _MAX_WORKERS slots. Waiting for a slot counts
+    toward the deadline (Codex 6167868817 P1): the time left is recomputed after the slot is taken, and if it
+    is gone the slot is released and no request is sent. The caller waits at most that time left; past it,
+    _DeadlineExceeded is raised at once and the worker is cancelled (Codex P2 on #328 and 6167868817 P2): every
+    socket the worker connected is shut down (so a stall in the response headers or body ends now and the slot
+    frees promptly), an open response is closed, and a worker still connecting has its socket shut down as soon
+    as it exists (the connect itself is bounded by the socket timeout, which is <= the time left).
+    """
+    left = _time_left(started, budget)
+    if not _WORKER_SLOTS.acquire(timeout=left):
+        raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed waiting for a free worker slot")
+    left = budget - (_monotonic() - started)
+    if left <= 0:
+        _WORKER_SLOTS.release()
+        raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed waiting for a free worker slot")
+    attempt_timeout = min(timeout, left)
+    outcome: dict[str, Any] = {}
+    done = threading.Event()
+    registry: dict[str, Any] = {"lock": threading.Lock(), "sockets": [], "cancelled": False, "response": None}
+
+    def work() -> None:
+        _WORKER_LOCAL.registry = registry
+        try:
+            response = urlopen(request, timeout=attempt_timeout)
+            with registry["lock"]:
+                registry["response"] = response
+                cancelled = registry["cancelled"]
+            try:
+                if cancelled:
+                    return
+                body = _read_body(response, attempt_timeout, started, budget)
+                # Task DU (Codex 6168938541 P1): decode and parse inside the deadline-bound worker.
+                outcome["data"] = json.loads(body.decode("utf-8"))
+            finally:
+                _close_quietly(response)
+        except BaseException as exc:  # noqa: BLE001 - handed to the caller's thread below
+            outcome["error"] = exc
+        finally:
+            _WORKER_LOCAL.registry = None
+            with registry["lock"]:  # unregister every socket (raw and SSL) of this worker
+                registry["sockets"].clear()
+            done.set()
+            _WORKER_SLOTS.release()
+
+    try:
+        threading.Thread(target=work, name="public_get", daemon=True).start()
+    except BaseException:
+        _WORKER_SLOTS.release()
+        raise
+    if not done.wait(left):
+        with registry["lock"]:
+            registry["cancelled"] = True
+            sockets = list(registry["sockets"])
+            response = registry["response"]
+        for sock in sockets:
+            _shutdown_quietly(sock)
+        if response is not None:
+            _close_quietly(response)
+        raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed before the answer was read")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["data"]
+
+
 def public_get(
     url: str,
     timeout: float = 20.0,
@@ -298,6 +550,10 @@ def public_get(
     Task DQ: the whole call is bounded by ``deadline_s`` (default PUBLIC_GET_DEADLINE_S, about 30 s): each
     attempt's timeout is min(timeout, time left), and a retry whose wait would end past the deadline is not
     taken. If every attempt fails, the deadline is reached, or /time answers 429, raises PublicGetError.
+
+    Task DU (#316): the deadline is a hard wall-clock cap, the connect, headers and body read included (a
+    slow-drip answer fails closed with PublicGetError at the deadline, never partial data or a late OK).
+    ``deadline_s`` must be a finite number > 0, else ValueError before any network call.
     """
     if not (url.startswith(PUBLIC_PREFIXES) or url in (DATA_API_STATUS_URL, TIME_URL)):
         raise RuntimeError("refusing URL outside public Gamma markets, CLOB /book /time and Data API v2 positions/trades/status")
@@ -312,19 +568,22 @@ def public_get(
     )
     tries = max(1, int(PUBLIC_GET_ATTEMPTS if attempts is None else attempts))
     base = PUBLIC_GET_BACKOFF_S if backoff_s is None else float(backoff_s)
-    budget = float(PUBLIC_GET_DEADLINE_S if deadline_s is None else deadline_s)
+    budget = _check_deadline_s(PUBLIC_GET_DEADLINE_S if deadline_s is None else deadline_s)
     started = _monotonic()
     for attempt in range(tries):
         left = budget - (_monotonic() - started)
         try:
             if left <= 0:
                 raise TimeoutError(f"public_get deadline {budget:g} s reached before attempt {attempt + 1}")
-            with urlopen(request, timeout=min(float(timeout), left)) as response:
-                body = response.read().decode("utf-8")
+            data = _attempt(request, float(timeout), started, budget)
             break
         except Exception as exc:  # noqa: BLE001 - filtered by _retryable
             if left <= 0:
                 raise PublicGetError(url, attempt, exc) from exc
+            if isinstance(exc, _BodyTooLarge):
+                raise PublicGetError(url, attempt + 1, exc) from exc  # Task DU: over _MAX_BODY_BYTES, never retried
+            if isinstance(exc, _DeadlineExceeded):
+                raise PublicGetError(url, attempt + 1, exc) from exc  # Task DU: the deadline passed mid-request
             if not _retryable(exc):
                 raise
             if attempt + 1 >= tries:
@@ -336,7 +595,12 @@ def public_get(
             if (_monotonic() - started) + wait >= budget:
                 raise PublicGetError(url, attempt + 1, exc) from exc  # Task DQ: the wait would pass the deadline
             _sleep(wait)
-    return json.loads(body)
+    # Task DU (Codex P2 on #328): decoding and parsing count toward the deadline too; a parse that ends past it
+    # is not returned as success.
+    if _monotonic() - started >= budget:
+        exc = _DeadlineExceeded(f"public_get deadline {budget:g} s passed while decoding the answer")
+        raise PublicGetError(url, attempt + 1, exc) from exc
+    return data
 
 
 def json_list(value: Any) -> list[Any]:
