@@ -172,8 +172,9 @@ Paging, retry and sampling limits. They decide how much is read, not what passes
 | `scanner.MAX_MARKETS` | `50000` | markets | Cap on one keyset walk; hitting it with a cursor left is incomplete (exit 3). | `src/scanner.py` | Task I (PR #2, 63c9e82) | no |
 | `scanner.MAX_PAGES` | `1000` | pages | Cap on keyset pages per walk. | `src/scanner.py` | Task I (PR #2, 63c9e82) | no |
 | `scanner.BUS_TOP_N` | `50` | markets | Only the top N passing markets (24h volume) become Scanner bus signals. | `src/scanner.py` | Task I (PR #2, 63c9e82) | no |
-| `podlib.PUBLIC_GET_ATTEMPTS` | `3` | attempts | Tries per public GET on transient network/TLS errors. | `src/podlib.py` | Task K (9c41d5a) | no |
-| `podlib.PUBLIC_GET_BACKOFF_S` | `0.5` | s | Retry backoff base (0.5 s, then 1 s). | `src/podlib.py` | Task K (9c41d5a) | no |
+| `podlib.PUBLIC_GET_ATTEMPTS` | `3` | attempts | Tries per public GET on transient network/TLS errors, HTTP 5xx and (since Task DN) HTTP 429; all share this budget. | `src/podlib.py` | Task K (9c41d5a) | no |
+| `podlib.PUBLIC_GET_BACKOFF_S` | `0.5` | s | Retry backoff base (0.5 s, then 1 s); also a 429's wait when its Retry-After is missing or not an integer. | `src/podlib.py` | Task K (9c41d5a) | no |
+| `podlib.PUBLIC_GET_RETRY_AFTER_MAX_S` | `30.0` | s | Longest wait a 429's `Retry-After` (integer seconds) can ask for; larger values wait this long. Other 4xx are never retried. | `src/podlib.py` | Task DN (issue #199) | no |
 | `podlib.READ_JSONL_WARN_LINES` | `10` | line numbers | `read_jsonl`'s WARN about skipped unreadable lines lists at most this many line numbers (all are counted). Display only. | `src/podlib.py` | Task BW (issue #162) | no |
 | `paper_session.BOOK_LIMIT` | `5` | markets | A paper session books the first N passing markets. | `src/paper_session.py` | Task E | no |
 | `m2_start.START_POLL_S` | `1.0` | s | How often the M2 start orchestration looks again for a fresh heartbeat while it waits; the waits themselves are the existing Sentinel timeouts (`SENTINEL_HEARTBEAT_TIMEOUT_S`, `PROC_SPECS`). | `src/m2_start.py` | Task BR (issue #133) | yes |

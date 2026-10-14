@@ -1565,7 +1565,28 @@ Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@ffe32ab).
 - Fix (tests only): fixed `FROZEN_NOW` plus `_freeze_wall` on those three modules in `tests/test_m2_runner_clock.py`
   `env` fixture. No `src/`, threshold, or `config/risk.toml` change.
 
+## Task DN — Issue #199: public_get retries HTTP 429 using Retry-After
+
+Status: done.
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@043e9ce).
+
+- `src/podlib.py` `public_get`: HTTP **429** is now retryable. It waits the response's `Retry-After` as integer
+  seconds (`_retry_after_s`; ASCII digits only, capped at `PUBLIC_GET_RETRY_AFTER_MAX_S` = 30 s) through the
+  patchable `_sleep`; a missing, HTTP-date, negative or fractional header falls back to Task K's
+  `PUBLIC_GET_BACKOFF_S * 2**n`. 429 counts against the same `PUBLIC_GET_ATTEMPTS` budget as network/TLS errors
+  and 5xx; exhausted, it raises `PublicGetError` (Scanner: `network_error`, exit 3, fails closed).
+- Unchanged: every other 4xx (400/401/403/404/422 …) is raised at once, even with a Retry-After header; 5xx and
+  transient network errors keep the exponential backoff (5xx ignores Retry-After).
+- `docs/THRESHOLDS.md` operational row for `podlib.PUBLIC_GET_RETRY_AFTER_MAX_S` (code constant, not risk.toml).
+- Tests: `tests/test_public_get_retry.py` (offline; urlopen mocked, `_sleep` recorded). The old case that pinned
+  429 as not retried is replaced by the 429 cases.
+
 ## Latest
+
+- 2026-10-14: Task DN (issue #199): public_get retries HTTP 429, waiting Retry-After integer seconds (capped at
+  30 s, backoff fallback) inside the same PUBLIC_GET_ATTEMPTS budget; other 4xx still raise at once. risk.toml
+  unchanged (0aea23af…bc04), `live_enabled=false`.
 
 - 2026-10-14: Task DM (issue #293): freeze podlib/book_staleness/wash_detect clock in m2_runner_clock tests so
   RiskGate commit path matches runner fixture time. Tests only. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.

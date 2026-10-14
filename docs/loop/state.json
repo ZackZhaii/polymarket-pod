@@ -555,6 +555,15 @@
       "note": "Claimed by Poly桥接 as Task DM. Done by grok-bot on NoisePC.",
       "done_at": "2026-10-13T23:30:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "DN",
+      "status": "done",
+      "title": "Issue #199: public_get retries HTTP 429 using Retry-After (integer seconds, capped), other 4xx still raised at once",
+      "finish": "src/podlib.py: _retryable treats HTTP 429 as retryable; public_get waits _retry_after_s (Retry-After as ASCII integer seconds, capped at PUBLIC_GET_RETRY_AFTER_MAX_S = 30.0) via the patchable _sleep, falling back to PUBLIC_GET_BACKOFF_S * 2**n when the header is missing or not an integer; 429 shares the PUBLIC_GET_ATTEMPTS budget with network/TLS errors and 5xx and raises PublicGetError when exhausted (Scanner exit 3). Other 4xx still raise at once; 5xx and network retries unchanged. docs/THRESHOLDS.md operational row for the cap. Offline tests in tests/test_public_get_retry.py. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DN. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T01:30:00Z",
+      "surface": "grok-bot"
     }
   ]
 }

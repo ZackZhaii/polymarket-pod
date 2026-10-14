@@ -63,10 +63,14 @@ DATA_API_TRADES_PREFIX = "https://data-api.polymarket.com/v2/trades?"
 DATA_API_STATUS_URL = "https://data-api.polymarket.com/v2/status"
 PUBLIC_PREFIXES = (GAMMA_PREFIX, BOOK_PREFIX, DATA_API_POSITIONS_PREFIX, DATA_API_TRADES_PREFIX)
 
-# public_get retries transient network/TLS failures (SSL EOF, resets, timeouts, 5xx).
-# Waits are PUBLIC_GET_BACKOFF_S * 2**n between attempts (0.5 s, 1 s). HTTP 4xx is never retried.
+# public_get retries transient network/TLS failures (SSL EOF, resets, timeouts, 5xx) and HTTP 429.
+# Waits are PUBLIC_GET_BACKOFF_S * 2**n between attempts (0.5 s, 1 s). Task DN (#199): a 429 waits its
+# Retry-After (integer seconds, at most PUBLIC_GET_RETRY_AFTER_MAX_S) instead, falling back to the backoff when
+# the header is missing or not an integer. Every other HTTP 4xx is never retried. All share PUBLIC_GET_ATTEMPTS.
 PUBLIC_GET_ATTEMPTS = 3
 PUBLIC_GET_BACKOFF_S = 0.5
+PUBLIC_GET_RETRY_AFTER_MAX_S = 30.0
+HTTP_TOO_MANY_REQUESTS = 429
 _sleep = time.sleep  # tests patch this so they never sleep
 
 # OSError covers ConnectionResetError, socket.timeout/TimeoutError and ssl.SSLError (incl. SSLEOFError).
@@ -74,7 +78,7 @@ TRANSIENT_NETWORK_ERRORS = (URLError, OSError, http.client.HTTPException, ssl.SS
 
 
 class PublicGetError(RuntimeError):
-    """A public read still failed on a transient network/TLS error after every retry."""
+    """A public read still failed on a transient network/TLS error, 5xx or 429 after every retry."""
 
     def __init__(self, url: str, attempts: int, last_error: BaseException) -> None:
         self.url = url
@@ -246,8 +250,28 @@ def _check_resume(frm: str, to: str, kind: str, payload: dict[str, Any]) -> None
 
 def _retryable(exc: BaseException) -> bool:
     if isinstance(exc, HTTPError):
-        return exc.code >= 500
+        return exc.code >= 500 or exc.code == HTTP_TOO_MANY_REQUESTS
     return isinstance(exc, TRANSIENT_NETWORK_ERRORS)
+
+
+def _retry_after_s(exc: BaseException) -> float | None:
+    """Task DN: a 429's Retry-After as integer seconds, capped at PUBLIC_GET_RETRY_AFTER_MAX_S.
+
+    None (use the exponential backoff) when exc is not a 429 or the header is missing, an HTTP-date, negative,
+    fractional or anything else that is not plain ASCII digits.
+    """
+    if not isinstance(exc, HTTPError) or exc.code != HTTP_TOO_MANY_REQUESTS:
+        return None
+    try:
+        raw = exc.headers.get("Retry-After") if exc.headers is not None else None
+    except Exception:  # noqa: BLE001 - odd header objects fall back to the backoff
+        return None
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if not (text.isascii() and text.isdigit()):
+        return None
+    return min(float(int(text)), PUBLIC_GET_RETRY_AFTER_MAX_S)
 
 
 def public_get(
@@ -259,8 +283,10 @@ def public_get(
 ) -> Any:
     """GET a public read endpoint. Rejects order and auth URLs.
 
-    Transient network/TLS errors and HTTP 5xx are retried with exponential backoff.
-    HTTP 4xx and JSON errors are raised at once. If every attempt fails, raises PublicGetError.
+    Transient network/TLS errors and HTTP 5xx are retried with exponential backoff. HTTP 429 is retried too,
+    after waiting its Retry-After seconds (capped at PUBLIC_GET_RETRY_AFTER_MAX_S; exponential backoff when the
+    header is missing or not an integer). All of them share the same attempt budget. Every other HTTP 4xx and
+    JSON errors are raised at once. If every attempt fails, raises PublicGetError.
     """
     if not (url.startswith(PUBLIC_PREFIXES) or url in (DATA_API_STATUS_URL, TIME_URL)):
         raise RuntimeError("refusing URL outside public Gamma markets, CLOB /book /time and Data API v2 positions/trades/status")
@@ -285,7 +311,8 @@ def public_get(
                 raise
             if attempt + 1 >= tries:
                 raise PublicGetError(url, tries, exc) from exc
-            _sleep(base * (2 ** attempt))
+            wait = _retry_after_s(exc)
+            _sleep(base * (2 ** attempt) if wait is None else wait)
     return json.loads(body)
 
 
