@@ -609,6 +609,15 @@
       "note": "Claimed by Poly桥接 as Task DQ. KEY + HOLD: needs Poly风控 and Poly哨兵 通过, then 家伟's approval in chat. Done by grok-bot.",
       "done_at": "2026-10-14T05:00:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "DV",
+      "status": "done",
+      "title": "calibration: out-of-bounds fill rejects whole decision even if dropped by another filter; _parse_ts boundary OverflowError dropped (#321 follow-up)",
+      "finish": "src/calibration.py trade_samples checks forecast.ts <= fill.ts < closed_ts on every counted fill of the decision before other filters can hide it; _parse_ts catches OverflowError (0001-01-01+01:00, 9999-12-31-01:00) and returns None so the row is dropped and counted. tests/test_calibration.py Task DV section; tests/test_dt_ledger_post_write_verify.py asserts exact post_write:row_mismatch:<field>:<fill_id>. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DV (follow-up of #321 Codex review). Paper-only, calibration-only. Done by grok-bot on the box.",
+      "done_at": "2026-10-14T09:50:00Z",
+      "surface": "grok-bot"
     }
   ]
 }

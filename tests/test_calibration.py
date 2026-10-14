@@ -638,3 +638,40 @@ def test_report_carries_the_fixed_sentences():
     report, _ = build(*world(2))
     text = cal.render_markdown(report)
     assert "UMA dispute status not checked" in text and "Not a promise of profit" in text
+
+
+# ------------------------------------------------------------------ Task DV (#321 Codex follow-up)
+
+
+def test_an_out_of_bounds_fill_dropped_by_another_filter_still_rejects_its_decision():
+    # P1: the early fill is dropped for missing_market_mid first; its time must still reject the good fill.
+    f = forecast(0, 0.7, ts="2026-10-01T06:00:00Z")
+    good = fill(f, fill_id="good", ts="2026-10-01T08:00:00Z")
+    early = fill(f, fill_id="early", ts="2026-10-01T05:00:00Z")
+    early["calibration_problems"] = ["missing_market_mid"]
+    t = build([f], [resolution(0, 0, day=1)], [good, early])[0]["trades"]
+    assert t["eligible"] == 0
+    assert t["dropped_by_reason"] == {"fill_calibration_problems": 1, "fill_before_forecast": 1}
+
+
+def test_an_after_close_fill_dropped_first_still_rejects_its_decision():
+    f = forecast(0, 0.7, ts="2026-10-01T00:00:00Z")
+    late = fill(f, fill_id="late", ts="2026-10-01T12:00:00Z")
+    late.pop("calibration_problems")  # dropped as fill_missing_identity before any time check
+    t = build([f], [resolution(0, 0, day=1)], [fill(f, fill_id="ok"), late])[0]["trades"]
+    assert t["eligible"] == 0 and "fill_not_before_close" in t["dropped_by_reason"]
+
+
+@pytest.mark.parametrize("ts", ["0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"])
+def test_a_boundary_fill_time_is_dropped_and_counted_not_raised(ts):
+    assert cal._parse_ts(ts) is None
+    f = forecast(0, 0.7)
+    t = build([f], [resolution(0, 0)], [fill(f, ts=ts)])[0]["trades"]
+    assert t["eligible"] == 0 and t["dropped_by_reason"] == {"fill_ts_invalid": 1}
+
+
+@pytest.mark.parametrize("ts", ["0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"])
+def test_a_boundary_forecast_time_is_dropped_not_raised(ts):
+    f = forecast(0, 0.7, ts=ts)
+    t = build([f], [resolution(0, 0)], [fill(f)])[0]["trades"]
+    assert t["eligible"] == 0 and t["dropped_by_reason"] == {"fill_forecast_ts_invalid": 1}
