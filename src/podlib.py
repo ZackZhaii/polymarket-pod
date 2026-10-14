@@ -416,6 +416,9 @@ class _TrackSocketMixin:
             super().connect()  # type: ignore[misc]
         finally:
             self._create_connection = create  # type: ignore[attr-defined]
+        # Task DU (Codex 6169540943 P1): HTTPS wraps the raw socket in an SSLSocket, which detaches the raw
+        # socket's fd (its shutdown then does nothing). Register the socket in use now too.
+        _register_socket(self.sock)  # type: ignore[attr-defined]
 
 
 class _TrackedHTTPConnection(_TrackSocketMixin, http.client.HTTPConnection):
@@ -504,6 +507,8 @@ def _attempt(request: Request, timeout: float, started: float, budget: float) ->
             outcome["error"] = exc
         finally:
             _WORKER_LOCAL.registry = None
+            with registry["lock"]:  # unregister every socket (raw and SSL) of this worker
+                registry["sockets"].clear()
             done.set()
             _WORKER_SLOTS.release()
 

@@ -659,3 +659,109 @@ def test_slow_proxy_connect_frees_every_slot_and_healthy_requests_recover(monkey
         assert elapsed < 1.0, elapsed
         _wait_no_workers(1.0)
         assert not any(t.name == "public_get" for t in threading.enumerate())
+
+
+# ---------------------------------------------------------------- Task DU: Codex 6169540943 / Poly风控 6169773911
+
+import ssl  # noqa: E402
+import subprocess  # noqa: E402
+
+
+@pytest.fixture
+def tls_cert(tmp_path):
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(cert),
+                    "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
+                   check=True, capture_output=True)
+    return cert, key
+
+
+class _SlowTlsHeadersServer:
+    """127.0.0.1 HTTPS server: the TLS handshake completes at once, then the response headers drip 1 byte / 0.05 s."""
+
+    def __init__(self, cert, key) -> None:
+        self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.ctx.load_cert_chain(str(cert), str(key))
+        self.stop = threading.Event()
+        self.sock = socket.create_server(("127.0.0.1", 0))
+        self.sock.settimeout(0.1)
+        self.port = self.sock.getsockname()[1]
+        self.handshakes = 0
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
+        self.thread.join(5)
+        self.sock.close()
+        return False
+
+    def _serve(self) -> None:
+        while not self.stop.is_set():
+            try:
+                conn, _ = self.sock.accept()
+            except (socket.timeout, OSError):
+                continue
+            threading.Thread(target=self._answer, args=(conn,), daemon=True).start()
+
+    def _answer(self, raw) -> None:
+        try:
+            raw.settimeout(5)
+            conn = self.ctx.wrap_socket(raw, server_side=True)
+            self.handshakes += 1
+            got = b""
+            while b"\r\n\r\n" not in got:
+                piece = conn.recv(4096)
+                if not piece:
+                    return
+                got += piece
+            for byte in b"HTTP/1.1 200 OK\r\nX-Pad: " + b"p" * 400 + b"\r\n\r\n":
+                if self.stop.is_set():
+                    return
+                conn.sendall(bytes([byte]))
+                time.sleep(0.05)
+        except (OSError, ssl.SSLError):
+            pass  # the client shut the TLS socket down at its deadline: that is the point
+        finally:
+            raw.close()
+
+
+def test_slow_https_headers_free_every_slot_and_healthy_requests_recover(monkeypatch, tls_cert):
+    """Codex 6169540943 P1: after the TLS wrap the raw socket's fd is detached, so the SSLSocket itself must be
+    shut down at the deadline. 4 slow-header HTTPS requests fill all slots; all are freed, then a healthy request
+    succeeds in < 1 s and no worker thread is left."""
+    _wait_no_workers()
+    cert, key = tls_cert
+    client_ctx = ssl.create_default_context(cafile=str(cert))
+    tls_opener = podlib.build_opener(podlib.ProxyHandler({}), podlib._TrackedHTTPSHandler(context=client_ctx))
+    direct = podlib._make_opener({})
+    with _SlowTlsHeadersServer(cert, key) as slow, _DripServer(every=0.002, step=8) as fast:
+        mode = {"slow": True}
+
+        def routed_urlopen(request, timeout=None):
+            if mode["slow"]:
+                return tls_opener.open(f"https://127.0.0.1:{slow.port}/markets", timeout=timeout)
+            return direct.open(f"http://127.0.0.1:{fast.port}/markets", timeout=timeout)
+
+        monkeypatch.setattr(podlib, "urlopen", routed_urlopen)
+        results = []
+        callers = [threading.Thread(target=lambda: results.append(_timed_public_get(timeout=5.0, deadline_s=0.5, attempts=1)))
+                   for _ in range(podlib._MAX_WORKERS)]
+        for c in callers:
+            c.start()
+        for c in callers:
+            c.join(5)
+        assert len(results) == podlib._MAX_WORKERS
+        assert all(isinstance(r, podlib.PublicGetError) for r, _ in results), results
+        assert slow.handshakes >= 1
+        _wait_no_workers(0.5)
+        assert not any(t.name == "public_get" for t in threading.enumerate())
+        mode["slow"] = False
+        result, elapsed = _timed_public_get(timeout=2.0, deadline_s=2.0, attempts=1)
+        assert result == {"ok": "x" * 40}, result
+        assert elapsed < 1.0, elapsed
+        _wait_no_workers(1.0)
+        assert not any(t.name == "public_get" for t in threading.enumerate())
