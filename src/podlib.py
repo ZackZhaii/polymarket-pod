@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
@@ -342,20 +342,83 @@ def _read_body(response: Any, timeout: float, started: float, budget: float) -> 
 
 
 # Task DU (Codex P2 on #328): at most this many public_get worker threads exist at once in the process. A worker
-# left behind by a deadline still ends within its own socket timeout (<= the attempt timeout); this caps how many
-# such leftovers can pile up. Implementation bound, not a trading threshold.
+# left behind by a deadline has its socket shut down (see _attempt), so it frees its slot promptly; this caps how
+# many leftovers can exist at once. Internal implementation bound, not a trading threshold.
 _MAX_WORKERS = 4
+
+
+def _valid_max_workers(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 16
+
+
+assert _valid_max_workers(_MAX_WORKERS), f"_MAX_WORKERS must be an int in 1..16, got {_MAX_WORKERS!r}"
 _WORKER_SLOTS = threading.BoundedSemaphore(_MAX_WORKERS)
+
+# Task DU (Codex 6167868817 P2): each worker registers the sockets its connections open, so the caller can shut
+# them down at the deadline during the response-header stage too (not only the body read).
+_WORKER_LOCAL = threading.local()
+
+
+def _register_socket(sock: Any) -> None:
+    registry = getattr(_WORKER_LOCAL, "registry", None)
+    if registry is None or sock is None:
+        return
+    with registry["lock"]:
+        registry["sockets"].append(sock)
+        cancelled = registry["cancelled"]
+    if cancelled:  # the deadline already passed while this socket was connecting
+        _shutdown_quietly(sock)
+
+
+def _shutdown_quietly(sock: Any) -> None:
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+class _TrackedHTTPConnection(http.client.HTTPConnection):
+    def connect(self) -> None:
+        super().connect()
+        _register_socket(self.sock)
+
+
+class _TrackedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self) -> None:
+        super().connect()  # the TLS-wrapped socket; shutting it down also ends a pending handshake read
+        _register_socket(self.sock)
+
+
+class _TrackedHTTPHandler(HTTPHandler):
+    def http_open(self, req):  # noqa: D102
+        return self.do_open(_TrackedHTTPConnection, req)
+
+
+class _TrackedHTTPSHandler(HTTPSHandler):
+    def https_open(self, req):  # noqa: D102
+        return self.do_open(_TrackedHTTPSConnection, req, context=self._context)
+
+
+def _make_opener(proxies: dict[str, str] | None = None):
+    handlers = [_TrackedHTTPHandler(), _TrackedHTTPSHandler()]
+    if proxies is not None:
+        handlers.insert(0, ProxyHandler(proxies))
+    return build_opener(*handlers)
+
+
+_OPENER = _make_opener()
+
+
+def urlopen(request: Request, timeout: float):
+    """urllib's urlopen, but every socket it connects is registered for deadline cancellation."""
+    return _OPENER.open(request, timeout=timeout)
 
 
 def _close_quietly(response: Any) -> None:
     """Shut the response's socket (unblocks a pending recv) and close the response. Never raises."""
     sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
     if sock is not None:
-        try:
-            sock.shutdown(socket.SHUT_RDWR)
-        except (OSError, ValueError):
-            pass
+        _shutdown_quietly(sock)
     try:
         response.close()
     except Exception:  # noqa: BLE001 - best effort cleanup
@@ -365,30 +428,35 @@ def _close_quietly(response: Any) -> None:
 def _attempt(request: Request, timeout: float, started: float, budget: float) -> bytes:
     """Task DU: one GET (connect, headers, body) that returns or raises within the time left.
 
-    The request runs in a daemon worker thread; this thread waits at most the time left. If the worker is not
-    done by then, _DeadlineExceeded is raised here at once and the worker is reclaimed (Codex P2 on #328): an
-    open response is closed and its socket shut down from here, a worker still inside urlopen closes the
-    response as soon as urlopen returns, and it gives up its slot in _WORKER_SLOTS when it ends (the connect
-    and headers are bounded by the socket timeout). At most _MAX_WORKERS workers exist; when all slots are
-    busy past the deadline, the attempt fails closed without starting a thread.
+    The request runs in a daemon worker thread holding one of _MAX_WORKERS slots. Waiting for a slot counts
+    toward the deadline (Codex 6167868817 P1): the time left is recomputed after the slot is taken, and if it
+    is gone the slot is released and no request is sent. The caller waits at most that time left; past it,
+    _DeadlineExceeded is raised at once and the worker is cancelled (Codex P2 on #328 and 6167868817 P2): every
+    socket the worker connected is shut down (so a stall in the response headers or body ends now and the slot
+    frees promptly), an open response is closed, and a worker still connecting has its socket shut down as soon
+    as it exists (the connect itself is bounded by the socket timeout, which is <= the time left).
     """
     left = _time_left(started, budget)
-    attempt_timeout = min(timeout, left)
     if not _WORKER_SLOTS.acquire(timeout=left):
         raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed waiting for a free worker slot")
+    left = budget - (_monotonic() - started)
+    if left <= 0:
+        _WORKER_SLOTS.release()
+        raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed waiting for a free worker slot")
+    attempt_timeout = min(timeout, left)
     outcome: dict[str, Any] = {}
     done = threading.Event()
-    lock = threading.Lock()
-    state = {"abandoned": False, "response": None}
+    registry: dict[str, Any] = {"lock": threading.Lock(), "sockets": [], "cancelled": False, "response": None}
 
     def work() -> None:
+        _WORKER_LOCAL.registry = registry
         try:
             response = urlopen(request, timeout=attempt_timeout)
-            with lock:
-                state["response"] = response
-                abandoned = state["abandoned"]
+            with registry["lock"]:
+                registry["response"] = response
+                cancelled = registry["cancelled"]
             try:
-                if abandoned:
+                if cancelled:
                     return
                 outcome["body"] = _read_body(response, attempt_timeout, started, budget)
             finally:
@@ -396,6 +464,7 @@ def _attempt(request: Request, timeout: float, started: float, budget: float) ->
         except BaseException as exc:  # noqa: BLE001 - handed to the caller's thread below
             outcome["error"] = exc
         finally:
+            _WORKER_LOCAL.registry = None
             done.set()
             _WORKER_SLOTS.release()
 
@@ -405,9 +474,12 @@ def _attempt(request: Request, timeout: float, started: float, budget: float) ->
         _WORKER_SLOTS.release()
         raise
     if not done.wait(left):
-        with lock:
-            state["abandoned"] = True
-            response = state["response"]
+        with registry["lock"]:
+            registry["cancelled"] = True
+            sockets = list(registry["sockets"])
+            response = registry["response"]
+        for sock in sockets:
+            _shutdown_quietly(sock)
         if response is not None:
             _close_quietly(response)
         raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed before the answer was read")

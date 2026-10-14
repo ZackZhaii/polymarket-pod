@@ -442,3 +442,83 @@ def test_decode_and_parse_count_toward_the_deadline(clock, monkeypatch):
 def test_fast_parse_inside_the_deadline_still_returns(clock):
     clock["set"]((1.0, b'{"ok": 1}'))
     assert podlib.public_get(GAMMA_URL, deadline_s=30.0) == {"ok": 1}
+
+
+# ---------------------------------------------------------------- Task DU: Poly风控 6168109778 / Codex 6167868817
+
+
+def _wait_no_workers(limit_s: float = 3.0) -> None:
+    end = time.monotonic() + limit_s
+    while any(t.name == "public_get" for t in threading.enumerate()) and time.monotonic() < end:
+        time.sleep(0.01)
+
+
+def test_slot_wait_counts_toward_the_deadline(monkeypatch):
+    """Codex 6167868817 P1: 4 slots busy for 0.6 s, then our request hangs: total stays <= deadline 1.0 s."""
+    _wait_no_workers()
+    release = threading.Event()
+
+    def fake_urlopen(request, timeout=None):
+        if "hog" in request.full_url:
+            time.sleep(0.6)  # uncancellable: holds its slot 0.6 s
+            raise socket.timeout("timed out")
+        release.wait(10)
+        raise socket.timeout("timed out")
+
+    monkeypatch.setattr(podlib, "urlopen", fake_urlopen)
+    hog_url = GAMMA_URL + "&hog=1"
+    hogs = [threading.Thread(target=lambda: _swallow(hog_url)) for _ in range(podlib._MAX_WORKERS)]
+    try:
+        for h in hogs:
+            h.start()
+        time.sleep(0.05)
+        result, elapsed = _timed_public_get(timeout=10.0, deadline_s=1.0, attempts=1)
+        assert isinstance(result, podlib.PublicGetError), result
+        assert elapsed <= 1.0 + 0.3, elapsed
+    finally:
+        release.set()
+        for h in hogs:
+            h.join(5)
+        _wait_no_workers()
+
+
+def _swallow(url):
+    try:
+        podlib.public_get(url, timeout=10.0, deadline_s=0.3, attempts=1)
+    except podlib.PublicGetError:
+        pass
+
+
+def test_slow_headers_free_their_slots_and_healthy_requests_recover(monkeypatch):
+    """Codex 6167868817 P2: slow-drip headers on every slot are cancelled at the deadline (socket shut down),
+    so the slots free promptly and a healthy request right after succeeds."""
+    _wait_no_workers()
+    opener = podlib._make_opener({})  # podlib's tracked handlers, no proxy for 127.0.0.1
+    with _DripServer(every=0.05, phase="headers") as slow, _DripServer(every=0.002, step=8) as fast:
+        target = {"port": slow.port}
+        monkeypatch.setattr(podlib, "urlopen", lambda request, timeout=None: opener.open(
+            f"http://127.0.0.1:{target['port']}/markets", timeout=timeout))
+        results = []
+        callers = [threading.Thread(target=lambda: results.append(_timed_public_get(timeout=5.0, deadline_s=0.5, attempts=1)))
+                   for _ in range(podlib._MAX_WORKERS)]
+        for c in callers:
+            c.start()
+        for c in callers:
+            c.join(5)
+        assert len(results) == podlib._MAX_WORKERS
+        assert all(isinstance(r, podlib.PublicGetError) for r, _ in results), results
+        target["port"] = fast.port
+        result, elapsed = _timed_public_get(timeout=2.0, deadline_s=2.0, attempts=1)
+        assert result == {"ok": "x" * 40}, result
+        assert elapsed < 1.0, elapsed
+
+
+def test_max_workers_is_bounded_at_import():
+    assert podlib._valid_max_workers(podlib._MAX_WORKERS)
+    assert 1 <= podlib._MAX_WORKERS <= 16
+    for bad in (0, 17, -1, True, 4.0, "4", None):
+        assert not podlib._valid_max_workers(bad), bad
+    for good in (1, 4, 16):
+        assert podlib._valid_max_workers(good)
+    import inspect
+    assert "assert _valid_max_workers(_MAX_WORKERS)" in inspect.getsource(podlib)
