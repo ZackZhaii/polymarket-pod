@@ -546,6 +546,15 @@
       "note": "Non-KEY part split from #243, claimed by Poly桥接 as Task DK. Done by grok-bot on NoisePC.",
       "done_at": "2026-10-13T21:30:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "DM",
+      "status": "done",
+      "title": "Issue #293: make m2_runner_clock offline tests deterministic under full-suite load",
+      "finish": "tests/test_m2_runner_clock.py only: env fixture freezes podlib/book_staleness/wash_detect datetime to the runner fixture clock (e2e metaclass pattern) so commit_if_allowed/RiskGate.evaluate(now=None) cannot drift past INTENT_TTL_S under full-suite load; fixes flaky future_book_ts and malformed-book second-signal allows. No src/, threshold, or config/risk.toml change. live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DM. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-13T23:30:00Z",
+      "surface": "grok-bot"
     }
   ]
 }
