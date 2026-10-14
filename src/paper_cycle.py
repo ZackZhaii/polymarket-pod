@@ -77,6 +77,8 @@ progress carries ``input_pending_streak``. No new threshold: the same constant a
 """
 from __future__ import annotations
 
+import math
+
 import argparse
 import json
 import sys
@@ -159,6 +161,25 @@ class CorruptInput(Exception):
 
     def as_problem(self) -> dict:
         return {"path": self.path, "line": self.line, "problem": self.problem}
+
+
+INVALID_BOOK_PRICE = "invalid_book_price"
+
+
+def _unit_price(value: object) -> tuple[float | None, bool]:
+    """(price, bad): a number strictly in (0, 1) -> (price, False). A number float() cannot hold (OverflowError) ->
+    (None, True): the market is skipped as invalid_book_price. Anything else (absent, bool, non-number, NaN / inf — the
+    recorder's "no level" —, <= 0, >= 1) -> (None, False): that leg's price is left out as before (no ask: no buy;
+    no bid: no sell-set signal), so it can never make a buy."""
+    if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None, False
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        return None, True
+    if not math.isfinite(number) or not 0.0 < number < 1.0:
+        return None, False
+    return number, False
 
 
 def read_strict_jsonl(path: Path) -> list[dict]:
@@ -529,6 +550,7 @@ def run(
     for market_id, market in markets.items():
         tokens = [str(token) for token in market.get("token_ids") or []]
         asks: list[float] = []
+        bids: list[float] = []
         depths: list[float | None] = []
         stale_reasons: set[str] = set()
         sentinel_reasons: set[str] = set()
@@ -545,11 +567,23 @@ def run(
             sentinel_problem = problem or _row_book_problem(book, now_at, sentinel.SENTINEL_STALE_S)
             if sentinel_problem is not None:
                 sentinel_reasons.add(sentinel_problem)
-            ask = book.get("best_ask")
-            if isinstance(ask, (int, float)) and 0.0 < float(ask) < 1.0:
-                asks.append(float(ask))
+            # Codex P2 on #310: a huge price (float OverflowError) crashed the cycle; now the market is skipped
+            # (fail closed, no crash, no buy). Non-finite / out-of-range prices are left out as before (no buy).
+            bid, bid_bad = _unit_price(book.get("best_bid"))
+            ask, ask_bad = _unit_price(book.get("best_ask"))
+            if bid_bad or ask_bad:
+                stale_reasons.add(INVALID_BOOK_PRICE)
+                continue
+            if bid is not None:
+                bids.append(bid)  # Issue #237 (Task DO): sell-the-full-set side
+            if ask is not None:
+                asks.append(ask)
                 size = book.get("best_ask_size")
-                depths.append(float(size) if isinstance(size, (int, float)) else None)
+                try:
+                    size_f = float(size) if isinstance(size, (int, float)) and not isinstance(size, bool) else None
+                except (OverflowError, ValueError):
+                    size_f = None
+                depths.append(size_f if size_f is not None and math.isfinite(size_f) else None)
         if not tokens:
             stale_reasons.add(MISSING_BOOK)
             sentinel_reasons.add(MISSING_BOOK)
@@ -618,6 +652,13 @@ def run(
             skips.append({"market": market_id, "kind": structural_gate.STRUCTURAL_ARB_DISABLED,
                           "reason": structural_gate.STRUCTURAL_ARB_DISABLED, "strategy": message["from"],
                           "legs": len(asks)})
+        elif _sell_set_message(bids, tokens, market_id, bus_path) is not None:
+            # Issue #237 (Task DO): best bids summing to > 1 (split, sell every leg) is a structural arb too:
+            # rejected and recorded, never an order.
+            structural_rejected += 1
+            skips.append({"market": market_id, "kind": structural_gate.STRUCTURAL_ARB_DISABLED,
+                          "reason": structural_gate.STRUCTURAL_ARB_DISABLED, "strategy": "SellSet",
+                          "shape": "sell_set", "legs": len(bids)})
     # Task AP gap 14: every checked market stale in this cycle extends the all-stale streak.
     all_stale = bool(checked) and len(stale_checked) == len(checked)
     watch.all_stale_streak = watch.all_stale_streak + 1 if all_stale else 0
@@ -710,6 +751,19 @@ def _gap_message(asks: list[float], market_id: str, depths: list[float | None], 
     if len(asks) >= 3:
         return neg_risk.emit_gap(asks, market_id, bus_path=bus_path, displayed_depth=depth)
     return None
+
+
+def _sell_set_message(bids: list[float], tokens: list[str], market_id: str, bus_path: Path | None) -> dict | None:
+    """Issue #237 (Task DO): every leg has a best bid and the bids sum to > 1 -> one rejected structural signal."""
+    if len(tokens) < 2 or len(bids) != len(tokens):
+        return None
+    bid_sum = sum(bids)
+    if bid_sum <= 1.0 + 1e-9:
+        return None
+    return bus("SellSet", "RiskGate", "signal", market_id,
+               {"shape": "sell_set", "bid_sum": round(bid_sum, 8), "legs": len(bids), "rejected": True,
+                "reject_reason": structural_gate.STRUCTURAL_ARB_DISABLED, "exchange_action": "none"},
+               path=bus_path)
 
 
 def _record_skipped_rows(skipped: list[dict], rows: list[dict], source: str, skips: list[dict],
