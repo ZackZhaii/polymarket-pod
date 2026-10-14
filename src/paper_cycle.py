@@ -59,6 +59,10 @@ skipped: ``ok`` False, reason ``input_pending``, zero gaps and zero fills, no St
 reset, no halt and no signal. ``--loop`` keeps the heartbeat and waits for the next round, so a transient
 append is never mapped to a permanent halt (EXIT_PIN would record a global halt); a one-shot run reports
 the skipped round and exits EXIT_OK. A file that has stopped changing is read exactly as before.
+Issue #75 criterion 3 (tightening only): a rotated book file that was enumerated and then disappeared --
+the glob listed it, the read cannot find it, or it is deleted while it is being read -- is the rotation
+changing, not an empty file: the round is skipped the same way (``input_pending``, problem ``vanished``,
+the path reported), never silently read as no rows, which would have made every leg missing_book.
 Issue #277 (Task DF, tightening only): consecutive ``input_pending`` rounds are no longer silent. Each one
 adds 1 to ``input_pending_streak`` in the StaleWatch state (next to ``all_stale_streak``; the per-market
 streaks are still neither advanced nor reset). At ALL_STALE_CONSECUTIVE_CYCLES rounds in a row it takes the
@@ -134,6 +138,8 @@ INPUT_NOT_OBJECT = "not_object"
 INPUT_PENDING = "input_pending"
 INPUT_CHANGING = "changing"
 INPUT_REREAD_LIMIT = 1  # one bounded re-read of a changing input (structure, not a threshold)
+# Issue #75 criterion 3: an enumerated rotated book file that is gone when it is read.
+INPUT_VANISHED = "vanished"
 
 
 class CorruptInput(Exception):
@@ -195,16 +201,19 @@ class InputPending(Exception):
     """A monitored markets/books input is still being appended (Issue #75 criterion 2).
 
     Raised only after the one bounded re-read; the round is skipped (no signal, no gap, no StaleWatch
-    bookkeeping), never halted. Carries where: the path and one problem code, never file content.
+    bookkeeping), never halted. Carries where and what: the path and one problem code --
+    ``INPUT_CHANGING`` for a file still being appended, ``INPUT_VANISHED`` for one of the rotation's
+    enumerated files that disappeared (Issue #75 criterion 3) -- never file content.
     """
 
-    def __init__(self, path: Path, detail: str = "") -> None:
+    def __init__(self, path: Path, detail: str = "", problem: str = INPUT_CHANGING) -> None:
         self.path = str(path)
         self.detail = detail
-        super().__init__(f"{self.path}: {INPUT_CHANGING}" + (f" ({detail})" if detail else ""))
+        self.problem = problem
+        super().__init__(f"{self.path}: {problem}" + (f" ({detail})" if detail else ""))
 
     def as_problem(self) -> dict:
-        return {"path": self.path, "line": None, "problem": INPUT_CHANGING}
+        return {"path": self.path, "line": None, "problem": self.problem}
 
 
 def _file_signature(path: Path) -> tuple[int, int] | None:
@@ -223,7 +232,10 @@ def read_stable_strict_jsonl(path: Path) -> list[dict]:
     changed means the rows may be a partial view: exactly ``INPUT_REREAD_LIMIT`` bounded re-read is
     allowed. Still changing after that and InputPending names the path; the caller then skips the
     round. A file that has stopped changing is read exactly once, so a corrupt one is refused as
-    ``CorruptInput`` without a re-read.
+    ``CorruptInput`` without a re-read. Issue #75 criterion 3: a file that was present when the read
+    started and is gone when it ends was deleted mid-read -- that too is a change (InputPending,
+    ``INPUT_VANISHED``), never a silent empty read. A file absent from the start keeps its old
+    meaning of no rows (the missing_book rule).
     """
     path = Path(path)
     problem: CorruptInput | None = None
@@ -235,11 +247,33 @@ def read_stable_strict_jsonl(path: Path) -> list[dict]:
             rows = read_strict_jsonl(path)
         except CorruptInput as exc:
             problem = exc
-        if _file_signature(path) == before:
-            if problem is not None:
-                raise problem
-            return rows
+        after = _file_signature(path)
+        if after != before:
+            if before is not None and after is None:
+                raise InputPending(path, problem=INPUT_VANISHED)
+            continue
+        if problem is not None:
+            raise problem
+        return rows
     raise InputPending(path)
+
+
+def _read_enumerated_strict_jsonl(path: Path) -> list[dict]:
+    """``read_strict_jsonl`` for one of a rotation's already-enumerated files (Issue #75 criterion 3).
+
+    The file existed when the rotation was enumerated, so a read that finds it absent -- before the
+    read or in the middle of it -- is the rotation changing, not an empty file: InputPending names
+    the path with ``INPUT_VANISHED`` and the caller skips the round. Reading it as no rows would
+    have made every leg missing_book while the recording was still there a moment ago.
+    """
+    if _file_signature(path) is None:
+        raise InputPending(path, problem=INPUT_VANISHED)
+    try:
+        return read_strict_jsonl(path)
+    except CorruptInput as exc:
+        if exc.problem == INPUT_UNREADABLE and _file_signature(path) is None:
+            raise InputPending(path, problem=INPUT_VANISHED) from exc
+        raise
 
 
 NOT_RECORDED = "not_recorded"
@@ -313,6 +347,9 @@ def read_books(books_path: Path, recording_dir: Path | None = None) -> tuple[lis
     the rest; a missing or empty books file still means no rows (the missing_book rule is unchanged).
     The direct books file and the active (last) file of the rotation are the inputs that may still be
     appended to (Issue #75 criterion 2): they get the bounded re-read, the closed ones do not.
+    Issue #75 criterion 3: every enumerated file must still exist when it is read. One that vanished
+    since the enumeration (or while it was read) raises InputPending with INPUT_VANISHED -- the round
+    is skipped -- never silently read as an empty file.
     """
     if recording_dir is None:
         return read_stable_strict_jsonl(books_path), None
@@ -321,8 +358,11 @@ def read_books(books_path: Path, recording_dir: Path | None = None) -> tuple[lis
         return [], RECORDING_EMPTY
     rows: list[dict] = []
     for path in files[:-1]:
-        rows.extend(read_strict_jsonl(path))
-    rows.extend(read_stable_strict_jsonl(files[-1]))
+        rows.extend(_read_enumerated_strict_jsonl(path))
+    active = files[-1]
+    if _file_signature(active) is None:  # enumerated, then gone before its read
+        raise InputPending(active, problem=INPUT_VANISHED)
+    rows.extend(read_stable_strict_jsonl(active))
     return rows, None
 
 
