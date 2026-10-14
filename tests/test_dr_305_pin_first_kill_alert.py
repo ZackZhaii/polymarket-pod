@@ -1,10 +1,14 @@
-"""Issue #305 (Task DQ): paper_session runs the pin check first; kill_alert turns every Exception into exit 4.
+"""Issue #305 (Task DR): paper_session runs the pin check first; kill_alert turns every Exception into exit 4.
 
 Tightening only (Poly风控 non-blocking items from the #292 / #295 reviews). paper_session.run checks the risk file
 with ``pins.refuse_start`` before it reads risk.toml at all, so a missing file, a directory, or a sha computation
 that raises is ``risk_toml_pin_drift`` with a global halt record and ``ok=False`` -- never an uncaught exception --
 and the drift check and the unchanged-file guard read the same path. ``m2_runner.kill_alert`` converts any
 ``Exception`` (not KeyboardInterrupt / SystemExit) into ``WriteFailed`` (exit 4). Offline: getters fail the test.
+
+Task DS adds section 3: the reread-then-refuse branch. The real pin check passes, then the file is deleted,
+edited, swapped for a directory, or the reread raises, before ``_pinned_snapshot`` reads it again: still
+``risk_toml_pin_drift`` with one global halt, ``ok=False``, nothing written, no getter called.
 """
 from __future__ import annotations
 
@@ -193,6 +197,96 @@ def test_risk_file_changed_during_session_against_the_checked_path_still_raises(
         )
     assert not (tmp_path / "sessions.jsonl").exists()
 
+
+
+# ---------------------------------------------------------------- 3. Task DS: pin check passes, reread refuses
+
+
+def _race_after_real_check(monkeypatch, pinned: Path, change) -> dict:
+    """Run the real pins.refuse_start on ``pinned``; once it has passed, ``change`` races the file."""
+    real = paper_session.refuse_start
+    seen: dict = {}
+
+    def check_then_race(proc, *, risk_path=None, bus_path=None, stream=None):
+        problems = real(proc, risk_path=risk_path, bus_path=bus_path, stream=stream)
+        seen["problems"], seen["risk_path"] = problems, risk_path
+        seen["halts_after_check"] = list(halt_store.active_halts())
+        change()
+        return problems
+
+    monkeypatch.setattr(paper_session, "refuse_start", check_then_race)
+    return seen
+
+
+def _assert_check_passed_first(seen: dict, pinned: Path) -> None:
+    assert seen["problems"] == []  # the real pin check passed: the refusal comes from the reread
+    assert Path(seen["risk_path"]) == pinned
+    assert seen["halts_after_check"] == []  # no halt before the reread found the drift
+
+
+def _pinned_copy(tmp_path) -> Path:
+    pinned = tmp_path / "risk.toml"
+    pinned.write_bytes(_REAL_RISK)
+    return pinned
+
+
+def test_reread_refuses_when_file_deleted_after_check(tmp_path, monkeypatch):
+    pinned = _pinned_copy(tmp_path)
+    seen = _race_after_real_check(monkeypatch, pinned, pinned.unlink)
+    result, books, markets = _refused(tmp_path, risk_path=pinned)
+    _assert_check_passed_first(seen, pinned)
+    _assert_refused_with_halt(tmp_path, result, books, markets, "risk_toml_unreadable")
+
+
+def test_reread_refuses_when_sha_no_longer_pinned_after_check(tmp_path, monkeypatch):
+    pinned = _pinned_copy(tmp_path)
+    seen = _race_after_real_check(monkeypatch, pinned,
+                                  lambda: pinned.write_bytes(_REAL_RISK + b"# edited after the pin check\n"))
+    result, books, markets = _refused(tmp_path, risk_path=pinned)
+    _assert_check_passed_first(seen, pinned)
+    _assert_refused_with_halt(tmp_path, result, books, markets, "risk_sha256_not_pinned")
+
+
+def test_reread_refuses_when_file_replaced_by_directory_after_check(tmp_path, monkeypatch):
+    pinned = _pinned_copy(tmp_path)
+
+    def swap() -> None:
+        pinned.unlink()
+        pinned.mkdir()
+
+    seen = _race_after_real_check(monkeypatch, pinned, swap)
+    result, books, markets = _refused(tmp_path, risk_path=pinned)
+    _assert_check_passed_first(seen, pinned)
+    _assert_refused_with_halt(tmp_path, result, books, markets, "risk_toml_unreadable")
+
+
+def test_reread_that_raises_after_check_is_pin_drift(tmp_path, monkeypatch):
+    """A non-OSError in the reread (here its sha256) is drift too, never an uncaught exception."""
+    pinned = _pinned_copy(tmp_path)
+
+    class _BrokenHashlib:
+        @staticmethod
+        def sha256(*_a, **_k):
+            raise RuntimeError("sha256 unavailable on reread")
+
+    # Only paper_session's reread binding breaks; the real pin check (pins.hashlib) still passes.
+    seen = _race_after_real_check(monkeypatch, pinned,
+                                  lambda: monkeypatch.setattr(paper_session, "hashlib", _BrokenHashlib))
+    result, books, markets = _refused(tmp_path, risk_path=pinned)
+    _assert_check_passed_first(seen, pinned)
+    _assert_refused_with_halt(tmp_path, result, books, markets, "pin_check_failed:RuntimeError")
+
+
+def test_reread_refusal_never_parses_or_reads_config_further(tmp_path, monkeypatch):
+    """After the reread refuses, nothing parses the risk file or builds scanner thresholds."""
+    pinned = _pinned_copy(tmp_path)
+    monkeypatch.setattr(paper_session, "parse_risk_toml", lambda *_a, **_k: pytest.fail("parsed after drift"))
+    monkeypatch.setattr(paper_session.scanner, "thresholds_from", lambda *_a, **_k: pytest.fail("thresholds"))
+    monkeypatch.setattr(paper_session, "record_books", lambda *_a, **_k: pytest.fail("record_books"))
+    seen = _race_after_real_check(monkeypatch, pinned, pinned.unlink)
+    result, books, markets = _refused(tmp_path, risk_path=pinned)
+    _assert_check_passed_first(seen, pinned)
+    _assert_refused_with_halt(tmp_path, result, books, markets, "risk_toml_unreadable")
 
 # ---------------------------------------------------------------- 2. m2_runner.kill_alert: Exception -> exit 4
 
