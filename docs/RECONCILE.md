@@ -94,8 +94,10 @@ Fields the Reconciler does not use (titles, PnL columns, icons, profile fields) 
 - `DATA_API_MAX_LAG_S = 120.0` s: largest `age_seconds + serving.lag_seconds` accepted from `/v2/status`.
 - `DATA_API_IDENTITY_TOL_USDC = 1e-06` USDC: position-row identity tolerance (live rows: within 1.2e-10).
 - Rate limits (research note, per 10 s: 800 total, trades 300, positions 200, status 100): one round makes
-  1 + pages(positions) + pages(trades) requests, far below them; a 429 is not retried as success (`public_get`
-  raises, the round fails closed, exit 3).
+  1 + pages(positions) + pages(trades) requests, far below them; a 429 is retried by `public_get` after its
+  `Retry-After` (integer seconds, capped at 30 s, Task DP) inside the same attempt budget and the call's
+  `PUBLIC_GET_DEADLINE_S` = 30 s deadline (Task DQ); still failing, `public_get` raises and the round fails
+  closed (exit 3).
 - Operational, in the module: `reconcile.PAGE_LIMIT = 500`, `reconcile.MAX_PAGES = 200`.
 
 ## Phase 0 note

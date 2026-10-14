@@ -602,6 +602,15 @@
       "surface": "grok-bot"
     },
     {
+      "id": "DQ",
+      "status": "done",
+      "title": "Poly哨兵 on #309: public_get total deadline (PUBLIC_GET_DEADLINE_S), /time 429 not retried, m2_runner / m1_run heartbeats between GETs",
+      "finish": "src/thresholds.py PUBLIC_GET_DEADLINE_S = 30.0 (M2 pending, <= HEARTBEAT_RUNNER_TIMEOUT_S / 4, re-exported as podlib.PUBLIC_GET_DEADLINE_S); podlib.public_get clips each attempt's timeout to the time left and refuses a wait that would end past the deadline (PublicGetError); CLOB /time never retries a 429. m2_runner GuardedGetter(after=...) beats the heartbeat (throttled) after every GET of a tick; m1_run clock_check(beat=...) beats after each asset. KILL at most one tick late (documented). SKILL.md api-health-ratelimit, docs/RECONCILE.md and docs/THRESHOLDS.md match the code. Offline tests tests/test_public_get_deadline.py and tests/test_ratelimit_storm.py (429 storm: one runner tick and m1_run start-up < 120 s). config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DQ. KEY + HOLD: needs Poly风控 and Poly哨兵 通过, then 家伟's approval in chat. Done by grok-bot.",
+      "done_at": "2026-10-14T05:00:00Z",
+      "surface": "grok-bot"
+    },
+    {
       "id": "DV",
       "status": "done",
       "title": "calibration: out-of-bounds fill rejects whole decision even if dropped by another filter; _parse_ts boundary OverflowError dropped (#321 follow-up)",

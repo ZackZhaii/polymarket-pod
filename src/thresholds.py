@@ -313,6 +313,10 @@ HALT_STATE_LOCK_TIMEOUT_S = 5.0
 # Task DD (#237/#280): wait for the ledger commit mutex in paper_ledger.commit_if_allowed; not acquired ->
 # the order is refused. Registered in docs/THRESHOLDS.md (value unchanged from the PR; M2 pending).
 COMMIT_LOCK_TIMEOUT_S = 5.0
+# Task DQ (Poly哨兵 on #309): total wall-time budget (seconds) of ONE podlib.public_get call, attempts, socket
+# timeouts and Retry-After / backoff waits together. A quarter of HEARTBEAT_RUNNER_TIMEOUT_S, so a 429 storm
+# cannot hold one GET long enough to stale a heartbeat. Must be > 0 and <= HEARTBEAT_RUNNER_TIMEOUT_S / 4. M2 pending.
+PUBLIC_GET_DEADLINE_S = 30.0
 # M2 pending. Retry step (seconds) while waiting for the halt-state mutex.
 HALT_STATE_LOCK_POLL_S = 0.05
 
@@ -436,6 +440,9 @@ def consistency_problems() -> list[str]:
             problems.append(f"{name} must be a finite float > 0")
     if not HEARTBEAT_RUNNER_EVERY_S < HEARTBEAT_RUNNER_TIMEOUT_S <= RUNNER_PAUSED_ALERT_S:
         problems.append("need HEARTBEAT_RUNNER_EVERY_S < HEARTBEAT_RUNNER_TIMEOUT_S <= RUNNER_PAUSED_ALERT_S")
+    if not (isinstance(PUBLIC_GET_DEADLINE_S, float)
+            and 0.0 < PUBLIC_GET_DEADLINE_S <= HEARTBEAT_RUNNER_TIMEOUT_S / 4.0):  # Task DQ
+        problems.append("need 0 < PUBLIC_GET_DEADLINE_S <= HEARTBEAT_RUNNER_TIMEOUT_S / 4")
     if not RUNNER_LOOP_S < HEARTBEAT_RUNNER_TIMEOUT_S:
         problems.append("need RUNNER_LOOP_S < HEARTBEAT_RUNNER_TIMEOUT_S")
     if not RUNNER_SCAN_EVERY_S < RUNNER_SCAN_MAX_AGE_S:
