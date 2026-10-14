@@ -145,12 +145,36 @@ Switching between `clock_unverified` and `clock_skew` is one clock pause episode
 `paused` event is still written on each switch), so the Sentinel's `runner_paused_too_long` (`RUNNER_PAUSED_ALERT_S`, 6 h)
 fires on a flapping clock too. `paused_since` clears only when a tick runs again; any other pause reason restamps it.
 
+Issue #289 (Task DJ): the runner heartbeat `progress` also carries three read-only clock observation fields. They
+never feed a decision, a pause or a halt (no new alert either; alert thresholds on them are M2 pending, #289 item 2):
+
+- `clock_anomaly`: the clock anomaly the runner currently holds, `null` when clear, else `clock_unverified` or
+  `clock_skew` (the value that makes the day-start snapshot late, `clock_ok=False`). It can stay set while the runner
+  is **not** paused: from startup (fail closed, #275) and after a clock pause it clears only on a tick with a clean
+  CLOB /time check and at least one fresh book with a valid book_ts, so a run with no pending signal, no readable
+  book, or a missing / invalid book_ts keeps it set with `paused_reason` null.
+- `clock_anomaly_since`: UTC stamp of when the current anomaly episode began (`null` when `clock_anomaly` is null).
+  The startup `clock_unverified` is stamped at runner start (`recover`), a later anomaly at the tick that set it.
+  Like `paused_since`, a switch between `clock_unverified` and `clock_skew` is the same episode and keeps the first
+  stamp; it resets only when the anomaly clears, and a later anomaly gets a new stamp.
+- `last_time_check`: the last CLOB /time check, `null` before the first one (a tick stopped earlier, e.g. by KILL, a
+  halt or a pin, keeps the previous value). An object `{ts, result, low_s, high_s, rtt_s}`: `ts` the tick's stamp,
+  `result` `ok` / `clock_unverified` / `clock_skew`, `low_s` / `high_s` the certified local-minus-server interval in
+  seconds (including the ±1 s server quantization) and `rtt_s` the request time, rounded to ms; the three are
+  `null` when the check could not measure (unreachable / malformed /time, unusable local clock).
+
+Issue #247 (Task DK): when `runs/m2/KILL` stops the runner it appends one line to `logs/alerts.jsonl` (the Sentinel's
+alerts file, same row shape): `{"ts", "from": "m2_runner", "alert": "kill_file", "severity": "info", "proc":
+"m2_runner", "detail", "exchange_action": "none"}`, at most once per stop (each start that finds KILL writes its own).
+A record only: the exit code stays 0 and recovery is unchanged; nothing restarts the runner (auto-restart is KEY
+#243). If that line cannot be written the runner does not drop it silently: it exits 4 like any other write failure.
+
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | `runs/m2/KILL` found, `--max-runtime` reached or `--once` done | - |
+| 0 | `EXIT_OK` | `runs/m2/KILL` found (one `kill_file` line in `logs/alerts.jsonl`, #247), `--max-runtime` reached or `--once` done | - |
 | 2 | `EXIT_USAGE` | usage error (an unknown argument, `--max-runtime` not > 0) | alert |
 | 3 | `EXIT_ALREADY_RUNNING` | another m2_runner holds `runner.lock` (no heartbeat written, nothing done) | alert |
-| 4 | `EXIT_WRITE_FAILED` | a journal / events / candidates write failed | global halt |
+| 4 | `EXIT_WRITE_FAILED` | a journal / events / candidates write failed, or the KILL alert line could not be written (#247) | global halt |
 | 6 | `EXIT_PIN_OR_LIVE` | config/risk.toml off its pins or a live flag (`live_enabled` not false, `mode` not paper, `require_human_gate` not true); global halt recorded (`risk_toml_pin_drift` / `m2_live_flag`) | global halt |
 | 7 | `EXIT_SELF_CHECK` | the start self-check failed (run dir or inbox not writable) | alert |
 
@@ -163,9 +187,14 @@ heartbeat. Acceptance 2: the ledger must pass `ledger_store.verify` first (only 
 and the bus is parsed strictly — bad JSON, non-object rows, a torn tail and unreadable files are
 named failures. Acceptance 3: each joined fill's full payload and the message's outer `market` are
 compared with a type-sensitive normalized JSON comparison (key order / formatting normalized;
-`10` / `10.0` / `true` / `"10.0"` stay distinct); the outer `bus.ts` is ignored. Review P1 on PR
-#202: the remaining checks (sender roles, duplicate / conflict copies, UNKNOWN markers, SHA256) are
-later acceptance items, so the tool never reports PASS — a problem-free run ends verdict `unknown`.
+`10` / `10.0` / `true` / `"10.0"` stay distinct); the outer `bus.ts` is ignored. Acceptance 4 +
+NEW-3b: every bus fill must be the Executor→Sentinel message the pipeline writes; identical
+duplicate copies count once (the extra-copy count is reported) while copies that contradict each
+other are a named `duplicate_conflict`; orphans on either side fail; settlement rows (`kind`
+"settlement", ledger-only by design) are counted separately (`ledger.settlements`), are not
+orphans, must still carry a fill_id, and a bus fill with a settlement's fill_id is a named
+problem. Review P1 on PR #202: the remaining checks (UNKNOWN markers, SHA256 and counts) are later
+acceptance items, so the tool never reports PASS — a problem-free run ends verdict `unknown`.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|

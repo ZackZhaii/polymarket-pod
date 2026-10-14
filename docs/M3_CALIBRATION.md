@@ -286,7 +286,8 @@ git-ignored. Exit codes: `docs/EXIT_CODES.md` (0 written, 2 usage, 3 corrupt inp
 
 ### Samples
 
-- **B, forecasts**: the first sealed forecast (by `ts`, then `forecast_id`) per `condition_id`; p =
+- **B, forecasts**: the first sealed forecast (by `ts`, then `forecast_id`) per `condition_id`, and only
+  one whose `ts` is provably before that market's `resolution.closed_ts`; p =
   `model_prob`, y = 1 when its token won.
 - **A, trades**: counted (`ledger_store.counts`), `risk_decision=allow` fills grouped by `decision_id`; at
   most `CALIBRATION_MAX_DECISIONS_PER_MARKET` decisions per market. p = the first fill's `model_prob`, q =
@@ -296,6 +297,13 @@ git-ignored. Exit codes: `docs/EXIT_CODES.md` (0 written, 2 usage, 3 corrupt inp
 A label is used only when the resolution row is `status=resolved`, `uma_checked=true`, its prices are one
 1.0 and the rest 0.0, and the forecast's `outcome_index` and `token_id` agree with it (the winning index
 and `winning_token_id` must point the same way).
+
+Issue #70 (no result leakage): a forecast sample must be sealed **strictly before** `resolution.closed_ts`.
+Both times are zoned ISO strings parsed to UTC (`_parse_ts`) before the comparison, so the same instant
+written in any offset is the same moment. A forecast whose time cannot be proved (its `ts` does not parse
+as a zoned ISO time) or that was sealed at the close or after it is dropped and counted
+(`forecast_ts_invalid`, `forecast_not_before_close`); nothing is imputed and an unprovable row never takes
+the market's first-forecast slot.
 
 ### Dropped and counted, never imputed
 
@@ -307,6 +315,8 @@ with its reason.
 | `no_book_context` | A | Task BC: `fill_context` is `operator_cli` or `gate_check` (checked first) |
 | `excluded_strategy` / `excluded_market` | A, B | phase0-gate-test, no-edge-check, wash-probe; `phase0-self-check*`, `e2e-*` |
 | `forecast_calibration_problems` | B | the stored list or a recomputed `forecast_problems` is non-empty (also counted per problem) |
+| `forecast_ts_invalid` | B | issue #70: its `ts` does not parse as a zoned ISO time (unparseable, or no timezone), so when it was sealed cannot be proved (a blank / missing `ts` is `missing_ts` under `forecast_calibration_problems`) |
+| `forecast_not_before_close` | B | issue #70: its `ts` is not strictly before `resolution.closed_ts` (sealed at the close or after it, the same instant in any offset counting as equal; a close that cannot be parsed is unproven too) |
 | `duplicate_market_forecast` | B | not the first forecast for its market |
 | `fill_missing_identity` | A | a fill booked before Task AX (no `calibration_problems`) |
 | `fill_calibration_problems` | A | stored or recomputed `fill_problems` (plus a missing / unknown stored `fill_context`) non-empty (counted per problem) |

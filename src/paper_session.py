@@ -11,6 +11,10 @@ markets, or a bad threshold writes nothing (fail closed, like scanner exits 1-3)
 Book age is judged by paper_cycle from each row's book_ts (the CLOB /book timestamp, never
 the recorder ts) against an evaluation clock read after the books are recorded, not the
 session start stamp. A missing, unparseable or future book_ts stays stale.
+
+Task DH (#233): start also verifies the full committed risk.toml sha256 and
+RISK_FILE_PINS via src.pins.risk_file_problems (not only podlib.PINS); drift
+refuses before any markets/books/sessions write.
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ if str(ROOT) not in sys.path:
 
 from src import paper_cycle, scanner  # noqa: E402
 from src.book import record as record_books  # noqa: E402
+from src.pins import record_drift, risk_file_problems  # noqa: E402 - Task DH (#233)
 from src.podlib import (  # noqa: E402
     BOOKS_PATH,
     MARKETS_PATH,
@@ -60,15 +65,27 @@ def run(
     book_limit: int = BOOK_LIMIT,
     clock: Callable[[], str] | None = None,
     max_markets: int = scanner.MAX_MARKETS,
+    risk_path: Path | None = None,
 ) -> dict[str, Any]:
     """now stamps the session (market rows and the recorder ts on book rows).
 
     clock is read once, after the books are recorded, and is the time paper_cycle judges
     book age against. It defaults to the wall clock; tests inject it.
+
+    Task DH (#233): before any public read or write, verify the committed risk.toml
+    sha256 and the full RISK_FILE_PINS set via src.pins.risk_file_problems — the same
+    check m2_runner / paper_cycle / book already use. Pre-start drift refuses with
+    reason=risk_toml_pin_drift and writes nothing.
     """
     before = RISK_PATH.read_bytes()
     loaded = cfg if cfg is not None else load_risk()
     empty = {"markets": 0, "books": 0, "gaps": 0, "stale": 0, "fills": 0}
+    # Full file pins first (sha + every key); then the in-memory five-pin check.
+    drift = risk_file_problems(risk_path)
+    if drift:
+        record_drift("paper_session", drift, phase="start", bus_path=bus_path)
+        _assert_risk_unchanged(before)
+        return {"ok": False, "reason": "risk_toml_pin_drift", **empty}
     if pin_problems(loaded):
         _assert_risk_unchanged(before)
         return {"ok": False, "reason": "phase0_pin", **empty}

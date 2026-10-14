@@ -61,7 +61,9 @@ def _default_scan(root: Path) -> None:
     path = root / "data" / "markets.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     row = {"ts": "2026-10-01T00:00:00Z", "id": "m-d", "question": "q", "version": "v2",
-           "token_id_source": "clob", "token_ids": ["tD1", "tD2"]}
+           "token_id_source": "clob", "token_ids": ["tD1", "tD2"],
+           "end_date": "2099-01-01T00:00:00Z",  # Task DI (#137): the scanner always sets end_date
+           "tags": ["politics"], "category": "politics"}  # and a classification (unknown = dropped)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row) + "\n")
 

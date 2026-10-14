@@ -1536,8 +1536,42 @@ window, deadline or threshold changed.
 - m1_run manifest counts add `pongs`, `inbound_frames`, `data_frames`, `clock_jumps_in_backoff`.
 - Tests: `tests/test_ws_telemetry.py`; exact `disconnected` events in `tests/test_ws_silence.py` updated.
 
+## Task DK — Issue #247: m2_runner writes an alert line on KILL (exit code unchanged)
+
+Status: done.
+
+Non-KEY part split from KEY #243, claimed by Poly桥接. Done by grok-bot on dev@9a25e07.
+
+- When `<run dir>/KILL` stops the runner, `iteration` appends one row to the Sentinel's `logs/alerts.jsonl`
+  (`sentinel_tick.ALERTS_PATH`, same row shape): `from` / `proc` `m2_runner`, `alert` `kill_file`, `severity`
+  `info`, `detail` (the KILL path, `exit_code=0`), `exchange_action` `none`. At most once per stop
+  (`RunnerState.kill_alerted`); each start that finds KILL writes its own line.
+- Unchanged: KILL still exits 0, no getter is called, recovery is untouched, nothing restarts the runner
+  (auto-restart stays KEY #243).
+- A failed alert write is `WriteFailed`: exit 4 like a journal / events write, never dropped silently.
+- docs/EXIT_CODES.md notes it. Tests: `tests/test_m2_runner_kill_alert.py` (offline).
+
+## Task DM — Issue #293: make m2_runner_clock tests deterministic
+
+Status: done.
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@ffe32ab).
+
+- Flaky under full-suite load: `test_bad_book_skips_one_signal_and_the_next_signal_can_commit[-6-future_book_ts]`
+  and `test_malformed_book_skips_one_signal_without_blocking_the_next[None]` (alone 70/70; under load fail once then pass).
+- Cause: `env` captured wall `datetime.now` for runner `clock`, but `paper_ledger.commit_if_allowed` →
+  `RiskGate.evaluate(now=None)` reads live `podlib` / `book_staleness` / `wash_detect` datetime; wall drift past
+  `INTENT_TTL_S` (or past a synthetic `future_book_ts`) broke the second-signal allow.
+- Fix (tests only): fixed `FROZEN_NOW` plus `_freeze_wall` on those three modules in `tests/test_m2_runner_clock.py`
+  `env` fixture. No `src/`, threshold, or `config/risk.toml` change.
+
 ## Latest
 
+- 2026-10-14: Task DM (issue #293): freeze podlib/book_staleness/wash_detect clock in m2_runner_clock tests so
+  RiskGate commit path matches runner fixture time. Tests only. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DK (issue #247): m2_runner writes one `kill_file` line to `logs/alerts.jsonl` on KILL; exit
+  code stays 0, no auto-restart (KEY #243). risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 - 2026-10-10: Task BL: WS recorder `ping` / `pong` events, inbound frame counts, richer `disconnected` events,
   backoff `clock_jump` events, PONGs and frame counts in the m1_run manifest. Logging only.
 - 2026-10-10: Task BJ (issue #104): RiskGate books min(intent_builder's shares, what fits the all-in 1% clip);
