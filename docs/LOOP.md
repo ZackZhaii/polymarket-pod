@@ -1601,7 +1601,28 @@ Claimed by Poly桥接. Done by grok-bot on NoisePC.
   `tests/test_310_maker_custom_quotes_path.py` (custom file then default, and the reverse),
   `tests/test_310_maker_book_age_in_lock.py` (book 119 s before lock, 121 s after: refused, no quote line).
 
+## Task DR — Issue #305: paper_session pin check first; kill_alert Exception → exit 4
+
+Status: done.
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@3a31906). Follow-up of Poly风控's #292 / #295 reviews.
+Tightening only; pin path change, so Poly风控 must comment “通过” on the head before merge.
+
+- `src/paper_session.py` `run`: the pin check is the first step, through `pins.refuse_start` (like m2_runner /
+  paper_cycle / book), before any risk.toml read. A missing or unreadable file, a directory, or a sha computation
+  that raises is `reason=risk_toml_pin_drift` with a global halt record and `ok=False` (was an uncaught
+  `FileNotFoundError` / `RuntimeError`); no markets / books / sessions write, no getter call.
+- The unchanged-file snapshot (`before`), the loaded config and the pin check use one path (`risk_path`, else
+  `RISK_PATH`); the config is parsed from the checked bytes (re-read sha must still be pinned, else drift).
+- `src/m2_runner.py` `kill_alert`: any `Exception` while building or writing the alert line becomes `WriteFailed`
+  (exit 4), not only `OSError`; KeyboardInterrupt / SystemExit pass through. docs/EXIT_CODES.md notes both.
+- Tests: `tests/test_dq_305_pin_first_kill_alert.py` (offline).
+
 ## Latest
+
+- 2026-10-14: Task DR (issue #305): paper_session runs the pin check first (missing / unreadable risk.toml is
+  `risk_toml_pin_drift` with a halt, not an exception; one path for snapshot and check); m2_runner kill_alert
+  turns any Exception into exit 4. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 - 2026-10-14: Task DO (issue #237, PR #310): maker paper buy re-checked under commit.lock (book age, pair,
   opposite leg, ledger validity), fail closed; bids over 1 record a skip. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
