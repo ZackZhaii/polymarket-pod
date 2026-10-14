@@ -618,6 +618,15 @@
       "note": "Claimed by Poly桥接 as Task DV (follow-up of #321 Codex review). Paper-only, calibration-only. Done by grok-bot on the box.",
       "done_at": "2026-10-14T09:50:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "DU",
+      "status": "done",
+      "title": "Issue #316: public_get hard wall-clock deadline (connect, headers, body read); deadline_s must be finite and > 0",
+      "finish": "src/podlib.py public_get: each attempt runs in a daemon worker the caller waits for at most the time left; the body is read in chunks (read1) with the socket timeout re-clipped to the time left and a deadline check after every chunk; past the deadline PublicGetError at once (not retried), never partial data. deadline_s NaN/inf/<=0/bool/str raise ValueError before any network call. PUBLIC_GET_DEADLINE_S unchanged (30.0); 429/Retry-After and /time 429 not retried unchanged. tests/test_public_get_deadline.py Task DU section: real 127.0.0.1 drip server (slow body Content-Length and chunked, slow headers) asserts PublicGetError within deadline + 0.75 s; fake-clock chunk reads; bad deadline_s values. docs/THRESHOLDS.md and SKILL.md api-health-ratelimit match the code. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DU (issue #316, Poly风控 / Codex follow-ups of #314). Tightening only, non-KEY; needs Poly风控 通过 on head. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T10:28:00Z",
+      "surface": "grok-bot"
     }
   ]
 }

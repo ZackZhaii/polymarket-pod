@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import http.client
 import json
+import math
 import socket
 import ssl
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -76,6 +78,11 @@ HTTP_TOO_MANY_REQUESTS = 429
 # PUBLIC_GET_DEADLINE_S (src/thresholds.py). Each attempt's socket timeout is clipped to the time left, and a
 # wait that would end past the deadline is not taken: PublicGetError at once. CLOB /time (TIME_URL) is never
 # retried on 429: a retried /time widens the sent/recv interval past the clock tolerance anyway.
+# Task DU (#316): the deadline is a hard wall-clock cap on one call, connect, headers and body read included.
+# Each attempt runs in a short-lived worker thread that the caller waits for at most the time left; the worker
+# reads the body in chunks of at most _READ_CHUNK_BYTES, re-clips the socket timeout to the time left before
+# every read and stops once the deadline has passed. Past the deadline: PublicGetError, never partial data.
+_READ_CHUNK_BYTES = 65536
 _sleep = time.sleep  # tests patch this so they never sleep
 _monotonic = time.monotonic  # tests patch this with a fake clock
 
@@ -280,6 +287,84 @@ def _retry_after_s(exc: BaseException) -> float | None:
     return min(float(int(text)), PUBLIC_GET_RETRY_AFTER_MAX_S)
 
 
+class _DeadlineExceeded(TimeoutError):
+    """Task DU: one public_get call passed its deadline. Never retried: public_get raises PublicGetError."""
+
+
+def _check_deadline_s(deadline_s: Any) -> float:
+    """Task DU (#316, Codex P2 on #314): the deadline must be a finite number > 0 (int or float, not bool)."""
+    if isinstance(deadline_s, bool) or not isinstance(deadline_s, (int, float)):
+        raise ValueError(f"public_get deadline_s must be a finite number > 0, got {deadline_s!r}")
+    budget = float(deadline_s)
+    if not math.isfinite(budget) or budget <= 0:
+        raise ValueError(f"public_get deadline_s must be a finite number > 0, got {deadline_s!r}")
+    return budget
+
+
+def _time_left(started: float, budget: float) -> float:
+    left = budget - (_monotonic() - started)
+    if left <= 0:
+        raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed during the read")
+    return left
+
+
+def _clip_socket_timeout(response: Any, seconds: float) -> None:
+    """Best effort: set the response socket's timeout so one recv cannot outlast the time left."""
+    sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+    if sock is None:
+        return
+    try:
+        sock.settimeout(max(seconds, 0.001))
+    except (OSError, ValueError):
+        pass
+
+
+def _read_body(response: Any, timeout: float, started: float, budget: float) -> bytes:
+    """Task DU: read the body in chunks, checking the deadline before and after every chunk."""
+    read1 = getattr(response, "read1", None)
+    if read1 is None:  # a response without read1 (test doubles): one read, then the deadline check
+        body = response.read()
+        _time_left(started, budget)
+        return body
+    chunks = []
+    while True:
+        _clip_socket_timeout(response, min(timeout, _time_left(started, budget)))
+        chunk = read1(_READ_CHUNK_BYTES)
+        _time_left(started, budget)  # a chunk that arrived past the deadline is not used
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _attempt(request: Request, timeout: float, started: float, budget: float) -> bytes:
+    """Task DU: one GET (connect, headers, body) that returns or raises within the time left.
+
+    The request runs in a daemon worker thread; this thread waits at most the time left. If the worker is not
+    done by then, _DeadlineExceeded is raised here at once; the worker stops at its next read (each read is
+    clipped to the time left, and it checks the deadline after every chunk) and its result is dropped.
+    """
+    left = _time_left(started, budget)
+    attempt_timeout = min(timeout, left)
+    outcome: dict[str, Any] = {}
+    done = threading.Event()
+
+    def work() -> None:
+        try:
+            with urlopen(request, timeout=attempt_timeout) as response:
+                outcome["body"] = _read_body(response, attempt_timeout, started, budget)
+        except BaseException as exc:  # noqa: BLE001 - handed to the caller's thread below
+            outcome["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=work, name="public_get", daemon=True).start()
+    if not done.wait(left):
+        raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed before the answer was read")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["body"]
+
+
 def public_get(
     url: str,
     timeout: float = 20.0,
@@ -298,6 +383,10 @@ def public_get(
     Task DQ: the whole call is bounded by ``deadline_s`` (default PUBLIC_GET_DEADLINE_S, about 30 s): each
     attempt's timeout is min(timeout, time left), and a retry whose wait would end past the deadline is not
     taken. If every attempt fails, the deadline is reached, or /time answers 429, raises PublicGetError.
+
+    Task DU (#316): the deadline is a hard wall-clock cap, the connect, headers and body read included (a
+    slow-drip answer fails closed with PublicGetError at the deadline, never partial data or a late OK).
+    ``deadline_s`` must be a finite number > 0, else ValueError before any network call.
     """
     if not (url.startswith(PUBLIC_PREFIXES) or url in (DATA_API_STATUS_URL, TIME_URL)):
         raise RuntimeError("refusing URL outside public Gamma markets, CLOB /book /time and Data API v2 positions/trades/status")
@@ -312,19 +401,20 @@ def public_get(
     )
     tries = max(1, int(PUBLIC_GET_ATTEMPTS if attempts is None else attempts))
     base = PUBLIC_GET_BACKOFF_S if backoff_s is None else float(backoff_s)
-    budget = float(PUBLIC_GET_DEADLINE_S if deadline_s is None else deadline_s)
+    budget = _check_deadline_s(PUBLIC_GET_DEADLINE_S if deadline_s is None else deadline_s)
     started = _monotonic()
     for attempt in range(tries):
         left = budget - (_monotonic() - started)
         try:
             if left <= 0:
                 raise TimeoutError(f"public_get deadline {budget:g} s reached before attempt {attempt + 1}")
-            with urlopen(request, timeout=min(float(timeout), left)) as response:
-                body = response.read().decode("utf-8")
+            body = _attempt(request, float(timeout), started, budget).decode("utf-8")
             break
         except Exception as exc:  # noqa: BLE001 - filtered by _retryable
             if left <= 0:
                 raise PublicGetError(url, attempt, exc) from exc
+            if isinstance(exc, _DeadlineExceeded):
+                raise PublicGetError(url, attempt + 1, exc) from exc  # Task DU: the deadline passed mid-request
             if not _retryable(exc):
                 raise
             if attempt + 1 >= tries:

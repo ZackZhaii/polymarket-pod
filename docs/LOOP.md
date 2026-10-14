@@ -1683,7 +1683,32 @@ Claimed by Poly桥接 (Codex review of #321 at a3b850b). Done by grok-bot on the
   `post_write:row_mismatch:<field>:<fill_id>` (#323 Codex P3).
 - Tests: `tests/test_calibration.py` Task DV section (offline). No thresholds changed.
 
+## Task DU — Issue #316: public_get hard wall-clock deadline (body read included); finite deadline_s
+
+Status: done.
+
+Claimed by Poly桥接 (issue #316, Poly风控 / Codex follow-ups of #314). Done by grok-bot on NoisePC. Tightening only,
+non-KEY; Poly风控 must comment “通过” on the head before merge. `PUBLIC_GET_DEADLINE_S` stays 30.0.
+
+- `src/podlib.py` `public_get`: `PUBLIC_GET_DEADLINE_S` is now a hard wall-clock cap on the whole call, connect,
+  headers and body read included. Each attempt runs in a short-lived daemon worker (`_attempt`) that the caller
+  waits for at most the time left; the worker reads the body in chunks (`_read_body`, `read1`), re-clips the socket
+  timeout to the time left before every read and drops a chunk that arrives past the deadline. Past the deadline:
+  `PublicGetError` at once (not retried), never partial data or a late OK. Before: a 1 byte/s server returned OK
+  after 43 s with deadline 10 s.
+- `deadline_s=` must be a finite number > 0 (int or float, not bool): NaN, ±inf, 0, negatives, bools and strings
+  raise `ValueError` before any network call (Codex P2 on #314).
+- 429 / Retry-After (Task DP), /time 429 not retried and the between-retry deadline checks (Task DQ) unchanged.
+- Tests: `tests/test_public_get_deadline.py` Task DU section (offline): a real 127.0.0.1 drip server (ephemeral
+  port, own thread, no proxy) for a slow body (Content-Length and chunked) and slow headers, asserting
+  `PublicGetError` within deadline + 0.75 s; fake-clock chunk-read checks; NaN/inf/0/negative/bool/str deadlines.
+  config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
 ## Latest
+
+- 2026-10-14: Task DU (issue #316): public_get's deadline is a hard wall-clock cap (connect, headers, body read);
+  a slow-drip answer is PublicGetError at the deadline; deadline_s must be finite and > 0. PUBLIC_GET_DEADLINE_S
+  unchanged (30 s). risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 - 2026-10-14: Task DV (#321 follow-up): an out-of-bounds fill rejects its whole decision even when another
   calibration filter dropped it first; boundary timestamps that overflow UTC are dropped and counted, not raised.
