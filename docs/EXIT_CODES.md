@@ -168,6 +168,8 @@ alerts file, same row shape): `{"ts", "from": "m2_runner", "alert": "kill_file",
 "m2_runner", "detail", "exchange_action": "none"}`, at most once per stop (each start that finds KILL writes its own).
 A record only: the exit code stays 0 and recovery is unchanged; nothing restarts the runner (auto-restart is KEY
 #243). If that line cannot be written the runner does not drop it silently: it exits 4 like any other write failure.
+Issue #305 (Task DQ): any `Exception` while building or writing that line (not only `OSError`) is that write
+failure (exit 4); KeyboardInterrupt / SystemExit are not caught.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
@@ -225,6 +227,9 @@ acceptance items, so the tool never reports PASS — a problem-free run ends ver
 ## `src/paper_session.py`
 
 `python -m src.paper_session`: one offline paper session. No heartbeat.
+Issue #305 (Task DQ): the risk.toml pin check (`pins.refuse_start`) runs before anything reads the file; a
+missing / unreadable file, a directory or a check that raises is `reason=risk_toml_pin_drift` (global halt
+recorded, nothing written), exit 1.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
