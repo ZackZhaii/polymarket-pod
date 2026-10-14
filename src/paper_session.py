@@ -15,9 +15,16 @@ session start stamp. A missing, unparseable or future book_ts stays stale.
 Task DH (#233): start also verifies the full committed risk.toml sha256 and
 RISK_FILE_PINS via src.pins.risk_file_problems (not only podlib.PINS); drift
 refuses before any markets/books/sessions write.
+
+Task DQ (#305): the pin check runs first, before anything reads risk.toml, through
+src.pins.refuse_start (like m2_runner / paper_cycle / book): a missing or unreadable file,
+a directory, or a sha computation that raises is risk_toml_pin_drift with a global halt
+record and ok=False, never an uncaught exception. The unchanged-file snapshot (before),
+the loaded config and the pin check all use the same path (risk_path, else RISK_PATH).
 """
 from __future__ import annotations
 
+import hashlib
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,14 +36,20 @@ if str(ROOT) not in sys.path:
 
 from src import paper_cycle, scanner  # noqa: E402
 from src.book import record as record_books  # noqa: E402
-from src.pins import record_drift, risk_file_problems  # noqa: E402 - Task DH (#233)
+from src.pins import (  # noqa: E402 - Task DH (#233), Task DQ (#305)
+    PIN_HALT_REASON,
+    PINNED_RISK_SHA256,
+    record_drift,
+    refuse_start,
+)
 from src.podlib import (  # noqa: E402
     BOOKS_PATH,
     MARKETS_PATH,
     RISK_PATH,
     SESSIONS_PATH,
     append_jsonl,
-    load_risk,
+    load_risk,  # noqa: F401 - kept importable as paper_session.load_risk (tests build cfg from it)
+    parse_risk_toml,
     pin_problems,
     utc_now,
 )
@@ -76,23 +89,35 @@ def run(
     sha256 and the full RISK_FILE_PINS set via src.pins.risk_file_problems — the same
     check m2_runner / paper_cycle / book already use. Pre-start drift refuses with
     reason=risk_toml_pin_drift and writes nothing.
+
+    Task DQ (#305): that check is the very first step (nothing reads risk.toml before it) and
+    goes through pins.refuse_start, so a missing / unreadable file or a check that raises is
+    drift too (halt recorded, ok=False). before, the loaded config and the check share one path.
     """
-    before = RISK_PATH.read_bytes()
-    loaded = cfg if cfg is not None else load_risk()
+    path = Path(risk_path) if risk_path is not None else Path(RISK_PATH)
     empty = {"markets": 0, "books": 0, "gaps": 0, "stale": 0, "fills": 0}
-    # Full file pins first (sha + every key); then the in-memory five-pin check.
-    drift = risk_file_problems(risk_path)
-    if drift:
-        record_drift("paper_session", drift, phase="start", bus_path=bus_path)
-        _assert_risk_unchanged(before)
-        return {"ok": False, "reason": "risk_toml_pin_drift", **empty}
+    refused = {"ok": False, "reason": PIN_HALT_REASON, **empty}
+    # Full file pins first (sha + every key), before any risk.toml read; then the in-memory five-pin check.
+    if refuse_start("paper_session", risk_path=path, bus_path=bus_path):
+        return refused
+    reread = _pinned_snapshot(path)
+    if isinstance(reread, list):  # the file went away or changed between the check and this read: still drift
+        record_drift("paper_session", reread, phase="start", bus_path=bus_path)
+        return refused
+    before = reread
+    try:
+        loaded = cfg if cfg is not None else parse_risk_toml(before.decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 - pinned bytes that do not parse: drift (fail closed)
+        record_drift("paper_session", [f"risk_toml_unparseable:{type(exc).__name__}"], phase="start",
+                     bus_path=bus_path)
+        return refused
     if pin_problems(loaded):
-        _assert_risk_unchanged(before)
+        _assert_risk_unchanged(path, before)
         return {"ok": False, "reason": "phase0_pin", **empty}
     try:
         limits = scanner.thresholds_from(loaded)
     except RuntimeError:
-        _assert_risk_unchanged(before)
+        _assert_risk_unchanged(path, before)
         return {"ok": False, "reason": "invalid_scanner_threshold", **empty}
     ts = now or utc_now()
     try:
@@ -104,18 +129,18 @@ def run(
             max_markets=max_markets,
         )
     except Exception:
-        _assert_risk_unchanged(before)
+        _assert_risk_unchanged(path, before)
         return {"ok": False, "reason": "public_read_failed", **empty}
     fetch = result.get("fetch") or {}
     if fetch.get("complete") is not True:
-        _assert_risk_unchanged(before)
+        _assert_risk_unchanged(path, before)
         return {"ok": False, "reason": "markets_incomplete", **empty}
     if result["scanned"] < SESSION_MIN_SCANNED:
-        _assert_risk_unchanged(before)
+        _assert_risk_unchanged(path, before)
         return {"ok": False, "reason": "too_few_markets", **empty}
     rows = result["rows"]
     if not rows:
-        _assert_risk_unchanged(before)
+        _assert_risk_unchanged(path, before)
         return {"ok": False, "reason": "no_markets", **empty}
     market_count = scanner.persist_markets(rows, markets_path, bus_path, bus_limit=scanner.BUS_TOP_N)
     book_rows = [row for row in rows if row.get("token_ids")][:book_limit]
@@ -127,7 +152,7 @@ def run(
         getter=book_getter,
     )
     if book_count < 1:
-        _assert_risk_unchanged(before)
+        _assert_risk_unchanged(path, before)
         return {**empty, "ok": False, "reason": "no_books", "markets": market_count}
     evaluated_at = (clock or eval_clock)()
     cycle = paper_cycle.run(
@@ -139,7 +164,7 @@ def run(
     )
     if cycle["fills"] != 0:
         raise RuntimeError("paper session refused a fill")
-    _assert_risk_unchanged(before)
+    _assert_risk_unchanged(path, before)
     summary = {
         "ok": bool(cycle["ok"]),
         "reason": "signals_only" if cycle["ok"] else cycle["reason"],
@@ -172,8 +197,22 @@ def run(
     return summary
 
 
-def _assert_risk_unchanged(before: bytes) -> None:
-    if RISK_PATH.read_bytes() != before:
+def _pinned_snapshot(path: Path) -> bytes | list[str]:
+    """Task DQ (#305): the bytes of the just-checked risk file, or drift problems. Never raises."""
+    try:
+        raw = path.read_bytes()
+        if hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest() != PINNED_RISK_SHA256:
+            return ["risk_sha256_not_pinned"]
+        return raw
+    except OSError as exc:
+        return [f"risk_toml_unreadable:{type(exc).__name__}"]
+    except Exception as exc:  # noqa: BLE001 - a broken re-read is drift (fail closed)
+        return [f"pin_check_failed:{type(exc).__name__}"]
+
+
+def _assert_risk_unchanged(path: Path, before: bytes) -> None:
+    """Task DQ (#305): compares the same file the pin check read (risk_path, else RISK_PATH)."""
+    if Path(path).read_bytes() != before:
         raise RuntimeError("risk.toml changed during paper session")
 
 

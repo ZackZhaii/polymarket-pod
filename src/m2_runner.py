@@ -338,14 +338,18 @@ def event(state: RunnerState, kind: str, now: datetime, **fields: Any) -> None:
 def kill_alert(state: RunnerState, now: datetime) -> None:
     """Issue #247 (Task DK): one line in the Sentinel's logs/alerts.jsonl (``sentinel_tick.ALERTS_PATH``, the same
     row shape as ``sentinel_tick.Tick.alert``) when KILL stops the runner, at most once per stop. Only a record:
-    the exit code stays 0, nothing is resumed or restarted (auto-restart is KEY #243). Raises WriteFailed."""
+    the exit code stays 0, nothing is resumed or restarted (auto-restart is KEY #243). Raises WriteFailed.
+
+    Issue #305 (Task DQ): any ``Exception`` while building or writing the row (not only OSError) is a write
+    failure (exit 4); KeyboardInterrupt / SystemExit are not caught."""
     if state.kill_alerted:
         return
-    row = {"ts": _stamp(now), "from": PROC, "alert": KILL_ALERT, "severity": "info", "proc": PROC,
-           "detail": f"{state.paths.kill_file} found; runner stopped, exit_code={EXIT_OK}", "exchange_action": "none"}
     try:
+        row = {"ts": _stamp(now), "from": PROC, "alert": KILL_ALERT, "severity": "info", "proc": PROC,
+               "detail": f"{state.paths.kill_file} found; runner stopped, exit_code={EXIT_OK}",
+               "exchange_action": "none"}
         podlib.append_jsonl(Path(sentinel_tick.ALERTS_PATH), row)
-    except OSError as exc:
+    except Exception as exc:  # noqa: BLE001 - issue #305: every failure here is a write failure (exit 4)
         raise WriteFailed(f"alerts.jsonl: {type(exc).__name__}") from exc
     state.kill_alerted = True
 

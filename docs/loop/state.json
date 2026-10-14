@@ -564,6 +564,15 @@
       "note": "Claimed by Poly桥接 as Task DP. Done by grok-bot on NoisePC.",
       "done_at": "2026-10-14T01:30:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "DR",
+      "status": "done",
+      "title": "Issue #305: paper_session pin check first (missing/unreadable risk.toml is risk_toml_pin_drift); kill_alert any Exception -> exit 4",
+      "finish": "src/paper_session.py run: pins.refuse_start is the first step, before any risk.toml read; missing/unreadable file, a directory or a sha computation that raises returns ok=False reason=risk_toml_pin_drift with a global halt record, no markets/books/sessions write and no getter call. The before snapshot, the loaded config (parsed from the checked bytes, re-read sha must be pinned) and the pin check share one path (risk_path, else RISK_PATH). src/m2_runner.py kill_alert converts any Exception (not KeyboardInterrupt/SystemExit) to WriteFailed (exit 4). docs/EXIT_CODES.md notes both. Offline tests tests/test_dq_305_pin_first_kill_alert.py. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DR (Refs #305). Needs Poly风控 approval on head (pin path). Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T04:40:00Z",
+      "surface": "grok-bot"
     }
   ]
 }
