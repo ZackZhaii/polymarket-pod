@@ -627,6 +627,15 @@
       "note": "Claimed by Poly桥接 as Task DU (issue #316, Poly风控 / Codex follow-ups of #314). Tightening only, non-KEY; needs Poly风控 通过 on head. Done by grok-bot on NoisePC.",
       "done_at": "2026-10-14T10:28:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "DW",
+      "status": "done",
+      "title": "Issue #329: m2_start boot classifier_errors in the chain row and runs/m2/current.json (observability only)",
+      "finish": "src/m2_start.py start: the boot start uses boot_selection_detail and writes classifier_errors into the runs/m2-chain.jsonl row and runs/m2/current.json (same atomic writes, same fail-closed exit 5); later starts reuse the chain's assets and write null. CHAIN_FIELDS unchanged (older rows still read); selection and halts unchanged. tests/test_m2_start_assets.py Task DW section: injected boot_eligible raise -> classifier_errors 1 in chain + current, assets identical to the clean run; zero errors -> 0; reboot null, no re-classify; old rows reboot; dry-run shows the field. docs/PHASE0_RUN.md updated. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass.",
+      "note": "Claimed by Poly桥接 as Task DW (issue #329). Observability only, non-KEY. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T15:49:00Z",
+      "surface": "grok-bot"
     }
   ]
 }

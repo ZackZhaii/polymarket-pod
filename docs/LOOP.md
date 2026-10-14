@@ -1704,7 +1704,32 @@ non-KEY; Poly风控 must comment “通过” on the head before merge. `PUBLIC_
   `PublicGetError` within deadline + 0.75 s; fake-clock chunk-read checks; NaN/inf/0/negative/bool/str deadlines.
   config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
+## Task DW — Issue #329: m2_start boot classifier_errors in the chain row and runs/m2/current.json
+
+Status: done.
+
+Claimed by Poly桥接 (issue #329). Done by grok-bot on NoisePC. Observability only, non-KEY: no selection, threshold or
+halt change.
+
+- `src/m2_start.py` `start`: the boot start (empty chain) now calls `boot_selection_detail` and records its
+  `classifier_errors` (markets dropped because the boot classifier raised, Task DN) in the `runs/m2-chain.jsonl` row and
+  in `runs/m2/current.json`, through the same atomic writes and fail-closed exits (a failed append or current.json
+  write still stops the order, exit 5). A later start reuses the chain's `assets`, classifies nothing and records
+  `classifier_errors: null`. `CHAIN_FIELDS` stays the required core set, so older rows without the field still read.
+  `-DryRun` shows the field in the chain line it would append.
+- `classifier_errors > 0` keeps the discard-and-continue behaviour; the selected assets are identical to a run
+  without the failing row; no new halt.
+- Docs: `docs/PHASE0_RUN.md` (chain row and current.json fields) and the `src/m2_start.py` docstrings.
+- Tests: `tests/test_m2_start_assets.py` Task DW section (offline): a row whose `boot_eligible` raises gives
+  `classifier_errors == 1` in chain + current with assets and `--assets` identical to the clean run; zero errors give
+  0; reboot records null and never re-classifies; old rows without the field still reboot; dry-run shows the field;
+  a failed current.json write still stops the boot. config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
 ## Latest
+
+- 2026-10-14: Task DW (issue #329): m2_start's boot start records classifier_errors in its chain row and
+  runs/m2/current.json (null on later starts that reuse the chain's assets). Observability only: selection and
+  halts unchanged. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 - 2026-10-14: Task DU (issue #316): public_get's deadline is a hard wall-clock cap (connect, headers, body read);
   a slow-drip answer is PublicGetError at the deadline; deadline_s must be finite and > 0. PUBLIC_GET_DEADLINE_S
