@@ -325,9 +325,38 @@ def _clip_socket_timeout(response: Any, seconds: float) -> None:
 # parse time that runs after the deadline check. Internal safety cap, not a trading threshold.
 _MAX_BODY_BYTES = 8 * 1024 * 1024  # 8 MiB
 
+# Task DY (#330): worst-case wall time to decode+json.loads one _MAX_BODY_BYTES body (measured ~0.07-0.32 s).
+# Before starting that GIL-holding parse, refuse when remaining deadline is below this scaled estimate so the
+# caller cannot sit behind the parse past the deadline by more than a small margin. Internal safety bound, not
+# a trading threshold; does not change PUBLIC_GET_DEADLINE_S or _MAX_BODY_BYTES.
+_PARSE_BUDGET_S_AT_CAP = 1.0
+
 
 class _BodyTooLarge(http.client.HTTPException):
     """Task DU: the answer is larger than _MAX_BODY_BYTES. Not retried (a retry would get the same size)."""
+
+
+def _parse_budget_s(body_len: int) -> float:
+    """Task DY (#330): how much deadline must remain before starting decode+json.loads of ``body_len`` bytes."""
+    if body_len <= 0:
+        return 0.0
+    return _PARSE_BUDGET_S_AT_CAP * (body_len / _MAX_BODY_BYTES)
+
+
+def _ensure_parse_budget(body_len: int, started: float, budget: float) -> None:
+    """Task DY (#330): do not start a GIL-holding decode+loads when remaining time is too short for this size.
+
+    CPython's json.loads holds the GIL, so the caller's ``done.wait`` timeout cannot resume until the parse
+    finishes. Skipping the parse when little time remains keeps the wall-clock overrun bounded and fail-closed.
+    """
+    left = budget - (_monotonic() - started)
+    if left <= 0:
+        raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed before decoding the answer")
+    needed = _parse_budget_s(body_len)
+    if needed > 0 and left < needed:
+        raise _DeadlineExceeded(
+            f"public_get deadline {budget:g} s: {left:g} s left is not enough to parse {body_len} bytes"
+        )
 
 
 def _read_body(response: Any, timeout: float, started: float, budget: float) -> bytes:
@@ -499,6 +528,8 @@ def _attempt(request: Request, timeout: float, started: float, budget: float) ->
                 if cancelled:
                     return
                 body = _read_body(response, attempt_timeout, started, budget)
+                # Task DY (#330): cheap size/time precheck before the GIL-holding decode+loads.
+                _ensure_parse_budget(len(body), started, budget)
                 # Task DU (Codex 6168938541 P1): decode and parse inside the deadline-bound worker.
                 outcome["data"] = json.loads(body.decode("utf-8"))
             finally:
@@ -554,6 +585,10 @@ def public_get(
     Task DU (#316): the deadline is a hard wall-clock cap, the connect, headers and body read included (a
     slow-drip answer fails closed with PublicGetError at the deadline, never partial data or a late OK).
     ``deadline_s`` must be a finite number > 0, else ValueError before any network call.
+
+    Task DY (#330): before decode+json.loads, a near-cap body is refused when too little deadline remains
+    (scaled from _PARSE_BUDGET_S_AT_CAP), so a GIL-holding parse cannot overrun the deadline by more than
+    about one cap-size parse. Still fail-closed: never returns a late or partial OK.
     """
     if not (url.startswith(PUBLIC_PREFIXES) or url in (DATA_API_STATUS_URL, TIME_URL)):
         raise RuntimeError("refusing URL outside public Gamma markets, CLOB /book /time and Data API v2 positions/trades/status")
