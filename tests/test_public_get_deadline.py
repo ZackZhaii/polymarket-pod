@@ -522,3 +522,140 @@ def test_max_workers_is_bounded_at_import():
         assert podlib._valid_max_workers(good)
     import inspect
     assert "assert _valid_max_workers(_MAX_WORKERS)" in inspect.getsource(podlib)
+
+
+# ---------------------------------------------------------------- Task DU: Codex 6168938541 / Poly风控 ruling
+
+
+class _BigResponse:
+    """read1 hands out ``total`` bytes in 1 MiB pieces; ``length`` mimics http.client's Content-Length left."""
+
+    def __init__(self, total: int, length=None) -> None:
+        self.left, self.length, self.reads = total, length, 0
+
+    def read1(self, n=-1):
+        self.reads += 1
+        if self.length is not None and self.length > podlib._MAX_BODY_BYTES:
+            raise AssertionError("read a body whose Content-Length is over the cap")
+        piece = min(self.left, 1024 * 1024)
+        self.left -= piece
+        return b" " * piece
+
+    def close(self):
+        pass
+
+
+def test_max_body_bytes_is_8_mib():
+    assert podlib._MAX_BODY_BYTES == 8 * 1024 * 1024
+
+
+def test_body_over_the_cap_while_reading_fails_closed_without_retry(monkeypatch):
+    calls = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(1)
+        return _BigResponse(podlib._MAX_BODY_BYTES + 2 * 1024 * 1024)  # no Content-Length (chunked)
+
+    monkeypatch.setattr(podlib, "urlopen", fake_urlopen)
+    with pytest.raises(podlib.PublicGetError) as info:
+        podlib.public_get(GAMMA_URL, timeout=5.0, deadline_s=10.0, attempts=3)
+    assert isinstance(info.value.__cause__, podlib._BodyTooLarge)
+    assert len(calls) == 1  # never retried
+
+
+def test_content_length_over_the_cap_is_rejected_before_reading(monkeypatch):
+    responses = []
+
+    def fake_urlopen(request, timeout=None):
+        responses.append(_BigResponse(podlib._MAX_BODY_BYTES + 1, length=podlib._MAX_BODY_BYTES + 1))
+        return responses[-1]
+
+    monkeypatch.setattr(podlib, "urlopen", fake_urlopen)
+    with pytest.raises(podlib.PublicGetError) as info:
+        podlib.public_get(GAMMA_URL, timeout=5.0, deadline_s=10.0, attempts=3)
+    assert isinstance(info.value.__cause__, podlib._BodyTooLarge)
+    assert len(responses) == 1 and responses[0].reads == 0
+
+
+class _SlowConnectProxy:
+    """127.0.0.1 HTTP proxy that answers CONNECT one byte every 0.05 s (each recv beats the socket timeout)."""
+
+    def __init__(self) -> None:
+        self.stop = threading.Event()
+        self.sock = socket.create_server(("127.0.0.1", 0))
+        self.sock.settimeout(0.1)
+        self.port = self.sock.getsockname()[1]
+        self.connects = 0
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stop.set()
+        self.thread.join(5)
+        self.sock.close()
+        return False
+
+    def _serve(self) -> None:
+        while not self.stop.is_set():
+            try:
+                conn, _ = self.sock.accept()
+            except (socket.timeout, OSError):
+                continue
+            threading.Thread(target=self._answer, args=(conn,), daemon=True).start()
+
+    def _answer(self, conn) -> None:
+        try:
+            conn.settimeout(5)
+            got = b""
+            while b"\r\n\r\n" not in got:
+                piece = conn.recv(4096)
+                if not piece:
+                    return
+                got += piece
+            if got.startswith(b"CONNECT"):
+                self.connects += 1
+            for byte in b"HTTP/1.1 200 Connection established\r\nX-Pad: " + b"p" * 400 + b"\r\n\r\n":
+                if self.stop.is_set():
+                    return
+                conn.sendall(bytes([byte]))
+                time.sleep(0.05)
+        except OSError:
+            pass  # the client shut the socket down at its deadline: that is the point
+        finally:
+            conn.close()
+
+
+def test_slow_proxy_connect_frees_every_slot_and_healthy_requests_recover(monkeypatch):
+    """Codex 6168938541 P2: a slow proxy CONNECT on all 4 slots is cancelled at the deadline (socket registered
+    at creation, before the tunnel and TLS), every slot is freed, and a healthy request then succeeds in < 1 s."""
+    _wait_no_workers()
+    with _SlowConnectProxy() as proxy, _DripServer(every=0.002, step=8) as fast:
+        proxied = podlib._make_opener({"https": f"http://127.0.0.1:{proxy.port}"})
+        direct = podlib._make_opener({})
+        mode = {"slow": True}
+
+        def routed_urlopen(request, timeout=None):
+            if mode["slow"]:
+                return proxied.open("https://gamma-api.polymarket.com/markets", timeout=timeout)
+            return direct.open(f"http://127.0.0.1:{fast.port}/markets", timeout=timeout)
+
+        monkeypatch.setattr(podlib, "urlopen", routed_urlopen)
+        results = []
+        callers = [threading.Thread(target=lambda: results.append(_timed_public_get(timeout=5.0, deadline_s=0.5, attempts=1)))
+                   for _ in range(podlib._MAX_WORKERS)]
+        for c in callers:
+            c.start()
+        for c in callers:
+            c.join(5)
+        assert len(results) == podlib._MAX_WORKERS
+        assert all(isinstance(r, podlib.PublicGetError) for r, _ in results), results
+        assert proxy.connects >= 1
+        mode["slow"] = False
+        result, elapsed = _timed_public_get(timeout=2.0, deadline_s=2.0, attempts=1)
+        assert result == {"ok": "x" * 40}, result
+        assert elapsed < 1.0, elapsed
+        _wait_no_workers(1.0)
+        assert not any(t.name == "public_get" for t in threading.enumerate())

@@ -262,6 +262,8 @@ def _check_resume(frm: str, to: str, kind: str, payload: dict[str, Any]) -> None
 
 
 def _retryable(exc: BaseException) -> bool:
+    if isinstance(exc, _BodyTooLarge):
+        return False
     if isinstance(exc, HTTPError):
         return exc.code >= 500 or exc.code == HTTP_TOO_MANY_REQUESTS
     return isinstance(exc, TRANSIENT_NETWORK_ERRORS)
@@ -319,14 +321,29 @@ def _clip_socket_timeout(response: Any, seconds: float) -> None:
         pass
 
 
+# Task DU (Codex 6168938541 P1, optional): a body larger than this is refused before json.loads, which bounds the
+# parse time that runs after the deadline check. Internal safety cap, not a trading threshold.
+_MAX_BODY_BYTES = 8 * 1024 * 1024  # 8 MiB
+
+
+class _BodyTooLarge(http.client.HTTPException):
+    """Task DU: the answer is larger than _MAX_BODY_BYTES. Not retried (a retry would get the same size)."""
+
+
 def _read_body(response: Any, timeout: float, started: float, budget: float) -> bytes:
     """Task DU: read the body in chunks, checking the deadline before and after every chunk."""
     read1 = getattr(response, "read1", None)
     if read1 is None:  # a response without read1 (test doubles): one read, then the deadline check
         body = response.read()
         _time_left(started, budget)
+        if len(body) > _MAX_BODY_BYTES:
+            raise _BodyTooLarge(f"public_get answer larger than {_MAX_BODY_BYTES} bytes")
         return body
+    announced = getattr(response, "length", None)  # http.client: the Content-Length still to read
+    if isinstance(announced, int) and not isinstance(announced, bool) and announced > _MAX_BODY_BYTES:
+        raise _BodyTooLarge(f"public_get Content-Length {announced} > {_MAX_BODY_BYTES} bytes")
     chunks = []
+    total = 0
     while True:
         _clip_socket_timeout(response, min(timeout, _time_left(started, budget)))
         chunk = read1(_READ_CHUNK_BYTES)
@@ -338,6 +355,9 @@ def _read_body(response: Any, timeout: float, started: float, budget: float) -> 
             if isinstance(missing, int) and not isinstance(missing, bool) and missing > 0:
                 raise http.client.IncompleteRead(b"".join(chunks), missing)
             return b"".join(chunks)
+        total += len(chunk)
+        if total > _MAX_BODY_BYTES:
+            raise _BodyTooLarge(f"public_get answer larger than {_MAX_BODY_BYTES} bytes")
         chunks.append(chunk)
 
 
@@ -377,16 +397,33 @@ def _shutdown_quietly(sock: Any) -> None:
         pass
 
 
-class _TrackedHTTPConnection(http.client.HTTPConnection):
+class _TrackSocketMixin:
+    """Task DU (Codex 6168938541 P2): register the raw TCP socket as soon as it exists, before the proxy CONNECT
+    tunnel and the TLS handshake, so a stall in either is cancelled at the deadline (shutting down the raw socket
+    also ends a TLS read on it)."""
+
     def connect(self) -> None:
-        super().connect()
-        _register_socket(self.sock)
+        # http.client sets self._create_connection per instance (socket.create_connection), so wrap it here.
+        create = self._create_connection  # type: ignore[attr-defined]
+
+        def create_and_register(*args: Any, **kwargs: Any) -> Any:
+            sock = create(*args, **kwargs)
+            _register_socket(sock)
+            return sock
+
+        self._create_connection = create_and_register  # type: ignore[attr-defined]
+        try:
+            super().connect()  # type: ignore[misc]
+        finally:
+            self._create_connection = create  # type: ignore[attr-defined]
 
 
-class _TrackedHTTPSConnection(http.client.HTTPSConnection):
-    def connect(self) -> None:
-        super().connect()  # the TLS-wrapped socket; shutting it down also ends a pending handshake read
-        _register_socket(self.sock)
+class _TrackedHTTPConnection(_TrackSocketMixin, http.client.HTTPConnection):
+    pass
+
+
+class _TrackedHTTPSConnection(_TrackSocketMixin, http.client.HTTPSConnection):
+    pass
 
 
 class _TrackedHTTPHandler(HTTPHandler):
@@ -458,7 +495,9 @@ def _attempt(request: Request, timeout: float, started: float, budget: float) ->
             try:
                 if cancelled:
                     return
-                outcome["body"] = _read_body(response, attempt_timeout, started, budget)
+                body = _read_body(response, attempt_timeout, started, budget)
+                # Task DU (Codex 6168938541 P1): decode and parse inside the deadline-bound worker.
+                outcome["data"] = json.loads(body.decode("utf-8"))
             finally:
                 _close_quietly(response)
         except BaseException as exc:  # noqa: BLE001 - handed to the caller's thread below
@@ -485,7 +524,7 @@ def _attempt(request: Request, timeout: float, started: float, budget: float) ->
         raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed before the answer was read")
     if "error" in outcome:
         raise outcome["error"]
-    return outcome["body"]
+    return outcome["data"]
 
 
 def public_get(
@@ -531,11 +570,13 @@ def public_get(
         try:
             if left <= 0:
                 raise TimeoutError(f"public_get deadline {budget:g} s reached before attempt {attempt + 1}")
-            raw = _attempt(request, float(timeout), started, budget)
+            data = _attempt(request, float(timeout), started, budget)
             break
         except Exception as exc:  # noqa: BLE001 - filtered by _retryable
             if left <= 0:
                 raise PublicGetError(url, attempt, exc) from exc
+            if isinstance(exc, _BodyTooLarge):
+                raise PublicGetError(url, attempt + 1, exc) from exc  # Task DU: over _MAX_BODY_BYTES, never retried
             if isinstance(exc, _DeadlineExceeded):
                 raise PublicGetError(url, attempt + 1, exc) from exc  # Task DU: the deadline passed mid-request
             if not _retryable(exc):
@@ -551,7 +592,6 @@ def public_get(
             _sleep(wait)
     # Task DU (Codex P2 on #328): decoding and parsing count toward the deadline too; a parse that ends past it
     # is not returned as success.
-    data = json.loads(raw.decode("utf-8"))
     if _monotonic() - started >= budget:
         exc = _DeadlineExceeded(f"public_get deadline {budget:g} s passed while decoding the answer")
         raise PublicGetError(url, attempt + 1, exc) from exc
