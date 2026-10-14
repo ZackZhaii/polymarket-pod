@@ -140,22 +140,42 @@ def assets_problem(value: object) -> str | None:
     return None
 
 
+# Task DN (#291 acceptance): common sports tag slugs besides ``sports`` (compared stripped, lower case).
+# A market carrying any of them, or a non-empty ``gameId`` / ``game_id``, counts as sports.
+SPORTS_TAG_BLOCKLIST: frozenset[str] = frozenset({
+    SPORTS_SLUG, "esports", "tennis", "nfl", "nba", "wnba", "ncaa", "ncaab", "ncaaf", "cfb", "soccer", "football",
+    "mlb", "baseball", "nhl", "hockey", "basketball", "mma", "ufc", "boxing", "cricket", "golf", "pga", "f1",
+    "formula-1", "nascar", "rugby", "epl", "premier-league", "la-liga", "champions-league", "mls", "games",
+})
+
+
+def _has_game_id(row: dict[str, Any]) -> bool:
+    for key in ("gameId", "game_id"):
+        value = row.get(key)
+        if value is not None and value is not False and value != 0 and not (isinstance(value, str) and not value.strip()):
+            return True
+    return False
+
+
 def is_sports(row: dict[str, Any]) -> bool:
-    """A sports market: tag slug or Gamma category ``sports`` (case and whitespace insensitive)."""
+    """A sports market: a tag slug in SPORTS_TAG_BLOCKLIST, Gamma category ``sports`` (case and whitespace
+    insensitive), or a non-empty ``gameId`` (Task DN)."""
     tags = row.get("tags") if isinstance(row.get("tags"), list) else []
     category = row.get("category")
-    return any(isinstance(t, str) and t.strip().lower() == SPORTS_SLUG for t in tags) or (
-        isinstance(category, str) and category.strip().lower() == SPORTS_SLUG)
+    return (any(isinstance(t, str) and t.strip().lower() in SPORTS_TAG_BLOCKLIST for t in tags)
+            or (isinstance(category, str) and category.strip().lower() == SPORTS_SLUG)
+            or _has_game_id(row))
 
 
 def classification_ok(row: dict[str, Any]) -> bool:
-    """Task DI (#137): the market's sports classification is readable: ``tags`` is a list of str and
-    ``category`` a non-empty str. Anything else (missing, wrong type, empty) is unknown and the boot
-    selection drops it (fail closed): an unclassifiable market could be a sports single."""
+    """Task DI (#137) / DN: the market's sports classification is readable: ``tags`` is a list of str.
+    ``category`` may be missing or None (the Gamma keyset never returns it); when present it must be a
+    str that is non-empty after strip. Anything else is unknown and the boot selection drops it."""
     tags = row.get("tags")
+    if not (isinstance(tags, list) and all(isinstance(t, str) for t in tags)):
+        return False
     category = row.get("category")
-    return (isinstance(tags, list) and all(isinstance(t, str) for t in tags)
-            and isinstance(category, str) and category.strip() != "")
+    return category is None or (isinstance(category, str) and category.strip() != "")
 
 
 def same_day_sports(row: dict[str, Any], now: datetime) -> bool:
@@ -171,26 +191,51 @@ def ends_before(row: dict[str, Any], m2_end: datetime) -> bool:
     return end is None or end < m2_end
 
 
+def boot_eligible(row: dict[str, Any], m2_end: datetime | None) -> bool:
+    """Task DI/DN: the row survives the boot classification, sports and M2-end filters."""
+    return classification_ok(row) and not is_sports(row) and not (m2_end is not None and ends_before(row, m2_end))
+
+
+def boot_selection_detail(root: Path, now: datetime, m2_end: datetime | None = None) -> dict[str, Any]:
+    """boot_selection plus counters: ``assets``, ``why`` and ``classifier_errors`` (Task DN: a market whose
+    classification raises is counted and dropped; startup never crashes on it)."""
+    path = root / MARKETS_NAME
+    try:
+        rows = read_jsonl(path) if path.exists() else []
+    except (OSError, ValueError) as exc:
+        return {"assets": [], "why": f"{MARKETS_NAME} unreadable ({type(exc).__name__})", "classifier_errors": 0}
+    stamps = [parse_book_ts(row.get("ts")) for row in rows if isinstance(row, dict)]
+    latest = max((stamp for stamp in stamps if stamp is not None), default=None)
+    # Pin the latest batch first: filtering must never make an older scan the "latest" one.
+    errors = 0
+    kept = []
+    for row in rows:
+        if not isinstance(row, dict) or parse_book_ts(row.get("ts")) != latest:
+            continue
+        try:
+            ok = boot_eligible(row, m2_end)
+        except Exception:  # noqa: BLE001 - fail safe: drop and count, never crash the start
+            errors += 1
+            continue
+        if ok:
+            kept.append(row)
+    if errors:
+        print(f"WARN boot_selection: {errors} market(s) dropped on classifier error", file=sys.stderr)
+    assets = select_assets(kept, M1_TOP_MARKETS)["assets"]
+    if assets_problem(assets) is not None:
+        return {"assets": [], "why": f"no usable assets in {MARKETS_NAME}; run python -m src.scanner first",
+                "classifier_errors": errors}
+    return {"assets": list(assets), "why": None, "classifier_errors": errors}
+
+
 def boot_selection(root: Path, now: datetime, m2_end: datetime | None = None) -> tuple[list[str], str | None]:
     """E1: the first start's assets, chosen once by m1_run.select_assets (N = M1_TOP_MARKETS) from the
     latest scanner batch. Task DI (#137): every sports market is dropped (Gamma puts a tennis single's
     endDate about a week after the match, so the end date cannot tell a single game apart), and, given
     ``m2_end``, every market ending before it (or without a usable end date). ``([], why)`` when nothing
-    is usable. Task DI: a market with unknown or malformed classification is dropped too."""
-    path = root / MARKETS_NAME
-    try:
-        rows = read_jsonl(path) if path.exists() else []
-    except (OSError, ValueError) as exc:
-        return [], f"{MARKETS_NAME} unreadable ({type(exc).__name__})"
-    stamps = [parse_book_ts(row.get("ts")) for row in rows if isinstance(row, dict)]
-    latest = max((stamp for stamp in stamps if stamp is not None), default=None)
-    # Pin the latest batch first: filtering must never make an older scan the "latest" one.
-    rows = [row for row in rows if isinstance(row, dict) and parse_book_ts(row.get("ts")) == latest
-            and classification_ok(row) and not is_sports(row) and not (m2_end is not None and ends_before(row, m2_end))]
-    assets = select_assets(rows, M1_TOP_MARKETS)["assets"]
-    if assets_problem(assets) is not None:
-        return [], f"no usable assets in {MARKETS_NAME}; run python -m src.scanner first"
-    return list(assets), None
+    is usable. Malformed classification is dropped; a classifier exception is counted and dropped (DN)."""
+    detail = boot_selection_detail(root, now, m2_end)
+    return detail["assets"], detail["why"]
 
 
 def read_chain(path: Path) -> tuple[list[dict[str, Any]], str | None]:
