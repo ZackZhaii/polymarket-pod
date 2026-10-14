@@ -1725,7 +1725,32 @@ halt change.
   0; reboot records null and never re-classifies; old rows without the field still reboot; dry-run shows the field;
   a failed current.json write still stops the boot. config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
+## Task DX – Issue #141: reject multi-leg/complete-set signals; close #141
+
+Status: done.
+
+Claimed by Poly桥接 (issue #141). Done by grok-bot on NoisePC. Non-KEY verify-and-close: the
+tightening code already landed on `dev` as Task BX (#177); this task re-verifies acceptance on NoisePC
+and closes the issue. Proposal item 2 (re-enable conditions) stays unlock-only and is not implemented.
+
+- Already on `dev` (Task BX, PR #177): `src/structural_gate.py` rejects any multi-leg / complete-set
+  candidate as `structural_arb_disabled` (ArbBinary YES+NO, NegRiskArb all-outcome, legs >= 2, and
+  fail-closed unknown leg counts); records on the bus (`gap_signal: rejected`, `reject_reason`) and in
+  paper_cycle skips (never silent drop, never an intent or order). `src/arb_binary.py` / `src/neg_risk.py`
+  mark every gap the same way. Markets past `endDate` (`expired`) or with non-empty
+  `umaResolutionStatus` / `umaResolutionStatuses` (`market_expired_or_resolving`) get no gap path
+  (BookWatcher skip + `resolving_market` skip); scanner applies the same UMA predicate every scan.
+- Not in this PR (and not required to close #141): event-group completeness as a re-enable gate, or a
+  <=2s cross-leg `book_ts` skew cap – those are unlock criteria only.
+- Tests re-run on NoisePC (offline, `--basetemp` outside the repo): `tests/test_structural_arb_disabled.py`,
+  `tests/test_structural_gate_gaps.py`, related paper_cycle / sell-set rejects; full `python -m pytest`;
+  `python scripts/guard.py --require-git`. config/risk.toml sha unchanged (0aea23af…bc04), `live_enabled=false`.
+
 ## Latest
+- 2026-10-15: Task DX (issue #141): verify-and-close. Multi-leg / complete-set gaps stay
+  `structural_arb_disabled` (bus + skips); past-endDate / UMA markets emit no gap signal. Code from Task BX
+  (#177); re-enable conditions (item 2) stay unlock-only. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
 
 - 2026-10-14: Task DW (issue #329): m2_start's boot start records classifier_errors in its chain row and
   runs/m2/current.json (null on later starts that reuse the chain's assets). Observability only: selection and

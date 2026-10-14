@@ -636,6 +636,15 @@
       "note": "Claimed by Poly桥接 as Task DW (issue #329). Observability only, non-KEY. Done by grok-bot on NoisePC.",
       "done_at": "2026-10-14T15:49:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "DX",
+      "status": "done",
+      "title": "Issue #141: reject multi-leg/complete-set signals (structural_arb_disabled); filter expired/UMA; close #141",
+      "finish": "Verify-and-close of #141 on NoisePC. Code already on dev from Task BX (#177): src/structural_gate.py + paper_cycle / arb_binary / neg_risk / scanner reject multi-leg complete-set gaps as structural_arb_disabled (bus + skips, never silent) and skip past-endDate / UMA-resolving markets (expired / market_expired_or_resolving) with no gap path. Proposal item 2 (re-enable conditions: event-group completeness gate and <=2s book_ts skew) intentionally not implemented. Offline tests/test_structural_arb_disabled.py and tests/test_structural_gate_gaps.py green; full pytest and guard --require-git pass. config/risk.toml unchanged, live_enabled false. Closes #141.",
+      "note": "Claimed by Poly桥接 as Task DX (issue #141). Non-KEY verify-and-close; code from Task BX (#177). Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T17:30:00Z",
+      "surface": "grok-bot"
     }
   ]
 }
