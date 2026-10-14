@@ -420,7 +420,8 @@ def _opposite_pending_buys(market: str, token_id: str, quotes: Any) -> int | Non
     return count
 
 
-def load_state(market: str, token_id: str = "", *, clock_ok: bool = False) -> dict[str, Any]:
+def load_state(market: str, token_id: str = "", *, clock_ok: bool = False,
+               quotes_path: Path | None = None) -> dict[str, Any]:
     """Risk state for an intent on one leg (market + token_id).
 
     open_positions counts open legs, not markets. leg_already_open is True only
@@ -440,10 +441,12 @@ def load_state(market: str, token_id: str = "", *, clock_ok: bool = False) -> di
     Issue #56: own_quotes comes from the strict quotes reader, once, for every return path. A
     quotes file that cannot be read in full is not a short history: own_quotes is None,
     quote_problems names the lines, and RiskGate vetoes the existing wash_input_invalid.
+    Poly风控 on #310 (Task DO): quotes_path (default QUOTES_PATH) names the quotes file own_quotes is read from, so
+    maker.quote checks the opposite-leg veto on the same file it writes to.
     """
     _, ledger = ledger_store.read_ledger(PAPER_PATH)
     rows = ledger.rows
-    own_quotes, quote_problems = read_quotes(QUOTES_PATH)
+    own_quotes, quote_problems = read_quotes(Path(quotes_path) if quotes_path is not None else QUOTES_PATH)
     if quote_problems:
         own_quotes = None  # issue #56: a partial quote history is not this history (fail closed)
     # Issue #145 (Task CH): the market's two tokens, read only when an own open quote rests on another token.

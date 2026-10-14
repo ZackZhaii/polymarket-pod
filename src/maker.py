@@ -154,8 +154,14 @@ def quote(
             paired = pair_problem(market, token_id, side, price, quotes_path=path, markets_path=markets_path)
             if paired is not None:
                 raise QuoteRefused(market, token_id, paired)  # Issue #145 reason kept first
+            # Poly风控 on #310: the veto reads the quotes file this quote is written to, and the default
+            # QUOTES_PATH too when they differ (the one commit_if_allowed reads). Either blocking refuses.
+            veto_paths = [Path(path)]
+            if Path(paper_ledger.QUOTES_PATH) != Path(path):
+                veto_paths.append(Path(paper_ledger.QUOTES_PATH))
             try:
-                blocked = opposite_leg_blocked(paper_ledger.load_state(market, token_id))
+                blocked = any(opposite_leg_blocked(paper_ledger.load_state(market, token_id, quotes_path=p))
+                              for p in veto_paths)
             except Exception:  # noqa: BLE001 - an unreadable state refuses (fail closed)
                 blocked = True
             if blocked:
