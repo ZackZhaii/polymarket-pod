@@ -1648,7 +1648,26 @@ Ledger fix, so Poly风控 must comment “通过” on the head before merge.
 - Tests: `tests/test_dt_ledger_post_write_verify.py` (offline); `tests/test_ledger_concurrent_book.py` unchanged
   and green under repeated runs.
 
+## Task DV — calibration: out-of-bounds fill rejects its whole decision; boundary timestamps (#321 follow-up)
+
+Status: done.
+
+Claimed by Poly桥接 (Codex review of #321 at a3b850b). Done by grok-bot on the box. Paper-only, calibration-only.
+
+- `src/calibration.py` `trade_samples`: the issue #70 time bounds (forecast.ts <= fill.ts < closed_ts) are checked
+  on every counted fill of the decision, including fills already dropped by another calibration filter, so an
+  out-of-bounds fill hidden by e.g. `missing_market_mid` still rejects the whole decision (P1).
+- `_parse_ts`: `OverflowError` from the UTC conversion (`0001-01-01T00:00:00+01:00`, `9999-12-31T23:59:59-01:00`)
+  returns None, so the row is dropped and counted (`fill_ts_invalid` / `fill_forecast_ts_invalid`), never raised (P2).
+- `tests/test_dt_ledger_post_write_verify.py`: the mismatch test asserts the exact
+  `post_write:row_mismatch:<field>:<fill_id>` (#323 Codex P3).
+- Tests: `tests/test_calibration.py` Task DV section (offline). No thresholds changed.
+
 ## Latest
+
+- 2026-10-14: Task DV (#321 follow-up): an out-of-bounds fill rejects its whole decision even when another
+  calibration filter dropped it first; boundary timestamps that overflow UTC are dropped and counted, not raised.
+  risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 - 2026-10-14: Task DT: ledger book() post-write check finds our row by fill_id and compares it field by field
   (a later append by another process is no longer a false not_appended). risk.toml unchanged (0aea23af…bc04),

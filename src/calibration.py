@@ -273,11 +273,11 @@ def _parse_ts(value: object) -> datetime | None:
         text = text[:-1] + "+00:00"
     try:
         parsed = datetime.fromisoformat(text)
-    except ValueError:
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError):  # Task DV: 0001-01-01+01:00 / 9999-12-31-01:00 overflow in UTC
         return None
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        return None
-    return parsed.astimezone(timezone.utc)
 
 
 # ------------------------------------------------------------------ labels
@@ -688,6 +688,9 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
     problem_counts: Counter = Counter()
     dropped: list[dict[str, Any]] = []
     decisions: dict[str, list[dict[str, Any]]] = {}
+    # Task DV (#321 P1): every counted fill of a decision, before any other filter, so a fill already
+    # dropped for another reason still rejects its whole decision when it is out of the time bounds.
+    all_fills: dict[str, list[dict[str, Any]]] = {}
 
     def drop(ref: Mapping[str, Any], reason: str, count: int = 1) -> None:
         reasons[reason] += count
@@ -697,6 +700,8 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
     for row in fills:
         if not ledger_store.counts(row) or row.get("risk_decision") != "allow":
             continue  # not a trade sample at all (hypothetical / not counted); not a drop
+        if isinstance(row.get("decision_id"), str):
+            all_fills.setdefault(row["decision_id"], []).append(row)
         if row.get("fill_context") in calibration_ids.NO_BOOK_CONTEXTS:
             drop(row, "no_book_context")  # Task BC: stamped at fill time; never inferred from missing fields
             continue
@@ -738,7 +743,7 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
             drop(ref, reason, len(rows))
             continue
         # issue #70: prove every fill sits between the forecast and the close before it can be scored.
-        time_reason = fill_time_problem(forecast, rows, resolution)
+        time_reason = fill_time_problem(forecast, all_fills.get(decision_id, rows), resolution)
         if time_reason:
             drop(ref, time_reason, len(rows))
             continue

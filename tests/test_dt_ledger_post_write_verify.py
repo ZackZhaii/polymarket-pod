@@ -67,9 +67,12 @@ def test_our_row_content_mismatch_raises(tmp_path, monkeypatch, change):
     ledger = tmp_path / "ledger.jsonl"
     ledger_store.book(ledger, _fill("m-0"))
 
+    seen: dict = {}
+
     def tamper(path, real):
         rows = _rows(path)
         last = rows[-1]
+        seen["fill_id"] = last["fill_id"]
         if change == "value":
             last["ts"] = "2026-10-13T00:00:01Z"
         elif change == "extra":
@@ -82,8 +85,8 @@ def test_our_row_content_mismatch_raises(tmp_path, monkeypatch, change):
         ledger_store.book(ledger, _fill("m-ours"))
     assert all(p.startswith("post_write:") for p in exc.value.problems)
     assert not any("not_appended" in p for p in exc.value.problems)
-    if change != "dropped":
-        assert any(p.startswith("post_write:row_mismatch:") for p in exc.value.problems)
+    field = "note" if change == "extra" else "ts"  # Task DV (#323 Codex P3): the exact field and fill_id
+    assert f"post_write:row_mismatch:{field}:{seen['fill_id']}" in exc.value.problems
 
 
 def test_mismatch_helper_names_field():
