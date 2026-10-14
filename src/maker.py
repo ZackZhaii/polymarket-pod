@@ -155,7 +155,7 @@ def quote(
             if paired is not None:
                 raise QuoteRefused(market, token_id, paired)  # Issue #145 reason kept first
             try:
-                blocked = opposite_leg_blocked(paper_ledger.load_state(market, token_id))
+                blocked = opposite_leg_blocked(paper_ledger.load_state(market, token_id, quotes_path=path))
             except Exception:  # noqa: BLE001 - an unreadable state refuses (fail closed)
                 blocked = True
             if blocked:
