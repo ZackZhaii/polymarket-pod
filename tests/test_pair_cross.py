@@ -195,7 +195,11 @@ def test_maker_quote_uses_same_check(files):
         _maker_quote(files, NO, price=0.40)  # 0.60 + 0.40 = 1.00: would mint against our own YES bid
     assert info.value.reason == MINT_PAIR_CROSS
     assert len(read_jsonl(files["quotes"])) == 1  # nothing written
-    assert _maker_quote(files, NO, price=0.39)["payload"]["status"] == "open"  # 0.99 does not pair
+    # Issue #237 (Task DO): 0.99 does not pair, but an own open YES buy now vetoes a NO buy (structural_arb_disabled)
+    with pytest.raises(maker.QuoteRefused) as info:
+        _maker_quote(files, NO, price=0.39)
+    assert info.value.reason == "structural_arb_disabled"
+    assert len(read_jsonl(files["quotes"])) == 1
 
 
 def test_maker_quote_fails_closed_without_the_market_tokens(files):

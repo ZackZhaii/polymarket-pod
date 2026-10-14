@@ -1582,6 +1582,25 @@ Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@043e9ce).
 - Tests: `tests/test_public_get_retry.py` (offline; urlopen mocked, `_sleep` recorded). The old case that pinned
   429 as not retried is replaced by the 429 cases.
 
+## Task DO — Issue #237: maker paper buy checked under the commit lock; bids over 1 record a skip
+
+Status: done (PR #310, HOLD until Poly风控 「通过」 on head).
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC.
+
+- `src/maker.py` `quote` buy path takes the paper ledger's `commit.lock` (outer, same order as
+  `paper_ledger.commit_if_allowed`), then re-checks inside it: book age (`book_problem`, `MAX_BOOK_AGE_S`), Issue #145
+  `pair_problem`, and `opposite_leg_blocked(load_state(..., quotes_path=<actual path>))`. A lock timeout, unreadable
+  state, or a state with `ledger_problems` / non-finite ledger rows refuses (`structural_arb_disabled`), nothing written.
+- A buy whose `quotes_path` does not resolve to `paper_ledger.QUOTES_PATH` (the only file `commit_if_allowed` reads)
+  is refused (`structural_arb_disabled`) before any file is written, closing the custom-file reverse bypass.
+- Paper cycle records a skip when the best bids across a market's outcomes sum above 1. A present best_bid / best_ask
+  too large for float marks the market `invalid_book_price` (skipped, no crash, no buy); NaN / inf / out-of-range
+  prices stay left out (no buy); `tests/test_310_paper_cycle_bad_bid.py`.
+- Tests: Poly套利's 8 #237 tests unchanged; `tests/test_310_maker_ledger_fail_closed.py`,
+  `tests/test_310_maker_custom_quotes_path.py` (custom file then default, and the reverse),
+  `tests/test_310_maker_book_age_in_lock.py` (book 119 s before lock, 121 s after: refused, no quote line).
+
 ## Task DR — Issue #305: paper_session pin check first; kill_alert Exception → exit 4
 
 Status: done.
@@ -1604,6 +1623,9 @@ Tightening only; pin path change, so Poly风控 must comment “通过” on the
 - 2026-10-14: Task DR (issue #305): paper_session runs the pin check first (missing / unreadable risk.toml is
   `risk_toml_pin_drift` with a halt, not an exception; one path for snapshot and check); m2_runner kill_alert
   turns any Exception into exit 4. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DO (issue #237, PR #310): maker paper buy re-checked under commit.lock (book age, pair,
+  opposite leg, ledger validity), fail closed; bids over 1 record a skip. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 - 2026-10-14: Task DP (issue #199): public_get retries HTTP 429, waiting Retry-After integer seconds (capped at
   30 s, backoff fallback) inside the same PUBLIC_GET_ATTEMPTS budget; other 4xx still raise at once. risk.toml
