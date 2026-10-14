@@ -17,6 +17,7 @@ Uses the real frames in tests/fixtures/ws_resync/. Offline: fake transport, fake
 from __future__ import annotations
 
 import json
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -138,26 +139,37 @@ def test_the_existing_counts_are_unchanged_next_to_the_new_ones(tmp_path, monkey
 
 
 def test_progress_snapshots_carry_the_recorder_counts(tmp_path, monkeypatch):
-    seen = []
-    real = r.ManifestWriter.progress
+    """While the run is blocked after the vector's frames, the progress thread's next snapshot (written through
+    ManifestWriter.progress, the same atomic path) carries exactly the in-memory per-asset counts."""
+    seen, spied, memory = [], {}, {}
+    real_progress, real_recorder = r.ManifestWriter.progress, r.Recorder
 
     def spy(self, snapshot):
         seen.append(snapshot)
-        return real(self, snapshot)
+        return real_progress(self, snapshot)
+
+    class Spy(real_recorder):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            spied["recorder"] = self
 
     monkeypatch.setattr(r.ManifestWriter, "progress", spy)
-    stored = {}
+    monkeypatch.setattr(r, "Recorder", Spy)
 
-    def peek():
-        stored.update(json.loads((tmp_path / "run" / "manifest.json").read_text(encoding="utf-8")))
+    def wait_for_progress():
+        memory.update(w.recorder_asset_counts(spied["recorder"].report, [YES, NO]))
+        deadline = time.monotonic() + 10
+        while not any(item.get("recorder") == memory for item in seen) and time.monotonic() < deadline:
+            time.sleep(0.01)
 
-    script = [json.loads(frame["raw"]) for frame in _frames("minimal_vector.jsonl")[:2]] + [peek]
+    script = [json.loads(frame["raw"]) for frame in _frames("minimal_vector.jsonl")[:4]] + [wait_for_progress]
     code, out, *_ = _main(tmp_path, [script], ["--assets", YES, NO, "--rest-assets", "0"],
-                          markets=_markets_file(tmp_path, [_market("m1", [YES, NO])]), progress_every_s=0.001)
-    assert code == r.EXIT_OK and seen
+                          markets=_markets_file(tmp_path, [_market("m1", [YES, NO])]), progress_every_s=0.02)
+    assert code == r.EXIT_OK
+    assert sum(item["group_held"] for item in memory.values()) == 2  # the vector's two held states
+    assert any(item.get("recorder") == memory for item in seen)
     assert all(set(item["recorder"]) == {YES, NO} and set(item["recorder"][YES]) == set(NAMES) for item in seen)
-    progress = _manifest(out)["progress"]
-    assert set(progress["recorder"]) == {YES, NO}
+    assert set(_manifest(out)["progress"]["recorder"]) == {YES, NO}
 
 
 def test_the_console_close_partial_manifest_carries_the_recorder_counts(tmp_path, monkeypatch):
