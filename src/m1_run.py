@@ -307,12 +307,17 @@ class RestSampler:
 
 
 def clock_check(assets: list[str], meta: dict[str, dict[str, Any]], *, getter: Any = None,
-                now: Callable[[], str] = utc_now_ms, limit_s: float = M1_MAX_CLOCK_BEHIND_S) -> dict[str, Any]:
+                now: Callable[[], str] = utc_now_ms, limit_s: float = M1_MAX_CLOCK_BEHIND_S,
+                beat: Callable[[int], Any] | None = None) -> dict[str, Any]:
     """Task CM: how far the local clock is behind the exchange, from one public /book read per asset.
 
     ``lead_s = book_ts - local receive time`` per usable answer; ``max_behind_s`` (the largest lead) is a lower
     bound on the local clock's lag. ``ok`` only when at least one answer was usable and max_behind_s <= limit_s.
-    Read only: book.snapshot (public CLOB /book, the REST sampler's reader); nothing is written."""
+    Read only: book.snapshot (public CLOB /book, the REST sampler's reader); nothing is written.
+
+    Task DQ (Poly哨兵 on #309): ``beat(done)`` (optional; main passes the m1_run heartbeat) is called after each
+    asset's read, answered or not, so a 429 storm over many assets (each GET bounded by PUBLIC_GET_DEADLINE_S)
+    never leaves the ``starting`` heartbeat older than HEARTBEAT_RECORDER_TIMEOUT_S. A failing beat is ignored."""
     samples: list[dict[str, Any]] = []
     unusable = 0
     for token in assets:
@@ -321,6 +326,11 @@ def clock_check(assets: list[str], meta: dict[str, dict[str, Any]], *, getter: A
                   "condition_id": info.get("condition_id", ""), "liquidity_usd": info.get("liquidity_usd")}
         row = rest_snapshot(market, info.get("outcome", ""), token, now(), getter=getter)
         received = now()
+        if beat is not None:
+            try:
+                beat(len(samples) + unusable + 1)
+            except Exception:  # noqa: BLE001 - a heartbeat never changes the clock check
+                pass
         book_at = parse_book_ts(row.get("book_ts")) if row and row.get("book_ts_problem") is None else None
         local_at = parse_book_ts(received)
         if book_at is None or local_at is None:
@@ -635,7 +645,13 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
             return True
         return stop.is_set()
 
-    clock = clock_check(assets, meta, getter=clock_getter if clock_getter is not None else rest_getter, now=now)
+    def clock_beat(done: int) -> None:  # Task DQ: one m1_run heartbeat per asset read during the clock check
+        if heartbeat is not None:
+            heartbeat.beat("starting", {"clock_check_assets_read": done, "clock_check_assets": len(assets)},
+                           force=True)
+
+    clock = clock_check(assets, meta, getter=clock_getter if clock_getter is not None else rest_getter, now=now,
+                        beat=clock_beat)
     if not clock["ok"]:
         print("m1_run: refusing to start (" + str(clock["reason"]) + "): local clock behind the exchange by at least "
               f"{clock['max_behind_s']} s (limit M1_MAX_CLOCK_BEHIND_S {M1_MAX_CLOCK_BEHIND_S:g} s), "

@@ -1582,7 +1582,31 @@ Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@043e9ce).
 - Tests: `tests/test_public_get_retry.py` (offline; urlopen mocked, `_sleep` recorded). The old case that pinned
   429 as not retried is replaced by the 429 cases.
 
+## Task DQ — Poly哨兵 on #309: public_get deadline, /time 429 not retried, in-tick heartbeats
+
+Status: done (PR is KEY + HOLD: Poly风控 and Poly哨兵 both 通过, then 家伟 approves in chat before merge).
+
+Claimed by Poly桥接. Done by grok-bot (dev@3a31906). Follows Task DP (#309 kept, not rolled back).
+
+- `src/thresholds.py` `PUBLIC_GET_DEADLINE_S = 30.0` (M2 pending, re-exported as `podlib.PUBLIC_GET_DEADLINE_S`;
+  import check `0 < PUBLIC_GET_DEADLINE_S <= HEARTBEAT_RUNNER_TIMEOUT_S / 4`). `podlib.public_get` bounds the whole
+  call (attempts, socket timeouts, Retry-After / backoff waits): each attempt's timeout is clipped to the time
+  left, a wait that would end past the deadline is not taken (`PublicGetError` at once). New `deadline_s=` kwarg.
+- CLOB `/time` (`TIME_URL`) never retries a 429 (`PublicGetError` after one attempt); 5xx/network still retried.
+- `src/m2_runner.py`: `GuardedGetter(after=...)` / `RunnerState.on_get` beat the heartbeat (throttled to
+  `HEARTBEAT_RUNNER_EVERY_S`) after every GET inside a tick (the /time check, settlement, each scan page, each
+  signal's fee and /book reads). KILL is still read at the start of each tick: at most one tick late (documented).
+- `src/m1_run.py`: `clock_check(beat=...)` beats the `m1_run` heartbeat (`starting`) after each asset read.
+- Docs: `.grok/skills/api-health-ratelimit/SKILL.md`, `docs/RECONCILE.md`, `docs/THRESHOLDS.md` match the code.
+- Tests (offline, fake clock): `tests/test_public_get_deadline.py`, `tests/test_ratelimit_storm.py` (429 storm with
+  Retry-After 30: one m2_runner tick and the m1_run start-up each end within 120 s; heartbeat gaps < 120 s).
+  config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
 ## Latest
+
+- 2026-10-14: Task DQ (Poly哨兵 on #309, KEY): one public_get call bounded by PUBLIC_GET_DEADLINE_S = 30 s
+  (M2 pending), /time does not retry 429, m2_runner beats between GETs, m1_run clock check beats per asset;
+  429-storm regressions (< 120 s). risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 - 2026-10-14: Task DP (issue #199): public_get retries HTTP 429, waiting Retry-After integer seconds (capped at
   30 s, backoff fallback) inside the same PUBLIC_GET_ATTEMPTS budget; other 4xx still raise at once. risk.toml

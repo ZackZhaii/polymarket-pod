@@ -167,6 +167,7 @@ EXPECTED = {
     # issue #52: the halt-state read-modify-write mutex (M2 pending).
     "HALT_STATE_LOCK_TIMEOUT_S": 5.0,
     "COMMIT_LOCK_TIMEOUT_S": 5.0,  # Task DD (#280): moved from src/paper_ledger.py, value unchanged
+    "PUBLIC_GET_DEADLINE_S": 30.0,  # Task DQ (Poly哨兵 on #309): new, one public_get call's total budget
     "HALT_STATE_LOCK_POLL_S": 0.05,
 }
 
@@ -178,6 +179,7 @@ REEXPORTS = {
     "risk_gate.MIN_EDGE": "MIN_EDGE",
     "risk_gate.EDGE_TOLERANCE": "EDGE_TOLERANCE",
     "podlib.PAPER_EQUITY_USD": "PAPER_EQUITY_USD",
+    "podlib.PUBLIC_GET_DEADLINE_S": "PUBLIC_GET_DEADLINE_S",
     "risk_gate.PAPER_EQUITY_USD": "PAPER_EQUITY_USD",
     "maker.PAPER_EQUITY_USD": "PAPER_EQUITY_USD",
     "paper_cycle.STALE_AFTER_S": "PAPER_CYCLE_STALE_AFTER_S",
@@ -271,7 +273,9 @@ M2_PENDING = {"MAX_BOOK_AGE_S", "DAY_START_MAX_LAG_S", "MIN_EDGE", "SENTINEL_STA
               # issue #52: the halt-state read-modify-write mutex.
               "HALT_STATE_LOCK_TIMEOUT_S", "HALT_STATE_LOCK_POLL_S",
               # Task DD (#280): the ledger commit mutex wait.
-              "COMMIT_LOCK_TIMEOUT_S"}
+              "COMMIT_LOCK_TIMEOUT_S",
+              # Task DQ (Poly哨兵 on #309): one public_get call's total budget.
+              "PUBLIC_GET_DEADLINE_S"}
 HEADER = ["Name", "Value", "Unit", "Meaning", "Where", "Source", "M2 pending"]
 
 

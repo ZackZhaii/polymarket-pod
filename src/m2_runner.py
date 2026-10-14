@@ -49,7 +49,9 @@ intent is built with ``paper=True``. Nothing here signs, sends or cancels anythi
 Heartbeat ``logs/heartbeat/m2_runner.json`` (src/heartbeat.py fields; a failed write is the global halt
 ``heartbeat_write_failed:m2_runner``, issue #79) every HEARTBEAT_RUNNER_EVERY_S, ``paused`` while paused. The
 Sentinel watches it (src/sentinel_tick.PROC_SPECS): stale is a global halt, ``paused`` longer than
-RUNNER_PAUSED_ALERT_S an alert. Single instance: ``<run dir>/runner.lock`` (pid, host, started_at) is held with an
+RUNNER_PAUSED_ALERT_S an alert. Task DQ: inside a tick the heartbeat is also beaten (throttled) after every GET,
+and every ``podlib.public_get`` is bounded by PUBLIC_GET_DEADLINE_S, so a 429 storm cannot stale it. KILL is
+checked at the start of each tick, so a KILL file stops the runner at most one tick late. Single instance: ``<run dir>/runner.lock`` (pid, host, started_at) is held with an
 OS byte lock for the process's life; a second runner exits 3. ``<run dir>/journal.jsonl`` (one fsynced line per
 step: sealed, rejected, built, committed, vetoed, skipped) and ``events.jsonl`` record what happened.
 
@@ -197,10 +199,16 @@ class Getters:
 
 
 class GuardedGetter:
-    """Calls ``inner`` only for an allowed URL; counts calls and refusals."""
+    """Calls ``inner`` only for an allowed URL; counts calls and refusals.
 
-    def __init__(self, inner: Callable[[str], Any]) -> None:
+    Task DQ (Poly哨兵 on #309): ``after`` (optional, never raises into the caller) runs after every fetched URL,
+    answered or failed: the runner beats its heartbeat there, so a tick of many GETs (the /time check, Gamma
+    settlement, every scan page, every signal's fee and /book reads) never goes HEARTBEAT_RUNNER_TIMEOUT_S
+    without a beat while each GET is bounded by PUBLIC_GET_DEADLINE_S."""
+
+    def __init__(self, inner: Callable[[str], Any], after: Callable[[], None] | None = None) -> None:
         self.inner = inner
+        self.after = after
         self.calls: list[str] = []
         self.refused: list[str] = []
 
@@ -209,7 +217,14 @@ class GuardedGetter:
             self.refused.append(str(url))
             raise RefusedURL(f"m2_runner refuses {url!r}")
         self.calls.append(url)
-        return self.inner(url)
+        try:
+            return self.inner(url)
+        finally:
+            if self.after is not None:
+                try:
+                    self.after()
+                except Exception:  # noqa: BLE001 - a heartbeat hook never changes a GET's outcome
+                    pass
 
 
 @dataclass
@@ -284,6 +299,8 @@ class RunnerState:
     resume_count: int = 0
     force_rescan: bool = False
     kill_alerted: bool = False  # issue #247: the KILL alert line was written for this stop (at most once)
+    # Task DQ: called after every GET of a tick (GuardedGetter.after); _run sets it to a throttled heartbeat beat.
+    on_get: Callable[[], None] | None = None
 
 
 @dataclass
@@ -929,8 +946,8 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     state.tick_clock_vetoed = False
     state.tick_time_ok = False
     _note_clock_anomaly(state, now)  # issue #289: heartbeat stamp for an anomaly held from startup
-    gamma = GuardedGetter(getters.gamma)  # one guarded Gamma getter per tick: settlement, scan, fee
-    book_get = GuardedGetter(getters.book)  # shared read-only transport for /time and later /book
+    gamma = GuardedGetter(getters.gamma, state.on_get)  # one guarded Gamma getter per tick: settlement, scan, fee
+    book_get = GuardedGetter(getters.book, state.on_get)  # shared read-only transport for /time and later /book
     try:
         check = preflight(state.paths, now=now, risk_path=state.risk_path, clock_ok=runner_clock_ok(state),
                           settle=lambda: _settle_tick(state, now, gamma),
@@ -1180,6 +1197,14 @@ def _run(args: argparse.Namespace, paths: RunnerPaths, getters: Getters, now_fn:
                     risk_path=risk_path)
     started = monotonic()
     hb.beat(heartbeat.STATE_STARTING, progress(state, now_fn()), force=True)
+
+    def beat_between_gets() -> None:
+        # Task DQ (Poly哨兵 on #309): a mid-tick beat after each GET, throttled to HEARTBEAT_RUNNER_EVERY_S; with
+        # every GET bounded by PUBLIC_GET_DEADLINE_S, a 429 storm never stales the heartbeat inside one tick.
+        beat_state = heartbeat.STATE_PAUSED if state.paused_reason is not None else heartbeat.STATE_RUNNING
+        hb.beat(beat_state, progress(state, now_fn()))
+
+    state.on_get = beat_between_gets
     try:
         while True:
             began = monotonic()

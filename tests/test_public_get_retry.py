@@ -179,8 +179,10 @@ def test_http_429_invalid_retry_after_falls_back_to_backoff(fake_net, value):
 
 
 def test_http_429_retry_after_is_capped(fake_net):
+    # Task DQ: a wider deadline than the default so the 30 s cap itself is visible (the default 30 s deadline
+    # refuses a 30 s wait; see tests/test_public_get_deadline.py).
     fake_net["set"](_http_error(429, "3600"), {"ok": 10})
-    assert podlib.public_get(GAMMA_URL) == {"ok": 10}
+    assert podlib.public_get(GAMMA_URL, deadline_s=120.0) == {"ok": 10}
     assert fake_net["sleeps"] == [podlib.PUBLIC_GET_RETRY_AFTER_MAX_S]
 
 

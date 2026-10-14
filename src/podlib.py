@@ -32,6 +32,7 @@ SENTINEL_STATE_PATH = LOG_DIR / "sentinel_stale.json"
 
 # Local paper bankroll. Not a wallet. Sizing never exceeds the 1% clip.
 from src.thresholds import PAPER_EQUITY_USD  # noqa: E402 - Task AC: value in src/thresholds.py
+from src.thresholds import PUBLIC_GET_DEADLINE_S  # noqa: E402,F401 - Task DQ: re-export, value in src/thresholds.py
 from src.secret_scan import check_message as _secret_check  # noqa: E402 - Task AQ: bus secret filter
 BUS_TYPES = frozenset({"signal", "veto", "fill", "proposal", "halt", "resume"})
 # Task AL: ``resume`` lifts one halt. Only the Operator (the human, via ``python -m src.halt_store
@@ -71,7 +72,12 @@ PUBLIC_GET_ATTEMPTS = 3
 PUBLIC_GET_BACKOFF_S = 0.5
 PUBLIC_GET_RETRY_AFTER_MAX_S = 30.0
 HTTP_TOO_MANY_REQUESTS = 429
+# Task DQ (Poly哨兵 on #309): one public_get call (every attempt, timeout and wait together) never runs past
+# PUBLIC_GET_DEADLINE_S (src/thresholds.py). Each attempt's socket timeout is clipped to the time left, and a
+# wait that would end past the deadline is not taken: PublicGetError at once. CLOB /time (TIME_URL) is never
+# retried on 429: a retried /time widens the sent/recv interval past the clock tolerance anyway.
 _sleep = time.sleep  # tests patch this so they never sleep
+_monotonic = time.monotonic  # tests patch this with a fake clock
 
 # OSError covers ConnectionResetError, socket.timeout/TimeoutError and ssl.SSLError (incl. SSLEOFError).
 TRANSIENT_NETWORK_ERRORS = (URLError, OSError, http.client.HTTPException, ssl.SSLError, socket.timeout)
@@ -280,13 +286,18 @@ def public_get(
     *,
     attempts: int | None = None,
     backoff_s: float | None = None,
+    deadline_s: float | None = None,
 ) -> Any:
     """GET a public read endpoint. Rejects order and auth URLs.
 
     Transient network/TLS errors and HTTP 5xx are retried with exponential backoff. HTTP 429 is retried too,
     after waiting its Retry-After seconds (capped at PUBLIC_GET_RETRY_AFTER_MAX_S; exponential backoff when the
-    header is missing or not an integer). All of them share the same attempt budget. Every other HTTP 4xx and
-    JSON errors are raised at once. If every attempt fails, raises PublicGetError.
+    header is missing or not an integer), except on CLOB /time (TIME_URL), where a 429 is not retried (Task DQ).
+    All of them share the same attempt budget. Every other HTTP 4xx and JSON errors are raised at once.
+
+    Task DQ: the whole call is bounded by ``deadline_s`` (default PUBLIC_GET_DEADLINE_S, about 30 s): each
+    attempt's timeout is min(timeout, time left), and a retry whose wait would end past the deadline is not
+    taken. If every attempt fails, the deadline is reached, or /time answers 429, raises PublicGetError.
     """
     if not (url.startswith(PUBLIC_PREFIXES) or url in (DATA_API_STATUS_URL, TIME_URL)):
         raise RuntimeError("refusing URL outside public Gamma markets, CLOB /book /time and Data API v2 positions/trades/status")
@@ -301,18 +312,30 @@ def public_get(
     )
     tries = max(1, int(PUBLIC_GET_ATTEMPTS if attempts is None else attempts))
     base = PUBLIC_GET_BACKOFF_S if backoff_s is None else float(backoff_s)
+    budget = float(PUBLIC_GET_DEADLINE_S if deadline_s is None else deadline_s)
+    started = _monotonic()
     for attempt in range(tries):
+        left = budget - (_monotonic() - started)
         try:
-            with urlopen(request, timeout=timeout) as response:
+            if left <= 0:
+                raise TimeoutError(f"public_get deadline {budget:g} s reached before attempt {attempt + 1}")
+            with urlopen(request, timeout=min(float(timeout), left)) as response:
                 body = response.read().decode("utf-8")
             break
         except Exception as exc:  # noqa: BLE001 - filtered by _retryable
+            if left <= 0:
+                raise PublicGetError(url, attempt, exc) from exc
             if not _retryable(exc):
                 raise
             if attempt + 1 >= tries:
                 raise PublicGetError(url, tries, exc) from exc
+            if url == TIME_URL and isinstance(exc, HTTPError) and exc.code == HTTP_TOO_MANY_REQUESTS:
+                raise PublicGetError(url, attempt + 1, exc) from exc  # Task DQ: /time never retries a 429
             wait = _retry_after_s(exc)
-            _sleep(base * (2 ** attempt) if wait is None else wait)
+            wait = base * (2 ** attempt) if wait is None else wait
+            if (_monotonic() - started) + wait >= budget:
+                raise PublicGetError(url, attempt + 1, exc) from exc  # Task DQ: the wait would pass the deadline
+            _sleep(wait)
     return json.loads(body)
 
 
