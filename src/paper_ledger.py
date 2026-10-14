@@ -978,48 +978,24 @@ def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def run_cli_intent(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, Any]:
-    # Issue #210 / #147: operator CLI tighten-only — never silent fee_rate=0, and never book
-    # without book depth/levels. Prefer refusing without levels over adding --asks.
+    """Issue #210 / #147 (Task DZ, Poly风控 6178561328 / Codex P1 6178323003): the operator CLI carries no
+    ask levels or depth evidence, so it always refuses with missing_book_levels before RiskGate (tighten-only).
+    No args.asks escape hatch: True, strings, zero depth or NaN must never reach commit. The early veto is
+    written to the bus like any RiskGate veto. Nothing is booked."""
     reasons: list[str] = []
     if getattr(args, "fee_rate", None) is None:
         reasons.append("missing_fee_data")
-    # CLI carries no ask levels today (NO_BOOK_CONTEXTS). An optional args.asks (unused by the
-    # parser) is the only depth evidence accepted here; without it, refuse before RiskGate.
-    asks = getattr(args, "asks", None)
-    if not asks:
-        reasons.append("missing_book_levels")
-    if reasons:
-        summary = {
-            "strategy": getattr(args, "strategy", None) or "",
-            "reasons": reasons,
-            "hypothetical": False,
-            "risk_decision": "veto",
-            "decision": "veto",
-            "note": "Operator CLI refused: fee-rate and book depth/levels required (#210).",
-        }
-        return {"allow": False, "decision": summary}
-
-    intent = Intent(
-        strategy=args.strategy,
-        market=args.market,
-        side=args.side,
-        model_prob=args.model_prob,
-        market_price=args.market_price,
-        assumed_slippage=args.slippage,
-        fee_rate=args.fee_rate,
-        liquidity_usd=args.liquidity,
-        spread=args.spread,
-        token_id=args.token_id or "",
-        hypothetical=False,
-        book_ts=args.book_ts,
-        note=args.note or "Operator paper intent. Not a promise of profit.",
-        fill_context=calibration_ids.FILL_CONTEXT_OPERATOR_CLI,  # Task BC: no book context
-        # Issue #131: the market's Gamma tag slugs; none given vetoes missing_category.
-        tags=tuple(t.strip() for t in (getattr(args, "tags", None) or "").split(",") if t.strip()) or None,
-        # Issue #226: the market's minimum order size in shares; none given vetoes missing_min_order_size.
-        min_order_size=getattr(args, "min_order_size", None),
-    )
-    return commit_if_allowed(intent, cfg)
+    reasons.append("missing_book_levels")
+    summary = {
+        "strategy": getattr(args, "strategy", None) or "",
+        "reasons": reasons,
+        "hypothetical": False,
+        "risk_decision": "veto",
+        "decision": "veto",
+        "note": "Operator CLI refused: fee-rate and book depth/levels required (#210).",
+    }
+    bus("RiskGate", "Executor", "veto", str(getattr(args, "market", None) or ""), summary)
+    return {"allow": False, "decision": summary}
 
 
 def slippage_arg(text: str) -> float:
