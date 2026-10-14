@@ -160,8 +160,19 @@ def quote(
             if Path(paper_ledger.QUOTES_PATH) != Path(path):
                 veto_paths.append(Path(paper_ledger.QUOTES_PATH))
             try:
-                blocked = any(opposite_leg_blocked(paper_ledger.load_state(market, token_id, quotes_path=p))
-                              for p in veto_paths)
+                # Poly review on #310: maker.quote only calls opposite_leg_blocked (not full evaluate).
+                # opposite_leg_blocked returns False on an unusable ledger (defers to evaluate
+                # invalid_risk_state) - that would fail-OPEN a buy quote. Refuse here.
+                blocked = False
+                for p in veto_paths:
+                    state = paper_ledger.load_state(market, token_id, quotes_path=p)
+                    if (state.get("ledger_problems") or state.get("non_finite_ledger_rows")
+                            or state.get("open_positions") is None):
+                        blocked = True
+                        break
+                    if opposite_leg_blocked(state):
+                        blocked = True
+                        break
             except Exception:  # noqa: BLE001 - an unreadable state refuses (fail closed)
                 blocked = True
             if blocked:
