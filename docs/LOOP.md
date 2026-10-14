@@ -1616,9 +1616,28 @@ Tightening only; pin path change, so Poly风控 must comment “通过” on the
   `RISK_PATH`); the config is parsed from the checked bytes (re-read sha must still be pinned, else drift).
 - `src/m2_runner.py` `kill_alert`: any `Exception` while building or writing the alert line becomes `WriteFailed`
   (exit 4), not only `OSError`; KeyboardInterrupt / SystemExit pass through. docs/EXIT_CODES.md notes both.
-- Tests: `tests/test_dq_305_pin_first_kill_alert.py` (offline).
+- Tests: `tests/test_dr_305_pin_first_kill_alert.py` (offline).
+
+## Task DS — paper_session reread-then-refuse test; #305 Task DQ leftovers renamed to DR
+
+Status: done (tests + docs/comments only).
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@a0569a2). Follow-up of Task DR (#315).
+
+- Offline tests for `src/paper_session.py` `run`'s reread-then-refuse branch: the real `pins.refuse_start` passes,
+  then the file is deleted, edited off its sha, swapped for a directory, or the reread raises, before
+  `_pinned_snapshot` reads it again. Each is `reason=risk_toml_pin_drift`, `ok=False`, one global halt recorded by
+  the reread (none by the passing check), no markets / books / sessions write, no getter call, no parse.
+- Renamed the #305 leftovers that kept the old letter: `tests/test_dq_305_pin_first_kill_alert.py` →
+  `tests/test_dr_305_pin_first_kill_alert.py`, and `Task DQ` → `Task DR` for #305 in `src/paper_session.py`,
+  `src/m2_runner.py` (comment) and `docs/EXIT_CODES.md`. Task DQ of KEY PR #314 untouched. No behaviour change.
+- Tests: `tests/test_dr_305_pin_first_kill_alert.py` section 3 (offline).
 
 ## Latest
+
+- 2026-10-14: Task DS: offline tests for paper_session's reread-then-refuse branch (file gone / edited / directory /
+  reread raising after a passing pin check is `risk_toml_pin_drift` with a halt, nothing written); #305 Task DQ
+  leftovers renamed to DR. Tests and docs only. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 - 2026-10-14: Task DR (issue #305): paper_session runs the pin check first (missing / unreadable risk.toml is
   `risk_toml_pin_drift` with a halt, not an exception; one path for snapshot and check); m2_runner kill_alert
