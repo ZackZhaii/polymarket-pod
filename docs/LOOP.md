@@ -1582,7 +1582,7 @@ Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@043e9ce).
 - Tests: `tests/test_public_get_retry.py` (offline; urlopen mocked, `_sleep` recorded). The old case that pinned
   429 as not retried is replaced by the 429 cases.
 
-## Task DQ — Issue #305: paper_session pin check first; kill_alert Exception → exit 4
+## Task DR — Issue #305: paper_session pin check first; kill_alert Exception → exit 4
 
 Status: done.
 
@@ -1601,7 +1601,7 @@ Tightening only; pin path change, so Poly风控 must comment “通过” on the
 
 ## Latest
 
-- 2026-10-14: Task DQ (issue #305): paper_session runs the pin check first (missing / unreadable risk.toml is
+- 2026-10-14: Task DR (issue #305): paper_session runs the pin check first (missing / unreadable risk.toml is
   `risk_toml_pin_drift` with a halt, not an exception; one path for snapshot and check); m2_runner kill_alert
   turns any Exception into exit 4. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
