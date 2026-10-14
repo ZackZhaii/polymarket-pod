@@ -65,10 +65,14 @@ def test_the_operator_cli_is_stamped_operator_cli(monkeypatch):
     refused = paper_ledger.run_cli_intent(args, load_risk())
     assert refused["allow"] is False and "missing_book_levels" in refused["decision"]["reasons"]
     assert seen == []
-    # With depth evidence (asks), Intent still stamps fill_context=operator_cli before commit.
+    # PR #336 P1: a programmatic asks is never depth evidence; the CLI still refuses, no commit.
     args_with_depth = argparse.Namespace(**{**vars(args), "asks": [(0.40, 100.0)]})
-    paper_ledger.run_cli_intent(args_with_depth, load_risk())
-    assert seen[0].fill_context == "operator_cli" and seen[0].kelly_frac_raw is None
+    still = paper_ledger.run_cli_intent(args_with_depth, load_risk())
+    assert still["allow"] is False and "missing_book_levels" in still["decision"]["reasons"]
+    assert seen == []
+    # The Intent the CLI would build is still stamped fill_context=operator_cli.
+    built = paper_ledger.build_cli_intent(args_with_depth)
+    assert built.fill_context == "operator_cli" and built.kelly_frac_raw is None
 
 
 def test_the_gate_checks_are_stamped_gate_check(monkeypatch):

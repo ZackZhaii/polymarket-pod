@@ -68,3 +68,29 @@ def test_cli_without_a_fee_rate_never_books_a_zero_fee(ledger):
     assert result["allow"] is False
     assert {"missing_fee_data", "invalid_fee_rate"} & set(result["decision"]["reasons"])
     assert not ledger.exists() or ledger.read_text() == ""
+
+
+_NAN = float("nan")
+_INF = float("inf")
+
+
+@pytest.mark.parametrize(
+    "asks",
+    [True, "x", [(0.4, 0.0)], [(0.4, 0.01)], [(_NAN, 1.0)], [(_INF, 1.0)], [(0.4, _NAN)], [(0.4, _INF)],
+     [(0.40, 100.0)]],
+    ids=["true", "string", "zero_depth", "tiny_size", "nan_price", "inf_price", "nan_size", "inf_size",
+         "plausible_levels"],
+)
+def test_cli_programmatic_asks_never_count_as_depth(ledger, monkeypatch, asks):
+    """PR #336 P1 (Poly risk option 1): any args.asks, junk or plausible, is not validated book
+    depth. The CLI refuses missing_book_levels and never reaches commit_if_allowed. Fee is present
+    so the refusal is about book levels, not fee."""
+    calls = []
+    monkeypatch.setattr(paper_ledger, "commit_if_allowed", lambda *a, **k: calls.append((a, k)) or {"allow": True})
+    result = paper_ledger.run_cli_intent(_cli(asks=asks, fee_rate=0.04), load_risk())
+    assert result["allow"] is False
+    reasons = result["decision"]["reasons"]
+    assert "missing_book_levels" in reasons
+    assert "missing_fee_data" not in reasons
+    assert calls == [], "commit_if_allowed was called with unvalidated asks"
+    assert not ledger.exists() or ledger.read_text() == ""

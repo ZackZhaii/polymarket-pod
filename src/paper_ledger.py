@@ -983,23 +983,24 @@ def run_cli_intent(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, A
     reasons: list[str] = []
     if getattr(args, "fee_rate", None) is None:
         reasons.append("missing_fee_data")
-    # CLI carries no ask levels today (NO_BOOK_CONTEXTS). An optional args.asks (unused by the
-    # parser) is the only depth evidence accepted here; without it, refuse before RiskGate.
-    asks = getattr(args, "asks", None)
-    if not asks:
-        reasons.append("missing_book_levels")
-    if reasons:
-        summary = {
-            "strategy": getattr(args, "strategy", None) or "",
-            "reasons": reasons,
-            "hypothetical": False,
-            "risk_decision": "veto",
-            "decision": "veto",
-            "note": "Operator CLI refused: fee-rate and book depth/levels required (#210).",
-        }
-        return {"allow": False, "decision": summary}
+    # PR #336 P1 (Poly risk option 1): the CLI carries no validated ask levels (NO_BOOK_CONTEXTS),
+    # so it ALWAYS refuses missing_book_levels. Any programmatic args.asks (True, a string,
+    # zero/tiny depth, NaN/inf) is ignored, never treated as depth evidence. No --asks flag.
+    reasons.append("missing_book_levels")
+    summary = {
+        "strategy": getattr(args, "strategy", None) or "",
+        "reasons": reasons,
+        "hypothetical": False,
+        "risk_decision": "veto",
+        "decision": "veto",
+        "note": "Operator CLI refused: fee-rate and book depth/levels required (#210).",
+    }
+    return {"allow": False, "decision": summary}
 
-    intent = Intent(
+
+def build_cli_intent(args: argparse.Namespace) -> Intent:
+    """The Intent the operator CLI would submit; stamped operator_cli. Never committed today (#210)."""
+    return Intent(
         strategy=args.strategy,
         market=args.market,
         side=args.side,
@@ -1019,7 +1020,6 @@ def run_cli_intent(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, A
         # Issue #226: the market's minimum order size in shares; none given vetoes missing_min_order_size.
         min_order_size=getattr(args, "min_order_size", None),
     )
-    return commit_if_allowed(intent, cfg)
 
 
 def slippage_arg(text: str) -> float:
