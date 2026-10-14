@@ -512,8 +512,24 @@ def book(path: Path, fill: dict[str, Any], *, unique_decision_id: bool = False) 
     atomic_append(path, data, line)
     _, after = read_ledger(path)
     problems = verify(after)
-    if not problems and (not after.ids or after.ids[-1] != row[FILL_ID_FIELD]):
-        problems = [f"not_appended:{row[FILL_ID_FIELD]}"]
+    if not problems:
+        problems = _post_write_row_problems(after, row[FILL_ID_FIELD], json.loads(text))
     if problems:
         raise LedgerIntegrityError(["post_write:" + problem for problem in problems])
     return row
+
+
+def _post_write_row_problems(after: LedgerRead, fill_id: str, written: dict[str, Any]) -> list[str]:
+    """Task DT: our row must be present by fill_id and equal, field by field, to what we wrote.
+
+    It need not be the last line: another process may append right after our locked replace.
+    Missing -> ``not_appended``; any differing, missing or extra field -> ``row_mismatch`` (fail closed).
+    """
+    if fill_id not in after.ids:
+        return [f"not_appended:{fill_id}"]
+    stored = after.rows[after.ids.index(fill_id)]
+    fields = sorted(set(stored) | set(written))
+    for name in fields:
+        if name not in stored or name not in written or canonical({"v": stored[name]}) != canonical({"v": written[name]}):
+            return [f"row_mismatch:{name}:{fill_id}"]
+    return []

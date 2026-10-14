@@ -1618,7 +1618,26 @@ Tightening only; pin path change, so Poly风控 must comment “通过” on the
   (exit 4), not only `OSError`; KeyboardInterrupt / SystemExit pass through. docs/EXIT_CODES.md notes both.
 - Tests: `tests/test_dq_305_pin_first_kill_alert.py` (offline).
 
+## Task DT — ledger_store.book() post-write check by fill_id, not "last line"
+
+Status: done.
+
+Claimed by Poly桥接 (Poly指挥 ruling on the ledger post-write false alarm). Done by grok-bot on the box.
+Ledger fix, so Poly风控 must comment “通过” on the head before merge.
+
+- `src/ledger_store.py` `book`: after the locked replace, our row no longer has to be the last line (another
+  process may append right after us). The re-read ledger must verify clean, contain our `fill_id`, and the
+  stored row must equal what we wrote field by field (`_post_write_row_problems`). Missing is
+  `post_write:not_appended:<id>`; a differing, missing or extra field is `post_write:row_mismatch:<field>:<id>`.
+  Fail closed as before; the lock is not widened.
+- Tests: `tests/test_dt_ledger_post_write_verify.py` (offline); `tests/test_ledger_concurrent_book.py` unchanged
+  and green under repeated runs.
+
 ## Latest
+
+- 2026-10-14: Task DT: ledger book() post-write check finds our row by fill_id and compares it field by field
+  (a later append by another process is no longer a false not_appended). risk.toml unchanged (0aea23af…bc04),
+  `live_enabled=false`.
 
 - 2026-10-14: Task DR (issue #305): paper_session runs the pin check first (missing / unreadable risk.toml is
   `risk_toml_pin_drift` with a halt, not an exception; one path for snapshot and check); m2_runner kill_alert
