@@ -178,7 +178,7 @@ def test_trade_section_reports_the_cluster_share_with_re_entries():
     # a second decision on market 0: a later forecast on the same market, filled once
     f2 = forecast(0, fs[0]["model_prob"], ts="2026-10-01T05:00:00Z")
     fs.append(f2)
-    fills.append(fill(f2, ts="2026-10-03T00:00:00Z", fill_id="re-entry"))
+    fills.append(fill(f2, ts="2026-10-01T11:00:00Z", fill_id="re-entry"))  # issue #70: before the 12:00Z close
     m = build(fs, rs, fills)[0]["trades"]["metrics"]
     ec = m["event_cluster"]
     assert ec["n"] == m["n"] and ec["n_clusters"] == m["markets"]

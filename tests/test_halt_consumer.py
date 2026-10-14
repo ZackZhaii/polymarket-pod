@@ -82,19 +82,19 @@ def test_a_halt_survives_a_fresh_book_and_a_new_process(tmp_path):
 def test_maker_refuses_a_halted_market(tmp_path, fresh_book):
     fresh_book("m1", "t")
     fresh_book("m2", "t")
-    sentinel.halt(reason="drill", market="m1", bus_path=tmp_path / "bus.jsonl", quotes_path=tmp_path / "q.jsonl")
+    sentinel.halt(reason="drill", market="m1", bus_path=tmp_path / "bus.jsonl", quotes_path=tmp_path / "quotes.jsonl")
     with pytest.raises(maker.HaltActive):
         maker.quote(market="m1", token_id="t", side="buy", price=0.4, size=5,
-                    bus_path=tmp_path / "bus.jsonl", quotes_path=tmp_path / "q.jsonl")
-    assert read_jsonl(tmp_path / "q.jsonl") == []
+                    bus_path=tmp_path / "bus.jsonl", quotes_path=tmp_path / "quotes.jsonl")
+    assert read_jsonl(tmp_path / "quotes.jsonl") == []
     maker.quote(market="m2", token_id="t", side="buy", price=0.4, size=5,
-                bus_path=tmp_path / "bus.jsonl", quotes_path=tmp_path / "q.jsonl")
-    assert [q["market"] for q in read_jsonl(tmp_path / "q.jsonl")] == ["m2"]
+                bus_path=tmp_path / "bus.jsonl", quotes_path=tmp_path / "quotes.jsonl")
+    assert [q["market"] for q in read_jsonl(tmp_path / "quotes.jsonl")] == ["m2"]
 
 
 def test_maker_cancels_its_own_quote_when_a_halt_lands_during_the_append(tmp_path, monkeypatch, fresh_book):
     fresh_book("m1", "t")
-    quotes = tmp_path / "q.jsonl"
+    quotes = tmp_path / "quotes.jsonl"
     real_append = maker.append_jsonl
 
     def append_then_halt(path, row):

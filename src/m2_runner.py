@@ -357,7 +357,7 @@ def kill_alert(state: RunnerState, now: datetime) -> None:
     row shape as ``sentinel_tick.Tick.alert``) when KILL stops the runner, at most once per stop. Only a record:
     the exit code stays 0, nothing is resumed or restarted (auto-restart is KEY #243). Raises WriteFailed.
 
-    Issue #305 (Task DQ): any ``Exception`` while building or writing the row (not only OSError) is a write
+    Issue #305 (Task DR): any ``Exception`` while building or writing the row (not only OSError) is a write
     failure (exit 4); KeyboardInterrupt / SystemExit are not caught."""
     if state.kill_alerted:
         return

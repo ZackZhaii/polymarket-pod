@@ -1582,6 +1582,25 @@ Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@043e9ce).
 - Tests: `tests/test_public_get_retry.py` (offline; urlopen mocked, `_sleep` recorded). The old case that pinned
   429 as not retried is replaced by the 429 cases.
 
+## Task DO — Issue #237: maker paper buy checked under the commit lock; bids over 1 record a skip
+
+Status: done (PR #310, HOLD until Poly风控 「通过」 on head).
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC.
+
+- `src/maker.py` `quote` buy path takes the paper ledger's `commit.lock` (outer, same order as
+  `paper_ledger.commit_if_allowed`), then re-checks inside it: book age (`book_problem`, `MAX_BOOK_AGE_S`), Issue #145
+  `pair_problem`, and `opposite_leg_blocked(load_state(..., quotes_path=<actual path>))`. A lock timeout, unreadable
+  state, or a state with `ledger_problems` / non-finite ledger rows refuses (`structural_arb_disabled`), nothing written.
+- A buy whose `quotes_path` does not resolve to `paper_ledger.QUOTES_PATH` (the only file `commit_if_allowed` reads)
+  is refused (`structural_arb_disabled`) before any file is written, closing the custom-file reverse bypass.
+- Paper cycle records a skip when the best bids across a market's outcomes sum above 1. A present best_bid / best_ask
+  too large for float marks the market `invalid_book_price` (skipped, no crash, no buy); NaN / inf / out-of-range
+  prices stay left out (no buy); `tests/test_310_paper_cycle_bad_bid.py`.
+- Tests: Poly套利's 8 #237 tests unchanged; `tests/test_310_maker_ledger_fail_closed.py`,
+  `tests/test_310_maker_custom_quotes_path.py` (custom file then default, and the reverse),
+  `tests/test_310_maker_book_age_in_lock.py` (book 119 s before lock, 121 s after: refused, no quote line).
+
 ## Task DR — Issue #305: paper_session pin check first; kill_alert Exception → exit 4
 
 Status: done.
@@ -1597,7 +1616,22 @@ Tightening only; pin path change, so Poly风控 must comment “通过” on the
   `RISK_PATH`); the config is parsed from the checked bytes (re-read sha must still be pinned, else drift).
 - `src/m2_runner.py` `kill_alert`: any `Exception` while building or writing the alert line becomes `WriteFailed`
   (exit 4), not only `OSError`; KeyboardInterrupt / SystemExit pass through. docs/EXIT_CODES.md notes both.
-- Tests: `tests/test_dq_305_pin_first_kill_alert.py` (offline).
+- Tests: `tests/test_dr_305_pin_first_kill_alert.py` (offline).
+
+## Task DS — paper_session reread-then-refuse test; #305 Task DQ leftovers renamed to DR
+
+Status: done (tests + docs/comments only).
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@a0569a2). Follow-up of Task DR (#315).
+
+- Offline tests for `src/paper_session.py` `run`'s reread-then-refuse branch: the real `pins.refuse_start` passes,
+  then the file is deleted, edited off its sha, swapped for a directory, or the reread raises, before
+  `_pinned_snapshot` reads it again. Each is `reason=risk_toml_pin_drift`, `ok=False`, one global halt recorded by
+  the reread (none by the passing check), no markets / books / sessions write, no getter call, no parse.
+- Renamed the #305 leftovers that kept the old letter: `tests/test_dq_305_pin_first_kill_alert.py` →
+  `tests/test_dr_305_pin_first_kill_alert.py`, and `Task DQ` → `Task DR` for #305 in `src/paper_session.py`,
+  `src/m2_runner.py` (comment) and `docs/EXIT_CODES.md`. Task DQ of KEY PR #314 untouched. No behaviour change.
+- Tests: `tests/test_dr_305_pin_first_kill_alert.py` section 3 (offline).
 
 ## Task DQ — Poly哨兵 on #309: public_get deadline, /time 429 not retried, in-tick heartbeats
 
@@ -1625,9 +1659,16 @@ Claimed by Poly桥接. Done by grok-bot (dev@3a31906). Follows Task DP (#309 kep
   (M2 pending), /time does not retry 429, m2_runner beats between GETs, m1_run clock check beats per asset;
   429-storm regressions (< 120 s). risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
+- 2026-10-14: Task DS: offline tests for paper_session's reread-then-refuse branch (file gone / edited / directory /
+  reread raising after a passing pin check is `risk_toml_pin_drift` with a halt, nothing written); #305 Task DQ
+  leftovers renamed to DR. Tests and docs only. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
 - 2026-10-14: Task DR (issue #305): paper_session runs the pin check first (missing / unreadable risk.toml is
   `risk_toml_pin_drift` with a halt, not an exception; one path for snapshot and check); m2_runner kill_alert
   turns any Exception into exit 4. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DO (issue #237, PR #310): maker paper buy re-checked under commit.lock (book age, pair,
+  opposite leg, ledger validity), fail closed; bids over 1 record a skip. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 - 2026-10-14: Task DP (issue #199): public_get retries HTTP 429, waiting Retry-After integer seconds (capped at
   30 s, backoff fallback) inside the same PUBLIC_GET_ATTEMPTS budget; other 4xx still raise at once. risk.toml
