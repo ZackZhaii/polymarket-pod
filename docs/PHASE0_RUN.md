@@ -294,7 +294,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\m2_start.ps1 -Reason
    first start, by m1_run's selection (top M1_TOP_MARKETS of the latest `data/markets.jsonl` batch, sports markets
    ending the same UTC day dropped) and reused unchanged by every later start; a market that closes mid-run stays
    listed and counts as a gap. `runs/m2/current.json` keeps a copy; `-DryRun` prints the list and its source. A
-   chain row without a valid `assets`, or rows that disagree, refuse with exit 3 (no migration).
+   chain row without a valid `assets`, or rows that disagree, refuse with exit 3 (no migration). The row also
+   carries `classifier_errors` (#329, observability only): on the first start, how many latest-batch markets were
+   dropped because the boot classifier raised on them (Task DN); `null` on every later start, which reuses the
+   chain's `assets` and classifies nothing. It never changes the selection and never halts; older rows without it
+   are still read.
 3. `python -m src.m1_run --out runs/m2/m1-<UTC stamp> --max-runtime <seconds left until the M2 end> --assets <ids>`. The run dir is
    new on every start, under #119's fixed `runs/m2/`, and is never reused. It counts as ready once m1_run's own fresh
    heartbeat, a valid manifest and a books file all exist, within m1_run's Sentinel timeout (120 s). Then
@@ -306,7 +310,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\m2_start.ps1 -Reason
 
 `runs/m2/current.json` is rewritten atomically (the heartbeat writer: temp file, fsync, `os.replace`) after every
 launch and every check. It holds `schema` (`m2_current/1`), `status` (`starting` / `started` / `failed`), `failure`,
-`updated_ts`, `run_dir` (null until the chain line is written), `m2_end`, `reason`, `git_sha`, `host`, and
+`updated_ts`, `run_dir` (null until the chain line is written), `m2_end`, `reason`, `git_sha`, `host`, `assets`,
+`assets_source`, `classifier_errors` (as in the chain row: a count on the first start, `null` later), and
 `processes[]`. Each process entry has `name`, `pid` (launched or kept), `started_ts`, `state` (`starting` / `ready` /
 `not_ready` / `kept`) and `heartbeat_pid`. Monitors such as the box patrol read it read-only. If the write fails, the
 order stops (exit 5), as it does for a failed chain append.

@@ -223,3 +223,103 @@ def test_boot_with_no_usable_assets_refuses(tmp_path, no_sentinel):
     r = Rig(tmp_path / "pod")
     (r.root / "data" / "markets.jsonl").unlink()
     assert _start(r) == m2_start.EXIT_REFUSED and r.launched == []
+
+
+# --- Task DW (#329): classifier_errors in the boot chain row and runs/m2/current.json (observability only) ----
+
+def _boom_scan(root, ts="2026-10-12T00:00:00Z"):
+    """One more market in SCAN1's batch. Eligible on its own, so only a classifier error drops it."""
+    path = root / "data" / "markets.jsonl"
+    row = {"ts": ts, "id": "m-boom", "question": "q", "version": "v2", "token_id_source": "clob",
+           "token_ids": ["tBoom1", "tBoom2"], "end_date": "2099-01-01T00:00:00Z",
+           "tags": ["politics"], "category": "politics"}
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+
+
+def _raise_on_boom(monkeypatch):
+    real = m2_start.boot_eligible
+
+    def boot_eligible(row, m2_end):
+        if row.get("id") == "m-boom":
+            raise RuntimeError("classifier boom")
+        return real(row, m2_end)
+
+    monkeypatch.setattr(m2_start, "boot_eligible", boot_eligible)
+
+
+def test_dw_boot_without_classifier_errors_records_zero(rig, no_sentinel):
+    assert _start(rig) == m2_start.EXIT_OK
+    row, current = _chain(rig.root)[0], _current(rig.root)
+    assert row["classifier_errors"] == 0 and current["classifier_errors"] == 0
+    assert row["assets"] == current["assets"] == SCAN1
+
+
+def test_dw_boot_classifier_error_is_recorded_and_selection_is_unchanged(rig, no_sentinel, monkeypatch):
+    # Baseline without the boom market (same Rig scan): selection must stay identical when the boom row raises.
+    assert _start(rig) == m2_start.EXIT_OK
+    clean_assets, clean_m1 = _chain(rig.root)[0]["assets"], _assets_arg(_m1_argv(rig))
+    assert _chain(rig.root)[0]["classifier_errors"] == 0 and clean_assets == SCAN1
+    for proc in ("m1_run", "paper_cycle"):
+        _beat(proc, state="finished")
+    time.sleep(1.1)
+    # Fresh root so this start is still a boot (empty chain); keep real heartbeat dir via no_sentinel.
+    boom = Rig(rig.root.parent / "boom")
+    _scan(boom.root, SCAN1, "2026-10-12T00:00:00Z")
+    _boom_scan(boom.root)
+    _raise_on_boom(monkeypatch)
+    lines: list[str] = []
+    assert _start(boom, lines) == m2_start.EXIT_OK  # counted and dropped: no crash, no new halt
+    row, current = _chain(boom.root)[0], _current(boom.root)
+    assert row["classifier_errors"] == 1 and current["classifier_errors"] == 1
+    assert row["assets"] == current["assets"] == clean_assets == SCAN1
+    assert _assets_arg(_m1_argv(boom)) == clean_m1 == SCAN1
+    assert current["status"] == "started" and boom.order()[-2:] == ["m1_run", "paper_cycle"]
+    assert any("classifier_errors=1" in line for line in lines)
+
+
+def test_dw_without_the_injection_the_extra_market_would_be_selected(rig, no_sentinel):
+    """Guards the test above: the injected row only drops out because its classifier raised."""
+    _boom_scan(rig.root)
+    assert _start(rig) == m2_start.EXIT_OK
+    assert _boot_assets(rig) == SCAN1 + ["tBoom1", "tBoom2"] and _chain(rig.root)[0]["classifier_errors"] == 0
+
+
+def test_dw_reboot_records_null_and_never_classifies(rig, no_sentinel, monkeypatch):
+    _boom_scan(rig.root)
+    _raise_on_boom(monkeypatch)
+    assert _start(rig) == m2_start.EXIT_OK
+    monkeypatch.setattr(m2_start, "boot_eligible",
+                        lambda row, m2_end: pytest.fail("a later start must not re-classify"))
+    assert _reboot(rig) == m2_start.EXIT_OK
+    one, two = _chain(rig.root)
+    assert one["classifier_errors"] == 1 and two["classifier_errors"] is None
+    assert "classifier_errors" in two and _current(rig.root)["classifier_errors"] is None
+    assert two["assets"] == one["assets"] == SCAN1 and _assets_arg(_m1_argv(rig)) == SCAN1
+
+
+def test_dw_old_chain_rows_without_classifier_errors_still_reboot(rig, no_sentinel):
+    assert _start(rig) == m2_start.EXIT_OK
+    path = rig.root / "runs" / "m2-chain.jsonl"
+    rows = [{k: v for k, v in r.items() if k != "classifier_errors"} for r in _chain(rig.root)]
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert _reboot(rig) == m2_start.EXIT_OK
+    assert _chain(rig.root)[-1]["classifier_errors"] is None and _assets_arg(_m1_argv(rig)) == SCAN1
+
+
+def test_dw_dry_run_chain_line_shows_classifier_errors(rig, no_sentinel, monkeypatch):
+    _boom_scan(rig.root)
+    _raise_on_boom(monkeypatch)
+    lines: list[str] = []
+    assert _start(rig, lines, dry_run=True) == m2_start.EXIT_OK
+    assert any("would append" in line and '"classifier_errors": 1' in line for line in lines)
+    assert rig.launched == [] and not (rig.root / "runs").exists()
+
+
+def test_dw_a_failed_current_json_write_still_stops_the_boot(rig, no_sentinel, monkeypatch):
+    """The extra field rides the existing atomic write; a failed write stays fail closed (exit 5)."""
+    _boom_scan(rig.root)
+    _raise_on_boom(monkeypatch)
+    monkeypatch.setattr(heartbeat, "write_record",
+                        lambda path, record: heartbeat.HB_WRITE_FAILED if path.name == "current.json" else None)
+    assert _start(rig) == m2_start.EXIT_NOT_READY and rig.order() == ["sentinel"]
