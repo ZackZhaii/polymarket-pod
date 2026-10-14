@@ -33,7 +33,9 @@ from src.thresholds import INTENT_SHARE_STEP
 from tests.test_risk_gate import _intent
 
 STATE = {"open_positions": 0, "exposure_usd": 0.0, "leg_exposure_usd": 0.0, "daily_loss_usd": 0.0,
-         "recent_fills": [], "own_quotes": []}
+         "recent_fills": [], "own_quotes": [],
+         # #280 (issue #237): the structural-arb gate fails closed on a missing opposite-leg view
+         "opposite_leg_shares": 0.0, "opposite_pending_buys": 0}
 
 
 # --- src/risk_gate.py:384-391: the share grid floors, and never past the raw cap -----------------
