@@ -1,8 +1,7 @@
 ﻿"""Task EA (issue #245): EXIT_CODES.md matches m2_runner / secret_scan reality.
 
-Docs-only. The registry Sentinel column for m2_runner 2/3/7 stays ``alert`` (EXIT_EVENTS
-default for a watched proc), but the prose must say those exits return before Heartbeat
-is created so Sentinel never sees them. Offline; no network.
+The registry Sentinel column for m2_runner 2/3/7 is ``不可见``: those exits return before
+Heartbeat is created so Sentinel never sees them, and prose and table must agree (PR #338). Offline; no network.
 """
 from __future__ import annotations
 
@@ -46,3 +45,15 @@ def test_secret_scan_exit2_covers_unenumerable_directory():
     sec = _section("src/secret_scan.py")
     row2 = [ln for ln in sec.splitlines() if ln.startswith("| 2 |")][0]
     assert "directory" in row2.lower() or "enumerat" in row2.lower() or "unenumerable" in row2.lower()
+
+
+def test_m2_runner_prose_and_table_agree_on_invisible_exits():
+    sec = _section("src/m2_runner.py")
+    rows = {ln.split("|")[1].strip(): ln for ln in sec.splitlines() if ln.startswith("| ")}
+    for code in ("2", "3", "7"):
+        assert rows[code].rstrip().endswith("| 不可见 |"), rows[code]
+    assert "m2_start" in sec and "exits 5" in sec
+    assert "stderr" in sec and "supervisor" in sec
+    assert "availability blind spot" in sec
+    assert "normal refusal" in sec
+    assert "no alert fires in practice" not in sec

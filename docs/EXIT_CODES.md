@@ -134,12 +134,22 @@ integrity first, then settlement (#206, which may read Gamma), then the independ
 breaker and disk, and only then scan / decide / seal / commit. The old "before any read" wording was wrong: settlement
 reads can happen before scan.
 
-Pre-heartbeat exits (issue #245): `main` returns 2 (`EXIT_USAGE`), 7 (`EXIT_SELF_CHECK`) and 3 (`EXIT_ALREADY_RUNNING`)
-before `_run` creates the Heartbeat, so no heartbeat is written and the resident Sentinel never observes those exits
-(no alert fires in practice). The Sentinel column stays `alert` only as the EXIT_EVENTS default for a watched proc's
-non-zero code *if* a finishing heartbeat carried that code. **Exit 3 must never write an m2_runner heartbeat** (it would
-overwrite the running instance's beat). Optional follow-up (not this PR): write a one-shot finished heartbeat or alert
-before exits 2/7 so Sentinel can see them.
+Pre-heartbeat exits (issue #245, PR #338): `main` returns 2 (`EXIT_USAGE`), 7 (`EXIT_SELF_CHECK`) and 3
+(`EXIT_ALREADY_RUNNING`) before `_run` creates the Heartbeat, so no heartbeat is written and the resident Sentinel
+never observes those exits. The Sentinel column below therefore says `不可见` (invisible) for all three; no Sentinel
+alert fires for any of them. **Exit 3 must never write an m2_runner heartbeat** (it would overwrite the running
+instance's beat).
+
+- Exit 3 = another m2_runner already holds `runner.lock`: a normal refusal, nothing done, no alert needed.
+- Exits 2 / 7 = the runner did not start. How on-call finds them:
+  - Launched via `m2_start`: 2/7 write no new heartbeat, so `m2_start` times out waiting for m2_runner and exits 5
+    (`EXIT_NOT_READY`). Check `m2_start`'s exit code and m2_runner's stderr.
+  - Restarted without `m2_start` (by hand or a supervisor): if the old m2_runner heartbeat says `running`, it goes
+    stale and the Sentinel records a global halt (stale heartbeat). If the old heartbeat says `finished`, nothing goes
+    stale and **only the supervisor's view of the exit code shows it**. No trading happens either way (the runner
+    never started), but this is an **availability blind spot**: the runner can stay down unnoticed.
+- Optional follow-up (not this PR): write a one-shot finished heartbeat or alert before exits 2/7 so Sentinel can
+  see them.
 
 Tick order detail: KILL / live / pins / halts / ledger, then settlement (#206), then the independent clock check, then the daily
 loss breaker, disk, and only then scan / decide. Clock check (C222, #222 option B): one public read-only GET of the CLOB
@@ -185,11 +195,11 @@ failure (exit 4); KeyboardInterrupt / SystemExit are not caught.
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
 | 0 | `EXIT_OK` | `runs/m2/KILL` found (one `kill_file` line in `logs/alerts.jsonl`, #247), `--max-runtime` reached or `--once` done | - |
-| 2 | `EXIT_USAGE` | usage error (an unknown argument, `--max-runtime` not > 0); returns before Heartbeat exists, so Sentinel does not see it (issue #245) | alert |
-| 3 | `EXIT_ALREADY_RUNNING` | another m2_runner holds `runner.lock` (no heartbeat written, nothing done; must never write one — issue #245) | alert |
+| 2 | `EXIT_USAGE` | usage error (an unknown argument, `--max-runtime` not > 0); returns before Heartbeat exists, so Sentinel does not see it; found via m2_start exit 5 / stderr / supervisor (issue #245) | 不可见 |
+| 3 | `EXIT_ALREADY_RUNNING` | another m2_runner holds `runner.lock` (no heartbeat written, nothing done; must never write one; a normal refusal, no alert — issue #245) | 不可见 |
 | 4 | `EXIT_WRITE_FAILED` | a journal / events / candidates write failed, or the KILL alert line could not be written (#247) | global halt |
 | 6 | `EXIT_PIN_OR_LIVE` | config/risk.toml off its pins or a live flag (`live_enabled` not false, `mode` not paper, `require_human_gate` not true); global halt recorded (`risk_toml_pin_drift` / `m2_live_flag`) | global halt |
-| 7 | `EXIT_SELF_CHECK` | the start self-check failed (run dir or inbox not writable); returns before Heartbeat exists, so Sentinel does not see it (issue #245) | alert |
+| 7 | `EXIT_SELF_CHECK` | the start self-check failed (run dir or inbox not writable); returns before Heartbeat exists, so Sentinel does not see it; found via m2_start exit 5 / stderr / supervisor (issue #245) | 不可见 |
 
 ## `src/paper_audit.py`
 
