@@ -160,8 +160,11 @@ def test_a_corrupt_file_refuses_the_self_check_too(tmp_path, monkeypatch, booked
 # ---------------------------------------------------------------- the pinned file keeps both flows
 
 def test_the_pinned_file_keeps_both_flows(capsys):
+    # Issue #210: operator CLI without --fee-rate / book levels refuses (VETO), still EXIT_OK with reasons.
     assert paper_ledger.main(operator_args()) == paper_ledger.EXIT_OK
-    assert "ALLOW" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "ALLOW" not in out
+    assert "VETO" in out and "missing_book_levels" in out
     assert paper_ledger.main([]) == paper_ledger.EXIT_OK
     out = capsys.readouterr().out
     assert "self_check pin_blocked=True" in out and "risk_toml_unchanged=true" in out
