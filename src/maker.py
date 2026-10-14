@@ -23,6 +23,8 @@ from src import halt_store, sentinel, wash_detect
 from src.book_staleness import INVALID_BOOK_TS, MISSING_BOOK_TS, book_age_problem, latest_by_time
 from src.podlib import PAPER_EQUITY_USD, QUOTES_PATH, append_jsonl, bus, utc_now
 from src.podlib import BOOKS_PATH, MARKETS_PATH, read_jsonl
+from src.risk_gate import opposite_leg_blocked
+from src.structural_gate import STRUCTURAL_ARB_DISABLED
 from src.thresholds import MAX_BOOK_AGE_S
 
 MISSING_BOOK = "missing_book"  # no recorded book row for the quoted leg (same word as paper_cycle)
@@ -135,6 +137,37 @@ def quote(
     if refused is not None:
         raise QuoteRefused(market, token_id, refused)  # Issue #125: fail closed, nothing written
     path = quotes_path or QUOTES_PATH
+    if side == "buy":
+        # Issue #237 (Task DO): the opposite-leg veto runs under the ledger's commit lock (outer), the quotes lock
+        # (append_jsonl) inside it, the same order as paper_ledger.commit_if_allowed. Lock or state trouble refuses.
+        from src import paper_ledger
+
+        lock = halt_store.StateLock(paper_ledger.PAPER_PATH)
+        lock.path = Path(str(paper_ledger.PAPER_PATH) + ".commit.lock")
+        try:
+            acquired = lock.acquire(timeout_s=paper_ledger.COMMIT_LOCK_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - a lock that cannot be taken refuses (fail closed)
+            acquired = False
+        if not acquired:
+            raise QuoteRefused(market, token_id, STRUCTURAL_ARB_DISABLED)
+        try:
+            paired = pair_problem(market, token_id, side, price, quotes_path=path, markets_path=markets_path)
+            if paired is not None:
+                raise QuoteRefused(market, token_id, paired)  # Issue #145 reason kept first
+            try:
+                blocked = opposite_leg_blocked(paper_ledger.load_state(market, token_id))
+            except Exception:  # noqa: BLE001 - an unreadable state refuses (fail closed)
+                blocked = True
+            if blocked:
+                raise QuoteRefused(market, token_id, STRUCTURAL_ARB_DISABLED)
+            return _write_quote(market, token_id, side, price, size, notional, path, markets_path, bus_path)
+        finally:
+            lock.release()
+    return _write_quote(market, token_id, side, price, size, notional, path, markets_path, bus_path)
+
+
+def _write_quote(market: str, token_id: str, side: str, price: float, size: float, notional: float, path: Path,
+                 markets_path: Path | None, bus_path: Path | None) -> dict:
     paired = pair_problem(market, token_id, side, price, quotes_path=path, markets_path=markets_path)
     if paired is not None:
         raise QuoteRefused(market, token_id, paired)  # Issue #145: would pair with our own resting quote
