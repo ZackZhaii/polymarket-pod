@@ -215,14 +215,15 @@ def test_d2_intent_builder_passes_the_book_min_order_size():
 
 
 def test_d2_the_operator_cli_passes_min_order_size(tmp_path, monkeypatch, no_bus):
+    # Issue #210: CLI without book levels refuses before min_order_size unlock; parser still accepts the flag.
     _ledger(tmp_path, monkeypatch, [])
     base = dict(strategy="manual", market=MARKET, side="buy", model_prob=0.7, market_price=0.4, slippage=0.005,
                 fee_rate=0.0, liquidity=20000.0, spread=0.01, token_id=YES, book_ts=paper_ledger.utc_now(),
                 note="", tags="us")
     vetoed = paper_ledger.run_cli_intent(argparse.Namespace(**base), load_risk())
-    assert vetoed["allow"] is False and vetoed["decision"]["reasons"] == ["missing_min_order_size"]
-    allowed = paper_ledger.run_cli_intent(argparse.Namespace(**base, min_order_size=5.0), load_risk())
-    assert allowed["allow"] is True, allowed
+    assert vetoed["allow"] is False and "missing_book_levels" in vetoed["decision"]["reasons"]
+    still = paper_ledger.run_cli_intent(argparse.Namespace(**base, min_order_size=5.0), load_risk())
+    assert still["allow"] is False and "missing_book_levels" in still["decision"]["reasons"]
     args = paper_ledger.build_parser().parse_args(["--min-order-size", "5"])
     assert args.min_order_size == 5.0
     assert paper_ledger.build_parser().parse_args([]).min_order_size is None

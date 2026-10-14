@@ -56,13 +56,20 @@ def test_the_intent_builder_path_is_stamped_and_records_both_kelly_values(paths)
 
 
 def test_the_operator_cli_is_stamped_operator_cli(monkeypatch):
+    # Issue #210: the operator CLI always refuses before commit (no book levels).
     seen = []
-    monkeypatch.setattr(paper_ledger, "commit_if_allowed", lambda intent, cfg: seen.append(intent) or {})
+    monkeypatch.setattr(paper_ledger, "commit_if_allowed", lambda intent, cfg: seen.append(intent) or {"allow": False})
     args = argparse.Namespace(strategy="manual", market="m1", side="buy", model_prob=0.7, market_price=0.4,
                               slippage=0.005, fee_rate=0.0, liquidity=20000.0, spread=0.01, token_id="t",
-                              book_ts=None, note=None)
-    paper_ledger.run_cli_intent(args, load_risk())
-    assert seen[0].fill_context == "operator_cli" and seen[0].kelly_frac_raw is None
+                              book_ts=None, note=None, tags="us", min_order_size=5.0)
+    refused = paper_ledger.run_cli_intent(args, load_risk())
+    assert refused["allow"] is False and "missing_book_levels" in refused["decision"]["reasons"]
+    assert seen == []
+    # Poly风控 6178561328 / Codex P1 6178323003: even with asks supplied, the CLI never reaches commit.
+    args_with_depth = argparse.Namespace(**{**vars(args), "asks": [(0.40, 100.0)]})
+    refused = paper_ledger.run_cli_intent(args_with_depth, load_risk())
+    assert refused["allow"] is False and "missing_book_levels" in refused["decision"]["reasons"]
+    assert seen == []
 
 
 def test_the_gate_checks_are_stamped_gate_check(monkeypatch):

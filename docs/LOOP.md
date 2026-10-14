@@ -1747,6 +1747,9 @@ and closes the issue. Proposal item 2 (re-enable conditions) stays unlock-only a
   `python scripts/guard.py --require-git`. config/risk.toml sha unchanged (0aea23af…bc04), `live_enabled=false`.
 
 ## Latest
+- 2026-10-15: Task DZ (issue #210): operator CLI no longer defaults --fee-rate to 0.0 (default None / missing_fee_data); CLI intents without book depth/levels refuse with missing_book_levels before booking (no --asks added). Tighten-only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-10-15: Task DZ PR #336 P1 fix (Poly risk option 1): run_cli_intent always refuses missing_book_levels; any programmatic args.asks (True/string/zero or tiny depth/NaN/inf) is ignored and commit_if_allowed is never reached. No --asks flag. tests/test_fill_realism_147.py parametric junk-asks cases. risk.toml unchanged, live_enabled=false.
+
 - 2026-10-15: Task DX (issue #141): verify-and-close. Multi-leg / complete-set gaps stay
   `structural_arb_disabled` (bus + skips); past-endDate / UMA markets emit no gap signal. Code from Task BX
   (#177); re-enable conditions (item 2) stay unlock-only. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.

@@ -188,11 +188,15 @@ def _cli(**kw):
 
 
 def test_the_operator_cli_needs_tags(ledger):
+    # Issue #210: CLI without book levels refuses before category unlock; tags alone never book.
+    # Untagged missing_category is still covered by test_an_untagged_intent_books_nothing.
     vetoed = paper_ledger.run_cli_intent(_cli(), load_risk())
-    assert vetoed["allow"] is False and vetoed["decision"]["reasons"] == ["missing_category"]
-    allowed = paper_ledger.run_cli_intent(_cli(tags="us, elections"), load_risk())
-    assert allowed["allow"] is True, allowed
-    assert read_jsonl(ledger)[0]["tags"] == ["us", "elections"]
+    assert vetoed["allow"] is False
+    assert "missing_book_levels" in vetoed["decision"]["reasons"]
+    still = paper_ledger.run_cli_intent(_cli(tags="us, elections"), load_risk())
+    assert still["allow"] is False
+    assert "missing_book_levels" in still["decision"]["reasons"]
+    assert not ledger.exists() or read_jsonl(ledger) == []
 
 
 def test_risk_file_is_untouched(ledger):

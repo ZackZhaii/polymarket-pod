@@ -645,6 +645,15 @@
       "note": "Claimed by Poly桥接 as Task DX (issue #141). Non-KEY verify-and-close; code from Task BX (#177). Done by grok-bot on NoisePC.",
       "done_at": "2026-10-14T17:30:00Z",
       "surface": "grok-bot"
+    },
+    {
+      "id": "DZ",
+      "status": "done",
+      "title": "Issue #210: operator CLI requires --fee-rate (no 0.0 default) and book depth/levels before booking",
+      "finish": "src/paper_ledger.py: --fee-rate default None (missing_fee_data when omitted); run_cli_intent refuses with missing_book_levels before commit when args.asks is absent (no --asks flag added — CLI cannot prove  depth). tests/test_fill_realism_147.py (3 offline cases); test_category / test_226 / test_calibration_mid_kelly CLI paths assert the stricter refusal. Self-check _intent fee_rate=0.0 gate-check path unchanged. config/risk.toml unchanged, live_enabled false; pytest + guard pass. Closes #210.",
+      "note": "Claimed by Poly指挥 as Task DZ (issue #210). Tighten-only, non-KEY. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T20:24:42Z",
+      "surface": "grok-bot"
     }
   ]
 }
