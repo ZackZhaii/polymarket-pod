@@ -9,7 +9,28 @@ Phase 0 work lands on `dev` (branch from `origin/dev`; PRs use base `dev`; Poly�
 ## How to split chats
 
 One chat, one task, one finish line. Do not start a second task in the same chat.
-When the diff is committed, write five lines at the bottom of this file under `## Latest` and stop.
+When the diff is committed, write five lines at the bottom of this file under `## Task EA — Issue #245: EXIT_CODES.md aligns with m2_runner / secret_scan reality
+
+Status: done.
+
+Claimed by Poly桥接 (issue #245). Done by grok-bot on NoisePC. Docs-only, non-KEY: make
+`docs/EXIT_CODES.md` match the code without changing thresholds, risk.toml, or behaviour.
+
+- `src/m2_runner.py`: exits 2 / 3 / 7 return from `main` before `_run` creates the Heartbeat, so
+  Sentinel never observes them (no alert in practice). Document that; keep the Sentinel column as
+  `alert` (EXIT_EVENTS default). Exit 3 must never write an m2_runner heartbeat. Drop the inaccurate
+  "before any read" claim; tick order is preflight → settlement (may read Gamma) → clock → daily
+  loss / disk → scan / decide.
+- `src/secret_scan.py`: exit 2 covers unenumerable directories (`ScanError`, #53 / #270) and a bad
+  BIP39 word list; exit 1 is intentional `EXIT_SECRET` (not an uncaught crash).
+- `src/m1_run.py`: 24 h → 6 h (`M1_RUN_TARGET_S=21600` / `M1_MIN_RUN_S=21540`, #171; also Refs #220).
+- Tests: `tests/test_ea_exit_codes_docs.py` (offline); `tests/test_exit_codes.py` still green.
+  Full pytest + `python scripts/guard.py --require-git`. config/risk.toml sha unchanged
+  (0aea23af…bc04), `live_enabled=false`.
+
+
+## Latest` and stop.
+- 2026-10-15: Task EA (issue #245): EXIT_CODES.md aligns with m2_runner pre-heartbeat exits 2/3/7, settlement-before-scan wording, secret_scan exit 2 directory/word-list, m1_run 24h→6h (Refs #220). Docs-only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 Branch from `origin/dev`; pull requests target `dev`. Poly指挥 merges into `dev` and opens `dev` -> `main` pull requests for human review.
 Never push `main` or `dev`, never merge your own pull request, keep at most 2 open pull requests per bot. Escalated items are never auto-merged.
 Task letters: the next letter unused on `dev`, `main` and every open pull request. After Z come AA, AB, AC, … (after AZ comes BA, and so on).

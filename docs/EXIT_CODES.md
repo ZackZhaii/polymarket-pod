@@ -96,7 +96,7 @@ samples.jsonl). Read-only on its inputs, no network, no halt. No heartbeat.
 
 ## `src/m1_run.py`
 
-`python -m src.m1_run`: the M1 24 h WS + REST recording run. Heartbeats m1_run (every 10 s) and m1_rest (per sample).
+`python -m src.m1_run`: the M1 6 h WS + REST recording run (`M1_RUN_TARGET_S=21600`; acceptance floor `M1_MIN_RUN_S=21540`, #171 / Refs #220). Heartbeats m1_run (every 10 s) and m1_rest (per sample).
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
@@ -126,11 +126,22 @@ check. Writes no heartbeat; never resumes, never stops what it started.
 
 ## `src/m2_runner.py`
 
-`python -m src.m2_runner --run-dir runs/m2 [--max-runtime S] [--once]`: the M2 paper runner (issue #119). Every iteration checks
-KILL, the live flags, the risk.toml pins, halts, the ledger, the daily loss breaker and disk before any read, seal or commit.
+`python -m src.m2_runner --run-dir runs/m2 [--max-runtime S] [--once]`: the M2 paper runner (issue #119).
 Heartbeat every HEARTBEAT_RUNNER_EVERY_S (`paused` while paused); single instance by `runs/m2/runner.lock`. Paper only, no executor.
 
-Tick order: KILL / live / pins / halts / ledger, then settlement (#206), then the independent clock check, then the daily
+Tick order (issue #245): each iteration's `preflight` checks KILL / live flags / risk.toml pins / global halts / ledger
+integrity first, then settlement (#206, which may read Gamma), then the independent clock check, then the daily loss
+breaker and disk, and only then scan / decide / seal / commit. The old "before any read" wording was wrong: settlement
+reads can happen before scan.
+
+Pre-heartbeat exits (issue #245): `main` returns 2 (`EXIT_USAGE`), 7 (`EXIT_SELF_CHECK`) and 3 (`EXIT_ALREADY_RUNNING`)
+before `_run` creates the Heartbeat, so no heartbeat is written and the resident Sentinel never observes those exits
+(no alert fires in practice). The Sentinel column stays `alert` only as the EXIT_EVENTS default for a watched proc's
+non-zero code *if* a finishing heartbeat carried that code. **Exit 3 must never write an m2_runner heartbeat** (it would
+overwrite the running instance's beat). Optional follow-up (not this PR): write a one-shot finished heartbeat or alert
+before exits 2/7 so Sentinel can see them.
+
+Tick order detail: KILL / live / pins / halts / ledger, then settlement (#206), then the independent clock check, then the daily
 loss breaker, disk, and only then scan / decide. Clock check (C222, #222 option B): one public read-only GET of the CLOB
 `https://clob.polymarket.com/time` (exact URL only; guard and `podlib.public_get` refuse every variant). The whole
 local-minus-server uncertainty interval (request round trip plus ±1 s rounding of the integer seconds) must fit inside
@@ -174,11 +185,11 @@ failure (exit 4); KeyboardInterrupt / SystemExit are not caught.
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
 | 0 | `EXIT_OK` | `runs/m2/KILL` found (one `kill_file` line in `logs/alerts.jsonl`, #247), `--max-runtime` reached or `--once` done | - |
-| 2 | `EXIT_USAGE` | usage error (an unknown argument, `--max-runtime` not > 0) | alert |
-| 3 | `EXIT_ALREADY_RUNNING` | another m2_runner holds `runner.lock` (no heartbeat written, nothing done) | alert |
+| 2 | `EXIT_USAGE` | usage error (an unknown argument, `--max-runtime` not > 0); returns before Heartbeat exists, so Sentinel does not see it (issue #245) | alert |
+| 3 | `EXIT_ALREADY_RUNNING` | another m2_runner holds `runner.lock` (no heartbeat written, nothing done; must never write one — issue #245) | alert |
 | 4 | `EXIT_WRITE_FAILED` | a journal / events / candidates write failed, or the KILL alert line could not be written (#247) | global halt |
 | 6 | `EXIT_PIN_OR_LIVE` | config/risk.toml off its pins or a live flag (`live_enabled` not false, `mode` not paper, `require_human_gate` not true); global halt recorded (`risk_toml_pin_drift` / `m2_live_flag`) | global halt |
-| 7 | `EXIT_SELF_CHECK` | the start self-check failed (run dir or inbox not writable) | alert |
+| 7 | `EXIT_SELF_CHECK` | the start self-check failed (run dir or inbox not writable); returns before Heartbeat exists, so Sentinel does not see it (issue #245) | alert |
 
 ## `src/paper_audit.py`
 
@@ -338,8 +349,8 @@ the fetch; it keeps the Sentinel alert and appends nothing.
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
 | 0 | `EXIT_CLEAN` | nothing found | - |
-| 1 | `EXIT_SECRET` | a secret found: global halt recorded (unless --no-halt) | - |
-| 2 | `EXIT_SCAN_ERROR` | a file could not be scanned: global halt recorded (unless --no-halt) | - |
+| 1 | `EXIT_SECRET` | a secret found (intentional exit 1, not an uncaught crash): global halt recorded (unless --no-halt). Uncaught exceptions elsewhere still end as heartbeat `crashed` per the intro | - |
+| 2 | `EXIT_SCAN_ERROR` | a file could not be scanned, a directory could not be enumerated (`ScanError`, issue #53 / #270), or the BIP39 word list is missing/changed: global halt recorded (unless --no-halt) | - |
 | 3 | `EXIT_USAGE` | usage error | - |
 
 ## `src/sentinel_tick.py`
