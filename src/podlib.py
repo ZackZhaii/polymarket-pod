@@ -64,7 +64,7 @@ DATA_API_STATUS_URL = "https://data-api.polymarket.com/v2/status"
 PUBLIC_PREFIXES = (GAMMA_PREFIX, BOOK_PREFIX, DATA_API_POSITIONS_PREFIX, DATA_API_TRADES_PREFIX)
 
 # public_get retries transient network/TLS failures (SSL EOF, resets, timeouts, 5xx) and HTTP 429.
-# Waits are PUBLIC_GET_BACKOFF_S * 2**n between attempts (0.5 s, 1 s). Task DN (#199): a 429 waits its
+# Waits are PUBLIC_GET_BACKOFF_S * 2**n between attempts (0.5 s, 1 s). Task DP (#199): a 429 waits its
 # Retry-After (integer seconds, at most PUBLIC_GET_RETRY_AFTER_MAX_S) instead, falling back to the backoff when
 # the header is missing or not an integer. Every other HTTP 4xx is never retried. All share PUBLIC_GET_ATTEMPTS.
 PUBLIC_GET_ATTEMPTS = 3
@@ -255,7 +255,7 @@ def _retryable(exc: BaseException) -> bool:
 
 
 def _retry_after_s(exc: BaseException) -> float | None:
-    """Task DN: a 429's Retry-After as integer seconds, capped at PUBLIC_GET_RETRY_AFTER_MAX_S.
+    """Task DP: a 429's Retry-After as integer seconds, capped at PUBLIC_GET_RETRY_AFTER_MAX_S.
 
     None (use the exponential backoff) when exc is not a 429 or the header is missing, an HTTP-date, negative,
     fractional or anything else that is not plain ASCII digits.

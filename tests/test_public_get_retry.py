@@ -1,4 +1,4 @@
-"""Offline tests for public_get retry/backoff (Task K; HTTP 429 Retry-After: Task DN, issue #199).
+"""Offline tests for public_get retry/backoff (Task K; HTTP 429 Retry-After: Task DP, issue #199).
 
 No network: urlopen is mocked, sleep is recorded."""
 from __future__ import annotations
@@ -128,7 +128,7 @@ def test_http_4xx_with_retry_after_is_still_not_retried(fake_net, code):
     assert fake_net["sleeps"] == []
 
 
-# --- Task DN (issue #199): HTTP 429 is retried, waiting Retry-After seconds -----------------------------
+# --- Task DP (issue #199): HTTP 429 is retried, waiting Retry-After seconds -----------------------------
 
 
 def test_http_429_with_retry_after_waits_then_succeeds(fake_net):

@@ -1565,7 +1565,7 @@ Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@ffe32ab).
 - Fix (tests only): fixed `FROZEN_NOW` plus `_freeze_wall` on those three modules in `tests/test_m2_runner_clock.py`
   `env` fixture. No `src/`, threshold, or `config/risk.toml` change.
 
-## Task DN — Issue #199: public_get retries HTTP 429 using Retry-After
+## Task DP — Issue #199: public_get retries HTTP 429 using Retry-After
 
 Status: done.
 
@@ -1584,7 +1584,7 @@ Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@043e9ce).
 
 ## Latest
 
-- 2026-10-14: Task DN (issue #199): public_get retries HTTP 429, waiting Retry-After integer seconds (capped at
+- 2026-10-14: Task DP (issue #199): public_get retries HTTP 429, waiting Retry-After integer seconds (capped at
   30 s, backoff fallback) inside the same PUBLIC_GET_ATTEMPTS budget; other 4xx still raise at once. risk.toml
   unchanged (0aea23af…bc04), `live_enabled=false`.
 
