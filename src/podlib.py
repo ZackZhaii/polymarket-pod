@@ -332,33 +332,84 @@ def _read_body(response: Any, timeout: float, started: float, budget: float) -> 
         chunk = read1(_READ_CHUNK_BYTES)
         _time_left(started, budget)  # a chunk that arrived past the deadline is not used
         if not chunk:
+            # Task DU (Codex P1 on #328): read1 returns b"" when the peer closes early. With Content-Length,
+            # http.client still counts the missing bytes in .length; a short body fails closed like read() did.
+            missing = getattr(response, "length", None)
+            if isinstance(missing, int) and not isinstance(missing, bool) and missing > 0:
+                raise http.client.IncompleteRead(b"".join(chunks), missing)
             return b"".join(chunks)
         chunks.append(chunk)
+
+
+# Task DU (Codex P2 on #328): at most this many public_get worker threads exist at once in the process. A worker
+# left behind by a deadline still ends within its own socket timeout (<= the attempt timeout); this caps how many
+# such leftovers can pile up. Implementation bound, not a trading threshold.
+_MAX_WORKERS = 4
+_WORKER_SLOTS = threading.BoundedSemaphore(_MAX_WORKERS)
+
+
+def _close_quietly(response: Any) -> None:
+    """Shut the response's socket (unblocks a pending recv) and close the response. Never raises."""
+    sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+    if sock is not None:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except (OSError, ValueError):
+            pass
+    try:
+        response.close()
+    except Exception:  # noqa: BLE001 - best effort cleanup
+        pass
 
 
 def _attempt(request: Request, timeout: float, started: float, budget: float) -> bytes:
     """Task DU: one GET (connect, headers, body) that returns or raises within the time left.
 
     The request runs in a daemon worker thread; this thread waits at most the time left. If the worker is not
-    done by then, _DeadlineExceeded is raised here at once; the worker stops at its next read (each read is
-    clipped to the time left, and it checks the deadline after every chunk) and its result is dropped.
+    done by then, _DeadlineExceeded is raised here at once and the worker is reclaimed (Codex P2 on #328): an
+    open response is closed and its socket shut down from here, a worker still inside urlopen closes the
+    response as soon as urlopen returns, and it gives up its slot in _WORKER_SLOTS when it ends (the connect
+    and headers are bounded by the socket timeout). At most _MAX_WORKERS workers exist; when all slots are
+    busy past the deadline, the attempt fails closed without starting a thread.
     """
     left = _time_left(started, budget)
     attempt_timeout = min(timeout, left)
+    if not _WORKER_SLOTS.acquire(timeout=left):
+        raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed waiting for a free worker slot")
     outcome: dict[str, Any] = {}
     done = threading.Event()
+    lock = threading.Lock()
+    state = {"abandoned": False, "response": None}
 
     def work() -> None:
         try:
-            with urlopen(request, timeout=attempt_timeout) as response:
+            response = urlopen(request, timeout=attempt_timeout)
+            with lock:
+                state["response"] = response
+                abandoned = state["abandoned"]
+            try:
+                if abandoned:
+                    return
                 outcome["body"] = _read_body(response, attempt_timeout, started, budget)
+            finally:
+                _close_quietly(response)
         except BaseException as exc:  # noqa: BLE001 - handed to the caller's thread below
             outcome["error"] = exc
         finally:
             done.set()
+            _WORKER_SLOTS.release()
 
-    threading.Thread(target=work, name="public_get", daemon=True).start()
+    try:
+        threading.Thread(target=work, name="public_get", daemon=True).start()
+    except BaseException:
+        _WORKER_SLOTS.release()
+        raise
     if not done.wait(left):
+        with lock:
+            state["abandoned"] = True
+            response = state["response"]
+        if response is not None:
+            _close_quietly(response)
         raise _DeadlineExceeded(f"public_get deadline {budget:g} s passed before the answer was read")
     if "error" in outcome:
         raise outcome["error"]
@@ -408,7 +459,7 @@ def public_get(
         try:
             if left <= 0:
                 raise TimeoutError(f"public_get deadline {budget:g} s reached before attempt {attempt + 1}")
-            body = _attempt(request, float(timeout), started, budget).decode("utf-8")
+            raw = _attempt(request, float(timeout), started, budget)
             break
         except Exception as exc:  # noqa: BLE001 - filtered by _retryable
             if left <= 0:
@@ -426,7 +477,13 @@ def public_get(
             if (_monotonic() - started) + wait >= budget:
                 raise PublicGetError(url, attempt + 1, exc) from exc  # Task DQ: the wait would pass the deadline
             _sleep(wait)
-    return json.loads(body)
+    # Task DU (Codex P2 on #328): decoding and parsing count toward the deadline too; a parse that ends past it
+    # is not returned as success.
+    data = json.loads(raw.decode("utf-8"))
+    if _monotonic() - started >= budget:
+        exc = _DeadlineExceeded(f"public_get deadline {budget:g} s passed while decoding the answer")
+        raise PublicGetError(url, attempt + 1, exc) from exc
+    return data
 
 
 def json_list(value: Any) -> list[Any]:

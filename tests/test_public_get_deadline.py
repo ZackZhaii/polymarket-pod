@@ -142,6 +142,7 @@ def test_other_4xx_still_raise_at_once(clock):
 # real local HTTP server (127.0.0.1, ephemeral port, its own thread) that drips the answer slowly. Offline only:
 # podlib.urlopen is pointed at 127.0.0.1, with no proxy, so nothing leaves the machine.
 
+import http.client  # noqa: E402
 import math  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
@@ -325,3 +326,119 @@ def test_default_and_valid_custom_deadlines_are_accepted(clock):
     assert podlib.public_get(GAMMA_URL) == {"ok": 3}
     assert podlib.public_get(GAMMA_URL, deadline_s=2) == {"ok": 3}  # an int is a number
     assert podlib.public_get(GAMMA_URL, deadline_s=0.5) == {"ok": 3}
+
+
+# ---------------------------------------------------------------- Task DU: Codex REQUEST_CHANGES 6167337740 on #328
+
+
+class _TruncatingServer:
+    """127.0.0.1 server that announces Content-Length: 100 but sends only a short body, then closes."""
+
+    def __init__(self) -> None:
+        self.sock = socket.create_server(("127.0.0.1", 0))
+        self.sock.settimeout(5)
+        self.port = self.sock.getsockname()[1]
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.thread.join(5)
+        self.sock.close()
+        return False
+
+    def _serve(self) -> None:
+        for _ in range(3):  # public_get may retry: answer every attempt the same short way
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            with conn:
+                conn.settimeout(5)
+                request = b""
+                while b"\r\n\r\n" not in request:
+                    got = conn.recv(4096)
+                    if not got:
+                        break
+                    request += got
+                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n"
+                             b"Connection: close\r\n\r\n{}")
+
+
+def test_truncated_content_length_body_fails_closed(local):
+    """Codex P1: '{}' is valid JSON, but 98 of the 100 announced bytes are missing: never a success."""
+    with _TruncatingServer() as server:
+        local(server)
+        result, _ = _timed_public_get(timeout=2.0, deadline_s=5.0, attempts=1)
+    assert isinstance(result, podlib.PublicGetError), result
+    assert isinstance(result.__cause__, http.client.IncompleteRead), repr(result.__cause__)
+
+
+class _BlockingResponse:
+    """read1 blocks until close() is called (like a recv on a socket that gets shut down)."""
+
+    def __init__(self) -> None:
+        self.closed = threading.Event()
+
+    def read1(self, n=-1):
+        self.closed.wait(10)
+        raise OSError("closed")
+
+    def close(self):
+        self.closed.set()
+
+
+def test_deadline_closes_the_response_of_the_abandoned_worker(monkeypatch):
+    """Codex P2: after the deadline the worker's response is closed at once, so the thread ends now."""
+    response = _BlockingResponse()
+    monkeypatch.setattr(podlib, "urlopen", lambda request, timeout=None: response)
+    result, elapsed = _timed_public_get(timeout=5.0, deadline_s=0.3)
+    assert isinstance(result, podlib.PublicGetError), result
+    assert response.closed.wait(1.0), "the abandoned response was never closed"
+    deadline = time.monotonic() + 2.0
+    while any(t.name == "public_get" for t in threading.enumerate()) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not any(t.name == "public_get" for t in threading.enumerate())
+
+
+def test_worker_threads_stuck_in_urlopen_are_bounded(monkeypatch):
+    """Codex P2: workers stuck in urlopen (connect/headers) cannot pile up past podlib._MAX_WORKERS."""
+    release = threading.Event()
+
+    def stuck_urlopen(request, timeout=None):
+        release.wait(10)
+        raise socket.timeout("timed out")
+
+    monkeypatch.setattr(podlib, "urlopen", stuck_urlopen)
+    try:
+        for _ in range(podlib._MAX_WORKERS * 2 + 2):
+            result, _ = _timed_public_get(timeout=10.0, deadline_s=0.05, attempts=1)
+            assert isinstance(result, podlib.PublicGetError), result
+        alive = sum(1 for t in threading.enumerate() if t.name == "public_get")
+        assert alive <= podlib._MAX_WORKERS, alive
+    finally:
+        release.set()
+        end = time.monotonic() + 3.0
+        while any(t.name == "public_get" for t in threading.enumerate()) and time.monotonic() < end:
+            time.sleep(0.01)
+
+
+def test_decode_and_parse_count_toward_the_deadline(clock, monkeypatch):
+    """Codex P2: the body arrives at 1 s, but parsing ends at 31 s > deadline 30 s: raise, not success."""
+    clock["set"]((1.0, b'{"ok": 1}'))
+    real_loads = podlib.json.loads
+
+    def slow_loads(text, *args, **kwargs):
+        clock["t"] += 30.0
+        return real_loads(text, *args, **kwargs)
+
+    monkeypatch.setattr(podlib.json, "loads", slow_loads)
+    with pytest.raises(podlib.PublicGetError):
+        podlib.public_get(GAMMA_URL, deadline_s=30.0)
+
+
+def test_fast_parse_inside_the_deadline_still_returns(clock):
+    clock["set"]((1.0, b'{"ok": 1}'))
+    assert podlib.public_get(GAMMA_URL, deadline_s=30.0) == {"ok": 1}
