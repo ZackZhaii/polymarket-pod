@@ -360,3 +360,138 @@ def test_a_still_changing_active_rotated_book_file_skips_the_round(tmp_path, mon
     assert (result["gaps"], result["stale"], result["fills"]) == (0, 0, 0)
     assert result["input_problems"] == [{"path": str(active), "line": None, "problem": "changing"}]
     assert not bus_path.exists()
+
+
+# ------------------- Issue #75 criterion 3: an enumerated rotated file that vanishes mid-round
+
+
+def _vanishing_after_enumeration(monkeypatch, victim: Path) -> None:
+    """Delete ``victim`` right after the rotation is enumerated, before the cycle reads it.
+
+    A deterministic stand-in for a rotated file disappearing between enumeration and read: the glob
+    still lists it (it existed), the read finds it gone. No sleeps, no threads.
+    """
+    real = paper_cycle.recording_book_files
+
+    def enumerated_then_deleted(run_dir):
+        files = real(run_dir)
+        victim.unlink()
+        return files
+
+    monkeypatch.setattr(paper_cycle, "recording_book_files", enumerated_then_deleted)
+
+
+def _assert_round_skipped(result, victim: Path, state: Path) -> None:
+    """The vanished file is a reported change and the round is skipped, never an empty books file."""
+    assert result["ok"] is False and result["reason"] == paper_cycle.INPUT_PENDING
+    assert (result["gaps"], result["stale"], result["signals"], result["fills"]) == (0, 0, 0, 0)
+    assert result["input_problems"] == [{"path": str(victim), "line": None, "problem": "vanished"}]
+    assert result["skipped"] == 1
+    assert result["skips"] == [{"kind": "input_pending", "reason": "input_pending", "path": str(victim)}]
+    assert not victim.exists()  # reported, never recreated
+    saved = json.loads(state.read_text(encoding="utf-8"))  # issue #277: one pending round, no halt
+    assert saved["streaks"] == {} and saved["all_stale_streak"] == 0 and saved["input_pending_streak"] == 1
+
+
+@pytest.mark.parametrize("which", ["closed", "active"])
+def test_a_rotated_file_that_vanishes_after_enumeration_skips_the_round(tmp_path, monkeypatch, which):
+    run_dir, bus_path = tmp_path / "run", tmp_path / "bus.jsonl"
+    (run_dir / "books").mkdir(parents=True)
+    markets = tmp_path / "markets.jsonl"
+    state = tmp_path / "stale.json"
+    _write(markets, [_MARKET])
+    closed = run_dir / "books" / "books-000001.jsonl"
+    active = run_dir / "books" / "books-000002.jsonl"
+    _write(closed, _BOOKS)
+    _write(active, _BOOKS)
+    victim = closed if which == "closed" else active
+    halts_before = halt_store.active_halts()
+    _vanishing_after_enumeration(monkeypatch, victim)
+
+    result = paper_cycle.run(markets_path=markets, bus_path=bus_path, recording_dir=run_dir,
+                             now="2026-10-08T00:10:00Z", sentinel_state_path=state)
+
+    _assert_round_skipped(result, victim, state)
+    assert not bus_path.exists()  # no gap, no stale and no skip signal
+    assert halt_store.active_halts() == halts_before  # a vanished file is never a halt in itself
+
+
+def test_a_rotated_file_deleted_while_it_is_read_skips_the_round(tmp_path, monkeypatch):
+    run_dir, bus_path = tmp_path / "run", tmp_path / "bus.jsonl"
+    (run_dir / "books").mkdir(parents=True)
+    markets = tmp_path / "markets.jsonl"
+    state = tmp_path / "stale.json"
+    _write(markets, [_MARKET])
+    active = run_dir / "books" / "books-000002.jsonl"
+    _write(run_dir / "books" / "books-000001.jsonl", _BOOKS)
+    _write(active, _BOOKS)
+    real = paper_cycle.read_strict_jsonl
+
+    def read_then_delete(path):
+        rows = real(path)  # the read succeeds; the file is gone before the signature is taken again
+        if Path(path) == active:
+            active.unlink()
+        return rows
+
+    monkeypatch.setattr(paper_cycle, "read_strict_jsonl", read_then_delete)
+
+    result = paper_cycle.run(markets_path=markets, bus_path=bus_path, recording_dir=run_dir,
+                             now="2026-10-08T00:10:00Z", sentinel_state_path=state)
+
+    _assert_round_skipped(result, active, state)
+    assert not bus_path.exists()
+
+
+def test_a_books_file_deleted_mid_read_is_a_change_not_an_empty_read(tmp_path, monkeypatch):
+    """The same tightening for a direct books file: deleted while read, so never silently empty."""
+    markets, books, bus_path = tmp_path / "markets.jsonl", tmp_path / "books.jsonl", tmp_path / "bus.jsonl"
+    state = tmp_path / "stale.json"
+    _write(markets, [_MARKET])
+    _write(books, _BOOKS)
+    real = paper_cycle.read_strict_jsonl
+
+    def read_then_delete(path):
+        rows = real(path)
+        if Path(path) == books:
+            books.unlink()
+        return rows
+
+    monkeypatch.setattr(paper_cycle, "read_strict_jsonl", read_then_delete)
+
+    result = paper_cycle.run(markets_path=markets, books_path=books, bus_path=bus_path,
+                             now="2026-10-08T00:10:00Z", sentinel_state_path=state)
+
+    assert result["ok"] is False and result["reason"] == paper_cycle.INPUT_PENDING
+    assert result["input_problems"] == [{"path": str(books), "line": None, "problem": "vanished"}]
+    assert (result["gaps"], result["stale"], result["fills"]) == (0, 0, 0)
+    assert not bus_path.exists()
+
+
+def test_a_vanished_rotated_file_comes_back_and_the_next_round_runs(tmp_path, monkeypatch):
+    """The skip is transient: a later cycle whose rotation is intact reads it and runs normally."""
+    run_dir, bus_path = tmp_path / "run", tmp_path / "bus.jsonl"
+    (run_dir / "books").mkdir(parents=True)
+    markets = tmp_path / "markets.jsonl"
+    state = tmp_path / "stale.json"
+    _write(markets, [_MARKET])
+    _write(run_dir / "books" / "books-000001.jsonl", _BOOKS)
+    _write(run_dir / "books" / "books-000002.jsonl", _BOOKS)
+    real_files = paper_cycle.recording_book_files
+    _vanishing_after_enumeration(monkeypatch, run_dir / "books" / "books-000002.jsonl")
+
+    skipped = paper_cycle.run(markets_path=markets, bus_path=bus_path, recording_dir=run_dir,
+                              now="2026-10-08T00:10:00Z", sentinel_state_path=state)
+    assert skipped["reason"] == paper_cycle.INPUT_PENDING
+
+    monkeypatch.setattr(paper_cycle, "recording_book_files", real_files)
+    _write(run_dir / "books" / "books-000002.jsonl", _BOOKS)  # the recorder's rotation is back
+
+    again = paper_cycle.run(markets_path=markets, bus_path=bus_path, recording_dir=run_dir,
+                            now="2026-10-08T00:10:00Z", sentinel_state_path=state)
+
+    assert again["ok"] is True and again["reason"] == "signals_only"
+    # no manifest, so the market is not_recorded (Issue #125) -- but its books were read: a
+    # missing_book round (the old silent empty read) would instead have made it stale.
+    assert again["stale"] == 0 and again["not_recorded"] == 1
+    saved = json.loads(state.read_text(encoding="utf-8"))
+    assert saved["input_pending_streak"] == 0  # a normal cycle clears the pending streak

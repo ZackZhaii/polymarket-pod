@@ -1536,8 +1536,288 @@ window, deadline or threshold changed.
 - m1_run manifest counts add `pongs`, `inbound_frames`, `data_frames`, `clock_jumps_in_backoff`.
 - Tests: `tests/test_ws_telemetry.py`; exact `disconnected` events in `tests/test_ws_silence.py` updated.
 
-## Latest
+## Task DK — Issue #247: m2_runner writes an alert line on KILL (exit code unchanged)
 
+Status: done.
+
+Non-KEY part split from KEY #243, claimed by Poly桥接. Done by grok-bot on dev@9a25e07.
+
+- When `<run dir>/KILL` stops the runner, `iteration` appends one row to the Sentinel's `logs/alerts.jsonl`
+  (`sentinel_tick.ALERTS_PATH`, same row shape): `from` / `proc` `m2_runner`, `alert` `kill_file`, `severity`
+  `info`, `detail` (the KILL path, `exit_code=0`), `exchange_action` `none`. At most once per stop
+  (`RunnerState.kill_alerted`); each start that finds KILL writes its own line.
+- Unchanged: KILL still exits 0, no getter is called, recovery is untouched, nothing restarts the runner
+  (auto-restart stays KEY #243).
+- A failed alert write is `WriteFailed`: exit 4 like a journal / events write, never dropped silently.
+- docs/EXIT_CODES.md notes it. Tests: `tests/test_m2_runner_kill_alert.py` (offline).
+
+## Task DM — Issue #293: make m2_runner_clock tests deterministic
+
+Status: done.
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@ffe32ab).
+
+- Flaky under full-suite load: `test_bad_book_skips_one_signal_and_the_next_signal_can_commit[-6-future_book_ts]`
+  and `test_malformed_book_skips_one_signal_without_blocking_the_next[None]` (alone 70/70; under load fail once then pass).
+- Cause: `env` captured wall `datetime.now` for runner `clock`, but `paper_ledger.commit_if_allowed` →
+  `RiskGate.evaluate(now=None)` reads live `podlib` / `book_staleness` / `wash_detect` datetime; wall drift past
+  `INTENT_TTL_S` (or past a synthetic `future_book_ts`) broke the second-signal allow.
+- Fix (tests only): fixed `FROZEN_NOW` plus `_freeze_wall` on those three modules in `tests/test_m2_runner_clock.py`
+  `env` fixture. No `src/`, threshold, or `config/risk.toml` change.
+
+## Task DP — Issue #199: public_get retries HTTP 429 using Retry-After
+
+Status: done.
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@043e9ce).
+
+- `src/podlib.py` `public_get`: HTTP **429** is now retryable. It waits the response's `Retry-After` as integer
+  seconds (`_retry_after_s`; ASCII digits only, capped at `PUBLIC_GET_RETRY_AFTER_MAX_S` = 30 s) through the
+  patchable `_sleep`; a missing, HTTP-date, negative or fractional header falls back to Task K's
+  `PUBLIC_GET_BACKOFF_S * 2**n`. 429 counts against the same `PUBLIC_GET_ATTEMPTS` budget as network/TLS errors
+  and 5xx; exhausted, it raises `PublicGetError` (Scanner: `network_error`, exit 3, fails closed).
+- Unchanged: every other 4xx (400/401/403/404/422 …) is raised at once, even with a Retry-After header; 5xx and
+  transient network errors keep the exponential backoff (5xx ignores Retry-After).
+- `docs/THRESHOLDS.md` operational row for `podlib.PUBLIC_GET_RETRY_AFTER_MAX_S` (code constant, not risk.toml).
+- Tests: `tests/test_public_get_retry.py` (offline; urlopen mocked, `_sleep` recorded). The old case that pinned
+  429 as not retried is replaced by the 429 cases.
+
+## Task DO — Issue #237: maker paper buy checked under the commit lock; bids over 1 record a skip
+
+Status: done (PR #310, HOLD until Poly风控 「通过」 on head).
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC.
+
+- `src/maker.py` `quote` buy path takes the paper ledger's `commit.lock` (outer, same order as
+  `paper_ledger.commit_if_allowed`), then re-checks inside it: book age (`book_problem`, `MAX_BOOK_AGE_S`), Issue #145
+  `pair_problem`, and `opposite_leg_blocked(load_state(..., quotes_path=<actual path>))`. A lock timeout, unreadable
+  state, or a state with `ledger_problems` / non-finite ledger rows refuses (`structural_arb_disabled`), nothing written.
+- A buy whose `quotes_path` does not resolve to `paper_ledger.QUOTES_PATH` (the only file `commit_if_allowed` reads)
+  is refused (`structural_arb_disabled`) before any file is written, closing the custom-file reverse bypass.
+- Paper cycle records a skip when the best bids across a market's outcomes sum above 1. A present best_bid / best_ask
+  too large for float marks the market `invalid_book_price` (skipped, no crash, no buy); NaN / inf / out-of-range
+  prices stay left out (no buy); `tests/test_310_paper_cycle_bad_bid.py`.
+- Tests: Poly套利's 8 #237 tests unchanged; `tests/test_310_maker_ledger_fail_closed.py`,
+  `tests/test_310_maker_custom_quotes_path.py` (custom file then default, and the reverse),
+  `tests/test_310_maker_book_age_in_lock.py` (book 119 s before lock, 121 s after: refused, no quote line).
+
+## Task DR — Issue #305: paper_session pin check first; kill_alert Exception → exit 4
+
+Status: done.
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@3a31906). Follow-up of Poly风控's #292 / #295 reviews.
+Tightening only; pin path change, so Poly风控 must comment “通过” on the head before merge.
+
+- `src/paper_session.py` `run`: the pin check is the first step, through `pins.refuse_start` (like m2_runner /
+  paper_cycle / book), before any risk.toml read. A missing or unreadable file, a directory, or a sha computation
+  that raises is `reason=risk_toml_pin_drift` with a global halt record and `ok=False` (was an uncaught
+  `FileNotFoundError` / `RuntimeError`); no markets / books / sessions write, no getter call.
+- The unchanged-file snapshot (`before`), the loaded config and the pin check use one path (`risk_path`, else
+  `RISK_PATH`); the config is parsed from the checked bytes (re-read sha must still be pinned, else drift).
+- `src/m2_runner.py` `kill_alert`: any `Exception` while building or writing the alert line becomes `WriteFailed`
+  (exit 4), not only `OSError`; KeyboardInterrupt / SystemExit pass through. docs/EXIT_CODES.md notes both.
+- Tests: `tests/test_dr_305_pin_first_kill_alert.py` (offline).
+
+## Task DS — paper_session reread-then-refuse test; #305 Task DQ leftovers renamed to DR
+
+Status: done (tests + docs/comments only).
+
+Claimed by Poly桥接. Done by grok-bot on NoisePC (dev@a0569a2). Follow-up of Task DR (#315).
+
+- Offline tests for `src/paper_session.py` `run`'s reread-then-refuse branch: the real `pins.refuse_start` passes,
+  then the file is deleted, edited off its sha, swapped for a directory, or the reread raises, before
+  `_pinned_snapshot` reads it again. Each is `reason=risk_toml_pin_drift`, `ok=False`, one global halt recorded by
+  the reread (none by the passing check), no markets / books / sessions write, no getter call, no parse.
+- Renamed the #305 leftovers that kept the old letter: `tests/test_dq_305_pin_first_kill_alert.py` →
+  `tests/test_dr_305_pin_first_kill_alert.py`, and `Task DQ` → `Task DR` for #305 in `src/paper_session.py`,
+  `src/m2_runner.py` (comment) and `docs/EXIT_CODES.md`. Task DQ of KEY PR #314 untouched. No behaviour change.
+- Tests: `tests/test_dr_305_pin_first_kill_alert.py` section 3 (offline).
+
+## Task DT — ledger_store.book() post-write check by fill_id, not "last line"
+
+Status: done.
+
+Claimed by Poly桥接 (Poly指挥 ruling on the ledger post-write false alarm). Done by grok-bot on the box.
+Ledger fix, so Poly风控 must comment “通过” on the head before merge.
+
+- `src/ledger_store.py` `book`: after the locked replace, our row no longer has to be the last line (another
+  process may append right after us). The re-read ledger must verify clean, contain our `fill_id`, and the
+  stored row must equal what we wrote field by field (`_post_write_row_problems`). Missing is
+  `post_write:not_appended:<id>`; a differing, missing or extra field is `post_write:row_mismatch:<field>:<id>`.
+  Fail closed as before; the lock is not widened.
+- Tests: `tests/test_dt_ledger_post_write_verify.py` (offline); `tests/test_ledger_concurrent_book.py` unchanged
+  and green under repeated runs.
+
+## Task DQ — Poly哨兵 on #309: public_get deadline, /time 429 not retried, in-tick heartbeats
+
+Status: done (PR is KEY + HOLD: Poly风控 and Poly哨兵 both 通过, then 家伟 approves in chat before merge).
+
+Claimed by Poly桥接. Done by grok-bot (dev@3a31906). Follows Task DP (#309 kept, not rolled back).
+
+- `src/thresholds.py` `PUBLIC_GET_DEADLINE_S = 30.0` (M2 pending, re-exported as `podlib.PUBLIC_GET_DEADLINE_S`;
+  import check `0 < PUBLIC_GET_DEADLINE_S <= HEARTBEAT_RUNNER_TIMEOUT_S / 4`). `podlib.public_get` bounds the whole
+  call (attempts, socket timeouts, Retry-After / backoff waits): each attempt's timeout is clipped to the time
+  left, a wait that would end past the deadline is not taken (`PublicGetError` at once). New `deadline_s=` kwarg.
+- CLOB `/time` (`TIME_URL`) never retries a 429 (`PublicGetError` after one attempt); 5xx/network still retried.
+- `src/m2_runner.py`: `GuardedGetter(after=...)` / `RunnerState.on_get` beat the heartbeat (throttled to
+  `HEARTBEAT_RUNNER_EVERY_S`) after every GET inside a tick (the /time check, settlement, each scan page, each
+  signal's fee and /book reads). KILL is still read at the start of each tick: at most one tick late (documented).
+- `src/m1_run.py`: `clock_check(beat=...)` beats the `m1_run` heartbeat (`starting`) after each asset read.
+- Docs: `.grok/skills/api-health-ratelimit/SKILL.md`, `docs/RECONCILE.md`, `docs/THRESHOLDS.md` match the code.
+- Tests (offline, fake clock): `tests/test_public_get_deadline.py`, `tests/test_ratelimit_storm.py` (429 storm with
+  Retry-After 30: one m2_runner tick and the m1_run start-up each end within 120 s; heartbeat gaps < 120 s).
+  config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+## Task DV — calibration: out-of-bounds fill rejects its whole decision; boundary timestamps (#321 follow-up)
+
+Status: done.
+
+Claimed by Poly桥接 (Codex review of #321 at a3b850b). Done by grok-bot on the box. Paper-only, calibration-only.
+
+- `src/calibration.py` `trade_samples`: the issue #70 time bounds (forecast.ts <= fill.ts < closed_ts) are checked
+  on every counted fill of the decision, including fills already dropped by another calibration filter, so an
+  out-of-bounds fill hidden by e.g. `missing_market_mid` still rejects the whole decision (P1).
+- `_parse_ts`: `OverflowError` from the UTC conversion (`0001-01-01T00:00:00+01:00`, `9999-12-31T23:59:59-01:00`)
+  returns None, so the row is dropped and counted (`fill_ts_invalid` / `fill_forecast_ts_invalid`), never raised (P2).
+- `tests/test_dt_ledger_post_write_verify.py`: the mismatch test asserts the exact
+  `post_write:row_mismatch:<field>:<fill_id>` (#323 Codex P3).
+- Tests: `tests/test_calibration.py` Task DV section (offline). No thresholds changed.
+
+## Task DU — Issue #316: public_get hard wall-clock deadline (body read included); finite deadline_s
+
+Status: done.
+
+Claimed by Poly桥接 (issue #316, Poly风控 / Codex follow-ups of #314). Done by grok-bot on NoisePC. Tightening only,
+non-KEY; Poly风控 must comment “通过” on the head before merge. `PUBLIC_GET_DEADLINE_S` stays 30.0.
+
+- `src/podlib.py` `public_get`: `PUBLIC_GET_DEADLINE_S` is now a hard wall-clock cap on the whole call, connect,
+  headers and body read included. Each attempt runs in a short-lived daemon worker (`_attempt`) that the caller
+  waits for at most the time left; the worker reads the body in chunks (`_read_body`, `read1`), re-clips the socket
+  timeout to the time left before every read and drops a chunk that arrives past the deadline. Past the deadline:
+  `PublicGetError` at once (not retried), never partial data or a late OK. Before: a 1 byte/s server returned OK
+  after 43 s with deadline 10 s.
+- `deadline_s=` must be a finite number > 0 (int or float, not bool): NaN, ±inf, 0, negatives, bools and strings
+  raise `ValueError` before any network call (Codex P2 on #314).
+- 429 / Retry-After (Task DP), /time 429 not retried and the between-retry deadline checks (Task DQ) unchanged.
+- Tests: `tests/test_public_get_deadline.py` Task DU section (offline): a real 127.0.0.1 drip server (ephemeral
+  port, own thread, no proxy) for a slow body (Content-Length and chunked) and slow headers, asserting
+  `PublicGetError` within deadline + 0.75 s; fake-clock chunk-read checks; NaN/inf/0/negative/bool/str deadlines.
+  config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+## Task DW — Issue #329: m2_start boot classifier_errors in the chain row and runs/m2/current.json
+
+Status: done.
+
+Claimed by Poly桥接 (issue #329). Done by grok-bot on NoisePC. Observability only, non-KEY: no selection, threshold or
+halt change.
+
+- `src/m2_start.py` `start`: the boot start (empty chain) now calls `boot_selection_detail` and records its
+  `classifier_errors` (markets dropped because the boot classifier raised, Task DN) in the `runs/m2-chain.jsonl` row and
+  in `runs/m2/current.json`, through the same atomic writes and fail-closed exits (a failed append or current.json
+  write still stops the order, exit 5). A later start reuses the chain's `assets`, classifies nothing and records
+  `classifier_errors: null`. `CHAIN_FIELDS` stays the required core set, so older rows without the field still read.
+  `-DryRun` shows the field in the chain line it would append.
+- `classifier_errors > 0` keeps the discard-and-continue behaviour; the selected assets are identical to a run
+  without the failing row; no new halt.
+- Docs: `docs/PHASE0_RUN.md` (chain row and current.json fields) and the `src/m2_start.py` docstrings.
+- Tests: `tests/test_m2_start_assets.py` Task DW section (offline): a row whose `boot_eligible` raises gives
+  `classifier_errors == 1` in chain + current with assets and `--assets` identical to the clean run; zero errors give
+  0; reboot records null and never re-classifies; old rows without the field still reboot; dry-run shows the field;
+  a failed current.json write still stops the boot. config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+## Task DX – Issue #141: reject multi-leg/complete-set signals; close #141
+
+Status: done.
+
+Claimed by Poly桥接 (issue #141). Done by grok-bot on NoisePC. Non-KEY verify-and-close: the
+tightening code already landed on `dev` as Task BX (#177); this task re-verifies acceptance on NoisePC
+and closes the issue. Proposal item 2 (re-enable conditions) stays unlock-only and is not implemented.
+
+- Already on `dev` (Task BX, PR #177): `src/structural_gate.py` rejects any multi-leg / complete-set
+  candidate as `structural_arb_disabled` (ArbBinary YES+NO, NegRiskArb all-outcome, legs >= 2, and
+  fail-closed unknown leg counts); records on the bus (`gap_signal: rejected`, `reject_reason`) and in
+  paper_cycle skips (never silent drop, never an intent or order). `src/arb_binary.py` / `src/neg_risk.py`
+  mark every gap the same way. Markets past `endDate` (`expired`) or with non-empty
+  `umaResolutionStatus` / `umaResolutionStatuses` (`market_expired_or_resolving`) get no gap path
+  (BookWatcher skip + `resolving_market` skip); scanner applies the same UMA predicate every scan.
+- Not in this PR (and not required to close #141): event-group completeness as a re-enable gate, or a
+  <=2s cross-leg `book_ts` skew cap – those are unlock criteria only.
+- Tests re-run on NoisePC (offline, `--basetemp` outside the repo): `tests/test_structural_arb_disabled.py`,
+  `tests/test_structural_gate_gaps.py`, related paper_cycle / sell-set rejects; full `python -m pytest`;
+  `python scripts/guard.py --require-git`. config/risk.toml sha unchanged (0aea23af…bc04), `live_enabled=false`.
+
+## Task EA — Issue #245: EXIT_CODES.md aligns with m2_runner / secret_scan reality
+
+Status: done.
+
+Claimed by Poly桥接 (issue #245). Done by grok-bot on NoisePC. Docs plus the registry checker, non-KEY: make
+`docs/EXIT_CODES.md` match the code without changing thresholds, risk.toml, or behaviour.
+
+- `src/m2_runner.py`: exits 2 / 3 / 7 return from `main` before `_run` creates the Heartbeat, so
+  Sentinel never observes them. Their Sentinel column is `不可见` (`PRE_HEARTBEAT_EXITS` in
+  `src/exit_codes.py`); on-call finds 2 / 7 via m2_start exit 5 and
+  `runs/m2/start-logs/<stamp>/m2_runner.log`, or the supervisor exit code (availability blind spot).
+  Exit 3 is a normal refusal and must never write an m2_runner heartbeat. Drop the inaccurate
+  "before any read" claim; tick order is preflight → settlement (may read Gamma) → clock → daily
+  loss / disk → scan / decide.
+- `src/secret_scan.py`: exit 2 covers unenumerable directories (`ScanError`, #53 / #270) and a bad
+  BIP39 word list; exit 1 is intentional `EXIT_SECRET` (not an uncaught crash).
+- `src/m1_run.py`: 24 h → 6 h (`M1_RUN_TARGET_S=21600` / `M1_MIN_RUN_S=21540`, #171; also Refs #220).
+- Tests: `tests/test_ea_exit_codes_docs.py` (offline); `tests/test_exit_codes.py` still green.
+  Full pytest + `python scripts/guard.py --require-git`. config/risk.toml sha unchanged
+  (0aea23af…bc04), `live_enabled=false`.
+
+## Latest
+- 2026-10-15: Task EB (issue #223): m1_run manifest `counts.recorder.<asset>.<name>` persists ws_recorder's internal counts per asset (duplicate_level_removal, group_held, group_resolved, group_unresolved, group_replaced_by_book, stale_resubscribe_snapshot), also in every `progress` snapshot and the console-close partial counts (same atomic ManifestWriter path as counts.resyncs). m1_report only displays them (no criterion; N/A for older runs). Observability only, non-KEY: no check, threshold or M1 criterion changed. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-10-15: Task EA (issue #245): EXIT_CODES.md aligns with m2_runner pre-heartbeat exits 2/3/7, settlement-before-scan wording, secret_scan exit 2 directory/word-list, m1_run 24h→6h (Refs #220). m2_runner 2/3/7 Sentinel column 不可见 (on-call: m2_start exit 5, start-logs m2_runner.log, supervisor). risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-10-15: Task DZ (issue #210): operator CLI no longer defaults --fee-rate to 0.0 (default None / missing_fee_data); CLI intents without book depth/levels refuse with missing_book_levels before booking (no --asks added). Tighten-only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-10-15: Task DZ PR #336 P1 fix (Poly risk option 1): run_cli_intent always refuses missing_book_levels; any programmatic args.asks (True/string/zero or tiny depth/NaN/inf) is ignored and commit_if_allowed is never reached. No --asks flag. tests/test_fill_realism_147.py parametric junk-asks cases. risk.toml unchanged, live_enabled=false.
+
+- 2026-10-15: Task DX (issue #141): verify-and-close. Multi-leg / complete-set gaps stay
+  `structural_arb_disabled` (bus + skips); past-endDate / UMA markets emit no gap signal. Code from Task BX
+  (#177); re-enable conditions (item 2) stay unlock-only. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+
+- 2026-10-14: Task DW (issue #329): m2_start's boot start records classifier_errors in its chain row and
+  runs/m2/current.json (null on later starts that reuse the chain's assets). Observability only: selection and
+  halts unchanged. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DU (issue #316): public_get's deadline is a hard wall-clock cap (connect, headers, body read);
+  a slow-drip answer is PublicGetError at the deadline; deadline_s must be finite and > 0. PUBLIC_GET_DEADLINE_S
+  unchanged (30 s). risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DV (#321 follow-up): an out-of-bounds fill rejects its whole decision even when another
+  calibration filter dropped it first; boundary timestamps that overflow UTC are dropped and counted, not raised.
+  risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DQ (Poly哨兵 on #309, KEY): one public_get call bounded by PUBLIC_GET_DEADLINE_S = 30 s
+  (M2 pending), /time does not retry 429, m2_runner beats between GETs, m1_run clock check beats per asset;
+  429-storm regressions (< 120 s). risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DT: ledger book() post-write check finds our row by fill_id and compares it field by field
+  (a later append by another process is no longer a false not_appended). risk.toml unchanged (0aea23af…bc04),
+  `live_enabled=false`.
+
+- 2026-10-14: Task DS: offline tests for paper_session's reread-then-refuse branch (file gone / edited / directory /
+  reread raising after a passing pin check is `risk_toml_pin_drift` with a halt, nothing written); #305 Task DQ
+  leftovers renamed to DR. Tests and docs only. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DR (issue #305): paper_session runs the pin check first (missing / unreadable risk.toml is
+  `risk_toml_pin_drift` with a halt, not an exception; one path for snapshot and check); m2_runner kill_alert
+  turns any Exception into exit 4. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DO (issue #237, PR #310): maker paper buy re-checked under commit.lock (book age, pair,
+  opposite leg, ledger validity), fail closed; bids over 1 record a skip. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DP (issue #199): public_get retries HTTP 429, waiting Retry-After integer seconds (capped at
+  30 s, backoff fallback) inside the same PUBLIC_GET_ATTEMPTS budget; other 4xx still raise at once. risk.toml
+  unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DM (issue #293): freeze podlib/book_staleness/wash_detect clock in m2_runner_clock tests so
+  RiskGate commit path matches runner fixture time. Tests only. risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+- 2026-10-14: Task DK (issue #247): m2_runner writes one `kill_file` line to `logs/alerts.jsonl` on KILL; exit
+  code stays 0, no auto-restart (KEY #243). risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 - 2026-10-10: Task BL: WS recorder `ping` / `pong` events, inbound frame counts, richer `disconnected` events,
   backoff `clock_jump` events, PONGs and frame counts in the m1_run manifest. Logging only.
 - 2026-10-10: Task BJ (issue #104): RiskGate books min(intent_builder's shares, what fits the all-in 1% clip);

@@ -11,7 +11,8 @@ C.4, C.6, C.8; Poly执行's no-live audit F2 / T1-T13 on the issue):
 
 **Every iteration starts with the checks, before any getter, seal or commit** (``preflight``). In this order:
 
-1. ``<run dir>/KILL`` (the Operator's file): stop. Heartbeat ``finished``, exit 0.
+1. ``<run dir>/KILL`` (the Operator's file): stop. One alert line ``kill_file`` in logs/alerts.jsonl (issue #247),
+   heartbeat ``finished``, exit 0.
 2. config/risk.toml: ``live_enabled is False``, ``mode == "paper"`` and ``require_human_gate is True``, else a
    global halt ``m2_live_flag`` is recorded and the runner exits 6.
 3. ``pins.risk_file_problems()`` on every iteration (not PinWatch's 60 s throttle): drift records the global halt
@@ -48,7 +49,9 @@ intent is built with ``paper=True``. Nothing here signs, sends or cancels anythi
 Heartbeat ``logs/heartbeat/m2_runner.json`` (src/heartbeat.py fields; a failed write is the global halt
 ``heartbeat_write_failed:m2_runner``, issue #79) every HEARTBEAT_RUNNER_EVERY_S, ``paused`` while paused. The
 Sentinel watches it (src/sentinel_tick.PROC_SPECS): stale is a global halt, ``paused`` longer than
-RUNNER_PAUSED_ALERT_S an alert. Single instance: ``<run dir>/runner.lock`` (pid, host, started_at) is held with an
+RUNNER_PAUSED_ALERT_S an alert. Task DQ: inside a tick the heartbeat is also beaten (throttled) after every GET,
+and every ``podlib.public_get`` is bounded by PUBLIC_GET_DEADLINE_S, so a 429 storm cannot stale it. KILL is
+checked at the start of each tick, so a KILL file stops the runner at most one tick late. Single instance: ``<run dir>/runner.lock`` (pid, host, started_at) is held with an
 OS byte lock for the process's life; a second runner exits 3. ``<run dir>/journal.jsonl`` (one fsynced line per
 step: sealed, rejected, built, committed, vetoed, skipped) and ``events.jsonl`` record what happened.
 
@@ -59,7 +62,7 @@ not-committed reconciled to the ledger), ``unique_decision_id=True`` on every co
 ``intent_builder.book_snapshot_from_clob``). Brier backfill is #121.
 
 Exit codes (docs/EXIT_CODES.md): 0 KILL or --max-runtime reached or --once done; 2 usage; 3 another runner holds
-the lock; 4 a journal / event / candidates write failed; 6 risk.toml off its pins or a live flag (global halt
+the lock; 4 a journal / event / candidates / KILL alert write failed; 6 risk.toml off its pins or a live flag (global halt
 recorded); 7 the start self-check failed (run dir not writable).
 """
 from __future__ import annotations
@@ -102,6 +105,7 @@ from src import (  # noqa: E402
     resolution_watch,
     scanner,
     sentinel,
+    sentinel_tick,
 )
 from src.daily_loss import daily_loss  # noqa: E402
 from src.book_staleness import INVALID_BOOK_TS, MISSING_BOOK_TS, book_age_problem, parse_book_ts  # noqa: E402
@@ -134,6 +138,7 @@ EXIT_PIN_OR_LIVE = 6
 EXIT_SELF_CHECK = 7
 
 LIVE_HALT_REASON = "m2_live_flag"
+KILL_ALERT = "kill_file"  # issue #247: the alert code written to logs/alerts.jsonl when KILL stops the runner
 LEDGER_HALT_REASON = "invalid_risk_state"
 
 ACT_RUN = "run"
@@ -164,7 +169,7 @@ class RefusedURL(RuntimeError):
 
 
 class WriteFailed(RuntimeError):
-    """A journal / event / candidates write failed (exit 4)."""
+    """A journal / event / candidates / KILL alert write failed (exit 4)."""
 
 
 def url_allowed(url: object) -> bool:
@@ -195,10 +200,16 @@ class Getters:
 
 
 class GuardedGetter:
-    """Calls ``inner`` only for an allowed URL; counts calls and refusals."""
+    """Calls ``inner`` only for an allowed URL; counts calls and refusals.
 
-    def __init__(self, inner: Callable[[str], Any]) -> None:
+    Task DQ (Poly哨兵 on #309): ``after`` (optional, never raises into the caller) runs after every fetched URL,
+    answered or failed: the runner beats its heartbeat there, so a tick of many GETs (the /time check, Gamma
+    settlement, every scan page, every signal's fee and /book reads) never goes HEARTBEAT_RUNNER_TIMEOUT_S
+    without a beat while each GET is bounded by PUBLIC_GET_DEADLINE_S."""
+
+    def __init__(self, inner: Callable[[str], Any], after: Callable[[], None] | None = None) -> None:
         self.inner = inner
+        self.after = after
         self.calls: list[str] = []
         self.refused: list[str] = []
 
@@ -207,7 +218,14 @@ class GuardedGetter:
             self.refused.append(str(url))
             raise RefusedURL(f"m2_runner refuses {url!r}")
         self.calls.append(url)
-        return self.inner(url)
+        try:
+            return self.inner(url)
+        finally:
+            if self.after is not None:
+                try:
+                    self.after()
+                except Exception:  # noqa: BLE001 - a heartbeat hook never changes a GET's outcome
+                    pass
 
 
 @dataclass
@@ -264,6 +282,11 @@ class RunnerState:
     tick_clock_verified: bool = False
     tick_clock_vetoed: bool = False  # Poly风控 P1 on #275: any book with an invalid book_ts this tick
     tick_time_ok: bool = False  # #253: this tick's CLOB /time check passed (|skew| <= CLOCK_SKEW_MAX_S)
+    # Issue #289 (Task DJ): heartbeat observation only, never read by a decision. When the current clock anomaly
+    # episode began (kept across a clock_unverified <-> clock_skew switch, None once clock_anomaly clears), and
+    # the last CLOB /time check (ts, result, low_s / high_s interval, rtt_s), None before the first check.
+    clock_anomaly_since: str | None = None
+    last_time_check: dict[str, Any] | None = None
     counters: dict[str, int] = field(default_factory=lambda: {
         "forecasts_sealed_total": 0, "forecasts_rejected_total": 0, "intents_built_total": 0, "allows_total": 0,
         "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0})
@@ -278,6 +301,9 @@ class RunnerState:
     last_resume_at: datetime | None = None  # books fetched before this are refused
     resume_count: int = 0
     force_rescan: bool = False
+    kill_alerted: bool = False  # issue #247: the KILL alert line was written for this stop (at most once)
+    # Task DQ: called after every GET of a tick (GuardedGetter.after); _run sets it to a throttled heartbeat beat.
+    on_get: Callable[[], None] | None = None
 
 
 @dataclass
@@ -327,6 +353,25 @@ def journal(state: RunnerState, step: str, now: datetime, **fields: Any) -> None
 
 def event(state: RunnerState, kind: str, now: datetime, **fields: Any) -> None:
     append_synced(state.paths.events, {"ts": _stamp(now), "event": kind, **fields})
+
+
+def kill_alert(state: RunnerState, now: datetime) -> None:
+    """Issue #247 (Task DK): one line in the Sentinel's logs/alerts.jsonl (``sentinel_tick.ALERTS_PATH``, the same
+    row shape as ``sentinel_tick.Tick.alert``) when KILL stops the runner, at most once per stop. Only a record:
+    the exit code stays 0, nothing is resumed or restarted (auto-restart is KEY #243). Raises WriteFailed.
+
+    Issue #305 (Task DR): any ``Exception`` while building or writing the row (not only OSError) is a write
+    failure (exit 4); KeyboardInterrupt / SystemExit are not caught."""
+    if state.kill_alerted:
+        return
+    try:
+        row = {"ts": _stamp(now), "from": PROC, "alert": KILL_ALERT, "severity": "info", "proc": PROC,
+               "detail": f"{state.paths.kill_file} found; runner stopped, exit_code={EXIT_OK}",
+               "exchange_action": "none"}
+        podlib.append_jsonl(Path(sentinel_tick.ALERTS_PATH), row)
+    except Exception as exc:  # noqa: BLE001 - issue #305: every failure here is a write failure (exit 4)
+        raise WriteFailed(f"alerts.jsonl: {type(exc).__name__}") from exc
+    state.kill_alerted = True
 
 
 def _risk_cfg(risk_path: Path | None) -> dict[str, Any]:
@@ -465,19 +510,39 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
 CLOCK_PAUSE_REASONS = frozenset({"clock_unverified", "clock_skew"})
 
 
-def _clock_check(state: "RunnerState", getter: GuardedGetter) -> str | None:
+def _clock_check(state: "RunnerState", getter: GuardedGetter, now: datetime | None = None) -> str | None:
     """#253 + Task DA: a clock_unverified / clock_skew result also marks ``state.clock_anomaly``, so later
     ticks' daily-loss evaluation treats the day-start reference as late (fail closed)."""
-    problem = _clock_problem(state.clock, getter)
+    measured: dict[str, float | None] = {}
+    problem = _clock_problem(state.clock, getter, measured)
     if problem is not None:
         state.clock_anomaly = problem
     else:
         state.tick_time_ok = True  # #253: a clean CLOB /time check (the skew source) this tick
+    if now is not None:  # issue #289: observation only (heartbeat), after the decision above
+        state.last_time_check = {"ts": _stamp(now), "result": problem or "ok", **{
+            key: _rounded(measured.get(key)) for key in ("low_s", "high_s", "rtt_s")}}
+        _note_clock_anomaly(state, now)
     return problem
 
 
-def _clock_problem(clock: Callable[[], datetime], getter: GuardedGetter) -> str | None:
-    """Certify the whole local-minus-server interval, including request time and ±1 s server quantization."""
+def _rounded(value: float | None) -> float | None:
+    return round(value, 3) if isinstance(value, float) and math.isfinite(value) else None
+
+
+def _note_clock_anomaly(state: "RunnerState", now: datetime) -> None:
+    """Issue #289: heartbeat bookkeeping only. Stamp ``clock_anomaly_since`` when an anomaly episode is first
+    seen (a clock_unverified <-> clock_skew switch keeps it), clear it with the anomaly. Never changes a decision."""
+    if state.clock_anomaly is None:
+        state.clock_anomaly_since = None
+    elif state.clock_anomaly_since is None:
+        state.clock_anomaly_since = _stamp(now)
+
+
+def _clock_problem(clock: Callable[[], datetime], getter: GuardedGetter,
+                   measured: dict[str, float | None] | None = None) -> str | None:
+    """Certify the whole local-minus-server interval, including request time and ±1 s server quantization.
+    Issue #289: ``measured`` (optional, observation only) receives low_s / high_s / rtt_s once computed."""
     try:
         sent = clock()
         server = getter(podlib.TIME_URL)
@@ -491,6 +556,8 @@ def _clock_problem(clock: Callable[[], datetime], getter: GuardedGetter) -> str 
             return "clock_unverified"
         low = sent.timestamp() - server - 1.0
         high = received.timestamp() - server + 1.0
+        if measured is not None:
+            measured.update(low_s=low, high_s=high, rtt_s=received.timestamp() - sent.timestamp())
     except Exception:  # noqa: BLE001 - failed reads, invalid clocks and numeric overflow cannot certify time
         return "clock_unverified"
     if low >= -CLOCK_SKEW_MAX_S and high <= CLOCK_SKEW_MAX_S:
@@ -754,6 +821,7 @@ def recover(paths: RunnerPaths, ledger_path: Path, *, now: datetime | None = Non
     now = now or (clock or (lambda: datetime.now(timezone.utc)))()
     state = RunnerState(paths=paths, risk_path=risk_path, clock=clock or (lambda: datetime.now(timezone.utc)),
                         monotonic=monotonic or time.monotonic)
+    _note_clock_anomaly(state, now)  # issue #289: the startup clock_unverified is stamped at startup (heartbeat)
     _, ledger = ledger_store.read_ledger(Path(ledger_path))
     ledger_by_decision: dict[str, dict[str, Any]] = {}
     for row in ledger.rows:
@@ -923,12 +991,13 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     state.tick_clock_verified = False  # Task DC: per tick
     state.tick_clock_vetoed = False
     state.tick_time_ok = False
-    gamma = GuardedGetter(getters.gamma)  # one guarded Gamma getter per tick: settlement, scan, fee
-    book_get = GuardedGetter(getters.book)  # shared read-only transport for /time and later /book
+    _note_clock_anomaly(state, now)  # issue #289: heartbeat stamp for an anomaly held from startup
+    gamma = GuardedGetter(getters.gamma, state.on_get)  # one guarded Gamma getter per tick: settlement, scan, fee
+    book_get = GuardedGetter(getters.book, state.on_get)  # shared read-only transport for /time and later /book
     try:
         check = preflight(state.paths, now=now, risk_path=state.risk_path, clock_ok=runner_clock_ok(state),
                           settle=lambda: _settle_tick(state, now, gamma),
-                          clock_check=lambda: _clock_check(state, book_get))
+                          clock_check=lambda: _clock_check(state, book_get, now))
     except WriteFailed as exc:
         state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return IterationReport(ACT_WRITE_FAILED, [str(exc)])
@@ -936,6 +1005,12 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     state.ledger_rows = check.ledger_rows if check.ledger_rows is not None else state.ledger_rows
     if check.action != ACT_RUN:
         report = IterationReport(check.action, check.reasons)
+        if check.action == ACT_FINISH and check.reasons[:1] == ["kill_file"]:
+            try:
+                kill_alert(state, now)  # issue #247: a record only; the exit code stays 0
+            except WriteFailed as exc:
+                state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
+                return IterationReport(ACT_WRITE_FAILED, [str(exc)])
         if check.action == ACT_PAUSE:
             if state.paused_reason != check.reasons[0]:
                 # PR #253 review: clock_unverified <-> clock_skew is one clock pause episode (keep paused_since)
@@ -1001,6 +1076,7 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     # re-pause, a clean CLOB /time check this tick, and no book with a missing / invalid book_ts
     if report.action == ACT_RUN and state.tick_clock_verified:
         state.clock_anomaly = None
+        _note_clock_anomaly(state, now)  # issue #289: heartbeat only
     return report
 
 
@@ -1011,7 +1087,10 @@ def progress(state: RunnerState, now: datetime) -> dict[str, Any]:
             "resume_count": state.resume_count, "paused_reason": state.paused_reason, "paused_since": state.paused_since,
             "disk_free_gb": None if state.disk_free_gb is None else round(state.disk_free_gb, 3),
             "ledger_rows": state.ledger_rows, "pending_signals": len(state.pending),
-            "executor_enabled": EXECUTOR_ENABLED}
+            "executor_enabled": EXECUTOR_ENABLED,
+            # issue #289 (Task DJ): read-only clock observation; see docs/EXIT_CODES.md
+            "clock_anomaly": state.clock_anomaly, "clock_anomaly_since": state.clock_anomaly_since,
+            "last_time_check": None if state.last_time_check is None else dict(state.last_time_check)}
 
 
 # ---------------------------------------------------------------- single instance, network guard, CLI
@@ -1164,6 +1243,14 @@ def _run(args: argparse.Namespace, paths: RunnerPaths, getters: Getters, now_fn:
                     risk_path=risk_path)
     started = monotonic()
     hb.beat(heartbeat.STATE_STARTING, progress(state, now_fn()), force=True)
+
+    def beat_between_gets() -> None:
+        # Task DQ (Poly哨兵 on #309): a mid-tick beat after each GET, throttled to HEARTBEAT_RUNNER_EVERY_S; with
+        # every GET bounded by PUBLIC_GET_DEADLINE_S, a 429 storm never stales the heartbeat inside one tick.
+        beat_state = heartbeat.STATE_PAUSED if state.paused_reason is not None else heartbeat.STATE_RUNNING
+        hb.beat(beat_state, progress(state, now_fn()))
+
+    state.on_get = beat_between_gets
     try:
         while True:
             began = monotonic()

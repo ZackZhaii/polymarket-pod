@@ -38,6 +38,10 @@ through src.ws_recorder and the public CLOB /book path through src.book.snapshot
   start/end times, elapsed seconds, assets with their market metadata, settings, thresholds,
   versions (Python, websockets, schema), the git sha (and whether the tree was dirty), the
   config/risk.toml sha256 at start and end and live_enabled, the files written and the counts.
+  Task EB (issue #223): ``counts.recorder.<asset>.<name>`` holds ws_recorder's internal counts per selected asset
+  (every name of ws_recorder.RECORDER_ASSET_COUNTS: duplicate_level_removal, group_held, group_resolved,
+  group_unresolved, group_replaced_by_book, stale_resubscribe_snapshot; 0 when never counted). The same object is
+  in every ``progress`` snapshot and in the console-close partial counts. Observability only: no check uses it.
 
 Exit codes: 0 ran to --max-runtime and recorded at least one snapshot; 1 no snapshot recorded;
 2 usage error (bad arguments, no usable assets, a non-empty --out); 3 the optional websockets
@@ -109,6 +113,7 @@ from src.ws_recorder import (  # noqa: E402
     WebsocketsTransport,
     _line_bytes,
     asset_meta,
+    recorder_asset_counts,  # Task EB (issue #223)
     validate_assets,
 )
 
@@ -307,12 +312,17 @@ class RestSampler:
 
 
 def clock_check(assets: list[str], meta: dict[str, dict[str, Any]], *, getter: Any = None,
-                now: Callable[[], str] = utc_now_ms, limit_s: float = M1_MAX_CLOCK_BEHIND_S) -> dict[str, Any]:
+                now: Callable[[], str] = utc_now_ms, limit_s: float = M1_MAX_CLOCK_BEHIND_S,
+                beat: Callable[[int], Any] | None = None) -> dict[str, Any]:
     """Task CM: how far the local clock is behind the exchange, from one public /book read per asset.
 
     ``lead_s = book_ts - local receive time`` per usable answer; ``max_behind_s`` (the largest lead) is a lower
     bound on the local clock's lag. ``ok`` only when at least one answer was usable and max_behind_s <= limit_s.
-    Read only: book.snapshot (public CLOB /book, the REST sampler's reader); nothing is written."""
+    Read only: book.snapshot (public CLOB /book, the REST sampler's reader); nothing is written.
+
+    Task DQ (Poly哨兵 on #309): ``beat(done)`` (optional; main passes the m1_run heartbeat) is called after each
+    asset's read, answered or not, so a 429 storm over many assets (each GET bounded by PUBLIC_GET_DEADLINE_S)
+    never leaves the ``starting`` heartbeat older than HEARTBEAT_RECORDER_TIMEOUT_S. A failing beat is ignored."""
     samples: list[dict[str, Any]] = []
     unusable = 0
     for token in assets:
@@ -321,6 +331,11 @@ def clock_check(assets: list[str], meta: dict[str, dict[str, Any]], *, getter: A
                   "condition_id": info.get("condition_id", ""), "liquidity_usd": info.get("liquidity_usd")}
         row = rest_snapshot(market, info.get("outcome", ""), token, now(), getter=getter)
         received = now()
+        if beat is not None:
+            try:
+                beat(len(samples) + unusable + 1)
+            except Exception:  # noqa: BLE001 - a heartbeat never changes the clock check
+                pass
         book_at = parse_book_ts(row.get("book_ts")) if row and row.get("book_ts_problem") is None else None
         local_at = parse_book_ts(received)
         if book_at is None or local_at is None:
@@ -635,7 +650,13 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
             return True
         return stop.is_set()
 
-    clock = clock_check(assets, meta, getter=clock_getter if clock_getter is not None else rest_getter, now=now)
+    def clock_beat(done: int) -> None:  # Task DQ: one m1_run heartbeat per asset read during the clock check
+        if heartbeat is not None:
+            heartbeat.beat("starting", {"clock_check_assets_read": done, "clock_check_assets": len(assets)},
+                           force=True)
+
+    clock = clock_check(assets, meta, getter=clock_getter if clock_getter is not None else rest_getter, now=now,
+                        beat=clock_beat)
     if not clock["ok"]:
         print("m1_run: refusing to start (" + str(clock["reason"]) + "): local clock behind the exchange by at least "
               f"{clock['max_behind_s']} s (limit M1_MAX_CLOCK_BEHIND_S {M1_MAX_CLOCK_BEHIND_S:g} s), "
@@ -728,7 +749,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
             "elapsed_s": round(monotonic() - run_start_mono, 3),
             "exit_code": EXIT_INTERRUPTED,
             "files": stream_files(),
-            "counts": {"partial": True, "ended_by": "console", "book_rows_at_close": recorder.report.rows},
+            "counts": {"partial": True, "ended_by": "console", "book_rows_at_close": recorder.report.rows,
+                       "recorder": recorder_asset_counts(recorder.report, assets)},  # Task EB: snapshot at close
             "risk": dict(manifest["risk"], end=risk_state()),
         }, timeout_s=left + 1.0)
         if heartbeat is not None:
@@ -753,7 +775,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
         while not stop.wait(progress_every_s):
             snapshot = {"last_flush_at": now(), "elapsed_s": round(monotonic() - run_start_mono, 3),
                         "files": stream_files(), "book_rows": recorder.report.rows, "events": events.rows,
-                        "rest_rows": sampler.rows}
+                        "rest_rows": sampler.rows,
+                        "recorder": recorder_asset_counts(recorder.report, assets)}  # Task EB (issue #223)
             if not writer.progress(snapshot):
                 try:
                     events.write({"ts": now(), "event": "manifest_progress_write_failed",
@@ -841,6 +864,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
                 "resyncs": {key.split(":", 1)[1]: value for key, value in sorted(report.counts.items())
                             if key.startswith("resync:")},
                 "unmapped_assets": report.unmapped_assets,
+                # Task EB (issue #223): ws_recorder's internal counts per asset (observability only, no criterion)
+                "recorder": recorder_asset_counts(report, assets),
             },
             "exit_code": code,
             "risk": dict(manifest["risk"], end=risk_state()),

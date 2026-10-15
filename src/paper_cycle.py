@@ -59,6 +59,13 @@ skipped: ``ok`` False, reason ``input_pending``, zero gaps and zero fills, no St
 reset, no halt and no signal. ``--loop`` keeps the heartbeat and waits for the next round, so a transient
 append is never mapped to a permanent halt (EXIT_PIN would record a global halt); a one-shot run reports
 the skipped round and exits EXIT_OK. A file that has stopped changing is read exactly as before.
+Issue #75 criterion 3 (tightening only): a rotated book file that was enumerated and then disappeared --
+the glob listed it, the read cannot find it, or it is deleted while it is being read -- is the rotation
+changing, not an empty file: the round is skipped the same way (``input_pending``, problem ``vanished``,
+the path reported), never silently read as no rows, which would have made every leg missing_book.
+Issue #75 criterion 5: a refused round (``input_invalid``) ends the heartbeat and the run -- ``--loop``
+included -- with its own ``EXIT_INPUT_INVALID`` (3), which the Sentinel maps to a global halt like the
+pin's 1; only a still-changing input (``input_pending``) keeps the heartbeat and waits for the next round.
 Issue #277 (Task DF, tightening only): consecutive ``input_pending`` rounds are no longer silent. Each one
 adds 1 to ``input_pending_streak`` in the StaleWatch state (next to ``all_stale_streak``; the per-market
 streaks are still neither advanced nor reset). At ALL_STALE_CONSECUTIVE_CYCLES rounds in a row it takes the
@@ -72,6 +79,8 @@ more pending round (fail closed: a streak that cannot be kept must not hide the 
 progress carries ``input_pending_streak``. No new threshold: the same constant as all_markets_stale.
 """
 from __future__ import annotations
+
+import math
 
 import argparse
 import json
@@ -134,6 +143,8 @@ INPUT_NOT_OBJECT = "not_object"
 INPUT_PENDING = "input_pending"
 INPUT_CHANGING = "changing"
 INPUT_REREAD_LIMIT = 1  # one bounded re-read of a changing input (structure, not a threshold)
+# Issue #75 criterion 3: an enumerated rotated book file that is gone when it is read.
+INPUT_VANISHED = "vanished"
 
 
 class CorruptInput(Exception):
@@ -153,6 +164,25 @@ class CorruptInput(Exception):
 
     def as_problem(self) -> dict:
         return {"path": self.path, "line": self.line, "problem": self.problem}
+
+
+INVALID_BOOK_PRICE = "invalid_book_price"
+
+
+def _unit_price(value: object) -> tuple[float | None, bool]:
+    """(price, bad): a number strictly in (0, 1) -> (price, False). A number float() cannot hold (OverflowError) ->
+    (None, True): the market is skipped as invalid_book_price. Anything else (absent, bool, non-number, NaN / inf — the
+    recorder's "no level" —, <= 0, >= 1) -> (None, False): that leg's price is left out as before (no ask: no buy;
+    no bid: no sell-set signal), so it can never make a buy."""
+    if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None, False
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        return None, True
+    if not math.isfinite(number) or not 0.0 < number < 1.0:
+        return None, False
+    return number, False
 
 
 def read_strict_jsonl(path: Path) -> list[dict]:
@@ -195,16 +225,19 @@ class InputPending(Exception):
     """A monitored markets/books input is still being appended (Issue #75 criterion 2).
 
     Raised only after the one bounded re-read; the round is skipped (no signal, no gap, no StaleWatch
-    bookkeeping), never halted. Carries where: the path and one problem code, never file content.
+    bookkeeping), never halted. Carries where and what: the path and one problem code --
+    ``INPUT_CHANGING`` for a file still being appended, ``INPUT_VANISHED`` for one of the rotation's
+    enumerated files that disappeared (Issue #75 criterion 3) -- never file content.
     """
 
-    def __init__(self, path: Path, detail: str = "") -> None:
+    def __init__(self, path: Path, detail: str = "", problem: str = INPUT_CHANGING) -> None:
         self.path = str(path)
         self.detail = detail
-        super().__init__(f"{self.path}: {INPUT_CHANGING}" + (f" ({detail})" if detail else ""))
+        self.problem = problem
+        super().__init__(f"{self.path}: {problem}" + (f" ({detail})" if detail else ""))
 
     def as_problem(self) -> dict:
-        return {"path": self.path, "line": None, "problem": INPUT_CHANGING}
+        return {"path": self.path, "line": None, "problem": self.problem}
 
 
 def _file_signature(path: Path) -> tuple[int, int] | None:
@@ -223,7 +256,10 @@ def read_stable_strict_jsonl(path: Path) -> list[dict]:
     changed means the rows may be a partial view: exactly ``INPUT_REREAD_LIMIT`` bounded re-read is
     allowed. Still changing after that and InputPending names the path; the caller then skips the
     round. A file that has stopped changing is read exactly once, so a corrupt one is refused as
-    ``CorruptInput`` without a re-read.
+    ``CorruptInput`` without a re-read. Issue #75 criterion 3: a file that was present when the read
+    started and is gone when it ends was deleted mid-read -- that too is a change (InputPending,
+    ``INPUT_VANISHED``), never a silent empty read. A file absent from the start keeps its old
+    meaning of no rows (the missing_book rule).
     """
     path = Path(path)
     problem: CorruptInput | None = None
@@ -235,11 +271,33 @@ def read_stable_strict_jsonl(path: Path) -> list[dict]:
             rows = read_strict_jsonl(path)
         except CorruptInput as exc:
             problem = exc
-        if _file_signature(path) == before:
-            if problem is not None:
-                raise problem
-            return rows
+        after = _file_signature(path)
+        if after != before:
+            if before is not None and after is None:
+                raise InputPending(path, problem=INPUT_VANISHED)
+            continue
+        if problem is not None:
+            raise problem
+        return rows
     raise InputPending(path)
+
+
+def _read_enumerated_strict_jsonl(path: Path) -> list[dict]:
+    """``read_strict_jsonl`` for one of a rotation's already-enumerated files (Issue #75 criterion 3).
+
+    The file existed when the rotation was enumerated, so a read that finds it absent -- before the
+    read or in the middle of it -- is the rotation changing, not an empty file: InputPending names
+    the path with ``INPUT_VANISHED`` and the caller skips the round. Reading it as no rows would
+    have made every leg missing_book while the recording was still there a moment ago.
+    """
+    if _file_signature(path) is None:
+        raise InputPending(path, problem=INPUT_VANISHED)
+    try:
+        return read_strict_jsonl(path)
+    except CorruptInput as exc:
+        if exc.problem == INPUT_UNREADABLE and _file_signature(path) is None:
+            raise InputPending(path, problem=INPUT_VANISHED) from exc
+        raise
 
 
 NOT_RECORDED = "not_recorded"
@@ -313,6 +371,9 @@ def read_books(books_path: Path, recording_dir: Path | None = None) -> tuple[lis
     the rest; a missing or empty books file still means no rows (the missing_book rule is unchanged).
     The direct books file and the active (last) file of the rotation are the inputs that may still be
     appended to (Issue #75 criterion 2): they get the bounded re-read, the closed ones do not.
+    Issue #75 criterion 3: every enumerated file must still exist when it is read. One that vanished
+    since the enumeration (or while it was read) raises InputPending with INPUT_VANISHED -- the round
+    is skipped -- never silently read as an empty file.
     """
     if recording_dir is None:
         return read_stable_strict_jsonl(books_path), None
@@ -321,8 +382,11 @@ def read_books(books_path: Path, recording_dir: Path | None = None) -> tuple[lis
         return [], RECORDING_EMPTY
     rows: list[dict] = []
     for path in files[:-1]:
-        rows.extend(read_strict_jsonl(path))
-    rows.extend(read_stable_strict_jsonl(files[-1]))
+        rows.extend(_read_enumerated_strict_jsonl(path))
+    active = files[-1]
+    if _file_signature(active) is None:  # enumerated, then gone before its read
+        raise InputPending(active, problem=INPUT_VANISHED)
+    rows.extend(read_stable_strict_jsonl(active))
     return rows, None
 
 
@@ -489,6 +553,7 @@ def run(
     for market_id, market in markets.items():
         tokens = [str(token) for token in market.get("token_ids") or []]
         asks: list[float] = []
+        bids: list[float] = []
         depths: list[float | None] = []
         stale_reasons: set[str] = set()
         sentinel_reasons: set[str] = set()
@@ -505,11 +570,23 @@ def run(
             sentinel_problem = problem or _row_book_problem(book, now_at, sentinel.SENTINEL_STALE_S)
             if sentinel_problem is not None:
                 sentinel_reasons.add(sentinel_problem)
-            ask = book.get("best_ask")
-            if isinstance(ask, (int, float)) and 0.0 < float(ask) < 1.0:
-                asks.append(float(ask))
+            # Codex P2 on #310: a huge price (float OverflowError) crashed the cycle; now the market is skipped
+            # (fail closed, no crash, no buy). Non-finite / out-of-range prices are left out as before (no buy).
+            bid, bid_bad = _unit_price(book.get("best_bid"))
+            ask, ask_bad = _unit_price(book.get("best_ask"))
+            if bid_bad or ask_bad:
+                stale_reasons.add(INVALID_BOOK_PRICE)
+                continue
+            if bid is not None:
+                bids.append(bid)  # Issue #237 (Task DO): sell-the-full-set side
+            if ask is not None:
+                asks.append(ask)
                 size = book.get("best_ask_size")
-                depths.append(float(size) if isinstance(size, (int, float)) else None)
+                try:
+                    size_f = float(size) if isinstance(size, (int, float)) and not isinstance(size, bool) else None
+                except (OverflowError, ValueError):
+                    size_f = None
+                depths.append(size_f if size_f is not None and math.isfinite(size_f) else None)
         if not tokens:
             stale_reasons.add(MISSING_BOOK)
             sentinel_reasons.add(MISSING_BOOK)
@@ -578,6 +655,13 @@ def run(
             skips.append({"market": market_id, "kind": structural_gate.STRUCTURAL_ARB_DISABLED,
                           "reason": structural_gate.STRUCTURAL_ARB_DISABLED, "strategy": message["from"],
                           "legs": len(asks)})
+        elif _sell_set_message(bids, tokens, market_id, bus_path) is not None:
+            # Issue #237 (Task DO): best bids summing to > 1 (split, sell every leg) is a structural arb too:
+            # rejected and recorded, never an order.
+            structural_rejected += 1
+            skips.append({"market": market_id, "kind": structural_gate.STRUCTURAL_ARB_DISABLED,
+                          "reason": structural_gate.STRUCTURAL_ARB_DISABLED, "strategy": "SellSet",
+                          "shape": "sell_set", "legs": len(bids)})
     # Task AP gap 14: every checked market stale in this cycle extends the all-stale streak.
     all_stale = bool(checked) and len(stale_checked) == len(checked)
     watch.all_stale_streak = watch.all_stale_streak + 1 if all_stale else 0
@@ -672,6 +756,19 @@ def _gap_message(asks: list[float], market_id: str, depths: list[float | None], 
     return None
 
 
+def _sell_set_message(bids: list[float], tokens: list[str], market_id: str, bus_path: Path | None) -> dict | None:
+    """Issue #237 (Task DO): every leg has a best bid and the bids sum to > 1 -> one rejected structural signal."""
+    if len(tokens) < 2 or len(bids) != len(tokens):
+        return None
+    bid_sum = sum(bids)
+    if bid_sum <= 1.0 + 1e-9:
+        return None
+    return bus("SellSet", "RiskGate", "signal", market_id,
+               {"shape": "sell_set", "bid_sum": round(bid_sum, 8), "legs": len(bids), "rejected": True,
+                "reject_reason": structural_gate.STRUCTURAL_ARB_DISABLED, "exchange_action": "none"},
+               path=bus_path)
+
+
 def _record_skipped_rows(skipped: list[dict], rows: list[dict], source: str, skips: list[dict],
                          bus_path: Path | None) -> None:
     """Record each row dropped for an unusable ts: one skip entry and one BookWatcher signal."""
@@ -753,6 +850,9 @@ def _assert_risk_unchanged(before: bytes) -> None:
 EXIT_OK = 0
 EXIT_PIN = 1  # a phase-0 pin failed (in-memory config or, Task AS, the risk file: a global halt is recorded)
 EXIT_USAGE = 2
+# Issue #75: stable corrupt or unreadable markets/books input. Its own code, not the pin's 1: the
+# Sentinel maps it to a global halt too (src/sentinel_tick.py EXIT_EVENTS, docs/EXIT_CODES.md).
+EXIT_INPUT_INVALID = 3
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -762,7 +862,9 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Exit codes: 0 ran (a round skipped on a still-changing input: ok=false reason=input_pending; "
                "ALL_STALE_CONSECUTIVE_CYCLES such rounds in a row are an all_markets_stale global halt); "
                "1 a phase-0 pin failed (the risk file is checked before every cycle; "
-               "global halt recorded); 2 usage error. See docs/EXIT_CODES.md.",
+               "global halt recorded); 2 usage error; 3 the markets/books input is corrupt or unreadable "
+               "(ok=false reason=input_invalid, issue #75: the round is refused with zero gaps and fills; "
+               "a global halt for the Sentinel, like the pin). See docs/EXIT_CODES.md.",
     )
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--books", type=Path, default=None, help="book rows JSONL (default data/books.jsonl)")
@@ -826,6 +928,13 @@ def main(argv: list[str] | None = None, *, sleep=time.sleep, monotonic=time.mono
                 # exits EXIT_OK; --loop falls through, keeps the heartbeat and waits for the next round.
                 hb.finish(EXIT_OK, progress)
                 return EXIT_OK
+            if result["reason"] == INPUT_INVALID:
+                # Issue #75: a stable input failure (corrupt or unreadable markets/books, refused with
+                # zero gaps and fills) ends the heartbeat and exits with its own code: 3 is a global
+                # halt for the Sentinel; the pin's 1 keeps its meaning. --loop stops here too: only a
+                # still-changing input (input_pending) waits for the next round.
+                hb.finish(EXIT_INPUT_INVALID, progress)
+                return EXIT_INPUT_INVALID
             if not result["ok"] and result["reason"] != INPUT_PENDING:
                 hb.finish(EXIT_PIN, progress)
                 return EXIT_PIN

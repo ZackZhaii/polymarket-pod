@@ -71,6 +71,32 @@ def test_a_stale_book_row_keeps_the_builders_own_reason(tmp_path, capsys):
     assert code == replay_intent.EXIT_OK and out["intent"] is None and "stale_book" in out["reasons"]
 
 
+def test_a_stale_signal_keeps_the_builders_own_reason(tmp_path, capsys):
+    code, out, _ = run(tmp_path, capsys, bundle(signal=dict(SIGNAL, ts="2026-08-01T12:00:00Z")))
+    assert code == replay_intent.EXIT_OK and out["intent"] is None and "stale_signal" in out["reasons"]
+
+
+def _without(row: dict, *keys: str) -> dict:
+    return {key: value for key, value in row.items() if key not in keys}
+
+
+@pytest.mark.parametrize("payload, reasons",
+                         [(bundle(books=[_without(book_row("t-yes", 0.41, 0.39), "tick_size"),
+                                         book_row("t-no", 0.61, 0.59)]), ["missing_tick_size"]),
+                          (bundle(books=[_without(book_row("t-yes", 0.41, 0.39), "min_order_size"),
+                                         book_row("t-no", 0.61, 0.59)]), ["missing_min_order_size"]),
+                          (bundle(signal=dict(SIGNAL, payload=_without(SIGNAL["payload"], "token_id",
+                                                                       "outcome_index"))),
+                           ["missing_outcome_index", "missing_token_id"]),
+                          (bundle(market=_without(MARKET, "tags")), ["missing_category"])],
+                         ids=["no-tick-size", "no-min-order-size", "no-signal-metadata", "no-market-tags"])
+def test_missing_metadata_keeps_the_builders_own_reasons(tmp_path, capsys, payload, reasons):
+    # Issue #80 acceptance 2/5: nothing is filled in with a default — the builder's own reasons come back.
+    code, out, _ = run(tmp_path, capsys, payload)
+    assert code == replay_intent.EXIT_OK and out["intent"] is None
+    assert all(reason in out["reasons"] for reason in reasons), out["reasons"]
+
+
 def test_no_book_rows_is_missing_book_not_a_default(tmp_path, capsys):
     code, out, _ = run(tmp_path, capsys, bundle(books=[]))
     assert code == replay_intent.EXIT_OK and out["intent"] is None and "missing_book" in out["reasons"]
@@ -107,6 +133,22 @@ def test_a_usage_error_is_the_entrys_own_code(tmp_path, capsys):
     capsys.readouterr()
 
 
+def test_pin_drift_is_refused_before_anything_is_replayed(tmp_path, monkeypatch, capsys):
+    from src import pins
+
+    monkeypatch.setattr(pins, "PINNED_RISK_SHA256", "0" * 64)  # config/risk.toml reads as off its pins
+
+    def boom(*args, **kwargs):
+        raise AssertionError("this read-only entry records no halt")
+
+    monkeypatch.setattr(pins, "record_drift", boom)
+    out_path = tmp_path / "result.json"
+    code = replay_intent.main(["--bundle", str(write(tmp_path, bundle())), "--out", str(out_path)])
+    out, err = capsys.readouterr()
+    assert code == replay_intent.EXIT_PIN_DRIFT and out == "" and "off its pins" in err
+    assert not out_path.exists()  # refused before the replay; no result published
+
+
 # ---------------------------------------------------------------- the published result JSON
 
 def test_out_publishes_one_result_json_with_the_input_sha256(tmp_path, capsys):
@@ -131,6 +173,30 @@ def test_a_second_run_never_overwrites_an_existing_output(tmp_path, capsys):
     out, err = capsys.readouterr()
     assert code == replay_intent.EXIT_OUTPUT_EXISTS and "replay_intent:" in err and out == ""
     assert out_path.read_bytes() == b"the previous result\n"
+
+
+def test_an_output_appearing_after_the_check_is_never_overwritten(tmp_path, monkeypatch, capsys):
+    # Output collision at the atomic link: another run publishes between the exists() check and
+    # os.link — the link refuses it (FileExistsError) and the earlier result stands.
+    out_path = tmp_path / "result.json"
+    bundle_path = write(tmp_path, bundle())
+    out_path.write_bytes(b"the previous result\n")
+    real_exists = Path.exists
+    checked: list[str] = []
+
+    def racing(self):
+        if self == out_path and not checked:  # the pre-check still sees a free slot
+            checked.append("seen")
+            return False
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", racing)
+    code = replay_intent.main(["--bundle", str(bundle_path), "--out", str(out_path)])
+    out, err = capsys.readouterr()
+    assert code == replay_intent.EXIT_OUTPUT_EXISTS and "never overwriting" in err
+    assert json.loads(out)["shadow"] is True  # the replay itself ran; only the file publish is refused
+    assert out_path.read_bytes() == b"the previous result\n"
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]  # no temp file left behind
 
 
 def test_the_same_bundle_and_now_publish_byte_identical_results(tmp_path, capsys):

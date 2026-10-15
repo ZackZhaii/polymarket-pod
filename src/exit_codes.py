@@ -33,7 +33,10 @@ EXIT_NAME = re.compile(r"^EXIT_[A-Z0-9_]+$")
 SECTION = re.compile(r"^## `((?:src|scripts)/[A-Za-z0-9_]+\.py)`\s*$")
 ROW = re.compile(r"^\|\s*(-?\d+)\s*\|\s*`?(EXIT_[A-Z0-9_]+)`?\s*\|(.*)\|\s*(.+?)\s*\|\s*$")
 ACTION_WORDS = {"GLOBAL": "global halt", "ALERT": "alert", "LOG": "log"}
-SENTINEL_WORDS = frozenset({"global halt", "alert", "alert x2", "log", "-"})
+SENTINEL_WORDS = frozenset({"global halt", "alert", "alert x2", "log", "-", "不可见"})
+# Issue #245 / PR #338 (Poly风控 6180433724): m2_runner returns these before _run creates its Heartbeat,
+# so no heartbeat carries the code and the resident Sentinel never sees the exit ("不可见" = invisible).
+PRE_HEARTBEAT_EXITS = frozenset({("m2_runner", 2), ("m2_runner", 3), ("m2_runner", 7)})
 EXIT_CALLS = frozenset({"sys.exit", "SystemExit", "exit", "os._exit", "quit"})
 
 
@@ -205,6 +208,8 @@ def expected_sentinel(proc: str, code: int, events: dict[tuple[str, int], str], 
         return "-"
     if (proc, code) == ("scanner", 3):
         return "alert x2"  # sentinel_tick: logged once, alert at SCANNER_INCOMPLETE_CONSECUTIVE in a row
+    if (proc, code) in PRE_HEARTBEAT_EXITS:
+        return "不可见"  # exits before any heartbeat exists: the EXIT_EVENTS default never fires
     return events.get((proc, code), "alert")
 
 

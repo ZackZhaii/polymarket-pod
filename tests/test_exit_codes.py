@@ -81,6 +81,18 @@ def test_resolutions_exit_3_registers_the_history_failure():
     assert "paging" in meaning and "history" in meaning
 
 
+def test_paper_cycle_input_invalid_is_its_own_global_halt_code():
+    # Issue #75: stable corrupt/unreadable input exits 3 (a global halt for the Sentinel);
+    # the pin keeps exit 1 unchanged, a still-changing input stays exit 0
+    events, _ = exit_codes.sentinel_matrix(ROOT)
+    assert events[("paper_cycle", 3)] == "global halt" and events[("paper_cycle", 1)] == "global halt"
+    sections, problems = exit_codes.parse_registry((ROOT / exit_codes.REGISTRY_REL).read_text(encoding="utf-8"))
+    assert problems == []
+    rows = {code: (name, word) for code, name, _, word in sections["src/paper_cycle.py"]}
+    assert rows[3] == ("EXIT_INPUT_INVALID", "global halt")
+    assert exit_codes.module_constants(ROOT, "src/paper_cycle.py")["EXIT_INPUT_INVALID"] == 3
+
+
 def test_constants_resolve_through_imports():
     # m1_run imports its codes from ws_recorder
     consts = exit_codes.module_constants(ROOT, "src/m1_run.py")

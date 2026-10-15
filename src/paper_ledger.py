@@ -486,7 +486,8 @@ def _opposite_pending_buys(market: str, token_id: str, quotes: Any) -> int | Non
     return count
 
 
-def load_state(market: str, token_id: str = "", *, clock_ok: bool = False) -> dict[str, Any]:
+def load_state(market: str, token_id: str = "", *, clock_ok: bool = False,
+               quotes_path: Path | None = None) -> dict[str, Any]:
     """Risk state for an intent on one leg (market + token_id).
 
     open_positions counts open legs, not markets. leg_already_open is True only
@@ -506,10 +507,13 @@ def load_state(market: str, token_id: str = "", *, clock_ok: bool = False) -> di
     Issue #56: own_quotes comes from the strict quotes reader, once, for every return path. A
     quotes file that cannot be read in full is not a short history: own_quotes is None,
     quote_problems names the lines, and RiskGate vetoes the existing wash_input_invalid.
+    Poly风控 on #310 (Task DO): quotes_path (default QUOTES_PATH) names the quotes file own_quotes is read from, so
+    maker.quote checks the opposite-leg veto on the same file it writes to.
     """
     _, ledger = ledger_store.read_ledger(PAPER_PATH)
     rows = ledger.rows
-    own_quotes, quote_problems = read_quotes(QUOTES_PATH)
+    # PR #310 review: the maker passes the quotes file it actually checks and writes (default QUOTES_PATH).
+    own_quotes, quote_problems = read_quotes(Path(quotes_path) if quotes_path is not None else QUOTES_PATH)
     if quote_problems:
         own_quotes = None  # issue #56: a partial quote history is not this history (fail closed)
     # Issue #145 (Task CH): the market's two tokens, read only when an own open quote rests on another token.
@@ -1041,27 +1045,24 @@ def realistic_no_edge(cfg: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def run_cli_intent(args: argparse.Namespace, cfg: dict[str, Any]) -> dict[str, Any]:
-    intent = Intent(
-        strategy=args.strategy,
-        market=args.market,
-        side=args.side,
-        model_prob=args.model_prob,
-        market_price=args.market_price,
-        assumed_slippage=args.slippage,
-        fee_rate=args.fee_rate,
-        liquidity_usd=args.liquidity,
-        spread=args.spread,
-        token_id=args.token_id or "",
-        hypothetical=False,
-        book_ts=args.book_ts,
-        note=args.note or "Operator paper intent. Not a promise of profit.",
-        fill_context=calibration_ids.FILL_CONTEXT_OPERATOR_CLI,  # Task BC: no book context
-        # Issue #131: the market's Gamma tag slugs; none given vetoes missing_category.
-        tags=tuple(t.strip() for t in (getattr(args, "tags", None) or "").split(",") if t.strip()) or None,
-        # Issue #226: the market's minimum order size in shares; none given vetoes missing_min_order_size.
-        min_order_size=getattr(args, "min_order_size", None),
-    )
-    return commit_if_allowed(intent, cfg)
+    """Issue #210 / #147 (Task DZ, Poly风控 6178561328 / Codex P1 6178323003): the operator CLI carries no
+    ask levels or depth evidence, so it always refuses with missing_book_levels before RiskGate (tighten-only).
+    No args.asks escape hatch: True, strings, zero depth or NaN must never reach commit. The early veto is
+    written to the bus like any RiskGate veto. Nothing is booked."""
+    reasons: list[str] = []
+    if getattr(args, "fee_rate", None) is None:
+        reasons.append("missing_fee_data")
+    reasons.append("missing_book_levels")
+    summary = {
+        "strategy": getattr(args, "strategy", None) or "",
+        "reasons": reasons,
+        "hypothetical": False,
+        "risk_decision": "veto",
+        "decision": "veto",
+        "note": "Operator CLI refused: fee-rate and book depth/levels required (#210).",
+    }
+    bus("RiskGate", "Executor", "veto", str(getattr(args, "market", None) or ""), summary)
+    return {"allow": False, "decision": summary}
 
 
 def slippage_arg(text: str) -> float:
@@ -1086,7 +1087,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--market-price", type=float, default=None)
     parser.add_argument("--slippage", type=slippage_arg, default=ASSUMED_SLIPPAGE,
                         help=f"Assumed slippage, price units per share; at least ASSUMED_SLIPPAGE={ASSUMED_SLIPPAGE}.")
-    parser.add_argument("--fee-rate", type=float, default=0.0)
+    parser.add_argument("--fee-rate", type=float, default=None,
+                        help="Fee rate [0,1]. Required for operator intents (#210); no silent 0.0. Explicit 0 is allowed for free markets when book levels are also supplied.")
     parser.add_argument("--liquidity", type=float, default=None)
     parser.add_argument("--spread", type=float, default=None)
     parser.add_argument("--token-id", default="")

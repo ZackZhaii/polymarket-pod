@@ -45,7 +45,18 @@ then dominated by a near-zero reference, e.g. q = 1e-9 gives about -1e16), ``ok`
 
 Fail closed. Nothing is imputed: a row with calibration_problems, a missing join, a pending,
 UMA-unconfirmed, disputed, void or ambiguous resolution, or a token / outcome that disagrees with
-the snapshot is dropped and counted by reason in the report. A corrupt input file (torn line,
+the snapshot is dropped and counted by reason in the report. Issue #70: a forecast sample is kept
+only when its ts provably precedes resolution.closed_ts (zoned ISO times compared as UTC) — an
+unparseable or unzoned ts drops as forecast_ts_invalid, and a forecast sealed at or after the close
+(as the same instant in any offset) drops as forecast_not_before_close, so a result is never
+scored against a prediction made after it was known. A trade sample proves the same order per fill
+against its joined forecast row's ts (never a fill's copy): every fill must satisfy
+forecast.ts <= fill.ts < closed_ts, or the whole decision sample is dropped and counted
+(fill_forecast_ts_invalid, fill_ts_invalid, fill_before_forecast, fill_not_before_close), so a
+result is never scored against a trade placed outside the window either. Slots follow the proven
+UTC instants, never the ts text: the market's first-forecast slot goes to the earliest sealed
+forecast and the per-market re-entry slots to the earliest decisions, and an unprovable time never
+takes either. A corrupt input file (torn line,
 bad JSON, wrong schema, conflicting duplicate) is an error exit and no report is written; a
 ledger that fails ledger_store.verify is its own error exit. Below the M3-pending minimums
 (src/thresholds.py CALIBRATION_*) a section is "insufficient" and carries no verdict.
@@ -115,6 +126,13 @@ RESOLUTION_FIELDS = ("condition_id", "winning_token_id", "outcome_prices_final",
 LEGACY_RESOLUTION_FIELDS = RESOLUTION_FIELDS[:-1]
 NOTES = (
     "Labels are only data/resolutions.jsonl rows with uma_checked=true and status=resolved; nothing is imputed.",
+    "A forecast sample must be sealed strictly before resolution.closed_ts (zoned ISO times compared as UTC): "
+    "an unparseable or unzoned ts is dropped (forecast_ts_invalid), a forecast at or after the close "
+    "(forecast_not_before_close). No time is ever imputed.",
+    "A trade sample proves the same order per fill against its joined forecast row's ts: every fill must fall "
+    "at or after the forecast and strictly before the close (zoned ISO times compared as UTC), else the whole "
+    "decision sample is dropped (fill_forecast_ts_invalid, fill_ts_invalid, fill_before_forecast, "
+    "fill_not_before_close). No time is ever imputed.",
     "UMA dispute status not checked (beyond umaResolutionStatus=resolved).",
     "Not a promise of profit. Paper only. This report proposes nothing and changes no setting.",
     "q is the first fill's market_mid (price_source=market_mid). Only a fill booked before Task BA, with no "
@@ -258,11 +276,11 @@ def _parse_ts(value: object) -> datetime | None:
         text = text[:-1] + "+00:00"
     try:
         parsed = datetime.fromisoformat(text)
-    except ValueError:
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError):  # Task DV: 0001-01-01+01:00 / 9999-12-31-01:00 overflow in UTC
         return None
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        return None
-    return parsed.astimezone(timezone.utc)
 
 
 # ------------------------------------------------------------------ labels
@@ -613,7 +631,7 @@ def forecast_samples(forecasts: Mapping[str, dict[str, Any]], resolutions: Mappi
     reasons: Counter = Counter()
     problem_counts: Counter = Counter()
     dropped: list[dict[str, Any]] = []
-    candidates: list[dict[str, Any]] = []
+    candidates: list[tuple[datetime, dict[str, Any]]] = []
 
     def drop(row: Mapping[str, Any], reason: str) -> None:
         reasons[reason] += 1
@@ -630,10 +648,23 @@ def forecast_samples(forecasts: Mapping[str, dict[str, Any]], resolutions: Mappi
             problem_counts.update(problems)
             drop(row, "forecast_calibration_problems")
             continue
-        candidates.append(row)
+        # issue #70: prove the forecast predates the close before it can become a sample at all.
+        ts = _parse_ts(row["ts"])
+        if ts is None:
+            drop(row, "forecast_ts_invalid")  # unparseable or unzoned: when it was sealed cannot be proved
+            continue
+        resolution = resolutions.get(row["condition_id"])
+        if resolution is not None:
+            closed = _parse_ts(resolution["closed_ts"])
+            if closed is None or ts >= closed:
+                drop(row, "forecast_not_before_close")  # at/after the close (or unprovable close): no result leak
+                continue
+        candidates.append((ts, row))
     seen: set[str] = set()
     eligible: list[dict[str, Any]] = []
-    for row in candidates:
+    # issue #70: the first sealed forecast is the earliest proven UTC instant (then the written form,
+    # then forecast_id), never the first ts text.
+    for _, row in sorted(candidates, key=lambda c: (c[0], str(c[1]["ts"]), str(c[1]["forecast_id"]))):
         condition = row["condition_id"]
         if condition in seen:
             drop(row, "duplicate_market_forecast")  # design 1.3: the first sealed forecast per market only
@@ -662,6 +693,9 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
     problem_counts: Counter = Counter()
     dropped: list[dict[str, Any]] = []
     decisions: dict[str, list[dict[str, Any]]] = {}
+    # Task DV (#321 P1): every counted fill of a decision, before any other filter, so a fill already
+    # dropped for another reason still rejects its whole decision when it is out of the time bounds.
+    all_fills: dict[str, list[dict[str, Any]]] = {}
 
     def drop(ref: Mapping[str, Any], reason: str, count: int = 1) -> None:
         reasons[reason] += count
@@ -671,6 +705,8 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
     for row in fills:
         if not ledger_store.counts(row) or row.get("risk_decision") != "allow":
             continue  # not a trade sample at all (hypothetical / not counted); not a drop
+        if isinstance(row.get("decision_id"), str):
+            all_fills.setdefault(row["decision_id"], []).append(row)
         if row.get("fill_context") in calibration_ids.NO_BOOK_CONTEXTS:
             drop(row, "no_book_context")  # Task BC: stamped at fill time; never inferred from missing fields
             continue
@@ -690,7 +726,14 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
         decisions.setdefault(row["decision_id"], []).append(row)
     per_market: Counter = Counter()
     eligible: list[dict[str, Any]] = []
-    ordered = sorted(decisions.items(), key=lambda item: (str(item[1][0].get("ts")), item[0]))
+
+    def _slot_key(item: tuple[str, list[dict[str, Any]]]) -> tuple[datetime, str, str]:
+        raw = item[1][0].get("ts")
+        # issue #70: re-entry slots go in the proven UTC order of the first fill, never the written
+        # form; an unprovable time sorts last - fill_time_problem drops it before it can take a slot.
+        return (_parse_ts(raw) or datetime.max.replace(tzinfo=timezone.utc), str(raw), item[0])
+
+    ordered = sorted(decisions.items(), key=_slot_key)
     for decision_id, rows in ordered:
         first = rows[0]
         ref = {"decision_id": decision_id, "market": first.get("market")}
@@ -710,6 +753,11 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
         y, reason = label(resolution, condition in disputed, first["outcome_index"], first["token_id"])
         if reason:
             drop(ref, reason, len(rows))
+            continue
+        # issue #70: prove every fill sits between the forecast and the close before it can be scored.
+        time_reason = fill_time_problem(forecast, all_fills.get(decision_id, rows), resolution)
+        if time_reason:
+            drop(ref, time_reason, len(rows))
             continue
         if per_market[condition] >= CALIBRATION_MAX_DECISIONS_PER_MARKET:
             drop(ref, "re_entry_cap", len(rows))
@@ -740,6 +788,33 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
                          "event_id": trade_event(first, forecast),  # Task BF
                          "resolution_day": resolution["closed_ts"][:10]})  # type: ignore[index]
     return eligible, dropped, reasons, problem_counts
+
+
+def fill_time_problem(forecast: Mapping[str, Any], rows: Sequence[Mapping[str, Any]],
+                      resolution: Mapping[str, Any] | None) -> str | None:
+    """issue #70: why this decision cannot be placed between its forecast and the close, else None.
+
+    Uses the joined forecast row's ts (never a fill's copy of it) and resolution.closed_ts, both parsed
+    to UTC by ``_parse_ts``, so one instant written in any offset compares equal. Every fill of the
+    decision must satisfy forecast.ts <= fill.ts < closed_ts: a missing, unparseable or unzoned time, a
+    fill before its forecast, or a fill at or after the close proves nothing, and the whole decision
+    sample is dropped. Nothing is ever imputed.
+    """
+    sealed = _parse_ts(forecast.get("ts"))
+    if sealed is None:
+        return "fill_forecast_ts_invalid"
+    closed = _parse_ts(resolution.get("closed_ts")) if resolution is not None else None
+    if closed is None:
+        return "fill_not_before_close"  # a close that cannot be parsed proves nothing: fail closed
+    for row in rows:
+        ts = _parse_ts(row.get("ts"))
+        if ts is None:
+            return "fill_ts_invalid"
+        if ts < sealed:
+            return "fill_before_forecast"
+        if ts >= closed:
+            return "fill_not_before_close"
+    return None
 
 
 def trade_event(fill: Mapping[str, Any], forecast: Mapping[str, Any]) -> str | None:

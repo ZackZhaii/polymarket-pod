@@ -311,6 +311,32 @@ def test_a_one_shot_input_pending_round_exits_zero_not_the_pin_halt(monkeypatch,
     assert read("paper_cycle")["exit_code"] == 0
 
 
+def _invalid() -> dict:
+    """The full result of a round refused on corrupt input (issue #75): ok=False reason=input_invalid."""
+    return paper_cycle._input_invalid(
+        paper_cycle.CorruptInput(Path("books.jsonl"), paper_cycle.INPUT_BAD_JSON, 3), state_path=None)
+
+
+def test_a_stable_input_failure_is_its_own_exit_code_3(monkeypatch, capsys):
+    # Issue #75: corrupt/unreadable markets or books is not the pin's exit 1 anymore: 3 is a
+    # global halt for the Sentinel, the heartbeat ends with it and the run stops.
+    monkeypatch.setattr(paper_cycle, "run", lambda **kw: _invalid())
+    assert paper_cycle.main([]) == paper_cycle.EXIT_INPUT_INVALID == 3
+    final = read("paper_cycle")
+    assert final["state"] == "finished" and final["exit_code"] == 3
+
+
+def test_the_loop_also_stops_on_a_stable_input_failure(monkeypatch, capsys):
+    # Stable corruption ends --loop too (only a still-changing input waits for the next round).
+    monkeypatch.setattr(paper_cycle, "run", lambda **kw: _invalid())
+    sleeps = []
+    assert paper_cycle.main(["--loop", "--max-cycles", "2"], sleep=sleeps.append,
+                            monotonic=lambda: 0.0) == paper_cycle.EXIT_INPUT_INVALID
+    assert sleeps == []  # no waiting: the corrupt input refused the round and exited at once
+    final = read("paper_cycle")
+    assert final["state"] == "finished" and final["exit_code"] == 3 and final["progress"]["cycles"] == 1
+
+
 @pytest.mark.parametrize("argv", [["--every", "61"], ["--every", "0"], ["--max-cycles", "-1"],
                                   ["--books", "a", "--recording-dir", "b"], ["--nope"]])
 def test_paper_cycle_usage_errors(argv, capsys):
