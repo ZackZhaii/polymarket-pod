@@ -656,6 +656,15 @@
       "surface": "grok-bot"
     },
     {
+      "id": "EA",
+      "status": "done",
+      "title": "Issue #245: EXIT_CODES.md aligns with m2_runner pre-heartbeat exits and secret_scan ScanError",
+      "finish": "docs/EXIT_CODES.md: m2_runner exits 2/3/7 documented as pre-Heartbeat (Sentinel cannot see; exit 3 must never write a heartbeat); drop inaccurate before-any-read claim (settlement may read Gamma after preflight); secret_scan exit 2 covers unenumerable directory / bad BIP39 list; exit 1 is intentional EXIT_SECRET; m1_run 24h to 6h (M1_RUN_TARGET_S=21600). Offline tests/test_ea_exit_codes_docs.py; test_exit_codes green. config/risk.toml unchanged, live_enabled false; pytest + guard pass. Closes #245.",
+      "note": "Claimed by Poly桥接 as Task EA (issue #245). Docs-only, non-KEY. Done by grok-bot on NoisePC.",
+      "done_at": "2026-10-14T22:40:00Z",
+      "surface": "grok-bot"
+    },
+    {
       "id": "EB",
       "status": "done",
       "title": "Issue #223: m1_run manifest counts.recorder persists ws_recorder internal counts per asset (observability only)",
