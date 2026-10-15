@@ -21,6 +21,7 @@ import pytest
 from src import calibration as cal
 from src import calibration_ids as ci
 from src import paper_ledger
+from src import podlib
 from src.podlib import load_risk, read_jsonl
 from src.risk_gate import NUMERIC_INTENT_FIELDS, evaluate
 from tests.test_calibration import build, fill, forecast, resolution, world
@@ -57,6 +58,11 @@ def test_the_intent_builder_path_is_stamped_and_records_both_kelly_values(paths)
 
 def test_the_operator_cli_is_stamped_operator_cli(monkeypatch):
     # Issue #210: the operator CLI always refuses before commit (no book levels).
+    # Task EC / Codex 6179446901 P2: the refusal veto goes to a bus stub, never the repo's real logs/bus.jsonl.
+    real_bus = podlib.BUS_PATH
+    before = real_bus.read_bytes() if real_bus.exists() else None
+    vetoes = []
+    monkeypatch.setattr(paper_ledger, "bus", lambda *a, **k: vetoes.append((a, k)))
     seen = []
     monkeypatch.setattr(paper_ledger, "commit_if_allowed", lambda intent, cfg: seen.append(intent) or {"allow": False})
     args = argparse.Namespace(strategy="manual", market="m1", side="buy", model_prob=0.7, market_price=0.4,
@@ -70,6 +76,8 @@ def test_the_operator_cli_is_stamped_operator_cli(monkeypatch):
     refused = paper_ledger.run_cli_intent(args_with_depth, load_risk())
     assert refused["allow"] is False and "missing_book_levels" in refused["decision"]["reasons"]
     assert seen == []
+    assert len(vetoes) == 2 and all("missing_book_levels" in repr(call) for call in vetoes)
+    assert (real_bus.read_bytes() if real_bus.exists() else None) == before
 
 
 def test_the_gate_checks_are_stamped_gate_check(monkeypatch):

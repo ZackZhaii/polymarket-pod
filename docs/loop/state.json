@@ -659,8 +659,8 @@
       "id": "EA",
       "status": "done",
       "title": "Issue #245: EXIT_CODES.md aligns with m2_runner pre-heartbeat exits and secret_scan ScanError",
-      "finish": "docs/EXIT_CODES.md: m2_runner exits 2/3/7 documented as pre-Heartbeat (Sentinel cannot see; exit 3 must never write a heartbeat); drop inaccurate before-any-read claim (settlement may read Gamma after preflight); secret_scan exit 2 covers unenumerable directory / bad BIP39 list; exit 1 is intentional EXIT_SECRET; m1_run 24h to 6h (M1_RUN_TARGET_S=21600). Offline tests/test_ea_exit_codes_docs.py; test_exit_codes green. config/risk.toml unchanged, live_enabled false; pytest + guard pass. Closes #245.",
-      "note": "Claimed by Poly桥接 as Task EA (issue #245). Docs-only, non-KEY. Done by grok-bot on NoisePC.",
+      "finish": "docs/EXIT_CODES.md: m2_runner exits 2/3/7 documented as pre-Heartbeat (Sentinel cannot see; exit 3 must never write a heartbeat); drop inaccurate before-any-read claim (settlement may read Gamma after preflight); secret_scan exit 2 covers unenumerable directory / bad BIP39 list; exit 1 is intentional EXIT_SECRET; m1_run 24h to 6h (M1_RUN_TARGET_S=21600). src/exit_codes.py: PRE_HEARTBEAT_EXITS and the m2_runner 2/3/7 Sentinel column 不可见 (the registry checker test_exit_codes compares the doc table with the code, so the doc change needed it). Tests at merge head bfb454a: tests/test_ea_exit_codes_docs.py 5 offline cases + tests/test_exit_codes.py 28 cases green; full python -m pytest 5609 passed, 0 failed (separate worktree, --basetemp outside the repo); guard --require-git 12/12. config/risk.toml unchanged, live_enabled false. Merged as PR #338 (247af98). Closes #245.",
+      "note": "Claimed by Poly桥接 as Task EA (issue #245). Docs plus src/exit_codes.py (registry checker; no runtime behaviour change), non-KEY. Done by grok-bot on NoisePC.",
       "done_at": "2026-10-14T22:40:00Z",
       "surface": "grok-bot"
     },
@@ -671,6 +671,24 @@
       "finish": "src/ws_recorder.py: RECORDER_ASSET_COUNTS (duplicate_level_removal, group_held, group_resolved, group_unresolved, group_replaced_by_book, stale_resubscribe_snapshot) are also counted per asset (Outcome/RunReport asset_counts; global counts unchanged); recorder_asset_counts() snapshot. src/m1_run.py writes counts.recorder.<asset>.<name> in the final manifest, every progress snapshot and the console-close partial counts (same atomic ManifestWriter path as counts.resyncs). src/m1_report.py only displays them (recorder_counts in report.json, a table in Connection and resyncs; N/A for runs without the field or malformed values; no criterion). tests/test_m1_run_recorder_counts.py: tests/fixtures/ws_resync vectors, per-asset sums equal global counts, manifest equals in-memory counts (final, progress, console close), report N/A for older runs. docs/M1_ACCEPTANCE.md documents the fields. No resync rule, threshold or M1 criterion changed. config/risk.toml unchanged, live_enabled false; python -m pytest and guard --require-git pass. Closes #223.",
       "note": "Claimed by Poly指挥 as Task EB (issue #223). Observability only, non-KEY. Done by grok-bot on NoisePC.",
       "done_at": "2026-10-14T23:40:00Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "CI",
+      "status": "done",
+      "title": "PR #195 [KEY]: leg marks need only the side the leg trades into (long: bids, short: asks); crossed check only when both sides are usable",
+      "finish": "src/leg_marks.py liquidation_mark: a long needs only usable bids, a short only usable asks; an empty or broken opposite side no longer marks the leg mark_invalid; crossed_book only when both sides are usable. tests/test_leg_marks.py covers both directions. Loosens #192 valuation, so KEY: approved by 家伟 (\"批准 #195\") and merged by Poly指挥 as c8f796d. config/risk.toml unchanged, live_enabled false.",
+      "note": "Task CI (PR #195, split from #194). KEY, approved by 家伟. Registered after merge by Task EC.",
+      "done_at": "2026-10-14T22:03:48Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "EC",
+      "status": "done",
+      "title": "Follow-ups from #338 / #336 reviews: EXIT_CODES tick order and exit 5 wording, EA registry entry, TLS test skip without openssl, CLI veto test off the real bus, register Task CI",
+      "finish": "docs/EXIT_CODES.md: tick order scan → ingest/seal → decide → commit (matches m2_runner _scan/_ingest/_decide); m2_start reports exit 5 as soon as it sees m2_runner exit (wait_for polls handle.poll()), not after the timeout. docs/loop/state.json EA entry: actual test counts and the src/exit_codes.py change. tests/test_public_get_deadline.py tls_cert skips when the openssl CLI is missing or fails. tests/test_calibration_mid_kelly.py operator CLI test stubs paper_ledger.bus and asserts the repo logs/bus.jsonl is untouched (Codex 6179446901 P2). Task CI (#195) registered. Docs/tests only, non-KEY. config/risk.toml unchanged, live_enabled false.",
+      "note": "Claimed by Poly桥接 as Task EC at Poly指挥's request (next letter after EB). Non-KEY.",
+      "done_at": "2026-10-15T02:00:00Z",
       "surface": "grok-bot"
     }
   ]

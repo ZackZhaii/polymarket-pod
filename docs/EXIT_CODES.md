@@ -131,7 +131,8 @@ Heartbeat every HEARTBEAT_RUNNER_EVERY_S (`paused` while paused); single instanc
 
 Tick order (issue #245): each iteration's `preflight` checks KILL / live flags / risk.toml pins / global halts / ledger
 integrity first, then settlement (#206, which may read Gamma), then the independent clock check, then the daily loss
-breaker and disk, and only then scan / decide / seal / commit. The old "before any read" wording was wrong: settlement
+breaker and disk, and only then scan → ingest/seal (`_ingest`: forecast_inbox seals each inbox forecast) →
+decide (`_decide`: fee and /book reads, intent build) → commit (`paper_ledger.commit_if_allowed`, called inside `_decide`). The old "before any read" wording was wrong: settlement
 reads can happen before scan.
 
 Pre-heartbeat exits (issue #245, PR #338): `main` returns 2 (`EXIT_USAGE`), 7 (`EXIT_SELF_CHECK`) and 3
@@ -142,8 +143,9 @@ instance's beat).
 
 - Exit 3 = another m2_runner already holds `runner.lock`: a normal refusal, nothing done, no alert needed.
 - Exits 2 / 7 = the runner did not start. How on-call finds them:
-  - Launched via `m2_start`: 2/7 write no new heartbeat, so `m2_start` times out waiting for m2_runner and exits 5
-    (`EXIT_NOT_READY`). Check `m2_start`'s exit code and m2_runner's stderr, which `m2_start` redirects (with stdout)
+  - Launched via `m2_start`: 2/7 write no new heartbeat. `m2_start` polls the child while it waits (`wait_for`
+    checks `handle.poll()` each round), so it exits 5 (`EXIT_NOT_READY`, reason `exited_<code>:…`) as soon as it
+    sees m2_runner exit, without waiting for the start timeout. Check `m2_start`'s exit code and m2_runner's stderr, which `m2_start` redirects (with stdout)
     to `runs/m2/start-logs/<stamp>/m2_runner.log`.
   - Restarted without `m2_start` (by hand or a supervisor): if the old m2_runner heartbeat says `running`, it goes
     stale and the Sentinel records a global halt (stale heartbeat). If the old heartbeat says `finished`, nothing goes
@@ -153,7 +155,7 @@ instance's beat).
   see them.
 
 Tick order detail: KILL / live / pins / halts / ledger, then settlement (#206), then the independent clock check, then the daily
-loss breaker, disk, and only then scan / decide. Clock check (C222, #222 option B): one public read-only GET of the CLOB
+loss breaker, disk, and only then scan → ingest/seal → decide → commit. Clock check (C222, #222 option B): one public read-only GET of the CLOB
 `https://clob.polymarket.com/time` (exact URL only; guard and `podlib.public_get` refuse every variant). The whole
 local-minus-server uncertainty interval (request round trip plus ±1 s rounding of the integer seconds) must fit inside
 ±`CLOCK_SKEW_MAX_S` (5 s). Two pause reasons, neither an exit code (the runner keeps beating `paused`, nothing is scanned or
