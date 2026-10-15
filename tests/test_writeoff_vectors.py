@@ -1,4 +1,4 @@
-"""Issue #197 (Task CK): Poly预测's v3 vectors (tests/fixtures/poly_forecast_197_vectors_v3.json, v3.5, 47 vectors; #195 bid-side long mark, writeoff_sod_late on every write-off).
+"""Issue #197 (Task CK): Poly预测's v3 vectors (tests/fixtures/poly_forecast_197_vectors_v3.json, v3.6, 47 vectors; #195 bid-side long mark, writeoff_sod_late on every write-off).
 
 Each vector is replayed tick by tick through the production code, in Poly风控's tick order
 (issuecomment-6106669720): restart (pending reads dropped, write-off events re-sent) -> ledger verify (a halt ends
@@ -21,16 +21,16 @@ from src import daily_loss as daily_loss_mod
 from src import halt_store, ledger_store, market_close, paper_ledger, settlement
 
 FIXTURE = Path(__file__).parent / "fixtures" / "poly_forecast_197_vectors_v3.json"
-SHA256_PREFIX = "02e03f8b"  # v3.5 (Poly预测: #195 WO-29/WO-30, writeoff_sod_late, snapshots = first evaluation); CK v3.3 was 0f1f210b
+SHA256_PREFIX = "6256e226"  # v3.6 (Poly预测: #195 WO-29/WO-30, writeoff_sod_late, dev-written snapshots, dev_current @247af98); CK v3.3 was 0f1f210b
 DATA = json.loads(FIXTURE.read_text(encoding="utf-8"))
 VECTORS = DATA["vectors"]
 TOL = 1e-6
 
 
-def test_the_vector_file_is_poly_forecasts_v3_5():
+def test_the_vector_file_is_poly_forecasts_v3_6():
     # the committed (LF) bytes: a Windows checkout with core.autocrlf=true has CRLF in the working copy
     assert hashlib.sha256(FIXTURE.read_bytes().replace(b"\r\n", b"\n")).hexdigest().startswith(SHA256_PREFIX)
-    assert DATA["version"] == "v3.5" and len(VECTORS) == 47
+    assert DATA["version"] == "v3.6" and len(VECTORS) == 47
 
 
 def _dt(stamp: str) -> datetime:

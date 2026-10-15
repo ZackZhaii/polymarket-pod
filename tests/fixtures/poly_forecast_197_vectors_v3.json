@@ -1,8 +1,8 @@
 {
  "schema": "poly_forecast_197_vectors/3",
- "version": "v3.5",
- "version_note": "v3.5（Poly风控 审 v3.4 后修订）：WO-27-ONTIME 10-14 快照改为 00:00:30Z 准时快照（late=false，当日两步 writeoff_sod_late=false）；WO-27 10-14、WO-43 10-13 迟到快照条目改为 dev 的 prev_day_last_mark 格式；生成器断言每个快照 created_at = 当日首次评估、late 符合 120 秒规则；数值与 v3.4 相同（断言）。 v3.4（Poly指挥 定名，取代 Poly预测 的 v3.3+r195；CK 分支自己的 v3.3 #225 版不变）：start_of_day_snapshots[].late 按 writeoff_sod_late 同一规则重算（当日首次评估距 00:00 UTC > 120 s 即 late），共 58 处变化，逐条见 changelog；所有数值与 v3.3+r195 相同（断言）。 v3.3+r195（Poly预测，在 CK 的 v3.3 #225 版本之上）：按 #195（已合入 dev c8f796d，leg_marks 只要求持有方一侧可用）重算，对照 dev 247af98；WO-29 12:01 浮亏 9.85→9.35，WO-30 10:00 浮亏 9.85→0.15，WO-30 描述去掉“#195 未批准”；每个 step 与核销行新增严格 bool 字段 writeoff_sod_late（#197 方案 A）。 v3.3（Task CK，Poly风控 #225 裁定）：WO-27 2026-10-14T13:00Z、WO-43 2026-10-13T09:00Z/10:00Z 为当日首次评估，距 UTC 00:00 超过 DAY_START_MAX_LAG_S，日初快照迟到，参考价取 max(成本, 前一日最后有效标价)；期望值由仓库函数（tests/test_writeoff_vectors.py 同一 harness，src.paper_ledger.daily_unrealized / src.daily_loss）重算。新增对照 WO-27-ONTIME（00:00:30Z 准时快照，13:00 期望 0）。harness 不再假设“昨天跑过即准时”。其余期望不变。 | 前版：v3.2：OQ-N7 已裁定（https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792）：核销后矛盾 → 全局 halt（invalid_risk_state），并叠加 #214 对该市场结算的阻断；人工解除全局 halt 后该市场结算仍阻断。WO-15/16 期望不变；新增 WO-42、WO-43、INV-13；对照 dev 8b5db69。 v3.1（仅措辞）：所有 'bus' 指 M2 runner 事件流（events.jsonl），不是 pod bus；PROTOCOL / BUS_TYPES 不变（Poly指挥 澄清）。数值、字段名与 v3 @4acf535 逐项相同。v3 按 Poly风控 补充裁定 issuecomment-6106700917 修订：bus 至少一次 + 消费端按键去重（WO-38）；已核销市场轮询到结算、只查矛盾，读失败忽略（WO-41）；N1–N6 resolved。v2 按 Poly风控 裁定 issuecomment-6106669720 修订：核销前的确认失败/读取失败不 halt（按 #124 继续计最坏浮亏、下一轮重新确认）；只有核销后矛盾与账本核销行冲突会 halt；同 tick 先结算后核销；新增崩溃重启/账本去重向量；第二源辅证另给 expected_reread_only。",
- "generator": "vectors/gen_197_vectors.v3_5.py",
+ "version": "v3.6",
+ "version_note": "v3.6（Poly风控 审 v3.5 后修订，仅元数据与 dev_current）：WO-43 10-13 mA prev_day_last_mark book_ts → 2026-10-12T12:01:40Z；生成器断言每个快照逐字段等于 dev 实际写出的快照（WO-40 两个 halt 日标 hypothetical）；dev_current 按 dev 247af98 同语义（无 close/halt，#225 快照）重算；核销腿快照条目标 recorded_only_legs；expected 不变（断言）。 v3.5（Poly风控 审 v3.4 后修订）：WO-27-ONTIME 10-14 快照改为 00:00:30Z 准时快照（late=false，当日两步 writeoff_sod_late=false）；WO-27 10-14、WO-43 10-13 迟到快照条目改为 dev 的 prev_day_last_mark 格式；生成器断言每个快照 created_at = 当日首次评估、late 符合 120 秒规则；数值与 v3.4 相同（断言）。 v3.4（Poly指挥 定名，取代 Poly预测 的 v3.3+r195；CK 分支自己的 v3.3 #225 版不变）：start_of_day_snapshots[].late 按 writeoff_sod_late 同一规则重算（当日首次评估距 00:00 UTC > 120 s 即 late），共 58 处变化，逐条见 changelog；所有数值与 v3.3+r195 相同（断言）。 v3.3+r195（Poly预测，在 CK 的 v3.3 #225 版本之上）：按 #195（已合入 dev c8f796d，leg_marks 只要求持有方一侧可用）重算，对照 dev 247af98；WO-29 12:01 浮亏 9.85→9.35，WO-30 10:00 浮亏 9.85→0.15，WO-30 描述去掉“#195 未批准”；每个 step 与核销行新增严格 bool 字段 writeoff_sod_late（#197 方案 A）。 v3.3（Task CK，Poly风控 #225 裁定）：WO-27 2026-10-14T13:00Z、WO-43 2026-10-13T09:00Z/10:00Z 为当日首次评估，距 UTC 00:00 超过 DAY_START_MAX_LAG_S，日初快照迟到，参考价取 max(成本, 前一日最后有效标价)；期望值由仓库函数（tests/test_writeoff_vectors.py 同一 harness，src.paper_ledger.daily_unrealized / src.daily_loss）重算。新增对照 WO-27-ONTIME（00:00:30Z 准时快照，13:00 期望 0）。harness 不再假设“昨天跑过即准时”。其余期望不变。 | 前版：v3.2：OQ-N7 已裁定（https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792）：核销后矛盾 → 全局 halt（invalid_risk_state），并叠加 #214 对该市场结算的阻断；人工解除全局 halt 后该市场结算仍阻断。WO-15/16 期望不变；新增 WO-42、WO-43、INV-13；对照 dev 8b5db69。 v3.1（仅措辞）：所有 'bus' 指 M2 runner 事件流（events.jsonl），不是 pod bus；PROTOCOL / BUS_TYPES 不变（Poly指挥 澄清）。数值、字段名与 v3 @4acf535 逐项相同。v3 按 Poly风控 补充裁定 issuecomment-6106700917 修订：bus 至少一次 + 消费端按键去重（WO-38）；已核销市场轮询到结算、只查矛盾，读失败忽略（WO-41）；N1–N6 resolved。v2 按 Poly风控 裁定 issuecomment-6106669720 修订：核销前的确认失败/读取失败不 halt（按 #124 继续计最坏浮亏、下一轮重新确认）；只有核销后矛盾与账本核销行冲突会 halt；同 tick 先结算后核销；新增崩溃重启/账本去重向量；第二源辅证另给 expected_reread_only。",
+ "generator": "vectors/gen_197_vectors.v3_6.py",
  "origin_dev_sha": "247af98797cf6745f72f6ba745e367213d480537",
  "rule": "KEY #197 close-then-write-off: body sections A-E, approval https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6104331631, ruling https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6106669720. PR #195 applied (merged in dev c8f796d): leg_marks needs only the held side.",
  "constants": {
@@ -19,12 +19,12 @@
   "inputs.ledger_writeoff_rows[]": "optional: write-off rows already in the ledger from a previous process: {row: <write-off row, same shape as expected.writeoff_events[]>, bus_emitted: bool (already in the runner event stream once before this run)}.",
   "inputs.steps[]": "ticks. t: UTC ISO. books: {'market|token': book|null} (carried forward; null = removed). gamma: {market: Gamma read (explicit closed=true query) | {'_error':..} | [] }. second_source: {market: {source: clob_markets, accepting_orders, closed} | {source: data_v2_tokens, closed, resolved}} (ignored by expected_reread_only). resolution: confirmed settlement snapshot. restart: process restart before this tick. crash_after_ledger_write: the write-off row of this tick is fsync'd but the process dies before the bus emit. operator_resume (v3.2): operator clears the global halt before this tick (OQ-N7).",
   "tick order (ruling)": "0) operator_resume (v3.2): clears a closed_flag_contradiction_after_writeoff global halt; that market is added to settlement_blocked_markets (#214) and stays blocked.  1) restart: drop in-memory pending, replay ledger; runner event stream is at-least-once (the model re-sends every write-off row whose leg is still open; consumers dedupe by key)  2) read ledger; conflicting write-off rows -> halt; halted -> stop (no settle, no write-off, daily_loss null)  3) settlement first (src.settlement.plan)  4) close detection + write-off only for open legs neither settled nor written off; post-write-off contradiction check  5) daily loss (start-of-day snapshot at the first tick of each UTC day, dev rule)  6) (RiskGate, not modelled). Matches origin/dev 4acf535 m2_runner.preflight: KILL/live/pins/global halt/verified ledger -> _settle_tick (resolution_watch.collect -> apply_settlements -> _writeoff_hook, CK slot) -> daily_loss re-check -> breaker -> RiskGate.",
-  "inputs.start_of_day_snapshots[]": "the snapshot dev (src.paper_ledger.daily_unrealized at 247af98) would write at the day's FIRST evaluation: created_at = first step t of that UTC day (asserted); late = day_start_late(created_at, clock_ok=True) (> 120 s after 00:00 UTC; clock_ok != True is always late) or day in late_days; legs = leg_marks.snapshot_legs with #195 liquidation marks; on a late day a leg with a previous-UTC-day last valid ladder mark carries it as mark_source=prev_day_last_mark (paper_ledger._previous_day_marks; applied to WO-27 2026-10-14 and WO-43 2026-10-13). Replaying every vector with these snapshots through dev leg_marks reproduces expected/dev_current numbers (generator check).",
+  "inputs.start_of_day_snapshots[]": "the snapshot dev actually writes (asserted field by field against scratch/v36/dev_snapshots_b460dbc+247af98.json: daily_marks files written by dev code while the CK harness (tests/test_writeoff_vectors.py::_run) replays v3.5 on b460dbc merged with 247af98 (own worktree, probe scratch/v36/test_zz_probe_snapshots.py; 47/47 replays passed).): created_at = the day's first non-halted evaluation; late = day_start_late(created_at, clock_ok=True) (> 120 s after 00:00 UTC; clock_ok != True is always late) or day in late_days; legs = leg_marks.snapshot_legs with #195 marks; on a late day a leg with a previous-UTC-day last valid ladder mark (recorded only by non-halted evaluations) carries it as prev_day_last_mark. hypothetical=true: dev writes no snapshot that day (all ticks halted; WO-40), illustrative only. recorded_only_legs: legs written off on/before that day; their entries are recorded but never valued (excluded from unrealized). The generator replays every vector with these semantics (Sim225) and asserts it reproduces every expected / expected_reread_only number and every dev-written snapshot.",
   "expected.steps[]": "risk_state ok|invalid_risk_state, halt_reason, close_reasons {market: reason}, writeoff_emitted, writeoff_events [event_id written this tick], ledger_writeoff_rows (distinct leg_keys), duplicate_writeoff_rows_ignored, bus_emitted [{event_id, replay}] (runner event stream; one conforming at-least-once trace; NOT asserted exactly), bus_keys_required_by_now (assert: each key has >=1 runner event by the end of this tick), crash_after_ledger_write, realized_writeoff_usd, daily_loss_usd (null when halted) + parts {fees_usd, realized_loss_usd, writeoff_usd, unrealized_usd}, realized_gain_usd, max_daily_loss_veto, occupancy {count, usd, legs}, settlement_booked, marks.",
   "expected.writeoff_events[]": "ledger write-off rows: event_id 'writeoff-'+sha256('<condition>|<market>|<token>')[:32] (proposed), unique key leg_key, ts, day, market, condition_id, token_id, shares, cost_basis_usd, open_fees_usd, full_cost_usd, daily_loss_component_usd, reason, evidence {first_read_t, confirm_t, closed_time, query}.",
   "expected.bus": "runner event stream (not the pod bus), at-least-once assertions: every keys_required key has >= 1 write-off event; consumer_deduped_count_by_key == 1 per key; model_emissions_by_key is informative only.",
   "expected_reread_only": "present when uses_second_source: same shape, second_source inputs ignored (M2 default until the CLOB /markets and Data /v2/tokens endpoints are whitelisted).",
-  "dev_current": "same ledger/books, origin/dev functions (no close detection, no halt). After a #197 halt nothing is settled in the shared ledger, so dev_current shows no settlement there either.",
+  "dev_current": "authoritative baseline of origin/dev 247af98 WITHOUT #197 (no close detection, no write-off, no halt): same ledger/books, dev pure functions (daily_loss, leg_marks) with dev's #225 snapshot semantics in its own state (evaluates every tick, so its snapshots / last marks can differ from expected's). Recomputed by the generator in v3.6. Not read by any test; informative regression baseline. After a #197 halt nothing is settled in the shared ledger.",
   "close reasons (proposed codes)": "writeoff_confirmed_reread | writeoff_confirmed_clob | writeoff_confirmed_data_tokens | awaiting_confirmation | reread_too_soon | confirmation_failed:<predicate reason> | confirmation_failed_closed_time_changed | confirmation_failed_second_source_disagrees | close_read_failed[_pending_dropped] | close_read_invalid_type[_pending_dropped] | not_closed | accepting_orders_not_false | closed_time_missing | closed_time_invalid | closed_time_in_future | already_written_off[_read_failed|_closed_time_changed] | settled_no_writeoff | settled_polling_stopped | no_open_leg. halt: closed_flag_contradiction_after_writeoff | writeoff_row_conflict:<leg_key>.",
   "terminology (v3.1)": "'bus' in field names (bus_emitted, bus_keys_required_by_now, expected.bus, ledger_writeoff_rows[].bus_emitted) means the M2 runner event stream (events.jsonl via src.m2_runner.event), NOT the pod bus (podlib.bus / PROTOCOL / BUS_TYPES, unchanged). Semantics: at-least-once, consumers dedupe by write-off key / settlement key. Field names are kept for compatibility. #211/#214 already assert that settlement puts nothing on the pod bus; write-off (CK) must do the same.",
   "settlement gain (v3.1)": "a written-off leg that later wins books the FULL payout (shares x 1; short: shares x (1 - payout)) as realized_gain_usd on the settlement day; it never lowers daily_loss_usd. A leg settled without a prior write-off books payout - basis (dev #126 path).",
@@ -809,6 +809,436 @@
       "mark_invalid": false
      },
      "prev_day_last_eval": "2026-10-12T08:00:30Z"
+    }
+   ],
+   "added": {}
+  },
+  {
+   "version": "v3.6",
+   "date": "2026-10-15 UTC+8",
+   "dev_sha": "247af98797cf6745f72f6ba745e367213d480537",
+   "summary": "Poly风控 审 v3.5（poly-risk-197-vectors-v3.5-review.md）：仅元数据与 dev_current；expected/expected_reread_only 全部不变（断言 vs v3.5 02e03f8b）。dev_current 选方案 (a)：按 247af98 同语义重算。",
+   "snapshot_changes": [
+    {
+     "vector": "WO-43",
+     "day": "2026-10-13",
+     "leg_key": "mA|mA-Y",
+     "field": "book_ts",
+     "old": "2026-10-12T13:04:50Z",
+     "new": "2026-10-12T12:01:40Z"
+    }
+   ],
+   "hypothetical_snapshots": [
+    {
+     "vector": "WO-40",
+     "day": "2026-10-12"
+    },
+    {
+     "vector": "WO-40",
+     "day": "2026-10-14"
+    }
+   ],
+   "recorded_only_legs": [
+    {
+     "vector": "WO-01",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-02",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-03",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-07",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-20",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-20",
+     "day": "2026-10-14",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-21",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-21",
+     "day": "2026-10-14",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-23",
+     "day": "2026-10-12",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-23",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-23",
+     "day": "2026-10-14",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-24",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-24",
+     "day": "2026-10-14",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-25",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-N",
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-25",
+     "day": "2026-10-14",
+     "legs": [
+      "m1|m1-N",
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-26",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-26",
+     "day": "2026-10-14",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-27",
+     "day": "2026-10-13",
+     "legs": [
+      "mA|mA-Y"
+     ]
+    },
+    {
+     "vector": "WO-27",
+     "day": "2026-10-14",
+     "legs": [
+      "mA|mA-Y"
+     ]
+    },
+    {
+     "vector": "WO-27-ONTIME",
+     "day": "2026-10-13",
+     "legs": [
+      "mA|mA-Y"
+     ]
+    },
+    {
+     "vector": "WO-27-ONTIME",
+     "day": "2026-10-14",
+     "legs": [
+      "mA|mA-Y"
+     ]
+    },
+    {
+     "vector": "WO-28",
+     "day": "2026-10-12",
+     "legs": [
+      "m1|m1-Y",
+      "m2|m2-Y",
+      "m3|m3-Y"
+     ]
+    },
+    {
+     "vector": "WO-28",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y",
+      "m2|m2-Y",
+      "m3|m3-Y"
+     ]
+    },
+    {
+     "vector": "WO-28",
+     "day": "2026-10-14",
+     "legs": [
+      "m1|m1-Y",
+      "m2|m2-Y",
+      "m3|m3-Y"
+     ]
+    },
+    {
+     "vector": "WO-29",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-30",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-31",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-32",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-34",
+     "day": "2026-10-12",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-34",
+     "day": "2026-10-14",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-35",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-35",
+     "day": "2026-10-14",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-37",
+     "day": "2026-10-13",
+     "legs": [
+      "mB|mB-Y"
+     ]
+    },
+    {
+     "vector": "WO-38",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-39",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-40",
+     "day": "2026-10-14",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-41",
+     "day": "2026-10-13",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-41",
+     "day": "2026-10-14",
+     "legs": [
+      "m1|m1-Y"
+     ]
+    },
+    {
+     "vector": "WO-42",
+     "day": "2026-10-13",
+     "legs": [
+      "mB|mB-Y"
+     ]
+    },
+    {
+     "vector": "WO-42",
+     "day": "2026-10-14",
+     "legs": [
+      "mB|mB-Y"
+     ]
+    },
+    {
+     "vector": "WO-43",
+     "day": "2026-10-13",
+     "legs": [
+      "mB|mB-Y"
+     ]
+    },
+    {
+     "vector": "WO-43",
+     "day": "2026-10-14",
+     "legs": [
+      "mB|mB-Y"
+     ]
+    }
+   ],
+   "dev_current_changes": [
+    {
+     "vector": "WO-27",
+     "t": "2026-10-14T13:00:00Z",
+     "field": "daily_loss_usd",
+     "old": 0.0,
+     "new": 0.3
+    },
+    {
+     "vector": "WO-27",
+     "t": "2026-10-14T13:00:00Z",
+     "field": "parts.unrealized_usd",
+     "old": 0.0,
+     "new": 0.3
+    },
+    {
+     "vector": "WO-27",
+     "field": "final/day_end_daily_loss_usd",
+     "old": [
+      {
+       "2026-10-12": 10.15,
+       "2026-10-13": 9.85,
+       "2026-10-14": 0.0
+      },
+      {
+       "realized_pnl_usd": 0.15,
+       "fees_total_usd": 0.0,
+       "open_legs_not_written_off": [
+        "mB|mB-Y"
+       ],
+       "written_off_unsettled_legs": [],
+       "writeoff_count": 0
+      }
+     ],
+     "new": [
+      {
+       "2026-10-12": 10.15,
+       "2026-10-13": 9.85,
+       "2026-10-14": 0.3
+      },
+      {
+       "realized_pnl_usd": 0.15,
+       "fees_total_usd": 0.0,
+       "open_legs_not_written_off": [
+        "mB|mB-Y"
+       ],
+       "written_off_unsettled_legs": [],
+       "writeoff_count": 0
+      }
+     ]
+    },
+    {
+     "vector": "WO-27-ONTIME",
+     "field": "steps[].t",
+     "old": [
+      "2026-10-12T08:00:30Z",
+      "2026-10-12T12:01:00Z",
+      "2026-10-12T12:01:40Z",
+      "2026-10-13T00:00:30Z",
+      "2026-10-14T13:00:00Z"
+     ],
+     "new": [
+      "2026-10-12T08:00:30Z",
+      "2026-10-12T12:01:00Z",
+      "2026-10-12T12:01:40Z",
+      "2026-10-13T00:00:30Z",
+      "2026-10-14T00:00:30Z",
+      "2026-10-14T13:00:00Z"
+     ]
+    },
+    {
+     "vector": "WO-43",
+     "t": "2026-10-13T09:00:00Z",
+     "field": "daily_loss_usd",
+     "old": 9.85,
+     "new": 10.0
+    },
+    {
+     "vector": "WO-43",
+     "t": "2026-10-13T09:00:00Z",
+     "field": "parts.unrealized_usd",
+     "old": 9.85,
+     "new": 10.0
+    },
+    {
+     "vector": "WO-43",
+     "t": "2026-10-13T10:00:00Z",
+     "field": "daily_loss_usd",
+     "old": 9.85,
+     "new": 10.0
+    },
+    {
+     "vector": "WO-43",
+     "t": "2026-10-13T10:00:00Z",
+     "field": "parts.unrealized_usd",
+     "old": 9.85,
+     "new": 10.0
     }
    ],
    "added": {}
@@ -2134,6 +2564,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -2713,6 +3146,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -3314,6 +3750,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -5020,6 +5459,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -11997,6 +12439,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      },
      {
@@ -12013,6 +12458,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -12668,6 +13116,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      },
      {
@@ -12684,6 +13135,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      },
      {
@@ -13742,6 +14196,9 @@
         "book_ts": "2026-10-12T00:00:20Z",
         "mark_invalid": false
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      },
      {
@@ -13758,6 +14215,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      },
      {
@@ -13774,6 +14234,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -14479,6 +14942,9 @@
         "book_ts": "2026-10-12T23:59:10Z",
         "mark_invalid": false
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      },
      {
@@ -14495,6 +14961,9 @@
         "book_ts": "2026-10-12T23:59:10Z",
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -15141,6 +15610,10 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-N",
+       "m1|m1-Y"
       ]
      },
      {
@@ -15166,6 +15639,10 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-N",
+       "m1|m1-Y"
       ]
      }
     ]
@@ -15889,6 +16366,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      },
      {
@@ -15905,6 +16385,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -16613,6 +17096,9 @@
         "book_ts": "2026-10-13T00:00:20Z",
         "mark_invalid": false
        }
+      ],
+      "recorded_only_legs": [
+       "mA|mA-Y"
       ]
      },
      {
@@ -16638,6 +17124,9 @@
         "book_ts": "2026-10-13T00:00:20Z",
         "mark_invalid": false
        }
+      ],
+      "recorded_only_legs": [
+       "mA|mA-Y"
       ]
      }
     ]
@@ -17168,12 +17657,12 @@
      {
       "t": "2026-10-14T13:00:00Z",
       "day": "2026-10-14",
-      "daily_loss_usd": 0.0,
+      "daily_loss_usd": 0.3,
       "parts": {
        "fees_usd": 0.0,
        "realized_loss_usd": 0.0,
        "writeoff_usd": 0.0,
-       "unrealized_usd": 0.0
+       "unrealized_usd": 0.3
       },
       "realized_gain_usd": 0.15,
       "max_daily_loss_veto": false,
@@ -17190,13 +17679,13 @@
       "marks": [
        {
         "leg_key": "mB|mB-Y",
-        "ref_usd": 9.5,
+        "ref_usd": 9.8,
         "value_usd": 9.5,
         "source": "bid_ladder",
         "mark_invalid": false,
         "reason": null,
-        "ref_source": "start_mark",
-        "loss_usd": 0.0
+        "ref_source": "cost",
+        "loss_usd": 0.3
        }
       ],
       "writeoff_sod_late": true
@@ -17205,7 +17694,7 @@
     "day_end_daily_loss_usd": {
      "2026-10-12": 10.15,
      "2026-10-13": 9.85,
-     "2026-10-14": 0.0
+     "2026-10-14": 0.3
     },
     "final": {
      "realized_pnl_usd": 0.15,
@@ -17489,6 +17978,9 @@
         "book_ts": "2026-10-13T00:00:20Z",
         "mark_invalid": false
        }
+      ],
+      "recorded_only_legs": [
+       "mA|mA-Y"
       ]
      },
      {
@@ -17514,6 +18006,9 @@
         "book_ts": "2026-10-14T00:00:20Z",
         "mark_invalid": false
        }
+      ],
+      "recorded_only_legs": [
+       "mA|mA-Y"
       ]
      }
     ]
@@ -18093,6 +18588,51 @@
       "writeoff_sod_late": false
      },
      {
+      "t": "2026-10-14T00:00:30Z",
+      "day": "2026-10-14",
+      "daily_loss_usd": 9.85,
+      "parts": {
+       "fees_usd": 0.0,
+       "realized_loss_usd": 0.0,
+       "writeoff_usd": 0.0,
+       "unrealized_usd": 9.85
+      },
+      "realized_gain_usd": 0.0,
+      "max_daily_loss_veto": false,
+      "occupancy": {
+       "count": 2,
+       "usd": 19.65,
+       "legs": [
+        "mA|mA-Y",
+        "mB|mB-Y"
+       ]
+      },
+      "settlement_booked": [],
+      "marks": [
+       {
+        "leg_key": "mA|mA-Y",
+        "ref_usd": 9.85,
+        "value_usd": 0.0,
+        "source": "invalid_book",
+        "mark_invalid": true,
+        "reason": "no_book",
+        "ref_source": "cost",
+        "loss_usd": 9.85
+       },
+       {
+        "leg_key": "mB|mB-Y",
+        "ref_usd": 9.5,
+        "value_usd": 9.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
+        "ref_source": "start_mark",
+        "loss_usd": 0.0
+       }
+      ],
+      "writeoff_sod_late": false
+     },
+     {
       "t": "2026-10-14T13:00:00Z",
       "day": "2026-10-14",
       "daily_loss_usd": 0.0,
@@ -18148,6 +18688,7 @@
    "differs_from_dev": true,
    "diffs": [
     "2026-10-13T00:00:30Z:daily_loss_usd 9.85 -> 0.0",
+    "2026-10-14T00:00:30Z:daily_loss_usd 9.85 -> 0.0",
     "2026-10-14T13:00:00Z:realized_gain_usd 0.15 -> 10.0"
    ],
    "invariants_checked": [
@@ -18424,6 +18965,11 @@
         "book_ts": "2026-10-12T00:00:20Z",
         "mark_invalid": false
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y",
+       "m2|m2-Y",
+       "m3|m3-Y"
       ]
      },
      {
@@ -18458,6 +19004,11 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y",
+       "m2|m2-Y",
+       "m3|m3-Y"
       ]
      },
      {
@@ -18492,6 +19043,11 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y",
+       "m2|m2-Y",
+       "m3|m3-Y"
       ]
      }
     ]
@@ -19493,6 +20049,9 @@
         "book_ts": "2026-10-12T12:00:50Z",
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -20186,6 +20745,9 @@
         "book_ts": "2026-10-12T09:59:50Z",
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -20797,6 +21359,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -21547,6 +22112,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -22509,6 +23077,9 @@
         "book_ts": "2026-10-12T00:00:20Z",
         "mark_invalid": false
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      },
      {
@@ -22525,6 +23096,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -23123,6 +23697,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      },
      {
@@ -23139,6 +23716,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -24287,6 +24867,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "mB|mB-Y"
       ]
      }
     ]
@@ -24879,6 +25462,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -25567,6 +26153,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -25930,7 +26519,9 @@
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:05:00Z",
       "late": true,
-      "legs": []
+      "legs": [],
+      "hypothetical": true,
+      "note": "dev 不写：该日所有 tick 都处于 invalid_risk_state halt（daily_unrealized 不被调用）；仅为示意，不是金标准"
      },
      {
       "day": "2026-10-14",
@@ -25946,6 +26537,11 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "hypothetical": true,
+      "note": "dev 不写：该日所有 tick 都处于 invalid_risk_state halt（daily_unrealized 不被调用）；仅为示意，不是金标准",
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -26322,6 +26918,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      },
      {
@@ -26338,6 +26937,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "m1|m1-Y"
       ]
      }
     ]
@@ -27308,6 +27910,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "mB|mB-Y"
       ]
      },
      {
@@ -27333,6 +27938,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "mB|mB-Y"
       ]
      }
     ]
@@ -28426,7 +29034,7 @@
         "cost_basis_usd": 9.85,
         "mark_usd": 9.7,
         "mark_source": "prev_day_last_mark",
-        "book_ts": "2026-10-12T13:04:50Z",
+        "book_ts": "2026-10-12T12:01:40Z",
         "mark_invalid": false
        },
        {
@@ -28438,6 +29046,9 @@
         "book_ts": "2026-10-12T08:00:20Z",
         "mark_invalid": false
        }
+      ],
+      "recorded_only_legs": [
+       "mB|mB-Y"
       ]
      },
      {
@@ -28454,6 +29065,9 @@
         "book_ts": null,
         "mark_invalid": true
        }
+      ],
+      "recorded_only_legs": [
+       "mB|mB-Y"
       ]
      }
     ]
@@ -29188,12 +29802,12 @@
      {
       "t": "2026-10-13T09:00:00Z",
       "day": "2026-10-13",
-      "daily_loss_usd": 9.85,
+      "daily_loss_usd": 10.0,
       "parts": {
        "fees_usd": 0.0,
        "realized_loss_usd": 0.0,
        "writeoff_usd": 0.0,
-       "unrealized_usd": 9.85
+       "unrealized_usd": 10.0
       },
       "realized_gain_usd": 0.0,
       "max_daily_loss_veto": false,
@@ -29209,13 +29823,13 @@
       "marks": [
        {
         "leg_key": "mA|mA-Y",
-        "ref_usd": 9.7,
+        "ref_usd": 9.85,
         "value_usd": 9.7,
         "source": "bid_ladder",
         "mark_invalid": false,
         "reason": null,
-        "ref_source": "start_mark",
-        "loss_usd": 0.0
+        "ref_source": "cost",
+        "loss_usd": 0.15
        },
        {
         "leg_key": "mB|mB-Y",
@@ -29233,12 +29847,12 @@
      {
       "t": "2026-10-13T10:00:00Z",
       "day": "2026-10-13",
-      "daily_loss_usd": 9.85,
+      "daily_loss_usd": 10.0,
       "parts": {
        "fees_usd": 0.0,
        "realized_loss_usd": 0.0,
        "writeoff_usd": 0.0,
-       "unrealized_usd": 9.85
+       "unrealized_usd": 10.0
       },
       "realized_gain_usd": 0.0,
       "max_daily_loss_veto": false,
@@ -29254,13 +29868,13 @@
       "marks": [
        {
         "leg_key": "mA|mA-Y",
-        "ref_usd": 9.7,
+        "ref_usd": 9.85,
         "value_usd": 9.7,
         "source": "bid_ladder",
         "mark_invalid": false,
         "reason": null,
-        "ref_source": "start_mark",
-        "loss_usd": 0.0
+        "ref_source": "cost",
+        "loss_usd": 0.15
        },
        {
         "leg_key": "mB|mB-Y",
@@ -29370,8 +29984,8 @@
     "2026-10-12T13:05:00Z:daily_loss_usd 10.0 -> None",
     "2026-10-12T13:05:00Z:max_daily_loss_veto False -> True",
     "2026-10-12T13:05:00Z:risk_state ok -> invalid_risk_state",
-    "2026-10-13T09:00:00Z:daily_loss_usd 9.85 -> 0.0",
-    "2026-10-13T10:00:00Z:daily_loss_usd 9.85 -> 0.0",
+    "2026-10-13T09:00:00Z:daily_loss_usd 10.0 -> 0.15",
+    "2026-10-13T10:00:00Z:daily_loss_usd 10.0 -> 0.15",
     "2026-10-13T10:05:00Z:daily_loss_usd 9.85 -> 0.0",
     "2026-10-14T00:00:30Z:daily_loss_usd 9.85 -> 0.0",
     "final:realized_pnl_usd 0.15 -> -9.7"
