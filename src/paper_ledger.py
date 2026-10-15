@@ -187,7 +187,10 @@ def _previous_day(day: str) -> str | None:
         return None
     from datetime import timedelta
 
-    return (stamp - timedelta(days=1)).strftime("%Y-%m-%d")
+    try:
+        return (stamp - timedelta(days=1)).strftime("%Y-%m-%d")
+    except OverflowError:  # PR #342 (Codex 6193266276): 0001-01-01 has no previous day
+        return None
 
 
 def _previous_day_marks(today: str, start: dict, current: dict) -> tuple[dict, list[str]]:
@@ -428,9 +431,10 @@ def _locked_write_time(now: str, clock: Callable[[], Any]) -> tuple[str, str | N
         later = clock()
     except Exception:  # noqa: BLE001 - an unusable clock decides nothing later than the caller's stamp
         return now, None
-    if base is None or not isinstance(later, datetime) or later.tzinfo is None or later <= base:
+    later = parse_book_ts(later) if isinstance(later, datetime) else None  # out-of-range UTC: unusable
+    if base is None or later is None or later <= base:
         return now, None
-    stamp = later.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    stamp = later.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     if stamp[:10] != now[:10]:
         return now, WRITEOFF_DAY_BOUNDARY
     return stamp, None

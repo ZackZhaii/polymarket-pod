@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from src import daily_loss, daily_marks, halt_store, ledger_store, m2_runner, market_close, paper_ledger, reconcile
+from src import daily_loss, daily_marks, halt_store, leg_marks, ledger_store, m2_runner, market_close, paper_ledger, reconcile
 from src.fees import booked_fee_usd, ledger_fee
 from src.podlib import load_risk
 from src.risk_gate import Intent
@@ -1516,3 +1516,43 @@ def test_a_day_snapshot_leg_too_large_for_a_float_is_invalid_not_a_crash(tmp_pat
     assert snap is not None
     loaded, problems = daily_marks.read_snapshot(tmp_path, "2026-09-02")
     assert loaded is None and problems
+
+
+# --- PR #342 review 6193476283 (Codex 6193266276 P2): out-of-range timestamps fail closed, never crash -------
+
+OUT_OF_RANGE = ["0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"]
+
+
+@pytest.mark.parametrize("raw", OUT_OF_RANGE)
+def test_a_snapshot_created_at_out_of_range_is_a_problem_not_a_crash(raw):
+    """leg_marks.writeoff_uplift_problems: the snapshot's created_at cannot be read in UTC: a problem."""
+    buy = dict(fill("buy", 20.0, 0.5, ts=YESTERDAY, market="m", token="t"), fill_id="f-1")
+    row = market_close.plan_writeoffs([buy], ["f-1"], [close("m")], DAY1).rows[0]
+    snap = {"day": DAY1[:10], "created_at": raw, "late": row.get("writeoff_sod_late") is True, "legs": []}
+    problems = leg_marks.writeoff_uplift_problems([buy, row], ["f-1", row["fill_id"]], DAY1[:10], snap)
+    assert any(p.startswith("writeoff_stamp_invalid") for p in problems), problems
+
+
+@pytest.mark.parametrize("raw", OUT_OF_RANGE)
+def test_the_shared_timestamp_parsers_refuse_out_of_range_stamps(raw):
+    from src import day_boundary
+    from src.book_staleness import parse_book_ts
+    from src.expiry_rule import parse_end_date
+    assert parse_book_ts(raw) is None and parse_end_date(raw) is None
+    assert parse_book_ts(datetime.fromisoformat(raw)) is None  # an aware datetime too
+    assert day_boundary.day_start_lag_s(raw) is None and day_boundary.day_start_late(raw) is True
+    assert daily_loss.counts_today(raw, DAY1[:10]) is None
+
+
+def test_previous_day_of_the_first_day_is_none_not_a_crash():
+    assert paper_ledger._previous_day("0001-01-01") is None
+
+
+@pytest.mark.parametrize("raw", OUT_OF_RANGE)
+def test_an_out_of_range_runner_clock_decides_nothing_later_and_never_crashes(raw):
+    """m2_runner write-off / snapshot time and the in-lock re-read: an out-of-range clock is unusable."""
+    bad = datetime.fromisoformat(raw)
+    assert m2_runner._clock_after(RUN_NOW, lambda: bad) == RUN_NOW
+    assert m2_runner._decision_time(RUN_NOW, lambda: bad) == RUN_NOW
+    stamp = RUN_NOW.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    assert paper_ledger._locked_write_time(stamp, lambda: bad) == (stamp, None)

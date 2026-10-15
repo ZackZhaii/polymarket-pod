@@ -414,6 +414,9 @@ def writeoff_uplift_problems(rows: list[dict[str, Any]], ids: list[str] | None, 
             problems.append(f"writeoff_daily_marks_missing:{label}")
             continue
         created, booked_at = parse_book_ts(snapshot.get("created_at")), parse_book_ts(row.get("ts"))
+        if created is None or booked_at is None:  # PR #342 (Codex 6193266276): unreadable/out-of-range stamp
+            problems.append(f"writeoff_stamp_invalid:{label}")
+            continue
         if carried and (created is None or booked_at is None or created > booked_at):
             problems.append(f"writeoff_before_daily_marks:{label}")
             continue

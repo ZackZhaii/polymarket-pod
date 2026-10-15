@@ -335,15 +335,21 @@ def _decision_time(now: datetime, clock: Callable[[], datetime] | None) -> datet
     """PR #342 review (Codex 6188442103 P1): the time a write-off / day-snapshot decision is made and stamped:
     max(tick start, runner clock), within the tick start's UTC day. A later UTC day keeps the tick start: the
     write-off defers to the next tick (``_writeoff_hook``) and the day's evaluation stays on the tick's day."""
+    later = _clock_after(now, clock)
+    return later if _stamp(later)[:10] == _stamp(now)[:10] else now
+
+
+def _clock_after(now: datetime, clock: Callable[[], datetime] | None) -> datetime:
+    """max(tick start, runner clock) in UTC; an unusable clock (raises, naive, or out of range in UTC: PR #342
+    review, Codex 6193266276) decides nothing later than the tick start."""
     if clock is None:
         return now
     try:
         later = clock()
     except Exception:  # noqa: BLE001 - an unusable clock decides nothing later than the tick start
         return now
-    if not isinstance(later, datetime) or later.tzinfo is None or later <= now:
-        return now
-    return later if _stamp(later)[:10] == _stamp(now)[:10] else now
+    later = parse_book_ts(later) if isinstance(later, datetime) else None
+    return later if later is not None and later > now else now
 
 
 def _stamp(moment: datetime) -> str:
@@ -987,7 +993,7 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter,
         # daily-loss evaluation (preflight, at the tick start ``now``) must share one UTC day. When the reads ran
         # past UTC midnight the write is deferred: nothing booked, the pending reads stay pending, no halt; the
         # next tick (new day) confirms, books, snapshots and evaluates on the new day.
-        written_at = max(now, state.clock())
+        written_at = _clock_after(now, state.clock)
         if _stamp(written_at)[:10] != _stamp(now)[:10]:
             for close in step.closes:
                 state.close_tracker.defer(close.market)
