@@ -235,6 +235,9 @@ class CloseTracker:
     """First qualifying reads per market (in memory: a restart re-reads; the ledger keeps every write-off)."""
 
     first: dict[str, Observation] = field(default_factory=dict)
+    # PR #342 review (Codex 6186452953 P2): monotonic stamp of the first closed read of each close this process
+    # confirmed, so the reopen grace is measured on the monotonic clock too (not cleared by ``drop``).
+    confirmed_mono: dict[str, float] = field(default_factory=dict)
 
     def step(self, obs: Observation, now: datetime) -> tuple[Close | None, str]:
         """Feed one read of a market that is not written off; return (the Close it confirms, the close reason)."""
@@ -269,6 +272,8 @@ class CloseTracker:
         if wall < MARKET_CLOSE_RECHECK_S:
             return None, TOO_SOON
         del self.first[obs.market]
+        if pending.observed_mono is not None:
+            self.confirmed_mono[obs.market] = pending.observed_mono
         return Close(obs.market, obs.closed_time, pending.observed_at, obs.observed_at, BY_REREAD), CONFIRMED  # type: ignore[arg-type]
 
     def update(self, obs: Observation, now: datetime) -> Close | None:
@@ -331,14 +336,20 @@ def written_off_legs(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], di
     return out
 
 
-def reopen_contradiction(obs: Observation, first_closed_seen: datetime | None, now: datetime) -> str | None:
+def reopen_contradiction(obs: Observation, first_closed_seen: datetime | None, now: datetime,
+                         first_closed_mono: float | None = None) -> str | None:
     """A written-off market read again: the halt reason, or None (ignored). See the module docstring.
 
-    PR #342 review (Codex 6183403293, fail closed): a first closed read stamped after ``now`` is a clock rollback,
-    a halt on every read; the reopen grace applies only for 0 <= elapsed < MARKET_CLOSE_REOPEN_GRACE_S."""
-    elapsed = None if first_closed_seen is None else (now - first_closed_seen).total_seconds()
+    PR #342 review (Codex 6183403293, fail closed): a first closed read stamped after the read is a clock
+    rollback, a halt on every read; the reopen grace applies only for 0 <= elapsed < MARKET_CLOSE_REOPEN_GRACE_S.
+    PR #342 review (Codex 6186452953 P2): elapsed is measured to the read's own stamp (``obs.observed_at``, when
+    the closed=true response completed), not to the tick start ``now``; with both monotonic stamps the larger of
+    the wall and monotonic intervals counts (a slow read or a wall step back never extends the grace)."""
+    elapsed = None if first_closed_seen is None else (obs.observed_at - first_closed_seen).total_seconds()
     if elapsed is not None and elapsed < 0:
         return HALT_CLOCK_ROLLBACK
+    if elapsed is not None and first_closed_mono is not None and obs.observed_mono is not None:
+        elapsed = max(elapsed, obs.observed_mono - first_closed_mono)
     if obs.problem is not None:
         return None
     if obs.closed is False or obs.accepting_orders is True:
@@ -392,7 +403,7 @@ def detect(tracker: CloseTracker, ledger_rows: list[dict[str, Any]], reads: Mapp
             tracker.drop(market)
             first_seen = min((parse_end_date(row.get("close_first_seen_ts")) for row in rows
                               if parse_end_date(row.get("close_first_seen_ts")) is not None), default=None)
-            halt = reopen_contradiction(obs, first_seen, now)
+            halt = reopen_contradiction(obs, first_seen, now, tracker.confirmed_mono.get(market))
             if halt is not None:
                 out.halts.append(f"{halt}:{market}")
             else:
@@ -415,6 +426,9 @@ def detect(tracker: CloseTracker, ledger_rows: list[dict[str, Any]], reads: Mapp
     for market in list(tracker.first):
         if market not in held:
             tracker.drop(market)  # settled or flat: nothing left to confirm
+    for market in list(tracker.confirmed_mono):
+        if market not in held:
+            del tracker.confirmed_mono[market]
     return out
 
 

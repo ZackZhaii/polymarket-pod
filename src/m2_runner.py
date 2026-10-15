@@ -964,7 +964,9 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter,
         # clock step given) or failed: clock_ok False, so a day's first snapshot is late and the write-off is
         # still booked at the late reference (#197 option A).
         clock_ok = clock is not None and clock() is None and runner_clock_ok(state)
-        out = paper_ledger.apply_writeoffs(step.closes, _stamp(now), clock_ok=clock_ok)
+        # PR #342 review (Codex 6186452953 P1): booked at the actual write time (the runner clock after the
+        # reads), never the tick start: a slow read across UTC midnight books on the new day, not the old one.
+        out = paper_ledger.apply_writeoffs(step.closes, _stamp(max(now, state.clock())), clock_ok=clock_ok)
         if out["problems"]:
             # PR #342 review (Codex 6184078075 / 6184412258 P2): a partial failure, or a row on disk whose
             # post-write re-read failed (not in ``booked``): re-send every written-off leg's event before the next

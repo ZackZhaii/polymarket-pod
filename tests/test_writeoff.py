@@ -1158,3 +1158,70 @@ def test_a_writeoff_or_settlement_row_with_an_overflowing_closed_ts_is_refused(e
     with pytest.raises(ledger_store.LedgerIntegrityError):
         ledger_store.book(env["ledger"], {**row, "closed_ts": raw})
     assert ledger_store._zoned_ts(raw) is False
+
+
+# --- PR #342 review 6186452953 (Codex) ---------------------------------------------------------------------
+
+def _slow_writeoff_read(inner, clock, seconds):
+    """A getter whose next write-off read (the tick's second closed=true read; src/resolution_watch reads first)
+    takes ``seconds`` before its closed=true response completes. Arm with ``getter.arm()`` before a tick."""
+    seen = {"armed": False, "closed_reads": 0}
+
+    def getter(url):
+        if seen["armed"] and url == market_close.gamma_url("held", closed=True):
+            seen["closed_reads"] += 1
+            if seen["closed_reads"] == 2:
+                clock.advance(seconds)
+                seen["armed"] = False
+        return inner(url)
+
+    def arm():
+        seen.update(armed=True, closed_reads=0)
+    getter.arm = arm
+    return getter
+
+
+def test_a_writeoff_read_that_crosses_utc_midnight_books_on_the_new_day(runner):
+    """P1: the tick starts at 23:59:50; the confirming read completes at 00:00:10. The write-off is booked at the
+    write time (new day), so the new day's loss counts it (the old tick-start stamp booked it on the old day)."""
+    midnight = (RUN_NOW + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    clock = _Time(midnight - timedelta(seconds=50))
+    _timed_runner(runner, clock)
+    inner = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = _slow_writeoff_read(inner, clock, 20.0)
+    _tick_at(runner, getter, clock)  # first closed read at 23:59:10
+    clock.advance(40.0)  # the next tick starts at 23:59:50
+    getter.arm()
+    _tick_at(runner, getter, clock)
+    rows = _writeoffs(runner["paper"])
+    assert len(rows) == 1
+    new_day = midnight.strftime("%Y-%m-%d")
+    assert rows[0]["ts"][:10] == new_day
+    read = ledger_store.read_ledger(runner["paper"])[1]
+    assert daily_loss.daily_loss(read.rows, new_day, list(read.ids)).writeoff_usd > 0
+
+
+def test_a_reopen_read_that_completes_after_the_grace_halts_even_if_the_tick_started_inside_it(runner):
+    """P2: written off from a first closed read at t=0; a tick starts at t=290 s (inside the 300 s grace) but its
+    reopen read completes at t=310 s: a contradiction halt (measured from the tick start it was ignored)."""
+    clock = _Time(RUN_NOW)
+    _timed_runner(runner, clock)
+    inner = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = _slow_writeoff_read(inner, clock, 20.0)
+    _tick_at(runner, getter, clock)
+    clock.advance(40.0)
+    _tick_at(runner, getter, clock)
+    assert len(_writeoffs(runner["paper"])) == 1
+    inner.row = gamma("held", closed=False, accepting=True, closed_time=None)
+    clock.advance(250.0)  # tick start t=290 s
+    getter.arm()
+    report = _tick_at(runner, getter, clock)
+    assert "closed_flag_contradiction_after_writeoff:held" in report.reasons and _halted()
+
+
+def test_the_reopen_grace_takes_the_larger_of_the_wall_and_monotonic_intervals():
+    first = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+    reopened = market_close.Observation("m", first + timedelta(seconds=100), closed=False, accepting_orders=True,
+                                        observed_mono=1310.0)
+    assert market_close.reopen_contradiction(reopened, first, first, 1000.0) == market_close.HALT_REOPENED
+    assert market_close.reopen_contradiction(reopened, first, first) is None  # wall only: inside the grace
