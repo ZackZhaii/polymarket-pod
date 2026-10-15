@@ -1,8 +1,8 @@
 {
  "schema": "poly_forecast_197_vectors/3",
- "version": "v3.4",
- "version_note": "v3.4（Poly指挥 定名，取代 Poly预测 的 v3.3+r195；CK 分支自己的 v3.3 #225 版不变）：start_of_day_snapshots[].late 按 writeoff_sod_late 同一规则重算（当日首次评估距 00:00 UTC > 120 s 即 late），共 58 处变化，逐条见 changelog；所有数值与 v3.3+r195 相同（断言）。 v3.3+r195（Poly预测，在 CK 的 v3.3 #225 版本之上）：按 #195（已合入 dev c8f796d，leg_marks 只要求持有方一侧可用）重算，对照 dev 247af98；WO-29 12:01 浮亏 9.85→9.35，WO-30 10:00 浮亏 9.85→0.15，WO-30 描述去掉“#195 未批准”；每个 step 与核销行新增严格 bool 字段 writeoff_sod_late（#197 方案 A）。 v3.3（Task CK，Poly风控 #225 裁定）：WO-27 2026-10-14T13:00Z、WO-43 2026-10-13T09:00Z/10:00Z 为当日首次评估，距 UTC 00:00 超过 DAY_START_MAX_LAG_S，日初快照迟到，参考价取 max(成本, 前一日最后有效标价)；期望值由仓库函数（tests/test_writeoff_vectors.py 同一 harness，src.paper_ledger.daily_unrealized / src.daily_loss）重算。新增对照 WO-27-ONTIME（00:00:30Z 准时快照，13:00 期望 0）。harness 不再假设“昨天跑过即准时”。其余期望不变。 | 前版：v3.2：OQ-N7 已裁定（https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792）：核销后矛盾 → 全局 halt（invalid_risk_state），并叠加 #214 对该市场结算的阻断；人工解除全局 halt 后该市场结算仍阻断。WO-15/16 期望不变；新增 WO-42、WO-43、INV-13；对照 dev 8b5db69。 v3.1（仅措辞）：所有 'bus' 指 M2 runner 事件流（events.jsonl），不是 pod bus；PROTOCOL / BUS_TYPES 不变（Poly指挥 澄清）。数值、字段名与 v3 @4acf535 逐项相同。v3 按 Poly风控 补充裁定 issuecomment-6106700917 修订：bus 至少一次 + 消费端按键去重（WO-38）；已核销市场轮询到结算、只查矛盾，读失败忽略（WO-41）；N1–N6 resolved。v2 按 Poly风控 裁定 issuecomment-6106669720 修订：核销前的确认失败/读取失败不 halt（按 #124 继续计最坏浮亏、下一轮重新确认）；只有核销后矛盾与账本核销行冲突会 halt；同 tick 先结算后核销；新增崩溃重启/账本去重向量；第二源辅证另给 expected_reread_only。",
- "generator": "vectors/gen_197_vectors.v3_4.py",
+ "version": "v3.5",
+ "version_note": "v3.5（Poly风控 审 v3.4 后修订）：WO-27-ONTIME 10-14 快照改为 00:00:30Z 准时快照（late=false，当日两步 writeoff_sod_late=false）；WO-27 10-14、WO-43 10-13 迟到快照条目改为 dev 的 prev_day_last_mark 格式；生成器断言每个快照 created_at = 当日首次评估、late 符合 120 秒规则；数值与 v3.4 相同（断言）。 v3.4（Poly指挥 定名，取代 Poly预测 的 v3.3+r195；CK 分支自己的 v3.3 #225 版不变）：start_of_day_snapshots[].late 按 writeoff_sod_late 同一规则重算（当日首次评估距 00:00 UTC > 120 s 即 late），共 58 处变化，逐条见 changelog；所有数值与 v3.3+r195 相同（断言）。 v3.3+r195（Poly预测，在 CK 的 v3.3 #225 版本之上）：按 #195（已合入 dev c8f796d，leg_marks 只要求持有方一侧可用）重算，对照 dev 247af98；WO-29 12:01 浮亏 9.85→9.35，WO-30 10:00 浮亏 9.85→0.15，WO-30 描述去掉“#195 未批准”；每个 step 与核销行新增严格 bool 字段 writeoff_sod_late（#197 方案 A）。 v3.3（Task CK，Poly风控 #225 裁定）：WO-27 2026-10-14T13:00Z、WO-43 2026-10-13T09:00Z/10:00Z 为当日首次评估，距 UTC 00:00 超过 DAY_START_MAX_LAG_S，日初快照迟到，参考价取 max(成本, 前一日最后有效标价)；期望值由仓库函数（tests/test_writeoff_vectors.py 同一 harness，src.paper_ledger.daily_unrealized / src.daily_loss）重算。新增对照 WO-27-ONTIME（00:00:30Z 准时快照，13:00 期望 0）。harness 不再假设“昨天跑过即准时”。其余期望不变。 | 前版：v3.2：OQ-N7 已裁定（https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792）：核销后矛盾 → 全局 halt（invalid_risk_state），并叠加 #214 对该市场结算的阻断；人工解除全局 halt 后该市场结算仍阻断。WO-15/16 期望不变；新增 WO-42、WO-43、INV-13；对照 dev 8b5db69。 v3.1（仅措辞）：所有 'bus' 指 M2 runner 事件流（events.jsonl），不是 pod bus；PROTOCOL / BUS_TYPES 不变（Poly指挥 澄清）。数值、字段名与 v3 @4acf535 逐项相同。v3 按 Poly风控 补充裁定 issuecomment-6106700917 修订：bus 至少一次 + 消费端按键去重（WO-38）；已核销市场轮询到结算、只查矛盾，读失败忽略（WO-41）；N1–N6 resolved。v2 按 Poly风控 裁定 issuecomment-6106669720 修订：核销前的确认失败/读取失败不 halt（按 #124 继续计最坏浮亏、下一轮重新确认）；只有核销后矛盾与账本核销行冲突会 halt；同 tick 先结算后核销；新增崩溃重启/账本去重向量；第二源辅证另给 expected_reread_only。",
+ "generator": "vectors/gen_197_vectors.v3_5.py",
  "origin_dev_sha": "247af98797cf6745f72f6ba745e367213d480537",
  "rule": "KEY #197 close-then-write-off: body sections A-E, approval https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6104331631, ruling https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6106669720. PR #195 applied (merged in dev c8f796d): leg_marks needs only the held side.",
  "constants": {
@@ -19,7 +19,7 @@
   "inputs.ledger_writeoff_rows[]": "optional: write-off rows already in the ledger from a previous process: {row: <write-off row, same shape as expected.writeoff_events[]>, bus_emitted: bool (already in the runner event stream once before this run)}.",
   "inputs.steps[]": "ticks. t: UTC ISO. books: {'market|token': book|null} (carried forward; null = removed). gamma: {market: Gamma read (explicit closed=true query) | {'_error':..} | [] }. second_source: {market: {source: clob_markets, accepting_orders, closed} | {source: data_v2_tokens, closed, resolved}} (ignored by expected_reread_only). resolution: confirmed settlement snapshot. restart: process restart before this tick. crash_after_ledger_write: the write-off row of this tick is fsync'd but the process dies before the bus emit. operator_resume (v3.2): operator clears the global halt before this tick (OQ-N7).",
   "tick order (ruling)": "0) operator_resume (v3.2): clears a closed_flag_contradiction_after_writeoff global halt; that market is added to settlement_blocked_markets (#214) and stays blocked.  1) restart: drop in-memory pending, replay ledger; runner event stream is at-least-once (the model re-sends every write-off row whose leg is still open; consumers dedupe by key)  2) read ledger; conflicting write-off rows -> halt; halted -> stop (no settle, no write-off, daily_loss null)  3) settlement first (src.settlement.plan)  4) close detection + write-off only for open legs neither settled nor written off; post-write-off contradiction check  5) daily loss (start-of-day snapshot at the first tick of each UTC day, dev rule)  6) (RiskGate, not modelled). Matches origin/dev 4acf535 m2_runner.preflight: KILL/live/pins/global halt/verified ledger -> _settle_tick (resolution_watch.collect -> apply_settlements -> _writeoff_hook, CK slot) -> daily_loss re-check -> breaker -> RiskGate.",
-  "inputs.start_of_day_snapshots[]": "daily_marks snapshot each UTC day gets at its first tick (dev format, liquidation_mark with #195 held-side-only rule). late (v3.4) = src.day_boundary.day_start_late(created_at, clock_ok=True) (> DAY_START_MAX_LAG_S=120 s after 00:00 UTC) or day in inputs.late_days; equals writeoff_sod_late of every step/row of that day.",
+  "inputs.start_of_day_snapshots[]": "the snapshot dev (src.paper_ledger.daily_unrealized at 247af98) would write at the day's FIRST evaluation: created_at = first step t of that UTC day (asserted); late = day_start_late(created_at, clock_ok=True) (> 120 s after 00:00 UTC; clock_ok != True is always late) or day in late_days; legs = leg_marks.snapshot_legs with #195 liquidation marks; on a late day a leg with a previous-UTC-day last valid ladder mark carries it as mark_source=prev_day_last_mark (paper_ledger._previous_day_marks; applied to WO-27 2026-10-14 and WO-43 2026-10-13). Replaying every vector with these snapshots through dev leg_marks reproduces expected/dev_current numbers (generator check).",
   "expected.steps[]": "risk_state ok|invalid_risk_state, halt_reason, close_reasons {market: reason}, writeoff_emitted, writeoff_events [event_id written this tick], ledger_writeoff_rows (distinct leg_keys), duplicate_writeoff_rows_ignored, bus_emitted [{event_id, replay}] (runner event stream; one conforming at-least-once trace; NOT asserted exactly), bus_keys_required_by_now (assert: each key has >=1 runner event by the end of this tick), crash_after_ledger_write, realized_writeoff_usd, daily_loss_usd (null when halted) + parts {fees_usd, realized_loss_usd, writeoff_usd, unrealized_usd}, realized_gain_usd, max_daily_loss_veto, occupancy {count, usd, legs}, settlement_booked, marks.",
   "expected.writeoff_events[]": "ledger write-off rows: event_id 'writeoff-'+sha256('<condition>|<market>|<token>')[:32] (proposed), unique key leg_key, ts, day, market, condition_id, token_id, shares, cost_basis_usd, open_fees_usd, full_cost_usd, daily_loss_component_usd, reason, evidence {first_read_t, confirm_t, closed_time, query}.",
   "expected.bus": "runner event stream (not the pod bus), at-least-once assertions: every keys_required key has >= 1 write-off event; consumer_deduped_count_by_key == 1 per key; model_emissions_by_key is informative only.",
@@ -714,6 +714,101 @@
      "created_at": "2026-10-13T09:00:00Z",
      "old": false,
      "new": true
+    }
+   ],
+   "added": {}
+  },
+  {
+   "version": "v3.5",
+   "date": "2026-10-15 UTC+8",
+   "dev_sha": "247af98797cf6745f72f6ba745e367213d480537",
+   "summary": "Poly风控 审 v3.4（poly-risk-197-vectors-v3.4-review.md）必改 1 项 + 非阻断第 4 项。数值不变（断言：除快照与 writeoff_sod_late 外与 v3.4 cd95722b 完全相同；WO-27-ONTIME 13:00 浮亏仍 0）。生成器 vectors/gen_197_vectors.v3_5.py。",
+   "late_changes": [
+    {
+     "vector": "WO-27-ONTIME",
+     "day": "2026-10-14",
+     "field": "inputs.start_of_day_snapshots[].created_at/late/legs",
+     "created_at_old": "2026-10-14T13:00:00Z",
+     "created_at_new": "2026-10-14T00:00:30Z",
+     "old": true,
+     "new": false
+    },
+    {
+     "vector": "WO-27-ONTIME",
+     "day": "2026-10-14",
+     "field": "expected.steps[t=2026-10-14T00:00:30Z].writeoff_sod_late",
+     "old": true,
+     "new": false
+    },
+    {
+     "vector": "WO-27-ONTIME",
+     "day": "2026-10-14",
+     "field": "expected.steps[t=2026-10-14T13:00:00Z].writeoff_sod_late",
+     "old": true,
+     "new": false
+    },
+    {
+     "vector": "WO-27-ONTIME",
+     "day": "2026-10-14",
+     "field": "dev_current.steps[t=2026-10-14T13:00:00Z].writeoff_sod_late",
+     "old": true,
+     "new": false
+    }
+   ],
+   "snapshot_format_changes": [
+    {
+     "vector": "WO-27",
+     "day": "2026-10-14",
+     "leg_key": "mB|mB-Y",
+     "old": {
+      "mark_usd": 9.5,
+      "mark_source": "bid_ladder",
+      "book_ts": "2026-10-14T12:59:50Z",
+      "mark_invalid": false
+     },
+     "new": {
+      "mark_usd": 9.5,
+      "mark_source": "prev_day_last_mark",
+      "book_ts": "2026-10-13T00:00:20Z",
+      "mark_invalid": false
+     },
+     "prev_day_last_eval": "2026-10-13T00:00:30Z"
+    },
+    {
+     "vector": "WO-43",
+     "day": "2026-10-13",
+     "leg_key": "mA|mA-Y",
+     "old": {
+      "mark_usd": 9.7,
+      "mark_source": "bid_ladder",
+      "book_ts": "2026-10-13T08:59:50Z",
+      "mark_invalid": false
+     },
+     "new": {
+      "mark_usd": 9.7,
+      "mark_source": "prev_day_last_mark",
+      "book_ts": "2026-10-12T13:04:50Z",
+      "mark_invalid": false
+     },
+     "prev_day_last_eval": "2026-10-12T13:05:00Z"
+    },
+    {
+     "vector": "WO-43",
+     "day": "2026-10-13",
+     "leg_key": "mB|mB-Y",
+     "old": {
+      "mark_usd": 0.0,
+      "mark_source": "invalid_book",
+      "book_ts": null,
+      "mark_invalid": true
+     },
+     "new": {
+      "mark_usd": 9.7,
+      "mark_source": "prev_day_last_mark",
+      "book_ts": "2026-10-12T08:00:20Z",
+      "mark_invalid": false
+     },
+     "prev_day_last_eval": "2026-10-12T08:00:30Z"
     }
    ],
    "added": {}
@@ -16539,8 +16634,8 @@
         "shares": 10.0,
         "cost_basis_usd": 9.8,
         "mark_usd": 9.5,
-        "mark_source": "bid_ladder",
-        "book_ts": "2026-10-14T12:59:50Z",
+        "mark_source": "prev_day_last_mark",
+        "book_ts": "2026-10-13T00:00:20Z",
         "mark_invalid": false
        }
       ]
@@ -17398,8 +17493,8 @@
      },
      {
       "day": "2026-10-14",
-      "created_at": "2026-10-14T13:00:00Z",
-      "late": true,
+      "created_at": "2026-10-14T00:00:30Z",
+      "late": false,
       "legs": [
        {
         "leg_key": "mA|mA-Y",
@@ -17416,7 +17511,7 @@
         "cost_basis_usd": 9.8,
         "mark_usd": 9.5,
         "mark_source": "bid_ladder",
-        "book_ts": "2026-10-14T12:59:50Z",
+        "book_ts": "2026-10-14T00:00:20Z",
         "mark_invalid": false
        }
       ]
@@ -17708,7 +17803,7 @@
         "loss_usd": 0.0
        }
       ],
-      "writeoff_sod_late": true
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -17760,7 +17855,7 @@
         "loss_usd": 0.0
        }
       ],
-      "writeoff_sod_late": true
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -18031,7 +18126,7 @@
         "loss_usd": 0.0
        }
       ],
-      "writeoff_sod_late": true
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -28330,18 +28425,18 @@
         "shares": 10.0,
         "cost_basis_usd": 9.85,
         "mark_usd": 9.7,
-        "mark_source": "bid_ladder",
-        "book_ts": "2026-10-13T08:59:50Z",
+        "mark_source": "prev_day_last_mark",
+        "book_ts": "2026-10-12T13:04:50Z",
         "mark_invalid": false
        },
        {
         "leg_key": "mB|mB-Y",
         "shares": 10.0,
         "cost_basis_usd": 9.85,
-        "mark_usd": 0.0,
-        "mark_source": "invalid_book",
-        "book_ts": null,
-        "mark_invalid": true
+        "mark_usd": 9.7,
+        "mark_source": "prev_day_last_mark",
+        "book_ts": "2026-10-12T08:00:20Z",
+        "mark_invalid": false
        }
       ]
      },
