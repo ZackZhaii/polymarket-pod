@@ -58,7 +58,6 @@ from src.ledger_store import (
     FILL_ID_FIELD,
     KIND_FIELD,
     WRITEOFF_DECISION,
-    WRITEOFF_ID_PREFIX,
     WRITEOFF_KIND,
     counts,
     is_writeoff,
@@ -66,6 +65,7 @@ from src.ledger_store import (
 )
 from src.thresholds import CLOCK_SKEW_MAX_S, LEDGER_OPEN_EPS, MARKET_CLOSE_RECHECK_S, MARKET_CLOSE_REOPEN_GRACE_S
 
+WRITEOFF_ID_PREFIX = "writeoff-"
 STRATEGY = "writeoff"
 BY_REREAD = "gamma_reread"
 BY_CLOB = "clob_accepting_orders"
@@ -168,36 +168,36 @@ def gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime, *,
                clock: Callable[[], datetime] | None = None,
                monotonic: Callable[[], float] | None = None) -> Observation:
     """Read one held market (see ``_gamma_read``). PR #342 review (Codex 6185166823 P1): with ``clock`` /
-    ``monotonic`` the observation is stamped when a read finished (wall and monotonic), not at the tick start,
-    so a slow read cannot shorten the confirmation interval. PR #342 review (Codex 6185588835 P1): the stamp is
-    taken the moment the ``closed=true`` response (the only read that can show a close) completes, never after
-    the trailing default-view read, so a slow default view cannot pad the interval either."""
-    changes: dict[str, Any] = {}
+    ``monotonic`` the observation is stamped when the closed=true response completed (wall and monotonic), not at
+    the tick start and not after the default view, so neither a slow read nor a slow default view can change the
+    confirmation interval."""
+    stamps: dict[str, Any] = {}
 
-    def stamp() -> None:
-        if clock is not None:
-            changes["observed_at"] = clock()
+    def stamp() -> None:  # PR #342 (Codex 6185588835 P1): when the closed=true response completes, so a
+        if clock is not None:  # slow default-view read can never pad the confirmation interval
+            stamps["observed_at"] = clock()
         if monotonic is not None:
-            changes["observed_mono"] = monotonic()
+            stamps["observed_mono"] = monotonic()
 
-    obs = _gamma_read(getter, market_id, now, on_close_response=stamp)
-    return dataclasses.replace(obs, **changes) if changes else obs
+    obs = _gamma_read(getter, market_id, now, stamp)
+    if not stamps:
+        stamp()  # the closed=true read itself failed: stamp the failure now
+    return dataclasses.replace(obs, **stamps) if stamps else obs
 
 
 def _gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime,
-                on_close_response: Callable[[], None] | None = None) -> Observation:
+                stamp: Callable[[], None] | None = None) -> Observation:
     """Read one held market: ``closed=true`` first (the only read that can show a close), then the default query
     (it can only show the market open). In neither list: unknown (a read failure). In both: unknown too (Gamma's
-    views split for a few minutes around a close). ``on_close_response`` runs as soon as the ``closed=true``
-    response is back (the observation's time stamp)."""
+    views split for a few minutes around a close)."""
     rows: dict[bool, dict[str, Any]] = {}
     for closed in (True, False):
         try:
             data = getter(gamma_url(market_id, closed=closed))
+            if closed and stamp is not None:
+                stamp()
         except Exception as exc:  # noqa: BLE001 - any failed read is a read failure (never a halt by itself)
             return failed(market_id, now, f"gamma_read_failed:{type(exc).__name__}")
-        if closed and on_close_response is not None:
-            on_close_response()
         row, problem = _match(data, market_id)
         if problem:
             return failed(market_id, now, problem)

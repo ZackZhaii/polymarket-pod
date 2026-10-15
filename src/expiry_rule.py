@@ -54,13 +54,10 @@ def parse_end_date(value: object) -> datetime | None:
         text = text[:-1] + "+00:00"
     try:
         parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if not _aware(parsed):
-        return None
-    try:
+        if not _aware(parsed):
+            return None
         return parsed.astimezone(timezone.utc)
-    except (OverflowError, ValueError):  # PR #342 review (Codex 6185588835 P2): e.g. 0001-01-01T00:00:00+01:00
+    except (ValueError, OverflowError):  # PR #342 (Codex 6185588835 P2): an out-of-range offset date is invalid
         return None
 
 
