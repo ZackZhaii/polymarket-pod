@@ -9,28 +9,7 @@ Phase 0 work lands on `dev` (branch from `origin/dev`; PRs use base `dev`; Poly�
 ## How to split chats
 
 One chat, one task, one finish line. Do not start a second task in the same chat.
-When the diff is committed, write five lines at the bottom of this file under `## Task EA — Issue #245: EXIT_CODES.md aligns with m2_runner / secret_scan reality
-
-Status: done.
-
-Claimed by Poly桥接 (issue #245). Done by grok-bot on NoisePC. Docs-only, non-KEY: make
-`docs/EXIT_CODES.md` match the code without changing thresholds, risk.toml, or behaviour.
-
-- `src/m2_runner.py`: exits 2 / 3 / 7 return from `main` before `_run` creates the Heartbeat, so
-  Sentinel never observes them (no alert in practice). Document that; keep the Sentinel column as
-  `alert` (EXIT_EVENTS default). Exit 3 must never write an m2_runner heartbeat. Drop the inaccurate
-  "before any read" claim; tick order is preflight → settlement (may read Gamma) → clock → daily
-  loss / disk → scan / decide.
-- `src/secret_scan.py`: exit 2 covers unenumerable directories (`ScanError`, #53 / #270) and a bad
-  BIP39 word list; exit 1 is intentional `EXIT_SECRET` (not an uncaught crash).
-- `src/m1_run.py`: 24 h → 6 h (`M1_RUN_TARGET_S=21600` / `M1_MIN_RUN_S=21540`, #171; also Refs #220).
-- Tests: `tests/test_ea_exit_codes_docs.py` (offline); `tests/test_exit_codes.py` still green.
-  Full pytest + `python scripts/guard.py --require-git`. config/risk.toml sha unchanged
-  (0aea23af…bc04), `live_enabled=false`.
-
-
-## Latest` and stop.
-- 2026-10-15: Task EA (issue #245): EXIT_CODES.md aligns with m2_runner pre-heartbeat exits 2/3/7, settlement-before-scan wording, secret_scan exit 2 directory/word-list, m1_run 24h→6h (Refs #220). Docs-only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+When the diff is committed, write five lines at the bottom of this file under `## Latest` and stop.
 Branch from `origin/dev`; pull requests target `dev`. Poly指挥 merges into `dev` and opens `dev` -> `main` pull requests for human review.
 Never push `main` or `dev`, never merge your own pull request, keep at most 2 open pull requests per bot. Escalated items are never auto-merged.
 Task letters: the next letter unused on `dev`, `main` and every open pull request. After Z come AA, AB, AC, … (after AZ comes BA, and so on).
@@ -1767,7 +1746,29 @@ and closes the issue. Proposal item 2 (re-enable conditions) stays unlock-only a
   `tests/test_structural_gate_gaps.py`, related paper_cycle / sell-set rejects; full `python -m pytest`;
   `python scripts/guard.py --require-git`. config/risk.toml sha unchanged (0aea23af…bc04), `live_enabled=false`.
 
+## Task EA — Issue #245: EXIT_CODES.md aligns with m2_runner / secret_scan reality
+
+Status: done.
+
+Claimed by Poly桥接 (issue #245). Done by grok-bot on NoisePC. Docs plus the registry checker, non-KEY: make
+`docs/EXIT_CODES.md` match the code without changing thresholds, risk.toml, or behaviour.
+
+- `src/m2_runner.py`: exits 2 / 3 / 7 return from `main` before `_run` creates the Heartbeat, so
+  Sentinel never observes them. Their Sentinel column is `不可见` (`PRE_HEARTBEAT_EXITS` in
+  `src/exit_codes.py`); on-call finds 2 / 7 via m2_start exit 5 and
+  `runs/m2/start-logs/<stamp>/m2_runner.log`, or the supervisor exit code (availability blind spot).
+  Exit 3 is a normal refusal and must never write an m2_runner heartbeat. Drop the inaccurate
+  "before any read" claim; tick order is preflight → settlement (may read Gamma) → clock → daily
+  loss / disk → scan / decide.
+- `src/secret_scan.py`: exit 2 covers unenumerable directories (`ScanError`, #53 / #270) and a bad
+  BIP39 word list; exit 1 is intentional `EXIT_SECRET` (not an uncaught crash).
+- `src/m1_run.py`: 24 h → 6 h (`M1_RUN_TARGET_S=21600` / `M1_MIN_RUN_S=21540`, #171; also Refs #220).
+- Tests: `tests/test_ea_exit_codes_docs.py` (offline); `tests/test_exit_codes.py` still green.
+  Full pytest + `python scripts/guard.py --require-git`. config/risk.toml sha unchanged
+  (0aea23af…bc04), `live_enabled=false`.
+
 ## Latest
+- 2026-10-15: Task EA (issue #245): EXIT_CODES.md aligns with m2_runner pre-heartbeat exits 2/3/7, settlement-before-scan wording, secret_scan exit 2 directory/word-list, m1_run 24h→6h (Refs #220). m2_runner 2/3/7 Sentinel column 不可见 (on-call: m2_start exit 5, start-logs m2_runner.log, supervisor). risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task DZ (issue #210): operator CLI no longer defaults --fee-rate to 0.0 (default None / missing_fee_data); CLI intents without book depth/levels refuse with missing_book_levels before booking (no --asks added). Tighten-only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task DZ PR #336 P1 fix (Poly risk option 1): run_cli_intent always refuses missing_book_levels; any programmatic args.asks (True/string/zero or tiny depth/NaN/inf) is ignored and commit_if_allowed is never reached. No --asks flag. tests/test_fill_realism_147.py parametric junk-asks cases. risk.toml unchanged, live_enabled=false.
 

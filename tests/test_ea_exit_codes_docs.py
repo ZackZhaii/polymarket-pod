@@ -57,3 +57,32 @@ def test_m2_runner_prose_and_table_agree_on_invisible_exits():
     assert "availability blind spot" in sec
     assert "normal refusal" in sec
     assert "no alert fires in practice" not in sec
+
+
+def test_pre_heartbeat_exits_match_m2_runner_return_paths():
+    """PRE_HEARTBEAT_EXITS is tied to the real code: main returns 2/3/7 before calling _run, and only
+    _run creates the Heartbeat (PR #338, Codex 6180719754 P2)."""
+    import ast
+
+    from src import exit_codes, m2_runner
+
+    assert {code for proc, code in exit_codes.PRE_HEARTBEAT_EXITS if proc == "m2_runner"} == {
+        m2_runner.EXIT_USAGE, m2_runner.EXIT_ALREADY_RUNNING, m2_runner.EXIT_SELF_CHECK}
+    assert all(proc == "m2_runner" for proc, _ in exit_codes.PRE_HEARTBEAT_EXITS)
+    tree = ast.parse((ROOT / "src" / "m2_runner.py").read_text(encoding="utf-8"))
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+
+    def makes_heartbeat(fn):
+        return any(isinstance(c, ast.Call) and ast.unparse(c.func).endswith("Heartbeat")
+                   for c in ast.walk(fn))
+
+    assert makes_heartbeat(funcs["_run"])
+    assert not [name for name, fn in funcs.items() if name != "_run" and makes_heartbeat(fn)]
+    main = funcs["main"]
+    run_line = min(c.lineno for c in ast.walk(main)
+                   if isinstance(c, ast.Call) and ast.unparse(c.func) == "_run")
+    returned = {ast.unparse(r.value): r.lineno for r in ast.walk(main)
+                if isinstance(r, ast.Return) and r.value is not None}
+    for name in ("EXIT_USAGE", "EXIT_SELF_CHECK", "EXIT_ALREADY_RUNNING"):
+        assert name in returned and returned[name] < run_line, name
+    assert "Heartbeat" not in ast.unparse(main)

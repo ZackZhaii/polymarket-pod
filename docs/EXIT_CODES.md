@@ -143,7 +143,8 @@ instance's beat).
 - Exit 3 = another m2_runner already holds `runner.lock`: a normal refusal, nothing done, no alert needed.
 - Exits 2 / 7 = the runner did not start. How on-call finds them:
   - Launched via `m2_start`: 2/7 write no new heartbeat, so `m2_start` times out waiting for m2_runner and exits 5
-    (`EXIT_NOT_READY`). Check `m2_start`'s exit code and m2_runner's stderr.
+    (`EXIT_NOT_READY`). Check `m2_start`'s exit code and m2_runner's stderr, which `m2_start` redirects (with stdout)
+    to `runs/m2/start-logs/<stamp>/m2_runner.log`.
   - Restarted without `m2_start` (by hand or a supervisor): if the old m2_runner heartbeat says `running`, it goes
     stale and the Sentinel records a global halt (stale heartbeat). If the old heartbeat says `finished`, nothing goes
     stale and **only the supervisor's view of the exit code shows it**. No trading happens either way (the runner
