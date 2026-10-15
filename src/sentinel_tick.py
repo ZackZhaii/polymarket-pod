@@ -35,7 +35,7 @@ market halt         one asset with RECORDER_GAP_RESYNC_HALT_COUNT gap resyncs in
 alert               scanner exit 1 / 2; scanner exit 3 SCANNER_INCOMPLETE_CONSECUTIVE times in a
                     row; scanner / endgame_scan / loop_claim / resolutions start with no finish after
                     SCANNER_HANG_S; no successful scan for SCANNER_MAX_SUCCESS_AGE_S; m1_run exit
-                    1 / 2 / 3 / 7; m1_rest heartbeat stale (HEARTBEAT_REST_TIMEOUT_S) or non-zero exit;
+                    1 / 2 / 3 / 7; m1_rest heartbeat stale (HEARTBEAT_REST_TIMEOUT_S) or non-zero exit; m1_rest error_streak >= REST_ERROR_STREAK_ALERT (rest_error_streak);
                     paper_cycle heartbeat stale (HEARTBEAT_PAPER_CYCLE_TIMEOUT_S) or crash;
                     RECORDER_RECONNECT_ALERT_COUNT reconnects in the window; any other non-zero
                     exit; a crash of a process not listed above; m2_runner paused longer than
@@ -83,6 +83,7 @@ from src.thresholds import (  # noqa: E402
     HEARTBEAT_RUNNER_TIMEOUT_S,
     RECORDER_GAP_RESYNC_HALT_COUNT,
     RECORDER_RECONNECT_ALERT_COUNT,
+    REST_ERROR_STREAK_ALERT,
     RUNNER_PAUSED_ALERT_S,
     SCANNER_HANG_S,
     SCANNER_INCOMPLETE_CONSECUTIVE,
@@ -320,6 +321,8 @@ class Tick:
             self._liveness(proc, spec, record)
         if proc in ("ws_recorder", "m1_run") and state != heartbeat.STATE_FINISHED:
             self._escalation(proc, record)
+        if proc == "m1_rest" and state != heartbeat.STATE_FINISHED:
+            self._rest_error_streak(record)
         if proc == "scanner":
             self._scanner_success(record)
         if proc == "m2_runner" and state == heartbeat.STATE_PAUSED:
@@ -380,6 +383,24 @@ class Tick:
             if isinstance(market, str) and market:
                 self.halt(f"recorder_gap_resyncs:{asset}", market=market, extra={"detail": detail})
             self.alert(f"gap_resync_storm:{proc}:{asset}", "gap_resync_storm", detail, proc=proc)
+
+    def _rest_error_streak(self, record: dict[str, Any]) -> None:
+        """Issue #138: m1_rest progress.error_streak >= REST_ERROR_STREAK_ALERT -> warn rest_error_streak.
+
+        Missing error_streak is treated as 0 (older heartbeats). A non-int / bool value is
+        heartbeat_malformed (fail closed). The alert key re-arms when the streak drops below the
+        threshold (e.g. after a successful sample round clears it).
+        """
+        progress = record["progress"]
+        streak = progress.get("error_streak", 0)
+        if isinstance(streak, bool) or not isinstance(streak, int):
+            self.halt(f"heartbeat_malformed:m1_rest")
+            self.alert("heartbeat_malformed:m1_rest", "heartbeat_malformed", "progress.error_streak",
+                       proc="m1_rest", severity="sev1")
+            return
+        if streak >= REST_ERROR_STREAK_ALERT:
+            self.alert("rest_error_streak:m1_rest", "rest_error_streak", f"error_streak={streak}",
+                       proc="m1_rest")
 
     def _runner_paused(self, record: dict[str, Any]) -> None:
         """Issue #119: an m2_runner paused (a halt, the daily loss breaker, disk) longer than RUNNER_PAUSED_ALERT_S
