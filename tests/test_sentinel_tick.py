@@ -157,6 +157,19 @@ def test_rest_error_streak_alerts_at_threshold_once_and_rearms(env):
     assert env()["alerts"] == ["rest_error_streak"]  # re-armed
 
 
+def test_rest_error_streak_missing_field_counts_as_zero(env):
+    """Issue #138 / Task EE: an older m1_rest heartbeat without progress.error_streak is streak 0:
+    no alert, no halt; a later real streak still alerts at the threshold."""
+    beat("m1_rest", progress={"samples": 9, "rows": 0, "errors": 18})
+    result = env()
+    assert result["halts"] == [] and result["alerts"] == [] and alerts() == []
+    beat("m1_rest", progress={})
+    result = env()
+    assert result["halts"] == [] and result["alerts"] == []
+    beat("m1_rest", progress={"samples": 10, "rows": 0, "errors": 20, "error_streak": REST_ERROR_STREAK_ALERT})
+    assert env()["alerts"] == ["rest_error_streak"]
+
+
 @pytest.mark.parametrize("bad", ["3", True, 1.5, None], ids=["str", "bool", "float", "none"])
 def test_malformed_rest_error_streak_halts(env, bad):
     """Issue #138: a non-int (or bool) error_streak is heartbeat_malformed (fail closed)."""
