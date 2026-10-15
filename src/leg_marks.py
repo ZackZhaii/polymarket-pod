@@ -394,7 +394,8 @@ def writeoff_uplift_problems(rows: list[dict[str, Any]], ids: list[str] | None, 
 
     Fail closed: a different uplift is ``writeoff_sod_uplift_mismatch``; a leg with shares held since the start of
     the day written off before the day's snapshot existed is ``writeoff_before_daily_marks``; a missing snapshot is
-    ``writeoff_daily_marks_missing``. Write-offs of earlier days are checked on their own day only.
+    ``writeoff_daily_marks_missing``; a ``writeoff_sod_late`` that is not the snapshot's ``late`` (missing included) is
+    ``writeoff_sod_late_mismatch`` (#197 option A). Write-offs of earlier days are checked on their own day only.
     """
     labels = list(ids) if ids is not None else [str(i) for i in range(len(rows))]
     problems: list[str] = []
@@ -412,6 +413,10 @@ def writeoff_uplift_problems(rows: list[dict[str, Any]], ids: list[str] | None, 
         created, booked_at = parse_book_ts(snapshot.get("created_at")), parse_book_ts(row.get("ts"))
         if carried and (created is None or booked_at is None or created > booked_at):
             problems.append(f"writeoff_before_daily_marks:{label}")
+            continue
+        # #197 option A (Poly风控 tightening 1): the row's writeoff_sod_late must be the snapshot's lateness
+        if row.get("writeoff_sod_late") is not (snapshot.get("late") is True):
+            problems.append(f"writeoff_sod_late_mismatch:{label}")
             continue
         expected = writeoff_sod_uplift(pos, snapshot, key)
         booked = _finite(row.get("writeoff_sod_uplift_usd") if row.get("writeoff_sod_uplift_usd") is not None else 0.0)

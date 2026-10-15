@@ -230,7 +230,9 @@ def writeoff_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
           and _zoned_ts(row.get("closed_ts"))
           # #197 correction (issuecomment-6109537257): the optional breakdown, when present, is a number >= 0
           and all(row.get(name) is None or (number(name) is not None and number(name) >= 0.0)  # type: ignore[operator]
-                  for name in ("writeoff_cost_usd", "writeoff_sod_uplift_usd")))
+                  for name in ("writeoff_cost_usd", "writeoff_sod_uplift_usd"))
+          # #197 option A: the start-of-day snapshot's lateness, when present, is a bool
+          and (row.get("writeoff_sod_late") is None or isinstance(row.get("writeoff_sod_late"), bool)))
     return [] if ok else [f"invalid_writeoff:{fill_id}"]
 
 

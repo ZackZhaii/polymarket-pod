@@ -50,7 +50,9 @@ def test_an_unwritable_snapshot_on_the_first_tick_books_nothing(env, monkeypatch
 
 def _book_writeoff(env, uplift):
     row = market_close.plan_writeoffs(_rows(env["ledger"]), ["ck-0000"], [close("m")], env["clock"]["now"]).rows[0]
-    row.update(writeoff_sod_uplift_usd=uplift, writeoff_usd=row["writeoff_cost_usd"] + uplift)
+    snap, _ = daily_marks.read_snapshot(paper_ledger.DAILY_MARKS_DIR, env["clock"]["now"][:10])
+    late = True if snap is None else snap.get("late") is True  # #197 option A: the snapshot's lateness
+    row.update(writeoff_sod_uplift_usd=uplift, writeoff_usd=row["writeoff_cost_usd"] + uplift, writeoff_sod_late=late)
     ledger_store.book(env["ledger"], row)
 
 
