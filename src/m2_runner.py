@@ -996,11 +996,15 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter,
             return []
         # PR #342 review (Codex 6188442103 P1): same UTC day here, so the row and the day's snapshot it may write
         # are stamped, and the snapshot's lateness decided, at the write time, never the tick start.
-        out = paper_ledger.apply_writeoffs(step.closes, _stamp(written_at), clock_ok=clock_ok)
-        if out.get("deferred"):  # PR #342 (Codex 6189524237 P1): commit lock busy: nothing booked, retry, no halt
+        out = paper_ledger.apply_writeoffs(step.closes, _stamp(written_at), clock_ok=clock_ok, clock=state.clock)
+        if out.get("deferred"):
+            # PR #342 (Codex 6189524237 / 6192075048 P1): commit lock busy, or the time read again inside the lock
+            # is on a later UTC day: nothing booked, the pending reads stay pending, no halt; retry next tick.
             for close in step.closes:
                 state.close_tracker.defer(close.market)
-            event(state, "writeoff_deferred_commit_lock", now, markets=sorted(c.market for c in step.closes))
+            name = ("writeoff_deferred_day_boundary" if out["deferred"] == paper_ledger.WRITEOFF_DAY_BOUNDARY
+                    else "writeoff_deferred_commit_lock")
+            event(state, name, now, markets=sorted(c.market for c in step.closes))
             return []
         if out["problems"]:
             # PR #342 review (Codex 6184078075 / 6184412258 P2): a partial failure, or a row on disk whose

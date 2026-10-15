@@ -1426,3 +1426,65 @@ def test_a_busy_commit_lock_defers_the_runners_writeoff_without_a_halt(runner, m
 
 def _stamp_s(moment):
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# --- PR #342 review 6192147305 (Codex 6192075048 P1): the write time is read again inside the commit lock -----
+
+def _lock_wait_runner(runner, monkeypatch, start, wait_s):
+    """Verified clock; the commit lock is held by a commit that releases it ``wait_s`` (fake) seconds after the
+    write-off starts waiting: the fake clock advances while the write-off waits."""
+    _verified(monkeypatch)
+    clock = _Time(start)
+    _timed_runner(runner, clock)
+    real_lock = paper_ledger._commit_lock
+
+    def lock_that_waits():
+        lock = real_lock()
+        acquire = lock.acquire
+
+        def acquire_after_wait(*args, **kwargs):
+            clock.advance(wait_s)  # the commit holding the lock finishes wait_s later
+            return acquire(*args, **kwargs)
+        lock.acquire = acquire_after_wait
+        return lock
+    return clock, lock_that_waits
+
+
+def test_a_lock_wait_past_the_day_start_lag_stamps_and_decides_late_inside_the_lock(runner, monkeypatch):
+    """The confirming tick starts 00:01:30 (pending read the previous day); the write-off waits 45 s for the
+    commit lock: written at 00:02:15, past the 120 s lag: snapshot and row late (old code: stamped 00:01:30, on time)."""
+    midnight = (RUN_NOW + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+    clock, lock_that_waits = _lock_wait_runner(runner, monkeypatch, midnight - timedelta(seconds=10), 45.0)
+    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _tick_at(runner, getter, clock)  # 23:59:50 the previous day: the pending read
+    clock.advance(100.0)  # 00:01:30
+    monkeypatch.setattr(paper_ledger, "_commit_lock", lock_that_waits)
+    report = _tick_at(runner, getter, clock)
+    assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
+    rows = _writeoffs(runner["paper"])
+    assert len(rows) == 1 and rows[0]["ts"].startswith(midnight.strftime("%Y-%m-%dT00:02:15"))
+    snap = daily_marks.read_snapshot(paper_ledger.DAILY_MARKS_DIR, midnight.strftime("%Y-%m-%d"))[0]
+    assert snap["late"] is True and rows[0]["writeoff_sod_late"] is True
+
+
+def test_a_lock_wait_across_utc_midnight_defers_to_the_new_days_tick(runner, monkeypatch):
+    """The confirming tick starts 23:59:50; the write-off waits 30 s for the commit lock (00:00:20): nothing is
+    booked on the old day, no halt, the pending read is kept; the new day's tick books on the new day (old code:
+    booked on the old day after the wait)."""
+    midnight = (RUN_NOW + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+    real_lock = paper_ledger._commit_lock
+    clock, lock_that_waits = _lock_wait_runner(runner, monkeypatch, midnight - timedelta(seconds=50), 30.0)
+    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _tick_at(runner, getter, clock)  # 23:59:10: the pending read
+    clock.advance(40.0)  # 23:59:50
+    monkeypatch.setattr(paper_ledger, "_commit_lock", lock_that_waits)
+    report = _tick_at(runner, getter, clock)
+    assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
+    assert _writeoffs(runner["paper"]) == []
+    assert "held" in runner["state"].close_tracker.first
+    monkeypatch.setattr(paper_ledger, "_commit_lock", real_lock)  # the commit lock is free again
+    clock.advance(1.0)
+    report = _tick_at(runner, getter, clock)
+    assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
+    rows = _writeoffs(runner["paper"])
+    assert len(rows) == 1 and rows[0]["ts"][:10] == midnight.strftime("%Y-%m-%d")

@@ -29,7 +29,8 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -394,7 +395,7 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
 
 def apply_writeoffs(closes: list[Any], now: str | None = None,
                     books: dict[tuple[str, str], dict[str, Any]] | None = None, *,
-                    clock_ok: bool = False) -> dict[str, Any]:
+                    clock_ok: bool = False, clock: Callable[[], Any] | None = None) -> dict[str, Any]:
     """PR #342 review (Codex 6189524237 P1): the whole read -> plan -> book path runs under the same
     ``<PAPER_PATH>.commit.lock`` as commit_if_allowed, so no fill is written between a RiskGate check and its
     book (the daily loss it checked cannot change underneath it). A lock that cannot be taken books nothing and
@@ -404,9 +405,35 @@ def apply_writeoffs(closes: list[Any], now: str | None = None,
     if not lock.acquire(timeout_s=COMMIT_LOCK_TIMEOUT_S):
         return {"booked": [], "problems": [], "deferred": WRITEOFF_LOCK_UNAVAILABLE}
     try:
+        if clock is not None and now is not None:
+            # PR #342 review (Codex 6192075048 P1): the time is read again INSIDE the lock (the wait may have been
+            # long): a later UTC day defers (nothing booked, no halt); the same day restamps the row and the
+            # day's snapshot and decides lateness at this time.
+            now, deferred = _locked_write_time(now, clock)
+            if deferred:
+                return {"booked": [], "problems": [], "deferred": deferred}
         return _apply_writeoffs_locked(closes, now, books, clock_ok=clock_ok)
     finally:
         lock.release()
+
+
+WRITEOFF_DAY_BOUNDARY = "writeoff_day_boundary"
+
+
+def _locked_write_time(now: str, clock: Callable[[], Any]) -> tuple[str, str | None]:
+    """(the write stamp, None) = max(the caller's stamp, the clock now) on the caller's UTC day, or (now,
+    WRITEOFF_DAY_BOUNDARY) when the clock is on a later UTC day. An unusable clock keeps the caller's stamp."""
+    base = parse_book_ts(now)
+    try:
+        later = clock()
+    except Exception:  # noqa: BLE001 - an unusable clock decides nothing later than the caller's stamp
+        return now, None
+    if base is None or not isinstance(later, datetime) or later.tzinfo is None or later <= base:
+        return now, None
+    stamp = later.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    if stamp[:10] != now[:10]:
+        return now, WRITEOFF_DAY_BOUNDARY
+    return stamp, None
 
 
 def _apply_writeoffs_locked(closes: list[Any], now: str | None = None,
