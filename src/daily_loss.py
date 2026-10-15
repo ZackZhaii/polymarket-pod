@@ -90,7 +90,7 @@ def _number(value: object) -> float | None:
     """The ledger's own number rule (ledger_store.non_finite_ledger_rows / _apply use float())."""
     try:
         number = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # PR #342 (Codex 6192635798): 10**400 is invalid
         return None
     return number if math.isfinite(number) else None
 

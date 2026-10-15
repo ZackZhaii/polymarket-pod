@@ -84,7 +84,7 @@ def _finite(value: object) -> float | None:
         return None
     try:
         number = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # PR #342 (Codex 6192635798): 10**400 is invalid
         return None
     return number if math.isfinite(number) else None
 

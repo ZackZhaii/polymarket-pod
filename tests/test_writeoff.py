@@ -1488,3 +1488,31 @@ def test_a_lock_wait_across_utc_midnight_defers_to_the_new_days_tick(runner, mon
     assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
     rows = _writeoffs(runner["paper"])
     assert len(rows) == 1 and rows[0]["ts"][:10] == midnight.strftime("%Y-%m-%d")
+
+
+# --- PR #342 review 6192786711 (Codex 6192635798 P2): huge ints never crash the ledger checks ---------------
+
+@pytest.mark.parametrize("name", ["writeoff_shares", "writeoff_usd", "writeoff_cost_usd", "writeoff_sod_uplift_usd"])
+def test_a_writeoff_field_too_large_for_a_float_is_invalid_risk_state_not_a_crash(env, name):
+    """10**400 cannot be converted to a float (OverflowError): the row is invalid (fail closed), never a crash in
+    verify / load_state."""
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    row = market_close.plan_writeoffs(_rows(env["ledger"]), ["ck-0000"], [close("m")], DAY1).rows[0]
+    with Path(env["ledger"]).open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({**row, name: 10 ** 400}) + "\n")  # written raw: book() would refuse it
+    problems = ledger_store.verify(ledger_store.read_ledger(env["ledger"])[1])
+    assert problems, "a 10**400 write-off field must be a ledger problem"
+    state = paper_ledger.load_state("x", "t")
+    assert state["daily_loss_usd"] is None
+    decision = paper_ledger.evaluate(_intent(), load_risk(), state)
+    assert "invalid_risk_state" in decision.reasons
+
+
+def test_a_day_snapshot_leg_too_large_for_a_float_is_invalid_not_a_crash(tmp_path):
+    """Sweep: daily_marks' number rule (snapshot legs, read on the write-off path) refuses 10**400."""
+    snap = daily_marks.create_snapshot(tmp_path, "2026-09-02", "2026-09-02T00:00:05.000Z", False, [{
+        "book_ts": None, "cost_basis_usd": 10 ** 400, "leg_key": "m|t", "mark_invalid": False, "mark_source": "bid",
+        "mark_usd": 1.0, "shares": 20.0}])
+    assert snap is not None
+    loaded, problems = daily_marks.read_snapshot(tmp_path, "2026-09-02")
+    assert loaded is None and problems

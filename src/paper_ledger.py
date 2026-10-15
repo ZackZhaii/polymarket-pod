@@ -846,7 +846,7 @@ def _price(value: object) -> tuple[float | None, str | None]:
     """A top-of-book price: a finite number strictly between 0 and 1 (bool and str refused)."""
     if value is None:
         return None, "missing"
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value < 1:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < 1 or not math.isfinite(value):
         return None, "invalid"
     return float(value), None
 
@@ -901,7 +901,7 @@ def _fraction(value: object) -> tuple[float | None, str | None]:
     """A Kelly fraction: a finite number in (0, 1] (bool and str refused); else None and missing / invalid."""
     if value is None:
         return None, "missing"
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value <= 1:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 1 or not math.isfinite(value):
         return None, "invalid"
     return float(value), None
 

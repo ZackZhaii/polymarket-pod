@@ -291,7 +291,7 @@ def non_finite_ledger_rows(rows: list[dict[str, Any]]) -> list[int]:
                 continue
             try:
                 number = float(value)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):  # PR #342 (Codex 6192635798): 10**400 is invalid
                 bad.append(index)
                 break
             if not math.isfinite(number):
@@ -371,7 +371,10 @@ def parse_ledger(data: bytes) -> LedgerRead:
 def _finite(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:  # PR #342 review (Codex 6192635798 P2): an int too large for a float is invalid
+        return None
     return number if math.isfinite(number) else None
 
 
