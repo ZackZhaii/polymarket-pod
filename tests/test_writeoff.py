@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from src import daily_loss, halt_store, ledger_store, m2_runner, market_close, paper_ledger, reconcile
+from src import daily_loss, daily_marks, halt_store, ledger_store, m2_runner, market_close, paper_ledger, reconcile
 from src.fees import booked_fee_usd, ledger_fee
 from src.podlib import load_risk
 from src.risk_gate import Intent
@@ -1181,9 +1181,10 @@ def _slow_writeoff_read(inner, clock, seconds):
     return getter
 
 
-def test_a_writeoff_read_that_crosses_utc_midnight_books_on_the_new_day(runner):
-    """P1: the tick starts at 23:59:50; the confirming read completes at 00:00:10. The write-off is booked at the
-    write time (new day), so the new day's loss counts it (the old tick-start stamp booked it on the old day)."""
+def test_a_writeoff_read_that_crosses_utc_midnight_is_deferred_to_the_new_days_tick(runner):
+    """PR #342 review (Codex 6186452953 P1 / 6187405980 P1): the tick starts at 23:59:50; the confirming read
+    completes at 00:00:10. Nothing is booked on that tick (its preflight evaluates the old day), no halt; the next
+    tick (new day) confirms from the kept pending read and books on the new day, and the new day's loss counts it."""
     midnight = (RUN_NOW + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     clock = _Time(midnight - timedelta(seconds=50))
     _timed_runner(runner, clock)
@@ -1192,13 +1193,63 @@ def test_a_writeoff_read_that_crosses_utc_midnight_books_on_the_new_day(runner):
     _tick_at(runner, getter, clock)  # first closed read at 23:59:10
     clock.advance(40.0)  # the next tick starts at 23:59:50
     getter.arm()
-    _tick_at(runner, getter, clock)
+    report = _tick_at(runner, getter, clock)
+    assert "market_close_halt" not in report.reasons and LEDGER_HALT not in report.reasons and not _halted()
+    assert _writeoffs(runner["paper"]) == []  # deferred: the write time is on the new UTC day
+    assert "held" in runner["state"].close_tracker.first  # the pending read is kept (no new 30 s wait)
+    clock.advance(1.0)  # 00:00:11: the new day's tick
+    report = _tick_at(runner, getter, clock)
+    assert "market_close_halt" not in report.reasons and LEDGER_HALT not in report.reasons and not _halted()
     rows = _writeoffs(runner["paper"])
-    assert len(rows) == 1
     new_day = midnight.strftime("%Y-%m-%d")
-    assert rows[0]["ts"][:10] == new_day
+    assert len(rows) == 1 and rows[0]["ts"][:10] == new_day
+    assert rows[0]["close_first_seen_ts"].startswith((midnight - timedelta(seconds=50)).strftime("%Y-%m-%dT%H:%M"))
     read = ledger_store.read_ledger(runner["paper"])[1]
     assert daily_loss.daily_loss(read.rows, new_day, list(read.ids)).writeoff_usd > 0
+
+
+LEDGER_HALT = m2_runner.LEDGER_HALT_REASON
+
+
+def test_e2e_cross_midnight_writeoff_with_two_different_day_snapshots_never_halts_or_undercounts(runner, monkeypatch):
+    """PR #342 review (Poly风控 6188044815, Codex 6187405980 P1 / 6187887177 P2), verified clock. The leg is carried
+    into both days; the old day's snapshot (on time, mark 14) and the new day's (made by the runner) differ. The
+    tick that starts 23:59:50 and reads until 00:00:10 books nothing (its preflight evaluates the old day: booking
+    the new day's row there paired it with the old day's snapshot, writeoff_sod_late_mismatch, global halt). The
+    old day keeps the leg open (no write-off counted or hidden); the new day's tick books it and its loss counts it."""
+    monkeypatch.setattr(m2_runner, "_clock_problem", lambda *a, **k: None)  # /time verified on every tick
+    midnight = (RUN_NOW + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+    old_day, new_day = (midnight - timedelta(days=1)).strftime("%Y-%m-%d"), midnight.strftime("%Y-%m-%d")
+    daily_marks.create_snapshot(paper_ledger.DAILY_MARKS_DIR, old_day, f"{old_day}T00:00:05.000Z", False, [{
+        "book_ts": f"{old_day}T00:00:04.000Z", "cost_basis_usd": 10.0, "leg_key": "held|t1", "mark_invalid": False,
+        "mark_source": "bid", "mark_usd": 14.0, "shares": 20.0}])
+    clock = _Time(midnight - timedelta(seconds=50))
+    _timed_runner(runner, clock)
+    inner = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = _slow_writeoff_read(inner, clock, 20.0)
+    first = _tick_at(runner, getter, clock)
+    assert LEDGER_HALT not in first.reasons and not _halted()
+    clock.advance(40.0)
+    getter.arm()
+    report = _tick_at(runner, getter, clock)
+    assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
+    assert _writeoffs(runner["paper"]) == []
+    read = ledger_store.read_ledger(runner["paper"])[1]
+    old = daily_loss.daily_loss(read.rows, old_day, list(read.ids))
+    assert old.problems == [] and old.writeoff_usd == 0.0 and old.writeoffs_today == 0
+    assert old.legs[("held", "t1")]["written_off"] == 0.0  # the old day's leg is open: marked, not hidden
+    clock.advance(1.0)
+    report = _tick_at(runner, getter, clock)
+    assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
+    rows = _writeoffs(runner["paper"])
+    assert len(rows) == 1 and rows[0]["ts"][:10] == new_day
+    snaps = {day: daily_marks.read_snapshot(paper_ledger.DAILY_MARKS_DIR, day)[0] for day in (old_day, new_day)}
+    assert snaps[old_day] is not None and snaps[new_day] is not None and snaps[old_day]["legs"] != snaps[new_day]["legs"]
+    assert rows[0]["writeoff_sod_late"] is (snaps[new_day]["late"] is True)
+    read = ledger_store.read_ledger(runner["paper"])[1]
+    new = daily_loss.daily_loss(read.rows, new_day, list(read.ids))
+    assert new.problems == [] and new.writeoffs_today == 1 and new.writeoff_usd == pytest.approx(rows[0]["writeoff_usd"])
+    assert new.writeoff_usd > 0
 
 
 def test_a_reopen_read_that_completes_after_the_grace_halts_even_if_the_tick_started_inside_it(runner):

@@ -238,6 +238,9 @@ class CloseTracker:
     # PR #342 review (Codex 6186452953 P2): monotonic stamp of the first closed read of each close this process
     # confirmed, so the reopen grace is measured on the monotonic clock too (not cleared by ``drop``).
     confirmed_mono: dict[str, float] = field(default_factory=dict)
+    # PR #342 review (Codex 6187405980): the pending read each confirmation consumed, so a write-off the runner
+    # defers (the write time is on another UTC day than the tick) keeps its pending read (``defer``).
+    confirmed_pending: dict[str, Observation] = field(default_factory=dict)
 
     def step(self, obs: Observation, now: datetime) -> tuple[Close | None, str]:
         """Feed one read of a market that is not written off; return (the Close it confirms, the close reason)."""
@@ -272,6 +275,7 @@ class CloseTracker:
         if wall < MARKET_CLOSE_RECHECK_S:
             return None, TOO_SOON
         del self.first[obs.market]
+        self.confirmed_pending[obs.market] = pending
         if pending.observed_mono is not None:
             self.confirmed_mono[obs.market] = pending.observed_mono
         return Close(obs.market, obs.closed_time, pending.observed_at, obs.observed_at, BY_REREAD), CONFIRMED  # type: ignore[arg-type]
@@ -290,6 +294,14 @@ class CloseTracker:
 
     def drop(self, market: str) -> None:
         self.first.pop(str(market), None)
+
+    def defer(self, market: str) -> None:
+        """Undo this tick's confirmation of ``market`` (nothing booked): its pending read is pending again, so the
+        next qualifying read confirms it (no halt, no new pending read). A resumed close has nothing to undo."""
+        pending = self.confirmed_pending.pop(str(market), None)
+        self.confirmed_mono.pop(str(market), None)
+        if pending is not None:
+            self.first[str(market)] = pending
 
 
 def writeoff_fill_id(market: str, token_id: str) -> str:
@@ -429,6 +441,9 @@ def detect(tracker: CloseTracker, ledger_rows: list[dict[str, Any]], reads: Mapp
     for market in list(tracker.confirmed_mono):
         if market not in held:
             del tracker.confirmed_mono[market]
+    for market in list(tracker.confirmed_pending):
+        if market not in held:
+            del tracker.confirmed_pending[market]
     return out
 
 
