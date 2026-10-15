@@ -165,18 +165,25 @@ def gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime, *,
                clock: Callable[[], datetime] | None = None,
                monotonic: Callable[[], float] | None = None) -> Observation:
     """Read one held market (see ``_gamma_read``). PR #342 review (Codex 6185166823 P1): with ``clock`` /
-    ``monotonic`` the observation is stamped when the reads FINISHED (wall and monotonic), not at the tick start,
-    so a slow read cannot shorten the confirmation interval."""
-    obs = _gamma_read(getter, market_id, now)
-    changes: dict[str, Any] = {}
-    if clock is not None:
-        changes["observed_at"] = clock()
-    if monotonic is not None:
-        changes["observed_mono"] = monotonic()
-    return dataclasses.replace(obs, **changes) if changes else obs
+    ``monotonic`` the observation is stamped when the closed=true response completed (wall and monotonic), not at
+    the tick start and not after the default view, so neither a slow read nor a slow default view can change the
+    confirmation interval."""
+    stamps: dict[str, Any] = {}
+
+    def stamp() -> None:  # PR #342 (Codex 6185588835 P1): when the closed=true response completes, so a
+        if clock is not None:  # slow default-view read can never pad the confirmation interval
+            stamps["observed_at"] = clock()
+        if monotonic is not None:
+            stamps["observed_mono"] = monotonic()
+
+    obs = _gamma_read(getter, market_id, now, stamp)
+    if not stamps:
+        stamp()  # the closed=true read itself failed: stamp the failure now
+    return dataclasses.replace(obs, **stamps) if stamps else obs
 
 
-def _gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime) -> Observation:
+def _gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime,
+                stamp: Callable[[], None] | None = None) -> Observation:
     """Read one held market: ``closed=true`` first (the only read that can show a close), then the default query
     (it can only show the market open). In neither list: unknown (a read failure). In both: unknown too (Gamma's
     views split for a few minutes around a close)."""
@@ -184,6 +191,8 @@ def _gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime) -> 
     for closed in (True, False):
         try:
             data = getter(gamma_url(market_id, closed=closed))
+            if closed and stamp is not None:
+                stamp()
         except Exception as exc:  # noqa: BLE001 - any failed read is a read failure (never a halt by itself)
             return failed(market_id, now, f"gamma_read_failed:{type(exc).__name__}")
         row, problem = _match(data, market_id)

@@ -901,3 +901,80 @@ def test_the_tracker_needs_both_clocks_to_agree():
     tracker.step(first, T0)
     unmeasured = dataclasses.replace(first, observed_at=T0 + timedelta(seconds=31), observed_mono=None)
     assert tracker.step(unmeasured, T0 + timedelta(seconds=31)) == (None, market_close.CLOCK_DISAGREE)
+
+
+# --- PR #342 review 6185860431 (Codex 6185588835) -------------------------------------------------------------
+
+def test_a_slow_default_view_does_not_pad_the_confirmation_interval(runner):
+    """P1: the observation is stamped when the closed=true response completes. The second tick's write-off read
+    (closed=true) completes 10 s after the first; its default-view read then takes 25 s. Real re-read interval:
+    10 s: no write-off (stamped after the default view it read 35 s and confirmed). Each tick reads the held
+    market twice (src/resolution_watch first, then src/market_close): only the second, the write-off read, is slow."""
+    clock = _Time(RUN_NOW)
+    _timed_runner(runner, clock)
+    inner = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    seen = {"slow_tick": False, "closed_reads": 0, "slow_next_default": False}
+
+    def getter(url):
+        out = inner(url)
+        if not seen["slow_tick"]:
+            return out
+        if url == market_close.gamma_url("held", closed=True):
+            seen["closed_reads"] += 1
+            seen["slow_next_default"] = seen["closed_reads"] == 2
+        elif url == market_close.gamma_url("held", closed=False) and seen["slow_next_default"]:
+            clock.advance(25.0)
+            seen["slow_next_default"] = False
+        return out
+
+    _tick_at(runner, getter, clock)
+    clock.advance(10.0)
+    seen["slow_tick"] = True
+    _tick_at(runner, getter, clock)
+    assert seen["closed_reads"] == 2 and clock.mono == 1035.0
+    assert _writeoffs(runner["paper"]) == []
+
+
+def _legacy_ledger(tmp_path, writeoff_fill_id=None):
+    """A legacy prefix (rows without fill_id): a buy, then a write-off row of that leg."""
+    buy = fill("buy", 20.0, 0.5, market="held", token="t1")
+    row = {"ts": buy["ts"], "kind": "writeoff", "strategy": "writeoff", "market": "held", "token_id": "t1",
+           "side": "sell", "shares": 0.0, "market_price": 0.0, "effective_price": 0.0, "notional_usd": 0.0,
+           "fee_rate": 0.0, "fee_usd": 0.0, "hypothetical": False, "counts_toward_risk": True,
+           "risk_decision": "writeoff", "writeoff_shares": 20.0, "writeoff_usd": 10.0, "closed_ts": CLOSED_TS}
+    if writeoff_fill_id is not None:
+        row["fill_id"] = writeoff_fill_id
+    path = tmp_path / "paper.jsonl"
+    path.write_text(json.dumps(buy) + "\n" + json.dumps(row) + "\n", encoding="utf-8")
+    return path
+
+
+def test_a_writeoff_row_without_a_fill_id_in_the_legacy_prefix_is_rejected(tmp_path):
+    """P1: a write-off row is never a legacy row: without a fill_id it is a control problem (fail closed), not a
+    write-off that silently counts (the next day's loss went 10 -> 0)."""
+    read = ledger_store.read_ledger(_legacy_ledger(tmp_path))[1]
+    problems = ledger_store.verify(read)
+    assert any(p.startswith("writeoff_without_fill_id") for p in problems), problems
+
+
+def test_a_writeoff_row_with_a_non_writeoff_fill_id_is_rejected(tmp_path):
+    path = tmp_path / "paper.jsonl"
+    buy = dict(fill("buy", 20.0, 0.5, market="held", token="t1"), fill_id="f-1")
+    path.write_text(json.dumps(buy) + "\n", encoding="utf-8")
+    read = ledger_store.read_ledger(path)[1]
+    row = market_close.plan_writeoffs(read.rows, list(read.ids), [close("held")], buy["ts"]).rows[0]
+    row["fill_id"] = "f-2"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+    problems = ledger_store.verify(ledger_store.read_ledger(path)[1])
+    assert "invalid_writeoff_fill_id:f-2" in problems, problems
+
+
+@pytest.mark.parametrize("raw", ["9999-12-31T23:59:59-01:00", "0001-01-01T00:00:00+01:00"])
+def test_an_out_of_range_closed_time_is_invalid_not_an_exception(raw):
+    """P2: OverflowError from the UTC conversion is an invalid closedTime (None), never raised."""
+    from src.expiry_rule import parse_end_date
+    assert parse_end_date(raw) is None
+    obs = market_close.observation_from_row("m", gamma(closed_time=raw), T0)
+    assert obs.closed_time is None
+    assert market_close.predicate(obs, T0) is not None  # does not qualify as a close

@@ -51,11 +51,11 @@ def parse_end_date(value: object) -> datetime | None:
         text = text[:-1] + "+00:00"
     try:
         parsed = datetime.fromisoformat(text)
-    except ValueError:
+        if not _aware(parsed):
+            return None
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError):  # PR #342 (Codex 6185588835 P2): an out-of-range offset date is invalid
         return None
-    if not _aware(parsed):
-        return None
-    return parsed.astimezone(timezone.utc)
 
 
 def hours_to_expiry(end_date: object, now: datetime) -> float | None:

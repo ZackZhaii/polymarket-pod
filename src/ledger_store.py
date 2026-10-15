@@ -123,6 +123,7 @@ SETTLEMENT_KIND = "settlement"
 SETTLEMENT_DECISION = "settlement"
 SETTLEMENT_PAYOUTS = (0.0, 1.0)
 WRITEOFF_KIND = "writeoff"  # issue #197 (Task CK)
+WRITEOFF_FILL_ID_PREFIX = "writeoff-"  # src/market_close.writeoff_fill_id (the leg key)
 WRITEOFF_DECISION = "writeoff"
 KIND_DECISIONS = {SETTLEMENT_KIND: SETTLEMENT_DECISION, WRITEOFF_KIND: WRITEOFF_DECISION}
 
@@ -407,6 +408,11 @@ def replay(rows: list[dict[str, Any]], ids: list[str]) -> tuple[float, dict[tupl
     for row, fill_id in zip(rows, ids):
         if FILL_ID_FIELD in row:
             control.extend(control_field_problems(row, fill_id))
+        elif is_writeoff(row):  # PR #342 (Codex 6185588835 P1): a write-off is never a legacy row
+            control.append(f"writeoff_without_fill_id:{fill_id}")
+        if is_writeoff(row) and FILL_ID_FIELD in row and not (
+                isinstance(row[FILL_ID_FIELD], str) and row[FILL_ID_FIELD].startswith(WRITEOFF_FILL_ID_PREFIX)):
+            control.append(f"invalid_writeoff_fill_id:{fill_id}")
     if control:
         return PAPER_EQUITY_USD, {}, control
     cash = PAPER_EQUITY_USD
