@@ -18,6 +18,9 @@ Measured over the run window (manifest started_at .. ended_at, recorder clock):
   already not fresh under the coverage rule above, which is unchanged; this only says why;
 - resyncs by reason (``disconnect_*`` versus gaps and invalid data), reconnects, connect
   failures, disconnect reasons, from events/;
+- Task EB (issue #223, display only, no criterion uses it): ws_recorder's internal counts per asset from manifest
+  ``counts.recorder`` (else the last ``progress.recorder`` snapshot of a killed run); a manifest without them (a
+  run before Task EB) or a malformed value shows N/A, never an error;
 - REST vs WS: each REST /book sample is compared with the live WS row for the same token whose
   exchange book_ts is nearest (within M1_REST_MATCH_WINDOW_S); best bid and best ask must be equal.
   Samples without such a row (or with an unusable REST book_ts) are unmatched; mismatches are listed.
@@ -448,7 +451,37 @@ def build_report(run_dir: Path) -> dict[str, Any]:
         "assets": per_asset,
         "events": events,
         "rest_vs_ws": rest,
+        "recorder_counts": recorder_counts(manifest),  # Task EB: display only, not a criterion
     }
+
+
+RECORDER_COUNT_NAMES = ("duplicate_level_removal", "group_held", "group_resolved", "group_unresolved",
+                        "group_replaced_by_book", "stale_resubscribe_snapshot")  # ws_recorder.RECORDER_ASSET_COUNTS
+
+
+def _count_value(raw: object) -> int | None:
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0 else None
+
+
+def recorder_counts(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Task EB (issue #223): ws_recorder's internal counts as m1_run stored them (``counts.recorder``, else the last
+    ``progress.recorder`` snapshot), for display only. Missing or not an object: all None (N/A). A value that is not
+    a non-negative int shows as None; never raises."""
+    sources = (("counts", manifest.get("counts")), ("progress", manifest.get("progress")))
+    for source, holder in sources:
+        stored = holder.get("recorder") if isinstance(holder, dict) else None
+        if not isinstance(stored, dict) or not stored:
+            continue
+        per_asset: dict[str, dict[str, int | None]] = {}
+        for asset, item in sorted(stored.items()):
+            item = item if isinstance(item, dict) else {}
+            per_asset[str(asset)] = {name: _count_value(item.get(name)) for name in RECORDER_COUNT_NAMES}
+        totals: dict[str, int | None] = {}
+        for name in RECORDER_COUNT_NAMES:
+            values = [item[name] for item in per_asset.values()]
+            totals[name] = None if any(value is None for value in values) else sum(values)
+        return {"source": source, "per_asset": per_asset, "totals": totals}
+    return {"source": None, "per_asset": None, "totals": None}
 
 
 def _fmt(value: object, digits: int = 1) -> str:
@@ -457,6 +490,25 @@ def _fmt(value: object, digits: int = 1) -> str:
     if isinstance(value, float):
         return f"{value:.{digits}f}"
     return str(value)
+
+
+def _render_recorder_counts(counts: dict[str, Any]) -> list[str]:
+    """Task EB (issue #223): display only. N/A when the manifest has no counts.recorder (a run before Task EB)."""
+    lines = ["", "### Recorder internal counts (display only, not a criterion)", ""]
+    if not counts.get("per_asset"):
+        return lines + ["- N/A (manifest has no counts.recorder: run recorded before Task EB)"]
+    where = "manifest counts" if counts.get("source") == "counts" else "last progress snapshot (run not finished)"
+
+    def na(value: object) -> str:
+        return "N/A" if value is None else str(value)
+    lines += [f"Source: {where}. They say why no gap resync fired (a fix absorbed the burst); no rule reads them.", "",
+              "| Asset | " + " | ".join(RECORDER_COUNT_NAMES) + " |",
+              "| --- |" + " --- |" * len(RECORDER_COUNT_NAMES)]
+    for asset, item in counts["per_asset"].items():
+        lines.append(f"| `{asset[:16]}...` | " + " | ".join(na(item.get(name)) for name in RECORDER_COUNT_NAMES) + " |")
+    totals = counts.get("totals") or {}
+    lines.append("| total | " + " | ".join(na(totals.get(name)) for name in RECORDER_COUNT_NAMES) + " |")
+    return lines
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -505,6 +557,7 @@ def render_markdown(report: dict[str, Any]) -> str:
               f"- disconnects by reason: {events['disconnects']}",
               f"- resyncs by reason: {events['resyncs_by_reason']} (gap/invalid total {events['gap_resyncs_total']})",
               f"- resubscribes {events['resubscribes']}, REST errors {events['rest_errors']}, run end: {events['end']}"]
+    lines += _render_recorder_counts(report.get("recorder_counts") or {})
     rest = report["rest_vs_ws"]
     lines += ["", "## REST /book vs WS", "",
               f"- samples {rest['samples']}, compared {rest['matched']}, mismatched {rest['mismatched']} "

@@ -101,7 +101,7 @@ less "$RUN/report.md"                             # report.json has the same dat
 
 | Path | Content |
 |---|---|
-| `manifest.json` | Written atomically at start (`status: running`) and at the end (`completed`, `interrupted`, `no_snapshot` or `failed`). Includes `started_at`/`ended_at` (UTC, ms), `elapsed_s`, the assets with market id, question and outcome, the selection (scan ts, skipped rows), settings, a snapshot of `src/thresholds.py`, versions (Python, websockets, schema `m1_run/1`), git sha and dirty flag, the `config/risk.toml` sha256 and `live_enabled` at start and end with the pin, the files written, the counts, the exit code, the stop signal and `stop_reason`. Task CM: `clock_check` (the start-up clock measurement, see exit 7). Task BT: rewritten every `M1_MANIFEST_PROGRESS_S` while running with `progress`; after a console close the handler may write it (`counts.partial: true`). |
+| `manifest.json` | Written atomically at start (`status: running`) and at the end (`completed`, `interrupted`, `no_snapshot` or `failed`). Includes `started_at`/`ended_at` (UTC, ms), `elapsed_s`, the assets with market id, question and outcome, the selection (scan ts, skipped rows), settings, a snapshot of `src/thresholds.py`, versions (Python, websockets, schema `m1_run/1`), git sha and dirty flag, the `config/risk.toml` sha256 and `live_enabled` at start and end with the pin, the files written, the counts, the exit code, the stop signal and `stop_reason`. Task CM: `clock_check` (the start-up clock measurement, see exit 7). Task BT: rewritten every `M1_MANIFEST_PROGRESS_S` while running with `progress`; after a console close the handler may write it (`counts.partial: true`). Task EB (issue #223, observability only): `counts.recorder.<asset>.<name>` holds ws_recorder's internal counts for every selected asset, each name 0 when never counted: `duplicate_level_removal` (a same-timestamp repeat removal skipped, Task CM), `group_held` / `group_resolved` / `group_unresolved` / `group_replaced_by_book` (same-timestamp groups, Task CC), `stale_resubscribe_snapshot` (a late resubscribe snapshot dropped, Task CC). The same object is in every `progress` snapshot and in the console-close partial counts. No check or threshold reads it. |
 | `books/books-NNNNNN.jsonl` | WS book rows, the same shape as `data/books.jsonl` plus `ws_state`. Includes the price-less invalidation rows on a resync or disconnect. |
 | `events/events-NNNNNN.jsonl` | `start`, `connected`, `connect_failed` (error type), `disconnected` (reason, healthy), `backoff`, `resync` (asset, reason), `resubscribe`, `live`, `rest_error`, `end`, `finish`. |
 | `rest/rest-NNNNNN.jsonl` | REST `/book` snapshots (book.py row shape plus `sample` and `received_at`). |
@@ -156,6 +156,10 @@ Definitions:
 - REST vs WS: each REST sample is compared with the live WS row of the same token whose exchange
   `book_ts` is nearest. Prices are compared rounded to 6 decimals. A missing side compares as null.
   Mismatches are listed (up to `m1_report.MISMATCH_LIST_LIMIT`) with both prices and the time difference.
+- Recorder internal counts (Task EB, issue #223; display only, not a criterion): the "Connection and resyncs" section
+  shows `counts.recorder` per asset with a total (report.json `recorder_counts`: `source` `counts` or, for a killed run,
+  `progress`; `per_asset`; `totals`). They say whether a fix absorbed a burst when an asset has 0 gap resyncs. A manifest
+  without them (a run before Task EB) shows N/A; a malformed value shows N/A; neither is an error or a FAIL.
 - Warnings, not failures: a dirty git tree or unknown sha at start, and files on disk that the manifest does not list.
   Task BT adds two: partial counts (a manifest written by the console-close handler), and `max_runtime_s` below
   `M1_MIN_RUN_S`. M1_MIN_RUN_S is 21540 s (6 h − 1 min; 86340 s until 2026-10-11, 家伟批准), so a shorter

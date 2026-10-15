@@ -38,6 +38,10 @@ through src.ws_recorder and the public CLOB /book path through src.book.snapshot
   start/end times, elapsed seconds, assets with their market metadata, settings, thresholds,
   versions (Python, websockets, schema), the git sha (and whether the tree was dirty), the
   config/risk.toml sha256 at start and end and live_enabled, the files written and the counts.
+  Task EB (issue #223): ``counts.recorder.<asset>.<name>`` holds ws_recorder's internal counts per selected asset
+  (every name of ws_recorder.RECORDER_ASSET_COUNTS: duplicate_level_removal, group_held, group_resolved,
+  group_unresolved, group_replaced_by_book, stale_resubscribe_snapshot; 0 when never counted). The same object is
+  in every ``progress`` snapshot and in the console-close partial counts. Observability only: no check uses it.
 
 Exit codes: 0 ran to --max-runtime and recorded at least one snapshot; 1 no snapshot recorded;
 2 usage error (bad arguments, no usable assets, a non-empty --out); 3 the optional websockets
@@ -109,6 +113,7 @@ from src.ws_recorder import (  # noqa: E402
     WebsocketsTransport,
     _line_bytes,
     asset_meta,
+    recorder_asset_counts,  # Task EB (issue #223)
     validate_assets,
 )
 
@@ -744,7 +749,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
             "elapsed_s": round(monotonic() - run_start_mono, 3),
             "exit_code": EXIT_INTERRUPTED,
             "files": stream_files(),
-            "counts": {"partial": True, "ended_by": "console", "book_rows_at_close": recorder.report.rows},
+            "counts": {"partial": True, "ended_by": "console", "book_rows_at_close": recorder.report.rows,
+                       "recorder": recorder_asset_counts(recorder.report, assets)},  # Task EB: snapshot at close
             "risk": dict(manifest["risk"], end=risk_state()),
         }, timeout_s=left + 1.0)
         if heartbeat is not None:
@@ -769,7 +775,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
         while not stop.wait(progress_every_s):
             snapshot = {"last_flush_at": now(), "elapsed_s": round(monotonic() - run_start_mono, 3),
                         "files": stream_files(), "book_rows": recorder.report.rows, "events": events.rows,
-                        "rest_rows": sampler.rows}
+                        "rest_rows": sampler.rows,
+                        "recorder": recorder_asset_counts(recorder.report, assets)}  # Task EB (issue #223)
             if not writer.progress(snapshot):
                 try:
                     events.write({"ts": now(), "event": "manifest_progress_write_failed",
@@ -857,6 +864,8 @@ def _main(argv: list[str] | None, *, transport: Transport | None, rest_getter: A
                 "resyncs": {key.split(":", 1)[1]: value for key, value in sorted(report.counts.items())
                             if key.startswith("resync:")},
                 "unmapped_assets": report.unmapped_assets,
+                # Task EB (issue #223): ws_recorder's internal counts per asset (observability only, no criterion)
+                "recorder": recorder_asset_counts(report, assets),
             },
             "exit_code": code,
             "risk": dict(manifest["risk"], end=risk_state()),
