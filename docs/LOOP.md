@@ -1759,15 +1759,40 @@ Claimed by Poly桥接 (issue #245). Done by grok-bot on NoisePC. Docs plus the r
   `runs/m2/start-logs/<stamp>/m2_runner.log`, or the supervisor exit code (availability blind spot).
   Exit 3 is a normal refusal and must never write an m2_runner heartbeat. Drop the inaccurate
   "before any read" claim; tick order is preflight → settlement (may read Gamma) → clock → daily
-  loss / disk → scan / decide.
+  loss / disk → scan → ingest/seal → decide → commit (Task EC).
 - `src/secret_scan.py`: exit 2 covers unenumerable directories (`ScanError`, #53 / #270) and a bad
   BIP39 word list; exit 1 is intentional `EXIT_SECRET` (not an uncaught crash).
 - `src/m1_run.py`: 24 h → 6 h (`M1_RUN_TARGET_S=21600` / `M1_MIN_RUN_S=21540`, #171; also Refs #220).
-- Tests: `tests/test_ea_exit_codes_docs.py` (offline); `tests/test_exit_codes.py` still green.
+- Tests: `tests/test_ea_exit_codes_docs.py` (5 offline cases); `tests/test_exit_codes.py` (28) still green;
+  full pytest at merge head bfb454a 5609 passed, 0 failed. Merged as PR #338 (247af98).
   Full pytest + `python scripts/guard.py --require-git`. config/risk.toml sha unchanged
   (0aea23af…bc04), `live_enabled=false`.
 
+## Task CI — PR #195 [KEY]: leg marks need only the side the leg trades into
+
+Status: done (merged c8f796d after 家伟 approved "批准 #195"; registered here by Task EC).
+
+- `src/leg_marks.py` `liquidation_mark`: a long needs only usable bids, a short only usable asks. An empty or
+  broken opposite side no longer makes the leg `mark_invalid`; `crossed_book` only when both sides are usable.
+- Loosens #192's valuation, so KEY. `tests/test_leg_marks.py` covers both directions.
+  config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+## Task EC — follow-ups from the #338 / #336 reviews
+
+Status: done. Claimed by Poly桥接 at Poly指挥's request. Docs and tests only, non-KEY.
+
+- `docs/EXIT_CODES.md`: m2_runner tick order is scan → ingest/seal → decide → commit (`_scan`, `_ingest`,
+  `_decide` with `commit_if_allowed` inside); m2_start reports exit 5 as soon as it sees m2_runner exit
+  (`wait_for` polls `handle.poll()`), without waiting for the start timeout.
+- `docs/loop/state.json`: the EA entry gives the real test counts and names the `src/exit_codes.py` change.
+- `tests/test_public_get_deadline.py`: the TLS fixture skips cleanly when the openssl CLI is missing or fails.
+- `tests/test_calibration_mid_kelly.py` (Codex 6179446901 P2): the operator CLI test stubs `paper_ledger.bus`
+  and asserts the repo's `logs/bus.jsonl` is untouched.
+- Registers Task CI (#195). config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
 ## Latest
+- 2026-10-15: Task EC: EXIT_CODES.md tick order (scan → ingest/seal → decide → commit) and m2_start exit 5 on child exit (no timeout wait); EA state entry with real test counts and the src/exit_codes.py change; TLS deadline test skips without openssl; operator CLI veto test uses a bus stub and asserts logs/bus.jsonl untouched (Codex 6179446901 P2); Task CI (#195) registered. Docs/tests only, non-KEY. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-10-15: Task CI (PR #195, KEY, approved by 家伟): leg marks need only the side the leg trades into (long: bids, short: asks); merged c8f796d. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task EB (issue #223): m1_run manifest `counts.recorder.<asset>.<name>` persists ws_recorder's internal counts per asset (duplicate_level_removal, group_held, group_resolved, group_unresolved, group_replaced_by_book, stale_resubscribe_snapshot), also in every `progress` snapshot and the console-close partial counts (same atomic ManifestWriter path as counts.resyncs). m1_report only displays them (no criterion; N/A for older runs). Observability only, non-KEY: no check, threshold or M1 criterion changed. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task EA (issue #245): EXIT_CODES.md aligns with m2_runner pre-heartbeat exits 2/3/7, settlement-before-scan wording, secret_scan exit 2 directory/word-list, m1_run 24h→6h (Refs #220). m2_runner 2/3/7 Sentinel column 不可见 (on-call: m2_start exit 5, start-logs m2_runner.log, supervisor). risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task DZ (issue #210): operator CLI no longer defaults --fee-rate to 0.0 (default None / missing_fee_data); CLI intents without book depth/levels refuse with missing_book_levels before booking (no --asks added). Tighten-only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.

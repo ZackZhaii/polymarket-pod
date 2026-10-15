@@ -664,15 +664,22 @@ def test_slow_proxy_connect_frees_every_slot_and_healthy_requests_recover(monkey
 # ---------------------------------------------------------------- Task DU: Codex 6169540943 / Poly风控 6169773911
 
 import ssl  # noqa: E402
+import shutil  # noqa: E402
 import subprocess  # noqa: E402
 
 
 @pytest.fixture
 def tls_cert(tmp_path):
+    # Task EC: no openssl CLI (or one too old for -addext) skips this TLS case cleanly instead of erroring.
+    if shutil.which("openssl") is None:
+        pytest.skip("openssl CLI not available to make a throwaway TLS cert")
     cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
-    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(cert),
-                    "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
-                   check=True, capture_output=True)
+    try:
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(cert),
+                        "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
+                       check=True, capture_output=True, timeout=60)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        pytest.skip(f"openssl could not make a throwaway TLS cert: {type(exc).__name__}")
     return cert, key
 
 
