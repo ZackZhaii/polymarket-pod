@@ -57,7 +57,11 @@ def test_k2_verified_clock_on_time_roll_uses_the_start_mark(env):
 
 
 def test_k3_the_hook_passes_runner_clock_ok():
-    assert "clock_ok=runner_clock_ok(state)" in inspect.getsource(m2_runner._writeoff_hook)
+    # PR #342 (Codex 6184412258): this tick's clock result AND the runner's held state; behaviour is covered by
+    # the cross-day runner test in tests/test_writeoff.py
+    source = inspect.getsource(m2_runner._writeoff_hook)
+    assert "clock is not None and clock() is None and runner_clock_ok(state)" in source
+    assert "clock_ok=clock_ok" in source
 
 
 @pytest.mark.parametrize("asks", [pytest.param([], id="ask_side_empty"),
@@ -188,3 +192,93 @@ def test_an_unhashable_kind_is_invalid_and_never_raises(env, kind):
         handle.write(_json.dumps({**row, "ts": "2026-09-01T00:00:00Z", "market": "m", "token_id": "t"}) + "\n")
     state = paper_ledger.load_state("x", "t")  # must not raise TypeError
     assert state["daily_loss_usd"] is None and state["ledger_problems"]
+
+
+# ---------------------------------------------------------------- PR #342 review 6184715521 (Codex 6184412258)
+
+def _cross_day(env):
+    """Cost 10 (20 @ 0.5) held since yesterday; yesterday's last valid mark 18 (bid 0.9); today's day-roll
+    book bid 0.5 (start mark 10). Late reference: max(cost, 18) = 18 -> write-off 18; on time: 10 + 0 = 10."""
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    _mark_books(env, _top(0.9, "2026-08-31T23:59:30Z"))
+    env["clock"]["now"] = "2026-08-31T23:59:40Z"
+    paper_ledger.load_state("x", "t", clock_ok=True)  # yesterday's evaluation records its last valid mark (18)
+    _mark_books(env, _top(0.5, "2026-09-01T00:00:05Z"))
+    env["clock"]["now"] = ROLL
+
+
+def _hook_state(tmp_path, anomaly):
+    state = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(tmp_path / "run"))
+    state.paths.run_dir.mkdir(parents=True, exist_ok=True)
+    state.clock_anomaly = anomaly  # what the PREVIOUS tick left behind
+    state.writeoff_events_resent = True
+    return state
+
+
+def _hook(state, monkeypatch, clock):
+    from src import market_close
+    monkeypatch.setattr(market_close, "detect", lambda *a, **k: market_close.Step(closes=[close("m")]))
+    now = datetime(2026, 9, 1, 0, 0, 10, tzinfo=timezone.utc)
+    return m2_runner._writeoff_hook(state, now, lambda url: [], clock)
+
+
+def test_the_first_tick_of_a_day_uses_this_ticks_failed_clock_not_the_previous_ticks_ok(env, tmp_path, monkeypatch):
+    """P1: the previous tick's clock was fine (no anomaly held), this tick's /time check fails. The write-off
+    runs before preflight's clock step, so it must ask for this tick's result: late -> 18, never 10."""
+    monkeypatch.setattr(podlib, "BUS_PATH", tmp_path / "bus.jsonl")
+    _cross_day(env)
+    state = _hook_state(tmp_path, None)
+    assert m2_runner.runner_clock_ok(state) is True  # the stale state the old code used
+    assert _hook(state, monkeypatch, lambda: "clock_unverified") == []
+    row = [r for r in _rows(env["ledger"]) if ledger_store.is_writeoff(r)][0]
+    assert row["writeoff_sod_late"] is True and row["writeoff_usd"] == pytest.approx(18.0)
+
+
+def test_no_clock_step_means_not_verified(env, tmp_path, monkeypatch):
+    monkeypatch.setattr(podlib, "BUS_PATH", tmp_path / "bus.jsonl")
+    _cross_day(env)
+    assert _hook(_hook_state(tmp_path, None), monkeypatch, None) == []
+    row = [r for r in _rows(env["ledger"]) if ledger_store.is_writeoff(r)][0]
+    assert row["writeoff_sod_late"] is True and row["writeoff_usd"] == pytest.approx(18.0)
+
+
+def test_a_verified_clock_this_tick_books_the_on_time_reference(env, tmp_path, monkeypatch):
+    monkeypatch.setattr(podlib, "BUS_PATH", tmp_path / "bus.jsonl")
+    monkeypatch.setattr(paper_ledger, "_LAST_EVAL_DAY", "2026-08-31")
+    _cross_day(env)
+    assert _hook(_hook_state(tmp_path, None), monkeypatch, lambda: None) == []
+    row = [r for r in _rows(env["ledger"]) if ledger_store.is_writeoff(r)][0]
+    assert row["writeoff_sod_late"] is False and row["writeoff_usd"] == pytest.approx(10.0)
+
+
+def test_the_tick_clock_is_checked_once_and_shared(tmp_path, monkeypatch):
+    state = _hook_state(tmp_path, None)
+    calls = []
+    monkeypatch.setattr(m2_runner, "_clock_check", lambda s, g, n: calls.append(1) or "clock_skew")
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    assert m2_runner._tick_clock(state, None, now) == "clock_skew" == m2_runner._tick_clock(state, None, now)
+    assert calls == [1]
+
+
+def test_a_failed_post_write_reread_rearms_the_event_resend(env, tmp_path, monkeypatch):
+    """P2: the row is on disk but ledger_store.book's post-write re-read fails (LedgerIntegrityError): not in
+    ``booked``, no event sent. The re-send flag is reset so the next settle step sends it."""
+    from src.ledger_store import LedgerIntegrityError
+    monkeypatch.setattr(podlib, "BUS_PATH", tmp_path / "bus.jsonl")
+    _cross_day(env)
+    real_book = ledger_store.book
+
+    def write_then_fail(path, row, **kwargs):
+        real_book(path, row, **kwargs)
+        raise LedgerIntegrityError(["post_write_mismatch:x"])
+
+    monkeypatch.setattr(ledger_store, "book", write_then_fail)
+    state = _hook_state(tmp_path, None)
+    problems = _hook(state, monkeypatch, lambda: None)
+    monkeypatch.setattr(ledger_store, "book", real_book)
+    assert problems and problems[0].startswith("writeoff_refused")
+    assert [r for r in _rows(env["ledger"]) if ledger_store.is_writeoff(r)]  # on disk
+    assert state.writeoff_events_resent is False
+    assert m2_runner._resend_writeoff_events(state, datetime(2026, 9, 1, 0, 1, tzinfo=timezone.utc)) == []
+    events = (state.paths.events).read_text(encoding="utf-8").splitlines()
+    assert any('"resent": true' in line.replace('"resent":true', '"resent": true') for line in events)

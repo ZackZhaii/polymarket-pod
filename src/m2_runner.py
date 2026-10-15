@@ -295,6 +295,7 @@ class RunnerState:
     ledger_rows: int | None = None
     close_tracker: market_close.CloseTracker = field(default_factory=market_close.CloseTracker)  # issue #197
     writeoff_events_resent: bool = False  # issue #197: the first tick after a start re-sends write-off events
+    tick_clock_result: tuple[str | None] | None = None  # PR #342: this tick's CLOB /time result, once per tick
     # Issue #120 (Task CJ): suspend / resume tracking
     last_iter_wall: datetime | None = None
     last_iter_mono: float | None = None
@@ -916,7 +917,16 @@ def _resend_writeoff_events(state: RunnerState, now: datetime, rows: list[dict[s
     return []
 
 
-def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter) -> list[str]:
+def _tick_clock(state: RunnerState, getter: GuardedGetter, now: datetime) -> str | None:
+    """PR #342 review (Codex 6184412258 P1): this tick's clock check, run at most once per tick. The write-off
+    (inside the settle step) asks for it before preflight's own clock step, which then reuses the same result."""
+    if state.tick_clock_result is None:
+        state.tick_clock_result = (_clock_check(state, getter, now),)
+    return state.tick_clock_result[0]
+
+
+def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter,
+                   clock: Callable[[], str | None] | None = None) -> list[str]:
     """Issue #197 (Task CK, KEY-approved): close-then-write-off, AFTER settlement and BEFORE the daily loss.
 
     Poly风控's tick order (#197, issuecomment-6106669720): halted -> end; settle; write off; #124 daily loss;
@@ -949,17 +959,24 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter) -> l
             halt_store.record_halt(scope=halt_store.SCOPE_MARKET, market=market, reason=reason, source="m2_runner")
         return step.halts
     if step.closes:
-        out = paper_ledger.apply_writeoffs(step.closes, _stamp(now), clock_ok=runner_clock_ok(state))
+        # PR #342 review (Codex 6184412258 P1): THIS tick's clock, never the previous tick's. Not checked (no
+        # clock step given) or failed: clock_ok False, so a day's first snapshot is late and the write-off is
+        # still booked at the late reference (#197 option A).
+        clock_ok = clock is not None and clock() is None and runner_clock_ok(state)
+        out = paper_ledger.apply_writeoffs(step.closes, _stamp(now), clock_ok=clock_ok)
         if out["problems"]:
-            if out["booked"]:  # PR #342 review (Codex 6184078075 P2): a partial write-off failure
-                state.writeoff_events_resent = False  # re-send every written-off leg's event before the next settle
+            # PR #342 review (Codex 6184078075 / 6184412258 P2): a partial failure, or a row on disk whose
+            # post-write re-read failed (not in ``booked``): re-send every written-off leg's event before the next
+            # settle step, so no booked write-off loses its event.
+            state.writeoff_events_resent = False
             return [str(problem) for problem in out["problems"]]
         if out["booked"]:  # on disk and fsynced (ledger_store.book) before the event
             event(state, "writeoff", now, resent=False, events=_writeoff_events(out["booked"]))
     return []
 
 
-def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> list[str]:
+def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter,
+                 clock: Callable[[], str | None] | None = None) -> list[str]:
     """Issue #206 (Task CO): this tick's settlement step (called by ``preflight``, see its docstring).
 
     1. Collect settlement snapshots from Gamma for the markets with an open leg only (src/resolution_watch).
@@ -1001,7 +1018,7 @@ def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> lis
                                                    "token_id": row.get("token_id"),
                                                    "settlement_payout": row.get("settlement_payout")}
                                                   for row in out["booked"]])
-    return _writeoff_hook(state, now, gamma)
+    return _writeoff_hook(state, now, gamma, clock)
 
 
 def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> IterationReport:
@@ -1011,13 +1028,14 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     state.tick_clock_verified = False  # Task DC: per tick
     state.tick_clock_vetoed = False
     state.tick_time_ok = False
+    state.tick_clock_result = None  # PR #342: one clock check per tick, shared by the write-off and preflight
     _note_clock_anomaly(state, now)  # issue #289: heartbeat stamp for an anomaly held from startup
     gamma = GuardedGetter(getters.gamma, state.on_get)  # one guarded Gamma getter per tick: settlement, scan, fee
     book_get = GuardedGetter(getters.book, state.on_get)  # shared read-only transport for /time and later /book
     try:
         check = preflight(state.paths, now=now, risk_path=state.risk_path, clock_ok=runner_clock_ok(state),
-                          settle=lambda: _settle_tick(state, now, gamma),
-                          clock_check=lambda: _clock_check(state, book_get, now))
+                          settle=lambda: _settle_tick(state, now, gamma, lambda: _tick_clock(state, book_get, now)),
+                          clock_check=lambda: _tick_clock(state, book_get, now))
     except WriteFailed as exc:
         state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return IterationReport(ACT_WRITE_FAILED, [str(exc)])
