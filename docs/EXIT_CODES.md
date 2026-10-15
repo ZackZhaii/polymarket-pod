@@ -225,13 +225,19 @@ pre-Task-AF history with no honest join — none is guessed, the row is reported
 (`unknowns`, its derived `legacy:` id as a stable name, never a join key) and counted
 (`ledger.legacy_rows`), not named a problem; the coverage gate keeps a run that cross-checked no
 fill at all (all-empty inputs, or nothing joinable) or with unverified legacy rows at verdict
-`unknown`, never PASS. Review P1 on PR #202: the remaining check (input SHA256, counts, reasons) is
-a later acceptance item, so the tool still never reports PASS — a problem-free run ends verdict
-`unknown`.
+`unknown`, never PASS. Acceptance 6: every check of the issue now runs — the JSON report carries
+each input's SHA256 (`ledger` / `bus` `sha256`, of the exact bytes read), the verified / unverified
+counts (`counts`: `verified_fills` joined and fully cross-checked vs `unverified_rows` legacy rows
+that can never be joined) and the difference reasons (the named `problems`, `ledger_only` /
+`bus_only`, `input_problems` entries, each naming the fill and the drifted field); the independent
+RiskGate allow attribution and mark-to-market are explicitly UNKNOWN in every run
+(`unknown_checks`) — honest non-claims, not differences, that do not gate the verdict. A
+problem-free run that cross-checked at least one fill and has no legacy row is verdict `pass` /
+exit 0.
 
 | Code | Name | Meaning | Sentinel |
 |---|---|---|---|
-| 0 | `EXIT_OK` | reserved for the fully checked pass (every #69 check); not reachable before the remaining acceptance items land | - |
+| 0 | `EXIT_OK` | the fully checked pass: every #69 check ran, nothing differs, at least one fill was cross-checked and no unverified legacy row remains (the coverage gate keeps an all-empty or legacy-only run at 1) | - |
 | 1 | `EXIT_MISMATCH` | a problem (the ledger failed `ledger_store.verify`, an orphan / join problem on either side, a payload or outer-market mismatch, a non-finite number), or no problem but verdict `unknown` (the two logs are not validated as agreeing) | - |
 | 2 | `EXIT_USAGE` | usage error, or an input that cannot be read in full (missing, unreadable, undecodable bytes, a malformed or non-object line, a torn last row, a conflicting fill_id) | - |
 
