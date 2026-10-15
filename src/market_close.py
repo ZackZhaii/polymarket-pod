@@ -301,6 +301,17 @@ def already_reason(obs: Observation, closed_ts: object) -> str:
     return ALREADY
 
 
+RESUMED = "writeoff_resumed_remaining_legs"
+
+
+def _close_from_row(market: str, row: dict[str, Any]) -> Close | None:
+    """The confirmed close a leg's write-off row records (None when the row's stamps do not parse)."""
+    stamps = [parse_end_date(row.get(name)) for name in ("closed_ts", "close_first_seen_ts", "close_confirmed_ts")]
+    if any(stamp is None for stamp in stamps) or not isinstance(row.get("close_confirmed_by"), str):
+        return None
+    return Close(market, stamps[0], stamps[1], stamps[2], row["close_confirmed_by"])
+
+
 @dataclass
 class Step:
     """One tick's close detection (Poly风控 tick step 3)."""
@@ -330,6 +341,14 @@ def detect(tracker: CloseTracker, ledger_rows: list[dict[str, Any]], reads: Mapp
                 out.halts.append(f"{halt}:{market}")
             else:
                 out.reasons[market] = already_reason(obs, rows[0].get("closed_ts"))
+                # PR #342 review (Codex 6183035627): completion is per leg. A write-off interrupted between two
+                # leg rows leaves an open leg of this confirmed-closed market without a row: write it off now,
+                # from the close already confirmed (plan_writeoffs skips every leg that has its row).
+                if any((market, token) not in written for token in held[market]):
+                    resumed = _close_from_row(market, rows[0])
+                    if resumed is not None:
+                        out.closes.append(resumed)
+                        out.reasons[market] = RESUMED
             continue
         close, reason = tracker.step(obs, now)
         out.reasons[market] = reason

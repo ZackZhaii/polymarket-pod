@@ -674,4 +674,40 @@ def test_e2e_real_settle_hook_with_a_paused_clock_writes_off_and_the_daily_loss_
     read = ledger_store.read_ledger(runner["paper"])[1]
     stamp = (RUN_NOW + timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), stamp, clock_ok=False)
-    assert risk["problems"] == [] and risk["loss_usd"] >= 10.0 - 1e-9
+    assert risk["problems"] == [] and risk["loss_usd"] == pytest.approx(10.0)
+
+
+class _Crash(BaseException):
+    """A process crash between two leg writes (not an Exception: nothing in the runner catches it)."""
+
+
+def test_a_writeoff_interrupted_between_two_legs_writes_off_the_remaining_leg_after_a_restart(runner, monkeypatch):
+    """PR #342 review (Codex 6183035627): completion is per leg. The market's YES leg is written off, the process
+    dies before the NO leg's row; after a restart the NO leg is written off exactly once."""
+    stamp = (RUN_NOW - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _book(runner["paper"], [fill("buy", 10.0, 0.4, ts=stamp, market="held", token="t2")], prefix="ck2")
+    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _iterate(runner, getter, RUN_NOW)
+    real_book = ledger_store.book
+
+    def crash_on_t2(path, row, **kwargs):
+        if ledger_store.is_writeoff(row) and row.get("token_id") == "t2":
+            raise _Crash()
+        return real_book(path, row, **kwargs)
+
+    monkeypatch.setattr(ledger_store, "book", crash_on_t2)
+    with pytest.raises(_Crash):
+        _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
+    monkeypatch.setattr(ledger_store, "book", real_book)
+    assert [r["token_id"] for r in _writeoffs(runner["paper"])] == ["t1"]  # interrupted after one leg
+    runner["state"] = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(runner["run"]))  # restart
+    report = _iterate(runner, getter, RUN_NOW + timedelta(seconds=120))
+    assert "market_close_halt" not in report.reasons and not _halted()
+    booked = _writeoffs(runner["paper"])
+    assert sorted(r["token_id"] for r in booked) == ["t1", "t2"]
+    t2 = next(r for r in booked if r["token_id"] == "t2")
+    assert t2["writeoff_usd"] == pytest.approx(4.0) and t2["close_first_seen_ts"] == booked[0]["close_first_seen_ts"]
+    for seconds in (180, 240):  # later ticks: nothing written off twice
+        _iterate(runner, getter, RUN_NOW + timedelta(seconds=seconds))
+    assert len(_writeoffs(runner["paper"])) == 2
+    assert ledger_store.verify(ledger_store.read_ledger(runner["paper"])[1]) == []
