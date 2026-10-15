@@ -227,6 +227,17 @@ def test_an_unprovable_time_never_takes_the_first_forecast_slot():
     assert report["forecasts"]["dropped_by_reason"] == {"forecast_ts_invalid": 1}
 
 
+def test_the_first_forecast_slot_follows_utc_not_the_written_form():
+    # 2026-10-01T02:00:00+05:00 is 2026-09-30T21:00:00Z: sealed before 2026-10-01T00:30:00Z,
+    # although its written form sorts after that text
+    early = forecast(0, 0.2, ts="2026-10-01T02:00:00+05:00")
+    late = forecast(0, 0.9, ts="2026-10-01T00:30:00Z")
+    report, samples = build([late, early], [resolution(0, 0, day=1)])
+    kept = [s for s in samples if s.get("kind") == "forecast" and s["eligible"]]
+    assert [s["forecast_id"] for s in kept] == [early["forecast_id"]]
+    assert report["forecasts"]["dropped_by_reason"] == {"duplicate_market_forecast": 1}
+
+
 def test_mixed_times_drop_exactly_and_match_samples_jsonl(tmp_path):
     fs = [forecast(0, 0.7, ts="2026-10-01T11:00:00Z"),          # before the close: kept
           forecast(1, 0.99, ts="2026-10-01T12:00:00Z"),          # at the close
@@ -528,6 +539,33 @@ def test_mixed_fill_times_drop_exactly_and_match_samples_jsonl(tmp_path):
         if not s["eligible"]:
             reasons[s["reason"]] = reasons.get(s["reason"], 0) + s.get("fills", 1)
     assert reasons == t["dropped_by_reason"]
+
+
+def test_an_unprovable_time_never_takes_a_trade_re_entry_slot():
+    fs = [forecast(0, 0.6, ts="2026-10-01T00:00:00Z"),
+          forecast(0, 0.6, ts="2026-10-02T00:00:00Z"),
+          forecast(0, 0.6, ts="2026-10-03T00:00:00Z")]
+    fills = [fill(fs[0], fill_id="first", ts="2026-10-01T01:00:00Z"),
+             fill(fs[1], fill_id="bad", ts="yesterday"),  # unprovable: no slot and no cap budget
+             fill(fs[2], fill_id="third", ts="2026-10-03T01:00:00Z")]
+    report, _ = build(fs, [resolution(0, 0, day=5)], fills)  # close 2026-10-05: the two provable fills fit
+    t = report["trades"]
+    assert t["eligible"] == 2 and t["dropped_by_reason"] == {"fill_ts_invalid": 1}
+    assert t["metrics"]["re_entries"] == 1
+
+
+def test_a_trade_re_entry_slot_follows_utc_not_the_written_form():
+    fs = [forecast(0, 0.6, ts="2026-09-30T00:00:00Z"),
+          forecast(0, 0.6, ts="2026-09-30T12:00:00Z"),
+          forecast(0, 0.6, ts="2026-09-30T18:00:00Z")]
+    fills = [fill(fs[0], fill_id="utc-first", ts="2026-10-01T02:00:00+05:00"),  # 2026-09-30T21:00:00Z
+             fill(fs[1], fill_id="utc-second", ts="2026-10-01T00:30:00Z"),
+             fill(fs[2], fill_id="utc-third", ts="2026-10-01T01:00:00Z")]
+    report, samples = build(fs, [resolution(0, 0, day=1)], fills)
+    t = report["trades"]
+    assert t["eligible"] == 2 and t["dropped_by_reason"] == {"re_entry_cap": 1}
+    kept = {s["forecast_id"] for s in samples if s.get("kind") == "trade" and s["eligible"]}
+    assert kept == {fs[0]["forecast_id"], fs[1]["forecast_id"]}  # the two earliest UTC fills keep the slots
 
 
 # ------------------------------------------------------------------ CLI

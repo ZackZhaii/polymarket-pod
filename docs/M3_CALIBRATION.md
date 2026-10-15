@@ -286,11 +286,13 @@ git-ignored. Exit codes: `docs/EXIT_CODES.md` (0 written, 2 usage, 3 corrupt inp
 
 ### Samples
 
-- **B, forecasts**: the first sealed forecast (by `ts`, then `forecast_id`) per `condition_id`, and only
+- **B, forecasts**: the first sealed forecast (earliest sealed instant by the parsed UTC `ts`, ties by the
+  written form then `forecast_id`) per `condition_id`, and only
   one whose `ts` is provably before that market's `resolution.closed_ts`; p =
   `model_prob`, y = 1 when its token won.
 - **A, trades**: counted (`ledger_store.counts`), `risk_decision=allow` fills grouped by `decision_id`; at
-  most `CALIBRATION_MAX_DECISIONS_PER_MARKET` decisions per market. p = the first fill's `model_prob`, q =
+  most `CALIBRATION_MAX_DECISIONS_PER_MARKET` decisions per market, the slots going to the earliest
+  decisions by their first fill's parsed UTC `ts`. p = the first fill's `model_prob`, q =
   its `market_mid` (Task BC, step 2c; `market_price` only for a pre-Task BA fill). Expected `E = sum(edge x shares)`; realized
   `R = (bought - sold shares) x y + sell proceeds - buy cost` (fees included).
   Issue #70: every fill of a decision must satisfy `forecast.ts <= fill.ts < closed_ts` (the joined
@@ -305,7 +307,8 @@ Both times are zoned ISO strings parsed to UTC (`_parse_ts`) before the comparis
 written in any offset is the same moment. A forecast whose time cannot be proved (its `ts` does not parse
 as a zoned ISO time) or that was sealed at the close or after it is dropped and counted
 (`forecast_ts_invalid`, `forecast_not_before_close`); nothing is imputed and an unprovable row never takes
-the market's first-forecast slot.
+the market's first-forecast slot. The first-forecast slot goes to the earliest sealed instant as a UTC
+datetime (`_parse_ts`), never to the first `ts` text.
 
 A trade sample proves the same order per fill, against its joined forecast row's `ts` (never a fill's copy
 of it) and `resolution.closed_ts`: every fill must satisfy `forecast.ts <= fill.ts < closed_ts`, the same
