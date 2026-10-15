@@ -1790,7 +1790,20 @@ Status: done. Claimed by Poly桥接 at Poly指挥's request. Docs and tests only
   and asserts the repo's `logs/bus.jsonl` is untouched.
 - Registers Task CI (#195). config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
+## Task ED — Issue #138: m1_rest heartbeat error_streak + Sentinel rest_error_streak
+
+Status: open. Claimed by Poly桥接 as Task ED (issue #138). Non-KEY: monitoring tighten only.
+
+- `src/m1_run.py` RestSampler: each sample round tracks consecutive all-asset failures as
+  `error_streak` (one success clears); the m1_rest heartbeat `progress` includes `error_streak`.
+- `src/thresholds.py` / `docs/THRESHOLDS.md`: `REST_ERROR_STREAK_ALERT = 3` (M2 pending).
+- `src/sentinel_tick.py`: `error_streak >= 3` → warn `rest_error_streak` (latched; re-arms after
+  clear); wrong type → `heartbeat_malformed`. No risk.toml change.
+- Tests: RestSampler streak + clear; Sentinel alert once / re-arm; malformed streak. Closes #138.
+
+
 ## Latest
+- 2026-10-15: Task ED (issue #138): m1_rest heartbeat progress.error_streak (consecutive all-asset REST sample failures; success clears); Sentinel warn rest_error_streak at REST_ERROR_STREAK_ALERT=3 (M2 pending); malformed streak → heartbeat_malformed. Monitoring tighten only, non-KEY. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task EC: EXIT_CODES.md tick order (scan → ingest/seal → decide → commit) and m2_start exit 5 on child exit (no timeout wait); EA state entry with real test counts and the src/exit_codes.py change; TLS deadline test skips without openssl; operator CLI veto test uses a bus stub and asserts logs/bus.jsonl untouched (Codex 6179446901 P2); Task CI (#195) registered. Docs/tests only, non-KEY. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task CI (PR #195, KEY, approved by 家伟): leg marks need only the side the leg trades into (long: bids, short: asks); merged c8f796d. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task EB (issue #223): m1_run manifest `counts.recorder.<asset>.<name>` persists ws_recorder's internal counts per asset (duplicate_level_removal, group_held, group_resolved, group_unresolved, group_replaced_by_book, stale_resubscribe_snapshot), also in every `progress` snapshot and the console-close partial counts (same atomic ManifestWriter path as counts.resyncs). m1_report only displays them (no criterion; N/A for older runs). Observability only, non-KEY: no check, threshold or M1 criterion changed. risk.toml unchanged (0aea23af…bc04), live_enabled=false.

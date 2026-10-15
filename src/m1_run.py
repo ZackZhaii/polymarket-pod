@@ -229,6 +229,7 @@ class RestSampler:
         self.samples = 0
         self.rows = 0
         self.errors = 0
+        self.error_streak = 0  # Issue #138: consecutive rounds where every asset failed
         self.failure: BaseException | None = None
         self.heartbeat = heartbeat  # Task AP: one m1_rest beat after every sample
         # Issue #82: one barrier shared by every publish (row, event, count, heartbeat) and the
@@ -260,6 +261,7 @@ class RestSampler:
                 return  # sealed: no request is ever started
             self.samples += 1
             sample = self.samples
+        round_ok = 0
         for token in self.assets:
             with self._barrier:
                 if self._sealed:
@@ -280,10 +282,23 @@ class RestSampler:
                 row["received_at"] = self.now()
                 self.sink.write(row)
                 self.rows += 1
+                round_ok += 1
         with self._barrier:
-            if not self._sealed and self.heartbeat is not None:
-                self.heartbeat.beat("running", {"samples": self.samples, "rows": self.rows, "errors": self.errors},
-                                    force=True)
+            if self._sealed:
+                return
+            # Issue #138: streak of consecutive "every asset failed this round"; one success clears.
+            if self.assets:
+                if round_ok == 0:
+                    self.error_streak += 1
+                else:
+                    self.error_streak = 0
+            if self.heartbeat is not None:
+                self.heartbeat.beat(
+                    "running",
+                    {"samples": self.samples, "rows": self.rows, "errors": self.errors,
+                     "error_streak": self.error_streak},
+                    force=True,
+                )
 
     def run(self, stop: threading.Event, wait: Callable[[float], bool] | None = None) -> None:
         """Sample now, then every every_s until stop or the deadline. ``wait(seconds)`` returns True on stop."""
