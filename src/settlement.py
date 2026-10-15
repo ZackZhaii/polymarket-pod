@@ -47,6 +47,8 @@ SETTLEMENT_ID_PREFIX = "settle-"
 # the start of its reason; every other market halt (a stale book, a cancelled quote, ...) settles as usual.
 SETTLEMENT_BLOCKING_HALT_PREFIXES = (
     "closed_flag_contradiction_after_writeoff",  # #197 OQ-8: written off, then the market reads open again
+    "writeoff_close_first_seen_in_future",       # #197 / PR #342: clock rollback after the market's write-off
+    "writeoff_close_record_unparseable",         # #197 / PR #342: the market's recorded close cannot be read
     "settlement_result_changed",                 # a booked settlement read again with another result
     "settlement_conflict",                       # two confirmed results for one leg / condition
     "invalid_settlement_payout",                 # a payout outside {0, 1}

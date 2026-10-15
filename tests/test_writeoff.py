@@ -762,3 +762,62 @@ def test_an_unparseable_close_record_with_a_remaining_leg_is_a_halt_not_a_silent
     reads = {"held": _rb_obs(True, False, RUN_NOW + timedelta(minutes=1))}
     step = market_close.detect(market_close.CloseTracker(), rows + [written], reads, RUN_NOW + timedelta(minutes=1))
     assert step.closes == [] and step.halts == [f"{market_close.HALT_CLOSE_UNPARSEABLE}:held"]
+
+
+# --- PR #342 review 6184198731 (Codex 6184078075) -----------------------------------------------------------
+
+def test_clearing_only_the_global_halt_still_blocks_settlement_of_a_rolled_back_market(runner):
+    """P1: a clock-rollback halt after a write-off is market-level and settlement-blocking; resuming the global
+    invalid_risk_state halt alone does not let that market settle (src/settlement.SETTLEMENT_BLOCKING_HALT_PREFIXES)."""
+    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _iterate(runner, getter, RUN_NOW)
+    _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
+    runner["state"] = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(runner["run"]))
+    _iterate(runner, getter, RUN_NOW - timedelta(minutes=10))  # wall clock rolled back
+    for record in halt_store.active_halts():
+        if record.get("scope") == halt_store.SCOPE_GLOBAL:
+            halt_store.resume(from_role="Operator", scope="global", halt_id=record["id"], approved_by="op",
+                              root_cause="test", postmortem="PR #342", bus_path=runner["paper"].parent / "bus.jsonl")
+    assert halt_store.global_halt_active() == []
+    assert "held" in paper_ledger.settlement_blocked_markets()
+
+
+@pytest.mark.parametrize("reason", [market_close.HALT_CLOCK_ROLLBACK, market_close.HALT_CLOSE_UNPARSEABLE])
+def test_the_new_writeoff_halts_block_settlement(reason):
+    from src import settlement
+    assert settlement.blocks_settlement(f"{reason}:held")
+
+
+def test_a_partial_writeoff_failure_resends_the_booked_events_in_the_same_process(runner, monkeypatch):
+    """P2: leg t1 booked, leg t2's write fails (a problem, not a crash). The runner keeps running; once the
+    global halt is resumed, the next settle step re-sends t1's write-off event before settling."""
+    stamp = (RUN_NOW - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _book(runner["paper"], [fill("buy", 10.0, 0.4, ts=stamp, market="held", token="t2")], prefix="ck2")
+    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _iterate(runner, getter, RUN_NOW)
+    assert runner["state"].writeoff_events_resent is True  # the first tick's re-send already ran
+    real_book = ledger_store.book
+
+    def fail_t2(path, row, **kwargs):
+        if ledger_store.is_writeoff(row) and row.get("token_id") == "t2":
+            raise OSError("disk")
+        return real_book(path, row, **kwargs)
+
+    monkeypatch.setattr(ledger_store, "book", fail_t2)
+    report = _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
+    monkeypatch.setattr(ledger_store, "book", real_book)
+    assert any(str(r).startswith("writeoff_write_failed") for r in report.reasons), report.reasons
+    assert [r["token_id"] for r in _writeoffs(runner["paper"])] == ["t1"]
+    assert runner["state"].writeoff_events_resent is False  # same process: re-send armed again
+    events = [json.loads(line) for line in (runner["run"] / "events.jsonl").read_text().splitlines()]
+    assert not [e for e in events if e.get("event") == "writeoff"]  # t1's event never went out
+    for record in halt_store.active_halts():
+        if record.get("scope") == halt_store.SCOPE_GLOBAL:
+            halt_store.resume(from_role="Operator", scope="global", halt_id=record["id"], approved_by="op",
+                              root_cause="test", postmortem="PR #342", bus_path=runner["paper"].parent / "bus.jsonl")
+    _iterate(runner, getter, RUN_NOW + timedelta(seconds=120))
+    events = [json.loads(line) for line in (runner["run"] / "events.jsonl").read_text().splitlines()]
+    sent = [e for e in events if e.get("event") == "writeoff"]
+    t1 = next(r for r in _writeoffs(runner["paper"]) if r["token_id"] == "t1")["fill_id"]
+    assert sent and sent[0]["resent"] is True and t1 in [x["key"] for x in sent[0]["events"]]
+    assert sorted(r["token_id"] for r in _writeoffs(runner["paper"])) == ["t1", "t2"]  # t2 resumed, once

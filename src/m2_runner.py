@@ -951,6 +951,8 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter) -> l
     if step.closes:
         out = paper_ledger.apply_writeoffs(step.closes, _stamp(now), clock_ok=runner_clock_ok(state))
         if out["problems"]:
+            if out["booked"]:  # PR #342 review (Codex 6184078075 P2): a partial write-off failure
+                state.writeoff_events_resent = False  # re-send every written-off leg's event before the next settle
             return [str(problem) for problem in out["problems"]]
         if out["booked"]:  # on disk and fsynced (ledger_store.book) before the event
             event(state, "writeoff", now, resent=False, events=_writeoff_events(out["booked"]))
