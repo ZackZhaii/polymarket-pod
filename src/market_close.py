@@ -40,6 +40,8 @@ one key are a ledger integrity problem (src/ledger_store.py (f)): invalid_risk_s
 """
 from __future__ import annotations
 
+import dataclasses
+
 import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -58,7 +60,7 @@ from src.ledger_store import (
     is_writeoff,
     leg_key,
 )
-from src.thresholds import LEDGER_OPEN_EPS, MARKET_CLOSE_RECHECK_S, MARKET_CLOSE_REOPEN_GRACE_S
+from src.thresholds import CLOCK_SKEW_MAX_S, LEDGER_OPEN_EPS, MARKET_CLOSE_RECHECK_S, MARKET_CLOSE_REOPEN_GRACE_S
 
 WRITEOFF_ID_PREFIX = "writeoff-"
 STRATEGY = "writeoff"
@@ -74,6 +76,7 @@ TIME_CHANGED = "confirmation_failed_closed_time_changed"
 READ_FAILED = "close_read_failed"
 INVALID_TYPE = "close_read_invalid_type"
 ALREADY = "already_written_off"
+CLOCK_DISAGREE = "confirmation_failed:wall_monotonic_disagree"  # PR #342: no confirmation across a clock jump
 HALT_REOPENED = "closed_flag_contradiction_after_writeoff"
 HALT_CLOCK_ROLLBACK = "writeoff_close_first_seen_in_future"  # PR #342: clock rollback after a write-off
 HALT_CLOSE_UNPARSEABLE = "writeoff_close_record_unparseable"  # PR #342: remaining legs cannot be resumed
@@ -90,6 +93,8 @@ class Observation:
     closed_time: datetime | None = None
     raw_closed_time: object = None
     problem: str | None = None
+    # PR #342 (Codex 6185166823): the monotonic stamp taken when the read finished (None: not measured)
+    observed_mono: float | None = None
 
 
 @dataclass(frozen=True)
@@ -156,7 +161,22 @@ def failed(market_id: str, now: datetime, problem: str) -> Observation:
     return Observation(str(market_id), now, problem=problem)
 
 
-def gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime) -> Observation:
+def gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime, *,
+               clock: Callable[[], datetime] | None = None,
+               monotonic: Callable[[], float] | None = None) -> Observation:
+    """Read one held market (see ``_gamma_read``). PR #342 review (Codex 6185166823 P1): with ``clock`` /
+    ``monotonic`` the observation is stamped when the reads FINISHED (wall and monotonic), not at the tick start,
+    so a slow read cannot shorten the confirmation interval."""
+    obs = _gamma_read(getter, market_id, now)
+    changes: dict[str, Any] = {}
+    if clock is not None:
+        changes["observed_at"] = clock()
+    if monotonic is not None:
+        changes["observed_mono"] = monotonic()
+    return dataclasses.replace(obs, **changes) if changes else obs
+
+
+def _gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime) -> Observation:
     """Read one held market: ``closed=true`` first (the only read that can show a close), then the default query
     (it can only show the market open). In neither list: unknown (a read failure). In both: unknown too (Gamma's
     views split for a few minutes around a close)."""
@@ -218,7 +238,20 @@ class CloseTracker:
         if pending.closed_time != obs.closed_time:
             del self.first[obs.market]  # this read does not open a new pending either (WO-14)
             return None, TIME_CHANGED
-        if (obs.observed_at - pending.observed_at).total_seconds() < MARKET_CLOSE_RECHECK_S:
+        wall = (obs.observed_at - pending.observed_at).total_seconds()
+        if pending.observed_mono is not None or obs.observed_mono is not None:
+            # PR #342 review (Codex 6185166823 P1): the interval is measured on the monotonic clock; a wall
+            # clock that disagrees with it (a jump either way) confirms nothing (the pending read is dropped).
+            if pending.observed_mono is None or obs.observed_mono is None:
+                del self.first[obs.market]
+                return None, CLOCK_DISAGREE
+            mono = obs.observed_mono - pending.observed_mono
+            if abs(wall - mono) > CLOCK_SKEW_MAX_S:
+                del self.first[obs.market]
+                return None, CLOCK_DISAGREE
+            if mono < MARKET_CLOSE_RECHECK_S:
+                return None, TOO_SOON
+        if wall < MARKET_CLOSE_RECHECK_S:
             return None, TOO_SOON
         del self.first[obs.market]
         return Close(obs.market, obs.closed_time, pending.observed_at, obs.observed_at, BY_REREAD), CONFIRMED  # type: ignore[arg-type]

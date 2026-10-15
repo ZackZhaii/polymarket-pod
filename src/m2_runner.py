@@ -948,7 +948,8 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter,
         return [f"writeoff_ledger_unreadable:{type(exc).__name__}"]
     _resend_writeoff_events(state, now, ledger.rows)  # no-op after _settle_tick ran it (before settlement)
     held = market_close.held_markets(ledger.rows)
-    reads = {market: market_close.gamma_read(gamma, market, now) for market in sorted(held)}
+    reads = {market: market_close.gamma_read(gamma, market, now, clock=state.clock, monotonic=state.monotonic)
+             for market in sorted(held)}  # PR #342: stamped when each read finishes (wall + monotonic)
     step = market_close.detect(state.close_tracker, ledger.rows, reads, now)
     unread = {market: obs.problem for market, obs in reads.items() if obs.problem is not None}
     if unread:

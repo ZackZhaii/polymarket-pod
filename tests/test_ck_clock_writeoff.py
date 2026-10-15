@@ -232,6 +232,8 @@ def test_the_first_tick_of_a_day_uses_this_ticks_failed_clock_not_the_previous_t
     assert _hook(state, monkeypatch, lambda: "clock_unverified") == []
     row = [r for r in _rows(env["ledger"]) if ledger_store.is_writeoff(r)][0]
     assert row["writeoff_sod_late"] is True and row["writeoff_usd"] == pytest.approx(18.0)
+    snap, problems = daily_marks.read_snapshot(paper_ledger.DAILY_MARKS_DIR, "2026-09-01")
+    assert problems == [] and snap is not None and snap["late"] is True  # the day's snapshot itself is late
 
 
 def test_no_clock_step_means_not_verified(env, tmp_path, monkeypatch):

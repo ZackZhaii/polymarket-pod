@@ -5,6 +5,7 @@ rows; every file lives in the test's folder. Paper only: no network, no order.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -437,6 +438,7 @@ def runner(tmp_path, monkeypatch):
 
 def _iterate(runner, getter, now):
     runner["state"].monotonic = lambda: now.timestamp()  # wall and monotonic move together (#120: no "resume")
+    runner["state"].clock = lambda: now
     return m2_runner.iteration(runner["state"], now=now, getters=m2_runner.Getters(gamma=getter, book=_no_book))
 
 
@@ -821,3 +823,81 @@ def test_a_partial_writeoff_failure_resends_the_booked_events_in_the_same_proces
     t1 = next(r for r in _writeoffs(runner["paper"]) if r["token_id"] == "t1")["fill_id"]
     assert sent and sent[0]["resent"] is True and t1 in [x["key"] for x in sent[0]["events"]]
     assert sorted(r["token_id"] for r in _writeoffs(runner["paper"])) == ["t1", "t2"]  # t2 resumed, once
+
+
+# --- PR #342 review 6185336686 (Codex 6185166823 P1): the re-read interval is real, measured, monotonic ------
+
+class _Time:
+    """A fake wall + monotonic clock for the runner; ``slow`` adds seconds inside the next Gamma read."""
+
+    def __init__(self, start):
+        self.wall, self.mono, self.slow = start, 1000.0, 0.0
+
+    def advance(self, seconds, *, wall_jump=0.0):
+        self.wall += timedelta(seconds=seconds + wall_jump)
+        self.mono += seconds
+
+
+def _timed_runner(runner, clock):
+    runner["state"].clock = lambda: clock.wall
+    runner["state"].monotonic = lambda: clock.mono
+
+
+def _timed_gamma(row, clock):
+    inner = RunnerGamma(row)
+
+    def getter(url):
+        if clock.slow and "id=held" in url:
+            clock.advance(clock.slow)
+            clock.slow = 0.0
+        return inner(url)
+    return getter
+
+
+def _tick_at(runner, getter, clock):
+    return m2_runner.iteration(runner["state"], now=clock.wall, getters=m2_runner.Getters(gamma=getter, book=_no_book))
+
+
+def test_a_slow_first_read_does_not_shorten_the_confirmation_interval(runner):
+    """The first read starts at the tick start but finishes 25 s later; the next tick starts 31 s after the first
+    tick's start. Real interval between the two reads: 6 s < 30 s: no write-off (the old tick-start stamp: 31 s)."""
+    clock = _Time(RUN_NOW)
+    _timed_runner(runner, clock)
+    getter = _timed_gamma(gamma("held", closed_time=runner["closed_at"]), clock)
+    clock.slow = 25.0
+    _tick_at(runner, getter, clock)  # read finishes at +25 s
+    clock.advance(6.0)  # the next tick starts at +31 s
+    _tick_at(runner, getter, clock)
+    assert _writeoffs(runner["paper"]) == []
+    clock.advance(30.0)  # a real 30 s+ after the pending read: confirmed now
+    _tick_at(runner, getter, clock)
+    assert len(_writeoffs(runner["paper"])) == 1
+
+
+@pytest.mark.parametrize("jump", [+120.0, -120.0])
+def test_a_wall_clock_jump_between_the_two_reads_confirms_nothing(runner, jump):
+    """Monotonic +10 s, wall +130 s (or -110 s): the clocks disagree; the pending read is dropped, no write-off."""
+    clock = _Time(RUN_NOW)
+    _timed_runner(runner, clock)
+    getter = _timed_gamma(gamma("held", closed_time=runner["closed_at"]), clock)
+    _tick_at(runner, getter, clock)
+    clock.advance(10.0, wall_jump=jump)
+    _tick_at(runner, getter, clock)
+    assert _writeoffs(runner["paper"]) == []
+    events = [json.loads(line) for line in (runner["run"] / "events.jsonl").read_text().splitlines()]
+    assert not [e for e in events if e.get("event") == "writeoff"]
+
+
+def test_the_tracker_needs_both_clocks_to_agree():
+    tracker = market_close.CloseTracker()
+    first = dataclasses.replace(market_close.observation_from_row("m", gamma(), T0), observed_mono=0.0)
+    later = dataclasses.replace(first, observed_at=T0 + timedelta(seconds=31), observed_mono=31.0)
+    tracker.step(first, T0)
+    close, reason = tracker.step(later, T0 + timedelta(seconds=31))
+    assert close is not None
+    tracker.step(first, T0)
+    jumped = dataclasses.replace(first, observed_at=T0 + timedelta(seconds=31), observed_mono=5.0)
+    assert tracker.step(jumped, T0 + timedelta(seconds=31)) == (None, market_close.CLOCK_DISAGREE)
+    tracker.step(first, T0)
+    unmeasured = dataclasses.replace(first, observed_at=T0 + timedelta(seconds=31), observed_mono=None)
+    assert tracker.step(unmeasured, T0 + timedelta(seconds=31)) == (None, market_close.CLOCK_DISAGREE)
