@@ -1,8 +1,8 @@
 {
  "schema": "poly_forecast_197_vectors/3",
- "version": "v3.3",
- "version_note": "v3.3+r195（Poly预测，在 CK 的 v3.3 #225 版本之上）：按 #195（已合入 dev c8f796d，leg_marks 只要求持有方一侧可用）重算，对照 dev 247af98；WO-29 12:01 浮亏 9.85→9.35，WO-30 10:00 浮亏 9.85→0.15，WO-30 描述去掉“#195 未批准”；每个 step 与核销行新增严格 bool 字段 writeoff_sod_late（#197 方案 A）。 v3.3（Task CK，Poly风控 #225 裁定）：WO-27 2026-10-14T13:00Z、WO-43 2026-10-13T09:00Z/10:00Z 为当日首次评估，距 UTC 00:00 超过 DAY_START_MAX_LAG_S，日初快照迟到，参考价取 max(成本, 前一日最后有效标价)；期望值由仓库函数（tests/test_writeoff_vectors.py 同一 harness，src.paper_ledger.daily_unrealized / src.daily_loss）重算。新增对照 WO-27-ONTIME（00:00:30Z 准时快照，13:00 期望 0）。harness 不再假设“昨天跑过即准时”。其余期望不变。 | 前版：v3.2：OQ-N7 已裁定（https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792）：核销后矛盾 → 全局 halt（invalid_risk_state），并叠加 #214 对该市场结算的阻断；人工解除全局 halt 后该市场结算仍阻断。WO-15/16 期望不变；新增 WO-42、WO-43、INV-13；对照 dev 8b5db69。 v3.1（仅措辞）：所有 'bus' 指 M2 runner 事件流（events.jsonl），不是 pod bus；PROTOCOL / BUS_TYPES 不变（Poly指挥 澄清）。数值、字段名与 v3 @4acf535 逐项相同。v3 按 Poly风控 补充裁定 issuecomment-6106700917 修订：bus 至少一次 + 消费端按键去重（WO-38）；已核销市场轮询到结算、只查矛盾，读失败忽略（WO-41）；N1–N6 resolved。v2 按 Poly风控 裁定 issuecomment-6106669720 修订：核销前的确认失败/读取失败不 halt（按 #124 继续计最坏浮亏、下一轮重新确认）；只有核销后矛盾与账本核销行冲突会 halt；同 tick 先结算后核销；新增崩溃重启/账本去重向量；第二源辅证另给 expected_reread_only。",
- "generator": "vectors/gen_197_vectors.v3_3.py",
+ "version": "v3.4",
+ "version_note": "v3.4（Poly指挥 定名，取代 Poly预测 的 v3.3+r195；CK 分支自己的 v3.3 #225 版不变）：start_of_day_snapshots[].late 按 writeoff_sod_late 同一规则重算（当日首次评估距 00:00 UTC > 120 s 即 late），共 58 处变化，逐条见 changelog；所有数值与 v3.3+r195 相同（断言）。 v3.3+r195（Poly预测，在 CK 的 v3.3 #225 版本之上）：按 #195（已合入 dev c8f796d，leg_marks 只要求持有方一侧可用）重算，对照 dev 247af98；WO-29 12:01 浮亏 9.85→9.35，WO-30 10:00 浮亏 9.85→0.15，WO-30 描述去掉“#195 未批准”；每个 step 与核销行新增严格 bool 字段 writeoff_sod_late（#197 方案 A）。 v3.3（Task CK，Poly风控 #225 裁定）：WO-27 2026-10-14T13:00Z、WO-43 2026-10-13T09:00Z/10:00Z 为当日首次评估，距 UTC 00:00 超过 DAY_START_MAX_LAG_S，日初快照迟到，参考价取 max(成本, 前一日最后有效标价)；期望值由仓库函数（tests/test_writeoff_vectors.py 同一 harness，src.paper_ledger.daily_unrealized / src.daily_loss）重算。新增对照 WO-27-ONTIME（00:00:30Z 准时快照，13:00 期望 0）。harness 不再假设“昨天跑过即准时”。其余期望不变。 | 前版：v3.2：OQ-N7 已裁定（https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792）：核销后矛盾 → 全局 halt（invalid_risk_state），并叠加 #214 对该市场结算的阻断；人工解除全局 halt 后该市场结算仍阻断。WO-15/16 期望不变；新增 WO-42、WO-43、INV-13；对照 dev 8b5db69。 v3.1（仅措辞）：所有 'bus' 指 M2 runner 事件流（events.jsonl），不是 pod bus；PROTOCOL / BUS_TYPES 不变（Poly指挥 澄清）。数值、字段名与 v3 @4acf535 逐项相同。v3 按 Poly风控 补充裁定 issuecomment-6106700917 修订：bus 至少一次 + 消费端按键去重（WO-38）；已核销市场轮询到结算、只查矛盾，读失败忽略（WO-41）；N1–N6 resolved。v2 按 Poly风控 裁定 issuecomment-6106669720 修订：核销前的确认失败/读取失败不 halt（按 #124 继续计最坏浮亏、下一轮重新确认）；只有核销后矛盾与账本核销行冲突会 halt；同 tick 先结算后核销；新增崩溃重启/账本去重向量；第二源辅证另给 expected_reread_only。",
+ "generator": "vectors/gen_197_vectors.v3_4.py",
  "origin_dev_sha": "247af98797cf6745f72f6ba745e367213d480537",
  "rule": "KEY #197 close-then-write-off: body sections A-E, approval https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6104331631, ruling https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6106669720. PR #195 applied (merged in dev c8f796d): leg_marks needs only the held side.",
  "constants": {
@@ -19,7 +19,7 @@
   "inputs.ledger_writeoff_rows[]": "optional: write-off rows already in the ledger from a previous process: {row: <write-off row, same shape as expected.writeoff_events[]>, bus_emitted: bool (already in the runner event stream once before this run)}.",
   "inputs.steps[]": "ticks. t: UTC ISO. books: {'market|token': book|null} (carried forward; null = removed). gamma: {market: Gamma read (explicit closed=true query) | {'_error':..} | [] }. second_source: {market: {source: clob_markets, accepting_orders, closed} | {source: data_v2_tokens, closed, resolved}} (ignored by expected_reread_only). resolution: confirmed settlement snapshot. restart: process restart before this tick. crash_after_ledger_write: the write-off row of this tick is fsync'd but the process dies before the bus emit. operator_resume (v3.2): operator clears the global halt before this tick (OQ-N7).",
   "tick order (ruling)": "0) operator_resume (v3.2): clears a closed_flag_contradiction_after_writeoff global halt; that market is added to settlement_blocked_markets (#214) and stays blocked.  1) restart: drop in-memory pending, replay ledger; runner event stream is at-least-once (the model re-sends every write-off row whose leg is still open; consumers dedupe by key)  2) read ledger; conflicting write-off rows -> halt; halted -> stop (no settle, no write-off, daily_loss null)  3) settlement first (src.settlement.plan)  4) close detection + write-off only for open legs neither settled nor written off; post-write-off contradiction check  5) daily loss (start-of-day snapshot at the first tick of each UTC day, dev rule)  6) (RiskGate, not modelled). Matches origin/dev 4acf535 m2_runner.preflight: KILL/live/pins/global halt/verified ledger -> _settle_tick (resolution_watch.collect -> apply_settlements -> _writeoff_hook, CK slot) -> daily_loss re-check -> breaker -> RiskGate.",
-  "inputs.start_of_day_snapshots[]": "daily_marks snapshot each UTC day gets at its first tick (dev format, liquidation_mark with #195 held-side-only rule). late=false unless the day is in inputs.late_days.",
+  "inputs.start_of_day_snapshots[]": "daily_marks snapshot each UTC day gets at its first tick (dev format, liquidation_mark with #195 held-side-only rule). late (v3.4) = src.day_boundary.day_start_late(created_at, clock_ok=True) (> DAY_START_MAX_LAG_S=120 s after 00:00 UTC) or day in inputs.late_days; equals writeoff_sod_late of every step/row of that day.",
   "expected.steps[]": "risk_state ok|invalid_risk_state, halt_reason, close_reasons {market: reason}, writeoff_emitted, writeoff_events [event_id written this tick], ledger_writeoff_rows (distinct leg_keys), duplicate_writeoff_rows_ignored, bus_emitted [{event_id, replay}] (runner event stream; one conforming at-least-once trace; NOT asserted exactly), bus_keys_required_by_now (assert: each key has >=1 runner event by the end of this tick), crash_after_ledger_write, realized_writeoff_usd, daily_loss_usd (null when halted) + parts {fees_usd, realized_loss_usd, writeoff_usd, unrealized_usd}, realized_gain_usd, max_daily_loss_veto, occupancy {count, usd, legs}, settlement_booked, marks.",
   "expected.writeoff_events[]": "ledger write-off rows: event_id 'writeoff-'+sha256('<condition>|<market>|<token>')[:32] (proposed), unique key leg_key, ts, day, market, condition_id, token_id, shares, cost_basis_usd, open_fees_usd, full_cost_usd, daily_loss_component_usd, reason, evidence {first_read_t, confirm_t, closed_time, query}.",
   "expected.bus": "runner event stream (not the pod bus), at-least-once assertions: every keys_required key has >= 1 write-off event; consumer_deduped_count_by_key == 1 per key; model_emissions_by_key is informative only.",
@@ -289,7 +289,7 @@
    }
   },
   {
-   "version": "v3.3+r195",
+   "version": "v3.3+r195（并入 v3.4，不单独发布）",
    "date": "2026-10-15 UTC+8",
    "dev_sha": "247af98797cf6745f72f6ba745e367213d480537",
    "summary": "#195 合入后（c8f796d，在 7826ca1/247af98 中）重算：只有 WO-29、WO-30 的 unrealized/daily_loss 变化；来源 /workspace/pod-bots/poly-exec-ck-merge-check-7826ca1.md。新增 writeoff_sod_late。生成器 vectors/gen_197_vectors.v3_3.py（自包含，v3/v3.2 生成器未改）。",
@@ -298,6 +298,424 @@
     "WO-30": "10:00 bids [[0.97,500]] / asks [['NaN',5]]：估值 10×0.97=9.7，unrealized 9.85→0.15（daily_loss 9.9→0.2）；12:01 起盘口已移除 → 仍 mark_invalid 9.85，不变；描述去掉“#195 未批准”",
     "all": "每个 step 与核销行新增 writeoff_sod_late（严格 bool，= src.day_boundary.day_start_late(当日首次评估时间)）；schema_doc/rule 改为 #195 单边口径；WO-27/WO-43/WO-27-ONTIME 的 #225 期望原样沿用 CK 版"
    },
+   "added": {}
+  },
+  {
+   "version": "v3.4",
+   "date": "2026-10-15 UTC+8",
+   "dev_sha": "247af98797cf6745f72f6ba745e367213d480537",
+   "summary": "Poly指挥 定名 v3.4（去掉 revision）。start_of_day_snapshots[].late 与 writeoff_sod_late 对齐，58 处 false→true / true→false 见 late_changes；数值不变（WO-29=9.35、WO-30=0.15 等，生成器断言除 late 外与 v3.3+r195 486a92a5 完全相同）。生成器 vectors/gen_197_vectors.v3_4.py。",
+   "changed": {
+    "start_of_day_snapshots[].late": "按 #225 规则重算，供 Poly风控 复核"
+   },
+   "late_changes": [
+    {
+     "vector": "CTRL-01",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "CTRL-02",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "CTRL-03",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "CTRL-03",
+     "day": "2026-10-14",
+     "created_at": "2026-10-14T13:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-01",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-02",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-03",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-04",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-05",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-06",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-07",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-08",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-09",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-10",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T11:59:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-11",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-12",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-13",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-14",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-15",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T11:59:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-16",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-17",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-18",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-19",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-20",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-20",
+     "day": "2026-10-14",
+     "created_at": "2026-10-14T13:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-21",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-21",
+     "day": "2026-10-14",
+     "created_at": "2026-10-14T13:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-22",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-23",
+     "day": "2026-10-11",
+     "created_at": "2026-10-11T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-25",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-25",
+     "day": "2026-10-14",
+     "created_at": "2026-10-14T13:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-26",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T10:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-26",
+     "day": "2026-10-14",
+     "created_at": "2026-10-14T13:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-27",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-27",
+     "day": "2026-10-14",
+     "created_at": "2026-10-14T13:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-27-ONTIME",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-27-ONTIME",
+     "day": "2026-10-14",
+     "created_at": "2026-10-14T13:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-28",
+     "day": "2026-10-11",
+     "created_at": "2026-10-11T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-29",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T09:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-30",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T09:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-31",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-32",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-33",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-34",
+     "day": "2026-10-11",
+     "created_at": "2026-10-11T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-34",
+     "day": "2026-10-14",
+     "created_at": "2026-10-14T13:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-35",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-35",
+     "day": "2026-10-14",
+     "created_at": "2026-10-14T13:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-36",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-37",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-38",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-39",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:05:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-40",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:05:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-40",
+     "day": "2026-10-14",
+     "created_at": "2026-10-14T13:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-41",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T12:01:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-41",
+     "day": "2026-10-14",
+     "created_at": "2026-10-14T13:00:00Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-42",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-43",
+     "day": "2026-10-12",
+     "created_at": "2026-10-12T08:00:30Z",
+     "old": false,
+     "new": true
+    },
+    {
+     "vector": "WO-43",
+     "day": "2026-10-13",
+     "created_at": "2026-10-13T09:00:00Z",
+     "old": false,
+     "new": true
+    }
+   ],
    "added": {}
   }
  ],
@@ -384,7 +802,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -710,7 +1128,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -1134,13 +1552,13 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
       "day": "2026-10-14",
       "created_at": "2026-10-14T13:00:00Z",
-      "late": false,
+      "late": true,
       "legs": [
        {
         "leg_key": "m1|m1-Y",
@@ -1604,7 +2022,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -2183,7 +2601,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -2784,7 +3202,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -3392,7 +3810,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -3796,7 +4214,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -4097,7 +4515,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -4490,7 +4908,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -4918,7 +5336,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -5507,7 +5925,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -6011,7 +6429,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T11:59:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -6625,7 +7043,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -7059,7 +7477,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -7676,7 +8094,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -8185,7 +8603,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -8730,7 +9148,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T11:59:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -9459,7 +9877,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -9940,7 +10358,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -10533,7 +10951,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -11024,7 +11442,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -11467,7 +11885,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -11489,7 +11907,7 @@
      {
       "day": "2026-10-14",
       "created_at": "2026-10-14T13:00:00Z",
-      "late": false,
+      "late": true,
       "legs": [
        {
         "leg_key": "m1|m1-Y",
@@ -12138,7 +12556,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -12160,7 +12578,7 @@
      {
       "day": "2026-10-14",
       "created_at": "2026-10-14T13:00:00Z",
-      "late": false,
+      "late": true,
       "legs": [
        {
         "leg_key": "m1|m1-Y",
@@ -12789,7 +13207,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      }
     ]
@@ -13212,7 +13630,7 @@
      {
       "day": "2026-10-11",
       "created_at": "2026-10-11T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -14602,7 +15020,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -14633,7 +15051,7 @@
      {
       "day": "2026-10-14",
       "created_at": "2026-10-14T13:00:00Z",
-      "late": false,
+      "late": true,
       "legs": [
        {
         "leg_key": "m1|m1-N",
@@ -15359,7 +15777,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T10:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -15381,7 +15799,7 @@
      {
       "day": "2026-10-14",
       "created_at": "2026-10-14T13:00:00Z",
-      "late": false,
+      "late": true,
       "legs": [
        {
         "leg_key": "m1|m1-Y",
@@ -16074,7 +16492,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -16105,7 +16523,7 @@
      {
       "day": "2026-10-14",
       "created_at": "2026-10-14T13:00:00Z",
-      "late": false,
+      "late": true,
       "legs": [
        {
         "leg_key": "mA|mA-Y",
@@ -16950,7 +17368,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -16981,7 +17399,7 @@
      {
       "day": "2026-10-14",
       "created_at": "2026-10-14T13:00:00Z",
-      "late": false,
+      "late": true,
       "legs": [
        {
         "leg_key": "mA|mA-Y",
@@ -17876,7 +18294,7 @@
      {
       "day": "2026-10-11",
       "created_at": "2026-10-11T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -18963,7 +19381,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T09:00:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -19656,7 +20074,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T09:00:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -20267,7 +20685,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -21017,7 +21435,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -21628,7 +22046,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -21979,7 +22397,7 @@
      {
       "day": "2026-10-11",
       "created_at": "2026-10-11T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -22001,7 +22419,7 @@
      {
       "day": "2026-10-14",
       "created_at": "2026-10-14T13:00:00Z",
-      "late": false,
+      "late": true,
       "legs": [
        {
         "leg_key": "m1|m1-Y",
@@ -22593,7 +23011,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -22615,7 +23033,7 @@
      {
       "day": "2026-10-14",
       "created_at": "2026-10-14T13:00:00Z",
-      "late": false,
+      "late": true,
       "legs": [
        {
         "leg_key": "m1|m1-Y",
@@ -23209,7 +23627,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -23757,7 +24175,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -24349,7 +24767,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -25037,7 +25455,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:05:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -25416,13 +25834,13 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:05:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
       "day": "2026-10-14",
       "created_at": "2026-10-14T13:00:00Z",
-      "late": false,
+      "late": true,
       "legs": [
        {
         "leg_key": "m1|m1-Y",
@@ -25792,7 +26210,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T12:01:00Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -25814,7 +26232,7 @@
      {
       "day": "2026-10-14",
       "created_at": "2026-10-14T13:00:00Z",
-      "late": false,
+      "late": true,
       "legs": [
        {
         "leg_key": "m1|m1-Y",
@@ -26769,7 +27187,7 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
@@ -27899,13 +28317,13 @@
      {
       "day": "2026-10-12",
       "created_at": "2026-10-12T08:00:30Z",
-      "late": false,
+      "late": true,
       "legs": []
      },
      {
       "day": "2026-10-13",
       "created_at": "2026-10-13T09:00:00Z",
-      "late": false,
+      "late": true,
       "legs": [
        {
         "leg_key": "mA|mA-Y",
@@ -28875,6 +29293,5 @@
     "INV-13"
    ]
   }
- ],
- "revision": "v3.3+r195"
+ ]
 }
