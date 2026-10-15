@@ -53,6 +53,9 @@ def test_m2_runner_prose_and_table_agree_on_invisible_exits():
     for code in ("2", "3", "7"):
         assert rows[code].rstrip().endswith("| 不可见 |"), rows[code]
     assert "m2_start" in sec and "exits 5" in sec
+    # Task EC: m2_start polls the child, so exit 5 comes on the child's exit, not after the timeout
+    assert "without waiting for the start timeout" in sec and "times out waiting" not in sec
+    assert "scan → ingest/seal → decide → commit" in sec
     assert "stderr" in sec and "supervisor" in sec
     assert "availability blind spot" in sec
     assert "normal refusal" in sec
