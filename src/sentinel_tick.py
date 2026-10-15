@@ -394,7 +394,7 @@ class Tick:
         progress = record["progress"]
         streak = progress.get("error_streak", 0)
         if isinstance(streak, bool) or not isinstance(streak, int):
-            self.halt(f"heartbeat_malformed:m1_rest")
+            self.halt("heartbeat_malformed:m1_rest")
             self.alert("heartbeat_malformed:m1_rest", "heartbeat_malformed", "progress.error_streak",
                        proc="m1_rest", severity="sev1")
             return

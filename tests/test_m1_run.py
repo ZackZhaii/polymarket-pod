@@ -480,6 +480,28 @@ def test_rest_sampler_error_streak_counts_all_fail_rounds_and_clears_on_success(
     assert all("error_streak" in progress for _, progress, _ in beats.beats)
 
 
+def test_rest_sampler_seal_mid_round_does_not_count_toward_error_streak():
+    """Issue #138 / Task EE: a round cut short by the stop-seal publishes nothing and is not an
+    all-fail round, so error_streak does not move (and no heartbeat carries a bumped streak)."""
+    clock = Clock()
+    beats = BeatLog()
+    holder = {}
+
+    def get(url):
+        holder["s"].seal()  # stop arrives while the first request is in flight
+        raise OSError("down")
+
+    sampler = r.RestSampler([A, B], {}, ListSink(), ListSink(), every_s=10, deadline_s=1e6, getter=get,
+                            now=clock.now, monotonic=clock.monotonic, heartbeat=beats)
+    holder["s"] = sampler
+    sampler.error_streak = 2  # two all-fail rounds already counted
+    sampler.sample_once()
+    assert sampler.sealed and sampler.error_streak == 2
+    assert beats.beats == []
+    sampler.sample_once()  # sealed: no request, no count
+    assert sampler.error_streak == 2 and beats.beats == []
+
+
 def test_rest_sampler_partial_success_clears_error_streak():
     """Issue #138: a round where any asset succeeds is not an all-fail round (clears the streak)."""
     clock = Clock()

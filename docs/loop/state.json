@@ -693,9 +693,17 @@
     },
     {
       "id": "ED",
-      "status": "open",
+      "status": "done",
       "title": "Issue #138: m1_rest heartbeat error_streak + Sentinel rest_error_streak (M2 pending threshold 3)",
-      "note": "Claimed by Poly桥接 as Task ED (issue #138). Non-KEY: monitoring tighten only; REST_ERROR_STREAK_ALERT=3 M2 pending; no risk.toml change.",
+      "note": "Claimed by Poly桥接 as Task ED (issue #138). Non-KEY: monitoring tighten only; REST_ERROR_STREAK_ALERT=3 M2 pending; no risk.toml change. Merged PR #343 (b766a2a). A malformed error_streak is a global halt heartbeat_malformed:m1_rest.",
+      "done_at": "2026-10-15T03:47:39Z",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "EE",
+      "status": "done",
+      "title": "#343 follow-ups: malformed error_streak = global halt wording, sentinel_tick F541, seal/missing-field error_streak tests",
+      "note": "Claimed by Poly桥接 as Task EE at Poly指挥's request. Non-KEY: docs/lint/tests only, no threshold change, no risk.toml change.",
       "surface": "grok-bot"
     }
   ]
