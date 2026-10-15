@@ -53,7 +53,10 @@ scored against a prediction made after it was known. A trade sample proves the s
 against its joined forecast row's ts (never a fill's copy): every fill must satisfy
 forecast.ts <= fill.ts < closed_ts, or the whole decision sample is dropped and counted
 (fill_forecast_ts_invalid, fill_ts_invalid, fill_before_forecast, fill_not_before_close), so a
-result is never scored against a trade placed outside the window either. A corrupt input file (torn line,
+result is never scored against a trade placed outside the window either. Slots follow the proven
+UTC instants, never the ts text: the market's first-forecast slot goes to the earliest sealed
+forecast and the per-market re-entry slots to the earliest decisions, and an unprovable time never
+takes either. A corrupt input file (torn line,
 bad JSON, wrong schema, conflicting duplicate) is an error exit and no report is written; a
 ledger that fails ledger_store.verify is its own error exit. Below the M3-pending minimums
 (src/thresholds.py CALIBRATION_*) a section is "insufficient" and carries no verdict.
@@ -628,7 +631,7 @@ def forecast_samples(forecasts: Mapping[str, dict[str, Any]], resolutions: Mappi
     reasons: Counter = Counter()
     problem_counts: Counter = Counter()
     dropped: list[dict[str, Any]] = []
-    candidates: list[dict[str, Any]] = []
+    candidates: list[tuple[datetime, dict[str, Any]]] = []
 
     def drop(row: Mapping[str, Any], reason: str) -> None:
         reasons[reason] += 1
@@ -656,10 +659,12 @@ def forecast_samples(forecasts: Mapping[str, dict[str, Any]], resolutions: Mappi
             if closed is None or ts >= closed:
                 drop(row, "forecast_not_before_close")  # at/after the close (or unprovable close): no result leak
                 continue
-        candidates.append(row)
+        candidates.append((ts, row))
     seen: set[str] = set()
     eligible: list[dict[str, Any]] = []
-    for row in candidates:
+    # issue #70: the first sealed forecast is the earliest proven UTC instant (then the written form,
+    # then forecast_id), never the first ts text.
+    for _, row in sorted(candidates, key=lambda c: (c[0], str(c[1]["ts"]), str(c[1]["forecast_id"]))):
         condition = row["condition_id"]
         if condition in seen:
             drop(row, "duplicate_market_forecast")  # design 1.3: the first sealed forecast per market only
@@ -721,7 +726,14 @@ def trade_samples(fills: Sequence[dict[str, Any]], forecasts: Mapping[str, dict[
         decisions.setdefault(row["decision_id"], []).append(row)
     per_market: Counter = Counter()
     eligible: list[dict[str, Any]] = []
-    ordered = sorted(decisions.items(), key=lambda item: (str(item[1][0].get("ts")), item[0]))
+
+    def _slot_key(item: tuple[str, list[dict[str, Any]]]) -> tuple[datetime, str, str]:
+        raw = item[1][0].get("ts")
+        # issue #70: re-entry slots go in the proven UTC order of the first fill, never the written
+        # form; an unprovable time sorts last - fill_time_problem drops it before it can take a slot.
+        return (_parse_ts(raw) or datetime.max.replace(tzinfo=timezone.utc), str(raw), item[0])
+
+    ordered = sorted(decisions.items(), key=_slot_key)
     for decision_id, rows in ordered:
         first = rows[0]
         ref = {"decision_id": decision_id, "market": first.get("market")}
