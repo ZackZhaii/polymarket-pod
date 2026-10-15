@@ -421,18 +421,23 @@ def apply_writeoffs(closes: list[Any], now: str | None = None,
 
 
 WRITEOFF_DAY_BOUNDARY = "writeoff_day_boundary"
+WRITEOFF_CLOCK_UNAVAILABLE = "writeoff_clock_unavailable"
 
 
 def _locked_write_time(now: str, clock: Callable[[], Any]) -> tuple[str, str | None]:
-    """(the write stamp, None) = max(the caller's stamp, the clock now) on the caller's UTC day, or (now,
-    WRITEOFF_DAY_BOUNDARY) when the clock is on a later UTC day. An unusable clock keeps the caller's stamp."""
+    """(the write stamp, None) = max(the caller's stamp, the clock now) on the caller's UTC day; (now,
+    WRITEOFF_DAY_BOUNDARY) when the clock is on a later UTC day. PR #342 review (Poly风控 6194515074): an
+    unusable clock (raises, naive, out of range in UTC) or caller stamp is (now, WRITEOFF_CLOCK_UNAVAILABLE):
+    nothing is booked (the caller defers), never stamped at the earlier caller time."""
     base = parse_book_ts(now)
     try:
         later = clock()
-    except Exception:  # noqa: BLE001 - an unusable clock decides nothing later than the caller's stamp
-        return now, None
-    later = parse_book_ts(later) if isinstance(later, datetime) else None  # out-of-range UTC: unusable
-    if base is None or later is None or later <= base:
+    except Exception:  # noqa: BLE001 - an unusable clock: fail closed
+        return now, WRITEOFF_CLOCK_UNAVAILABLE
+    later = parse_book_ts(later) if isinstance(later, datetime) else None  # naive / out of range: unusable
+    if base is None or later is None:
+        return now, WRITEOFF_CLOCK_UNAVAILABLE
+    if later <= base:
         return now, None
     stamp = later.isoformat(timespec="milliseconds").replace("+00:00", "Z")
     if stamp[:10] != now[:10]:

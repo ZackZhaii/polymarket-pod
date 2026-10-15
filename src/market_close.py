@@ -47,12 +47,14 @@ import dataclasses
 
 import hashlib
 from dataclasses import dataclass, field
+import math
 from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlencode
 
 from src import leg_marks, podlib
 from src.daily_loss import daily_loss, writeoff_amount
+from src.book_staleness import parse_book_ts
 from src.expiry_rule import parse_end_date
 from src.ledger_store import (
     FILL_ID_FIELD,
@@ -172,18 +174,38 @@ def gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime, *,
     the tick start and not after the default view, so neither a slow read nor a slow default view can change the
     confirmation interval."""
     stamps: dict[str, Any] = {}
+    unusable: list[str] = []
 
     def stamp() -> None:  # PR #342 (Codex 6185588835 P1): when the closed=true response completes, so a
-        if clock is not None:  # slow default-view read can never pad the confirmation interval
-            stamps["observed_at"] = clock()
+        # slow default-view read can never pad the confirmation interval. PR #342 review (Poly风控 6194515074):
+        # a clock that raises, is naive or is out of range in UTC stamps nothing: the read is a failure (below).
+        if clock is not None:
+            try:
+                wall = clock()
+            except Exception:  # noqa: BLE001
+                wall = None
+            wall = parse_book_ts(wall) if isinstance(wall, datetime) else None
+            if wall is None:
+                unusable.append("wall")
+            else:
+                stamps["observed_at"] = wall
         if monotonic is not None:
-            stamps["observed_mono"] = monotonic()
+            try:
+                mono = monotonic()
+            except Exception:  # noqa: BLE001
+                mono = None
+            if isinstance(mono, bool) or not isinstance(mono, (int, float)) or not math.isfinite(mono):
+                unusable.append("mono")
+            else:
+                stamps["observed_mono"] = float(mono)
 
     # PR #342 review (Codex 6188442103 P2): an observation built from the DEFAULT view (the market reads open: a
     # reopen) is stamped when that response completed, so a slow default view never shortens the reopen grace.
     obs = _gamma_read(getter, market_id, now, stamp, stamp)
-    if not stamps:
+    if not stamps and not unusable:
         stamp()  # the closed=true read itself failed: stamp the failure now
+    if unusable:  # no usable time for this read: a read failure (confirms nothing, never a halt by itself)
+        return failed(market_id, now, "clock_unavailable")
     return dataclasses.replace(obs, **stamps) if stamps else obs
 
 

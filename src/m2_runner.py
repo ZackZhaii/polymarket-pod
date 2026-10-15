@@ -331,25 +331,32 @@ class IterationReport:
 
 # ---------------------------------------------------------------- small I/O helpers
 
-def _decision_time(now: datetime, clock: Callable[[], datetime] | None) -> datetime:
-    """PR #342 review (Codex 6188442103 P1): the time a write-off / day-snapshot decision is made and stamped:
-    max(tick start, runner clock), within the tick start's UTC day. A later UTC day keeps the tick start: the
-    write-off defers to the next tick (``_writeoff_hook``) and the day's evaluation stays on the tick's day."""
+def _decision_time(now: datetime, clock: Callable[[], datetime] | None) -> tuple[datetime, bool]:
+    """PR #342 review (Codex 6188442103 P1): (the time a day-snapshot / daily-loss decision is made and stamped,
+    whether the clock was usable). max(tick start, runner clock) within the tick start's UTC day; a later UTC day
+    keeps the tick start (the write-off defers, the day's evaluation stays on the tick's day). PR #342 review
+    (Poly风控 6194515074): an unusable clock (raises, naive, out of range in UTC) returns (tick start, False):
+    the caller must decide fail closed (a snapshot written then is late), never "on time" at an earlier time."""
     later = _clock_after(now, clock)
-    return later if _stamp(later)[:10] == _stamp(now)[:10] else now
+    if later is None:
+        return now, False
+    return (later if _stamp(later)[:10] == _stamp(now)[:10] else now), True
 
 
-def _clock_after(now: datetime, clock: Callable[[], datetime] | None) -> datetime:
-    """max(tick start, runner clock) in UTC; an unusable clock (raises, naive, or out of range in UTC: PR #342
-    review, Codex 6193266276) decides nothing later than the tick start."""
+def _clock_after(now: datetime, clock: Callable[[], datetime] | None) -> datetime | None:
+    """max(tick start, runner clock) in UTC; no clock injected: the tick start. PR #342 review (Poly风控
+    6194515074): an unusable clock (raises, naive, or out of range in UTC, Codex 6193266276) is None: the caller
+    fails closed (defer / late), never falls back to the earlier tick start."""
     if clock is None:
         return now
     try:
         later = clock()
-    except Exception:  # noqa: BLE001 - an unusable clock decides nothing later than the tick start
-        return now
+    except Exception:  # noqa: BLE001 - an unusable clock: fail closed at the caller
+        return None
     later = parse_book_ts(later) if isinstance(later, datetime) else None
-    return later if later is not None and later > now else now
+    if later is None:
+        return None
+    return later if later > now else now
 
 
 def _stamp(moment: datetime) -> str:
@@ -507,8 +514,11 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
     rows = len(read.rows)
     # PR #342 review (Codex 6188442103): the day's snapshot this evaluation may write decides lateness at the
     # evaluation time (max(tick start, runner clock), same UTC day), never the tick start.
-    risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), _stamp(_decision_time(now, clock)),
-                                        clock_ok=clock_ok)
+    # PR #342 review (Poly风控 6194515074): an unusable clock evaluates the tick's day with clock_ok False, so a
+    # snapshot written now is late (the most conservative reference: max(cost, previous day's last mark)).
+    decided_at, clock_usable = _decision_time(now, clock)
+    risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), _stamp(decided_at),
+                                        clock_ok=clock_ok and clock_usable)
     if risk["problems"]:
         problems = [str(p) for p in risk["problems"][:10]]
         _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": problems})
@@ -994,6 +1004,11 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter,
         # past UTC midnight the write is deferred: nothing booked, the pending reads stay pending, no halt; the
         # next tick (new day) confirms, books, snapshots and evaluates on the new day.
         written_at = _clock_after(now, state.clock)
+        if written_at is None:  # PR #342 review (Poly风控 6194515074): no usable time: book nothing, defer, no halt
+            for close in step.closes:
+                state.close_tracker.defer(close.market)
+            event(state, "writeoff_deferred_clock_unavailable", now, markets=sorted(c.market for c in step.closes))
+            return []
         if _stamp(written_at)[:10] != _stamp(now)[:10]:
             for close in step.closes:
                 state.close_tracker.defer(close.market)
@@ -1008,8 +1023,9 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter,
             # is on a later UTC day: nothing booked, the pending reads stay pending, no halt; retry next tick.
             for close in step.closes:
                 state.close_tracker.defer(close.market)
-            name = ("writeoff_deferred_day_boundary" if out["deferred"] == paper_ledger.WRITEOFF_DAY_BOUNDARY
-                    else "writeoff_deferred_commit_lock")
+            name = {paper_ledger.WRITEOFF_DAY_BOUNDARY: "writeoff_deferred_day_boundary",
+                    paper_ledger.WRITEOFF_CLOCK_UNAVAILABLE: "writeoff_deferred_clock_unavailable"}.get(
+                        out["deferred"], "writeoff_deferred_commit_lock")
             event(state, name, now, markets=sorted(c.market for c in step.closes))
             return []
         if out["problems"]:

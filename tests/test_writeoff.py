@@ -1552,7 +1552,135 @@ def test_previous_day_of_the_first_day_is_none_not_a_crash():
 def test_an_out_of_range_runner_clock_decides_nothing_later_and_never_crashes(raw):
     """m2_runner write-off / snapshot time and the in-lock re-read: an out-of-range clock is unusable."""
     bad = datetime.fromisoformat(raw)
-    assert m2_runner._clock_after(RUN_NOW, lambda: bad) == RUN_NOW
-    assert m2_runner._decision_time(RUN_NOW, lambda: bad) == RUN_NOW
+    assert m2_runner._clock_after(RUN_NOW, lambda: bad) is None  # unusable: fail closed (PR #342, 6194515074)
+    assert m2_runner._decision_time(RUN_NOW, lambda: bad) == (RUN_NOW, False)
     stamp = RUN_NOW.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    assert paper_ledger._locked_write_time(stamp, lambda: bad) == (stamp, None)
+    assert paper_ledger._locked_write_time(stamp, lambda: bad) == (stamp, paper_ledger.WRITEOFF_CLOCK_UNAVAILABLE)
+
+
+
+# --- PR #342 review 6194515074 (Poly风控): an unusable clock fails closed, never the earlier tick start ------
+
+def _raise():
+    raise RuntimeError("clock broken")
+
+
+BAD_CLOCKS = {
+    "out_of_range": lambda: datetime.fromisoformat("0001-01-01T00:00:00+01:00"),
+    "naive": lambda: datetime(2026, 10, 17, 0, 2, 2),
+    "raises": _raise,
+}
+
+
+@pytest.mark.parametrize("kind", sorted(BAD_CLOCKS))
+def test_matrix_writeoff_row_an_unusable_clock_inside_the_lock_books_nothing_and_defers(runner, monkeypatch, kind):
+    """Write-off row: the confirming tick starts 00:01:59 and waits 3 s for the commit lock; inside the lock the
+    clock is unusable: nothing is booked (old code: stamped 00:01:59, on time), no halt, the pending read kept;
+    the next tick with a good clock books (late: past the 120 s lag)."""
+    midnight = (RUN_NOW + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+    real_lock = paper_ledger._commit_lock
+    clock, _ = _lock_wait_runner(runner, monkeypatch, midnight - timedelta(seconds=10), 0.0)
+    broken = {"on": False}
+    runner["state"].clock = lambda: BAD_CLOCKS[kind]() if broken["on"] else clock.wall
+    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _tick_at(runner, getter, clock)  # 23:59:50 the previous day: the pending read
+    clock.advance(129.0)  # 00:01:59
+
+    def lock_with_bad_clock():
+        lock = real_lock()
+        acquire = lock.acquire
+
+        def acquire_then_clock_breaks(*args, **kwargs):
+            clock.advance(3.0)
+            broken["on"] = True  # the same clock is unusable when read again inside the lock
+            return acquire(*args, **kwargs)
+        lock.acquire = acquire_then_clock_breaks
+        return lock
+    monkeypatch.setattr(paper_ledger, "_commit_lock", lock_with_bad_clock)
+    report = _tick_at(runner, getter, clock)
+    assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
+    assert _writeoffs(runner["paper"]) == []
+    assert "held" in runner["state"].close_tracker.first
+    monkeypatch.setattr(paper_ledger, "_commit_lock", real_lock)
+    broken["on"] = False
+    clock.advance(1.0)
+    _tick_at(runner, getter, clock)
+    rows = _writeoffs(runner["paper"])
+    assert len(rows) == 1 and rows[0]["writeoff_sod_late"] is True
+
+
+@pytest.mark.parametrize("kind", sorted(BAD_CLOCKS))
+def test_matrix_writeoff_row_an_unusable_clock_before_the_lock_defers(runner, monkeypatch, kind):
+    """The hook's own write time (before the lock): an unusable clock books nothing and defers, no halt."""
+    _verified(monkeypatch)
+    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _iterate(runner, getter, RUN_NOW)
+    now = RUN_NOW + timedelta(seconds=60)
+    runner["state"].monotonic = lambda: now.timestamp()
+    reads = {}
+    real_read = market_close.gamma_read
+
+    def read_then_break(*args, **kwargs):  # the read itself is stamped; the clock breaks right after it
+        obs = real_read(*args, **kwargs)
+        runner["state"].clock = BAD_CLOCKS[kind]
+        reads["obs"] = obs
+        return obs
+    monkeypatch.setattr(market_close, "gamma_read", read_then_break)
+    runner["state"].clock = lambda: now
+    report = m2_runner.iteration(runner["state"], now=now, getters=m2_runner.Getters(gamma=getter, book=_no_book))
+    assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
+    assert _writeoffs(runner["paper"]) == [] and "held" in runner["state"].close_tracker.first
+
+
+@pytest.mark.parametrize("kind", sorted(BAD_CLOCKS))
+def test_matrix_snapshot_an_unusable_clock_writes_the_days_first_snapshot_late(runner, monkeypatch, kind):
+    """Snapshot: tick at 00:01:59 (verified /time), no write-off; the runner clock is unusable when preflight
+    evaluates the day: the day's first snapshot is late (old code: decided at the tick start, on time)."""
+    _verified(monkeypatch)
+    midnight = (RUN_NOW + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+    now = midnight + timedelta(seconds=119)
+    runner["state"].monotonic = lambda: now.timestamp()
+    runner["state"].clock = BAD_CLOCKS[kind]
+    getter = RunnerGamma(gamma("held", closed=False, accepting=True, closed_time=None))
+    report = m2_runner.iteration(runner["state"], now=now, getters=m2_runner.Getters(gamma=getter, book=_no_book))
+    assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
+    snap = daily_marks.read_snapshot(paper_ledger.DAILY_MARKS_DIR, midnight.strftime("%Y-%m-%d"))[0]
+    assert snap is not None and snap["late"] is True
+
+
+@pytest.mark.parametrize("kind", sorted(BAD_CLOCKS))
+def test_matrix_a_close_read_with_an_unusable_clock_is_a_read_failure(kind):
+    obs = market_close.gamma_read(RunnerGamma(gamma("held", closed_time=CLOSED_TS)), "held", RUN_NOW,
+                                  clock=BAD_CLOCKS[kind], monotonic=lambda: 1.0)
+    assert obs.problem == "clock_unavailable" and obs.observed_at == RUN_NOW
+
+
+# --- Part of #351 (Poly执行 ab7739a merge check): per-field and per-function rejection gaps ----------------
+
+@pytest.mark.parametrize("change", [
+    {"writeoff_shares": -20.0}, {"writeoff_shares": float("nan")}, {"writeoff_shares": "20"},
+    {"writeoff_usd": float("nan")},
+    {"writeoff_cost_usd": -10.0},
+    {"writeoff_sod_uplift_usd": float("nan")}, {"writeoff_sod_uplift_usd": "0"},
+])
+def test_351_a_damaged_writeoff_field_is_refused_and_invalid_risk_state(env, change):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    row = market_close.plan_writeoffs(_rows(env["ledger"]), ["ck-0000"], [close("m")], DAY1).rows[0]
+    with pytest.raises(ledger_store.LedgerIntegrityError):
+        ledger_store.book(env["ledger"], {**row, **change})
+    text = json.dumps({**row, **change})  # NaN written as the JSON token NaN, as a damaged file would hold it
+    with Path(env["ledger"]).open("a", encoding="utf-8") as handle:
+        handle.write(text + "\n")
+    state = paper_ledger.load_state("x", "t")
+    assert state["daily_loss_usd"] is None
+    assert "invalid_risk_state" in paper_ledger.evaluate(_intent(), load_risk(), state).reasons
+
+
+@pytest.mark.parametrize("big", [10 ** 400, -(10 ** 400)])
+def test_351_per_function_overflow_returns_invalid_not_a_crash(big):
+    assert daily_loss._number(big) is None
+    assert daily_marks._number(big) is False
+    assert leg_marks._finite(big) is None
+    assert ledger_store._finite(big) is None
+    assert paper_ledger._price(big) == (None, "invalid") and paper_ledger._fraction(big) == (None, "invalid")
+    assert ledger_store.non_finite_ledger_rows([{**fill("buy", 20.0, 0.5), "notional_usd": big}]) == [0]
