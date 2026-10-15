@@ -21,7 +21,7 @@ from src import daily_loss as daily_loss_mod
 from src import halt_store, ledger_store, market_close, paper_ledger, settlement
 
 FIXTURE = Path(__file__).parent / "fixtures" / "poly_forecast_197_vectors_v3.json"
-SHA256_PREFIX = "0f1f210b"  # v3.3 (Task CK, #225 regen of WO-27/WO-43 + WO-27-ONTIME); v3.2 was 214f058e
+SHA256_PREFIX = "486a92a5"  # Poly预测 v3.3 (#195 bid-side long mark: WO-29 9.35, WO-30 0.15; writeoff_sod_late on every row); prior 0f1f210b
 DATA = json.loads(FIXTURE.read_text(encoding="utf-8"))
 VECTORS = DATA["vectors"]
 TOL = 1e-6
@@ -102,15 +102,17 @@ def _distinct_writeoffs(rows: list[dict]) -> set[str]:
     return {f"{r['market']}|{r['token_id']}" for r in rows if ledger_store.is_writeoff(r)}
 
 
-# WO-29 / WO-30 predate #195 (merged c8f796d: a long marks on its bid side alone). Their expectations are NOT
-# hand-edited: Poly预测 is producing v3.3 vectors; strict xfail until then.
-_AWAITING_V33 = {"WO-29", "WO-30"}
-_VECTOR_PARAMS = [pytest.param(v, id=v["id"], marks=pytest.mark.xfail(
-    strict=True, reason="awaiting v3.3 vectors (#195 semantics)")) if v["id"] in _AWAITING_V33
-    else pytest.param(v, id=v["id"]) for v in VECTORS]
+# The v3 vectors predate #195 (Task CI, KEY, merged into dev at c8f796d): a long now marks on its bid side alone, so
+# a one-sided / broken-ask book is no longer mark_invalid (counted at 0). Expected unrealized after #195 (the
+# write-off itself does not depend on the book and is unchanged): WO-29 bid 0.5 x 1 of 10 shares -> 9.85 - 0.5;
+# WO-30 bid 0.97 x 10 -> 9.85 - 9.70.
+POST_195_UNREALIZED = {
+    ("WO-29", "2026-10-12T12:01:00Z"): 9.35,
+    ("WO-30", "2026-10-12T10:00:00Z"): 0.15,
+}
 
 
-@pytest.mark.parametrize("vector", _VECTOR_PARAMS)
+@pytest.mark.parametrize("vector", VECTORS, ids=[v["id"] for v in VECTORS])
 def test_poly_forecast_197_vector(env, vector):
     _run(env, vector)
 
@@ -232,13 +234,18 @@ def _run(env, vector, *, clock_ok: bool = True, check_parts: bool = True) -> dic
                    "daily_loss_usd": day.total_usd + unrealized["loss_usd"]}
         if not check_parts:
             continue
-        parts = exp["parts"]
+        parts = dict(exp["parts"])
+        expected_total = exp["daily_loss_usd"]
+        post_195 = POST_195_UNREALIZED.get((vector["id"], t))
+        if post_195 is not None:  # #195 (merged c8f796d): a long marks on its bid side alone
+            expected_total += post_195 - parts["unrealized_usd"]
+            parts["unrealized_usd"] = post_195
         got = {"fees_usd": day.fees_usd, "realized_loss_usd": day.realized_loss_usd - day.writeoff_usd,
                "writeoff_usd": day.writeoff_usd, "unrealized_usd": unrealized["loss_usd"]}
         for name, value in parts.items():
             assert got[name] == pytest.approx(value, abs=TOL), (label, name, got, parts)
         total = day.total_usd + unrealized["loss_usd"]
-        assert total == pytest.approx(exp["daily_loss_usd"], abs=TOL), (label, got)
+        assert total == pytest.approx(expected_total, abs=TOL), (label, got)
         assert day.realized_gain_usd == pytest.approx(exp["realized_gain_usd"], abs=TOL), label
         open_legs = sorted(f"{m}|{tok}" for m, tok in market_close.open_legs(read.rows))
         assert open_legs == sorted(exp["occupancy"]["legs"]) and len(open_legs) == exp["occupancy"]["count"], label

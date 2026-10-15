@@ -1,10 +1,10 @@
 {
  "schema": "poly_forecast_197_vectors/3",
  "version": "v3.3",
- "version_note": "v3.3（Task CK，Poly风控 #225 裁定）：WO-27 2026-10-14T13:00Z、WO-43 2026-10-13T09:00Z/10:00Z 为当日首次评估，距 UTC 00:00 超过 DAY_START_MAX_LAG_S，日初快照迟到，参考价取 max(成本, 前一日最后有效标价)；期望值由仓库函数（tests/test_writeoff_vectors.py 同一 harness，src.paper_ledger.daily_unrealized / src.daily_loss）重算。新增对照 WO-27-ONTIME（00:00:30Z 准时快照，13:00 期望 0）。harness 不再假设“昨天跑过即准时”。其余期望不变。 | 前版：v3.2：OQ-N7 已裁定（https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792）：核销后矛盾 → 全局 halt（invalid_risk_state），并叠加 #214 对该市场结算的阻断；人工解除全局 halt 后该市场结算仍阻断。WO-15/16 期望不变；新增 WO-42、WO-43、INV-13；对照 dev 8b5db69。 v3.1（仅措辞）：所有 'bus' 指 M2 runner 事件流（events.jsonl），不是 pod bus；PROTOCOL / BUS_TYPES 不变（Poly指挥 澄清）。数值、字段名与 v3 @4acf535 逐项相同。v3 按 Poly风控 补充裁定 issuecomment-6106700917 修订：bus 至少一次 + 消费端按键去重（WO-38）；已核销市场轮询到结算、只查矛盾，读失败忽略（WO-41）；N1–N6 resolved。v2 按 Poly风控 裁定 issuecomment-6106669720 修订：核销前的确认失败/读取失败不 halt（按 #124 继续计最坏浮亏、下一轮重新确认）；只有核销后矛盾与账本核销行冲突会 halt；同 tick 先结算后核销；新增崩溃重启/账本去重向量；第二源辅证另给 expected_reread_only。",
- "generator": "vectors/gen_197_vectors.v3_2.py",
- "origin_dev_sha": "8b5db696d78fd2185c5b76fd79d20f26ab2c6bc6",
- "rule": "KEY #197 close-then-write-off: body sections A-E, approval https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6104331631, ruling https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6106669720. PR #195 NOT applied: two-sided leg_marks.",
+ "version_note": "v3.3+r195（Poly预测，在 CK 的 v3.3 #225 版本之上）：按 #195（已合入 dev c8f796d，leg_marks 只要求持有方一侧可用）重算，对照 dev 247af98；WO-29 12:01 浮亏 9.85→9.35，WO-30 10:00 浮亏 9.85→0.15，WO-30 描述去掉“#195 未批准”；每个 step 与核销行新增严格 bool 字段 writeoff_sod_late（#197 方案 A）。 v3.3（Task CK，Poly风控 #225 裁定）：WO-27 2026-10-14T13:00Z、WO-43 2026-10-13T09:00Z/10:00Z 为当日首次评估，距 UTC 00:00 超过 DAY_START_MAX_LAG_S，日初快照迟到，参考价取 max(成本, 前一日最后有效标价)；期望值由仓库函数（tests/test_writeoff_vectors.py 同一 harness，src.paper_ledger.daily_unrealized / src.daily_loss）重算。新增对照 WO-27-ONTIME（00:00:30Z 准时快照，13:00 期望 0）。harness 不再假设“昨天跑过即准时”。其余期望不变。 | 前版：v3.2：OQ-N7 已裁定（https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6109526792）：核销后矛盾 → 全局 halt（invalid_risk_state），并叠加 #214 对该市场结算的阻断；人工解除全局 halt 后该市场结算仍阻断。WO-15/16 期望不变；新增 WO-42、WO-43、INV-13；对照 dev 8b5db69。 v3.1（仅措辞）：所有 'bus' 指 M2 runner 事件流（events.jsonl），不是 pod bus；PROTOCOL / BUS_TYPES 不变（Poly指挥 澄清）。数值、字段名与 v3 @4acf535 逐项相同。v3 按 Poly风控 补充裁定 issuecomment-6106700917 修订：bus 至少一次 + 消费端按键去重（WO-38）；已核销市场轮询到结算、只查矛盾，读失败忽略（WO-41）；N1–N6 resolved。v2 按 Poly风控 裁定 issuecomment-6106669720 修订：核销前的确认失败/读取失败不 halt（按 #124 继续计最坏浮亏、下一轮重新确认）；只有核销后矛盾与账本核销行冲突会 halt；同 tick 先结算后核销；新增崩溃重启/账本去重向量；第二源辅证另给 expected_reread_only。",
+ "generator": "vectors/gen_197_vectors.v3_3.py",
+ "origin_dev_sha": "247af98797cf6745f72f6ba745e367213d480537",
+ "rule": "KEY #197 close-then-write-off: body sections A-E, approval https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6104331631, ruling https://github.com/ZackZhaii/polymarket-pod/issues/197#issuecomment-6106669720. PR #195 applied (merged in dev c8f796d): leg_marks needs only the held side.",
  "constants": {
   "confirm_min_gap_s": 30.0,
   "confirm_max_gap_s": null,
@@ -19,7 +19,7 @@
   "inputs.ledger_writeoff_rows[]": "optional: write-off rows already in the ledger from a previous process: {row: <write-off row, same shape as expected.writeoff_events[]>, bus_emitted: bool (already in the runner event stream once before this run)}.",
   "inputs.steps[]": "ticks. t: UTC ISO. books: {'market|token': book|null} (carried forward; null = removed). gamma: {market: Gamma read (explicit closed=true query) | {'_error':..} | [] }. second_source: {market: {source: clob_markets, accepting_orders, closed} | {source: data_v2_tokens, closed, resolved}} (ignored by expected_reread_only). resolution: confirmed settlement snapshot. restart: process restart before this tick. crash_after_ledger_write: the write-off row of this tick is fsync'd but the process dies before the bus emit. operator_resume (v3.2): operator clears the global halt before this tick (OQ-N7).",
   "tick order (ruling)": "0) operator_resume (v3.2): clears a closed_flag_contradiction_after_writeoff global halt; that market is added to settlement_blocked_markets (#214) and stays blocked.  1) restart: drop in-memory pending, replay ledger; runner event stream is at-least-once (the model re-sends every write-off row whose leg is still open; consumers dedupe by key)  2) read ledger; conflicting write-off rows -> halt; halted -> stop (no settle, no write-off, daily_loss null)  3) settlement first (src.settlement.plan)  4) close detection + write-off only for open legs neither settled nor written off; post-write-off contradiction check  5) daily loss (start-of-day snapshot at the first tick of each UTC day, dev rule)  6) (RiskGate, not modelled). Matches origin/dev 4acf535 m2_runner.preflight: KILL/live/pins/global halt/verified ledger -> _settle_tick (resolution_watch.collect -> apply_settlements -> _writeoff_hook, CK slot) -> daily_loss re-check -> breaker -> RiskGate.",
-  "inputs.start_of_day_snapshots[]": "daily_marks snapshot each UTC day gets at its first tick (dev format, two-sided liquidation_mark). late=false unless the day is in inputs.late_days.",
+  "inputs.start_of_day_snapshots[]": "daily_marks snapshot each UTC day gets at its first tick (dev format, liquidation_mark with #195 held-side-only rule). late=false unless the day is in inputs.late_days.",
   "expected.steps[]": "risk_state ok|invalid_risk_state, halt_reason, close_reasons {market: reason}, writeoff_emitted, writeoff_events [event_id written this tick], ledger_writeoff_rows (distinct leg_keys), duplicate_writeoff_rows_ignored, bus_emitted [{event_id, replay}] (runner event stream; one conforming at-least-once trace; NOT asserted exactly), bus_keys_required_by_now (assert: each key has >=1 runner event by the end of this tick), crash_after_ledger_write, realized_writeoff_usd, daily_loss_usd (null when halted) + parts {fees_usd, realized_loss_usd, writeoff_usd, unrealized_usd}, realized_gain_usd, max_daily_loss_veto, occupancy {count, usd, legs}, settlement_booked, marks.",
   "expected.writeoff_events[]": "ledger write-off rows: event_id 'writeoff-'+sha256('<condition>|<market>|<token>')[:32] (proposed), unique key leg_key, ts, day, market, condition_id, token_id, shares, cost_basis_usd, open_fees_usd, full_cost_usd, daily_loss_component_usd, reason, evidence {first_read_t, confirm_t, closed_time, query}.",
   "expected.bus": "runner event stream (not the pod bus), at-least-once assertions: every keys_required key has >= 1 write-off event; consumer_deduped_count_by_key == 1 per key; model_emissions_by_key is informative only.",
@@ -28,7 +28,8 @@
   "close reasons (proposed codes)": "writeoff_confirmed_reread | writeoff_confirmed_clob | writeoff_confirmed_data_tokens | awaiting_confirmation | reread_too_soon | confirmation_failed:<predicate reason> | confirmation_failed_closed_time_changed | confirmation_failed_second_source_disagrees | close_read_failed[_pending_dropped] | close_read_invalid_type[_pending_dropped] | not_closed | accepting_orders_not_false | closed_time_missing | closed_time_invalid | closed_time_in_future | already_written_off[_read_failed|_closed_time_changed] | settled_no_writeoff | settled_polling_stopped | no_open_leg. halt: closed_flag_contradiction_after_writeoff | writeoff_row_conflict:<leg_key>.",
   "terminology (v3.1)": "'bus' in field names (bus_emitted, bus_keys_required_by_now, expected.bus, ledger_writeoff_rows[].bus_emitted) means the M2 runner event stream (events.jsonl via src.m2_runner.event), NOT the pod bus (podlib.bus / PROTOCOL / BUS_TYPES, unchanged). Semantics: at-least-once, consumers dedupe by write-off key / settlement key. Field names are kept for compatibility. #211/#214 already assert that settlement puts nothing on the pod bus; write-off (CK) must do the same.",
   "settlement gain (v3.1)": "a written-off leg that later wins books the FULL payout (shares x 1; short: shares x (1 - payout)) as realized_gain_usd on the settlement day; it never lowers daily_loss_usd. A leg settled without a prior write-off books payout - basis (dev #126 path).",
-  "expected.steps[] (v3.2 fields)": "operator_resume: halt reason cleared this tick or null; settlement_blocked_markets: markets whose settlement is blocked (#214 SETTLEMENT_BLOCKING_HALT_PREFIXES / paper_ledger.settlement_blocked_markets), sticky until a separate manual release (not modelled); settlement_skipped_blocked: markets whose resolution this tick was skipped because blocked (no halt, no booking, occupancy held). Present on every step; null/[] in WO-01..41."
+  "expected.steps[] (v3.2 fields)": "operator_resume: halt reason cleared this tick or null; settlement_blocked_markets: markets whose settlement is blocked (#214 SETTLEMENT_BLOCKING_HALT_PREFIXES / paper_ledger.settlement_blocked_markets), sticky until a separate manual release (not modelled); settlement_skipped_blocked: markets whose resolution this tick was skipped because blocked (no halt, no booking, occupancy held). Present on every step; null/[] in WO-01..41.",
+  "writeoff_sod_late (v3.3)": "strict JSON bool (never 0/1/string) on every expected/expected_reread_only/dev_current step and every write-off row (expected.writeoff_events[], inputs.ledger_writeoff_rows[].row): true iff the UTC day's start-of-day snapshot is late by src.day_boundary.day_start_late(start_of_day_snapshots[day].created_at, clock_ok=True) (#225: > DAY_START_MAX_LAG_S after 00:00 UTC) or day in inputs.late_days; a runner clock anomaly also makes it true (#197 option A, not modelled here). NOTE: start_of_day_snapshots[].late keeps the legacy dev-format value. Must equal the repo snapshot's late (#255 recheck: writeoff_sod_late_mismatch). On dev_current it is informative only."
  },
  "invariants": [
   {
@@ -286,6 +287,18 @@
     "WO-43": "核销后 closed=false → 全局 halt（mA 结算也不入账）→ 人工解除 → mB 结算被阻断（不 halt、占用保留），mA 正常结算。",
     "INV-13": "halt 后市场级结算阻断在人工解除全局 halt 后仍有效。"
    }
+  },
+  {
+   "version": "v3.3+r195",
+   "date": "2026-10-15 UTC+8",
+   "dev_sha": "247af98797cf6745f72f6ba745e367213d480537",
+   "summary": "#195 合入后（c8f796d，在 7826ca1/247af98 中）重算：只有 WO-29、WO-30 的 unrealized/daily_loss 变化；来源 /workspace/pod-bots/poly-exec-ck-merge-check-7826ca1.md。新增 writeoff_sod_late。生成器 vectors/gen_197_vectors.v3_3.py（自包含，v3/v3.2 生成器未改）。",
+   "changed": {
+    "WO-29": "12:01:00 bids [[0.5,1]] / asks [['x',1]]：多头 bid 侧可用 → 1 股×0.5 估值，其余 9 股无深度按 0，unrealized 9.85→9.35（daily_loss 9.9→9.4；dev_current 12:01:40 同样变化）",
+    "WO-30": "10:00 bids [[0.97,500]] / asks [['NaN',5]]：估值 10×0.97=9.7，unrealized 9.85→0.15（daily_loss 9.9→0.2）；12:01 起盘口已移除 → 仍 mark_invalid 9.85，不变；描述去掉“#195 未批准”",
+    "all": "每个 step 与核销行新增 writeoff_sod_late（严格 bool，= src.day_boundary.day_start_late(当日首次评估时间)）；schema_doc/rule 改为 #195 单边口径；WO-27/WO-43/WO-27-ONTIME 的 #225 期望原样沿用 CK 版"
+   },
+   "added": {}
   }
  ],
  "vectors": [
@@ -440,7 +453,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -489,7 +503,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [],
@@ -547,7 +562,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -580,7 +596,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -762,7 +779,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:00:00Z",
@@ -811,7 +829,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -860,7 +879,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [],
@@ -918,7 +938,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:00:00Z",
@@ -951,7 +972,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -984,7 +1006,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -1180,7 +1203,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -1229,7 +1253,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -1278,7 +1303,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -1314,7 +1340,8 @@
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [],
@@ -1370,7 +1397,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -1403,7 +1431,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -1436,7 +1465,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -1458,7 +1488,8 @@
       "settlement_booked": [
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -1646,7 +1677,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -1695,7 +1727,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -1742,7 +1775,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -1780,7 +1814,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-13T18:00:00Z",
@@ -1818,7 +1853,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -1841,7 +1877,8 @@
        "confirm_t": "2026-10-12T12:01:45Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -1904,7 +1941,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -1937,7 +1975,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -1970,7 +2009,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -2003,7 +2043,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-13T18:00:00Z",
@@ -2036,7 +2077,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -2210,7 +2252,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -2250,7 +2293,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -2288,7 +2332,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -2311,7 +2356,8 @@
        "confirm_t": "2026-10-12T12:01:00Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -2374,7 +2420,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -2407,7 +2454,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -2440,7 +2488,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -2507,7 +2556,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -2554,7 +2604,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -2592,7 +2643,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -2615,7 +2667,8 @@
        "confirm_t": "2026-10-12T12:02:00Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -2800,7 +2853,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -2840,7 +2894,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -2878,7 +2933,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -2901,7 +2957,8 @@
        "confirm_t": "2026-10-12T12:01:00Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -2964,7 +3021,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -2997,7 +3055,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -3030,7 +3089,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -3097,7 +3157,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -3144,7 +3205,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -3182,7 +3244,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -3205,7 +3268,8 @@
        "confirm_t": "2026-10-12T12:02:00Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -3399,7 +3463,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -3448,7 +3513,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -3495,7 +3561,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [],
@@ -3553,7 +3620,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -3586,7 +3654,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -3619,7 +3688,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -3781,7 +3851,8 @@
         "ref_source": "cost",
         "loss_usd": 0.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -3830,7 +3901,8 @@
         "ref_source": "cost",
         "loss_usd": 0.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [],
@@ -3887,7 +3959,8 @@
         "ref_source": "cost",
         "loss_usd": 0.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -3920,7 +3993,8 @@
         "ref_source": "cost",
         "loss_usd": 0.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -4094,7 +4168,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -4143,7 +4218,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -4192,7 +4268,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [],
@@ -4250,7 +4327,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -4283,7 +4361,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -4316,7 +4395,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -4481,7 +4561,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -4528,7 +4609,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -4566,7 +4648,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -4589,7 +4672,8 @@
        "confirm_t": "2026-10-12T12:02:00Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -4652,7 +4736,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -4685,7 +4770,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -4718,7 +4804,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -4902,7 +4989,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -4951,7 +5039,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -5000,7 +5089,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [],
@@ -5058,7 +5148,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -5091,7 +5182,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -5124,7 +5216,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -5191,7 +5284,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -5240,7 +5334,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -5289,7 +5384,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [],
@@ -5466,7 +5562,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -5515,7 +5612,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -5564,7 +5662,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:40Z",
@@ -5611,7 +5710,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -5634,7 +5734,8 @@
        "confirm_t": "2026-10-12T12:03:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -5696,7 +5797,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -5729,7 +5831,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -5762,7 +5865,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:40Z",
@@ -5795,7 +5899,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -5961,7 +6066,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:00:30Z",
@@ -6010,7 +6116,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:10Z",
@@ -6057,7 +6164,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -6080,7 +6188,8 @@
        "confirm_t": "2026-10-12T12:01:10Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -6142,7 +6251,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:00:30Z",
@@ -6175,7 +6285,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:10Z",
@@ -6208,7 +6319,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -6274,7 +6386,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:00:30Z",
@@ -6323,7 +6436,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:10Z",
@@ -6370,7 +6484,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -6393,7 +6508,8 @@
        "confirm_t": "2026-10-12T12:01:10Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -6564,7 +6680,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:20Z",
@@ -6613,7 +6730,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:30Z",
@@ -6660,7 +6778,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -6683,7 +6802,8 @@
        "confirm_t": "2026-10-12T12:01:30Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -6745,7 +6865,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:20Z",
@@ -6778,7 +6899,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:30Z",
@@ -6811,7 +6933,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -6991,7 +7114,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -7040,7 +7164,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -7087,7 +7212,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -7110,7 +7236,8 @@
        "confirm_t": "2026-10-12T12:03:00Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -7172,7 +7299,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -7205,7 +7333,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -7238,7 +7367,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -7304,7 +7434,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -7351,7 +7482,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -7391,7 +7523,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -7414,7 +7547,8 @@
        "confirm_t": "2026-10-12T12:02:00Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -7597,7 +7731,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -7646,7 +7781,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -7695,7 +7831,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:40Z",
@@ -7742,7 +7879,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -7765,7 +7903,8 @@
        "confirm_t": "2026-10-12T12:03:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -7827,7 +7966,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -7860,7 +8000,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -7893,7 +8034,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:40Z",
@@ -7926,7 +8068,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -8097,7 +8240,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -8146,7 +8290,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -8195,7 +8340,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:45Z",
@@ -8242,7 +8388,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -8265,7 +8412,8 @@
        "confirm_t": "2026-10-12T12:03:45Z",
        "closed_time": "2026-10-12T12:00:40+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -8327,7 +8475,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -8360,7 +8509,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -8393,7 +8543,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:45Z",
@@ -8426,7 +8577,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -8633,7 +8785,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -8682,7 +8835,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -8731,7 +8885,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:30Z",
@@ -8780,7 +8935,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:10Z",
@@ -8827,7 +8983,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:00:00Z",
@@ -8857,7 +9014,8 @@
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": null,
       "settlement_booked": [],
-      "max_daily_loss_veto": true
+      "max_daily_loss_veto": true,
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:01:00Z",
@@ -8887,7 +9045,8 @@
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": null,
       "settlement_booked": [],
-      "max_daily_loss_veto": true
+      "max_daily_loss_veto": true,
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -8910,7 +9069,8 @@
        "confirm_t": "2026-10-12T12:03:10Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -8972,7 +9132,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -9005,7 +9166,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -9038,7 +9200,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:30Z",
@@ -9071,7 +9234,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:10Z",
@@ -9104,7 +9268,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:00:00Z",
@@ -9137,7 +9302,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:01:00Z",
@@ -9170,7 +9336,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -9347,7 +9514,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -9394,7 +9562,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:00:00Z",
@@ -9424,7 +9593,8 @@
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": null,
       "settlement_booked": [],
-      "max_daily_loss_veto": true
+      "max_daily_loss_veto": true,
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:01:00Z",
@@ -9454,7 +9624,8 @@
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": null,
       "settlement_booked": [],
-      "max_daily_loss_veto": true
+      "max_daily_loss_veto": true,
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -9477,7 +9648,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -9539,7 +9711,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -9572,7 +9745,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:00:00Z",
@@ -9605,7 +9779,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:01:00Z",
@@ -9638,7 +9813,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -9819,7 +9995,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -9868,7 +10045,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:20Z",
@@ -9917,7 +10095,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -9966,7 +10145,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:40Z",
@@ -10013,7 +10193,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -10036,7 +10217,8 @@
        "confirm_t": "2026-10-12T12:03:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -10098,7 +10280,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -10131,7 +10314,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:20Z",
@@ -10164,7 +10348,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -10197,7 +10382,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:40Z",
@@ -10230,7 +10416,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -10401,7 +10588,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -10450,7 +10638,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:30Z",
@@ -10499,7 +10688,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:10Z",
@@ -10546,7 +10736,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -10569,7 +10760,8 @@
        "confirm_t": "2026-10-12T12:03:10Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -10631,7 +10823,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -10664,7 +10857,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:30Z",
@@ -10697,7 +10891,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:10Z",
@@ -10730,7 +10925,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -10883,7 +11079,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -10932,7 +11129,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:40Z",
@@ -10979,7 +11177,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -11002,7 +11201,8 @@
        "confirm_t": "2026-10-12T12:02:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -11064,7 +11264,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:00Z",
@@ -11097,7 +11298,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:40Z",
@@ -11130,7 +11332,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -11352,7 +11555,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -11401,7 +11605,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -11448,7 +11653,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -11486,7 +11692,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -11524,7 +11731,8 @@
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-14T13:05:00Z",
@@ -11560,7 +11768,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -11583,7 +11792,8 @@
        "confirm_t": "2026-10-12T12:01:45Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -11645,7 +11855,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -11678,7 +11889,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -11711,7 +11923,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -11744,7 +11957,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -11766,7 +11980,8 @@
       "settlement_booked": [
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-14T13:05:00Z",
@@ -11786,7 +12001,8 @@
        "legs": []
       },
       "settlement_booked": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -12015,7 +12231,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -12064,7 +12281,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -12111,7 +12329,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -12149,7 +12368,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -12187,7 +12407,8 @@
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-15T00:00:30Z",
@@ -12223,7 +12444,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -12246,7 +12468,8 @@
        "confirm_t": "2026-10-12T12:01:45Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -12309,7 +12532,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -12342,7 +12566,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -12375,7 +12600,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -12408,7 +12634,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -12430,7 +12657,8 @@
       "settlement_booked": [
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-15T00:00:30Z",
@@ -12450,7 +12678,8 @@
        "legs": []
       },
       "settlement_booked": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -12615,7 +12844,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -12662,7 +12892,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T20:00:00Z",
@@ -12700,7 +12931,8 @@
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -12723,7 +12955,8 @@
        "confirm_t": "2026-10-12T12:01:45Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -12783,7 +13016,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -12816,7 +13050,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T20:00:00Z",
@@ -12838,7 +13073,8 @@
       "settlement_booked": [
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -13079,7 +13315,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T00:00:30Z",
@@ -13126,7 +13363,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T23:59:20Z",
@@ -13175,7 +13413,8 @@
         "ref_source": "start_mark",
         "loss_usd": 9.7
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T23:59:50Z",
@@ -13222,7 +13461,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -13260,7 +13500,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T00:00:30Z",
@@ -13298,7 +13539,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -13321,7 +13563,8 @@
        "confirm_t": "2026-10-12T23:59:50Z",
        "closed_time": "2026-10-12T23:59:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -13386,7 +13629,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T00:00:30Z",
@@ -13419,7 +13663,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T23:59:20Z",
@@ -13452,7 +13697,8 @@
         "ref_source": "start_mark",
         "loss_usd": 9.7
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T23:59:50Z",
@@ -13485,7 +13731,8 @@
         "ref_source": "start_mark",
         "loss_usd": 9.7
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -13518,7 +13765,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T00:00:30Z",
@@ -13551,7 +13799,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -13785,7 +14034,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T23:59:40Z",
@@ -13834,7 +14084,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-13T00:00:25Z",
@@ -13881,7 +14132,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-13T00:05:00Z",
@@ -13919,7 +14171,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T00:00:30Z",
@@ -13957,7 +14210,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -13980,7 +14234,8 @@
        "confirm_t": "2026-10-13T00:00:25Z",
        "closed_time": "2026-10-12T23:59:20+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -14044,7 +14299,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T23:59:40Z",
@@ -14077,7 +14333,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-13T00:00:25Z",
@@ -14110,7 +14367,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-13T00:05:00Z",
@@ -14143,7 +14401,8 @@
         "ref_source": "start_mark",
         "loss_usd": 9.7
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T00:00:30Z",
@@ -14176,7 +14435,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -14456,7 +14716,8 @@
         "ref_source": "cost",
         "loss_usd": 0.1
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -14516,7 +14777,8 @@
         "ref_source": "cost",
         "loss_usd": 6.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -14570,7 +14832,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -14610,7 +14873,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -14650,7 +14914,8 @@
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -14673,7 +14938,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      },
      {
       "event_id": "writeoff-01914c635bd604b3d7cc7ad134cd9b3f",
@@ -14694,7 +14960,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -14770,7 +15037,8 @@
         "ref_source": "cost",
         "loss_usd": 0.1
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -14814,7 +15082,8 @@
         "ref_source": "cost",
         "loss_usd": 6.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -14858,7 +15127,8 @@
         "ref_source": "cost",
         "loss_usd": 6.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -14902,7 +15172,8 @@
         "ref_source": "cost",
         "loss_usd": 6.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -14925,7 +15196,8 @@
        "settle-7b33a3e5c1e4097b4fafb1276ec32039",
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -15172,7 +15444,8 @@
         "ref_source": "cost",
         "loss_usd": 0.3
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -15221,7 +15494,8 @@
         "ref_source": "cost",
         "loss_usd": 8.55
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -15268,7 +15542,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -15306,7 +15581,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -15344,7 +15620,8 @@
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -15367,7 +15644,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -15429,7 +15707,8 @@
         "ref_source": "cost",
         "loss_usd": 0.3
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -15462,7 +15741,8 @@
         "ref_source": "cost",
         "loss_usd": 8.55
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -15495,7 +15775,8 @@
         "ref_source": "cost",
         "loss_usd": 8.55
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -15528,7 +15809,8 @@
         "ref_source": "cost",
         "loss_usd": 8.55
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -15550,7 +15832,8 @@
       "settlement_booked": [
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -15905,7 +16188,8 @@
         "ref_source": "cost",
         "loss_usd": 0.1
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -15966,7 +16250,8 @@
         "ref_source": "cost",
         "loss_usd": 0.3
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -16026,7 +16311,8 @@
         "ref_source": "cost",
         "loss_usd": 0.3
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -16076,7 +16362,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -16127,7 +16414,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -16150,7 +16438,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-mA&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -16225,7 +16514,8 @@
         "ref_source": "cost",
         "loss_usd": 0.1
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -16269,7 +16559,8 @@
         "ref_source": "cost",
         "loss_usd": 0.3
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -16313,7 +16604,8 @@
         "ref_source": "cost",
         "loss_usd": 0.3
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -16357,7 +16649,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -16392,7 +16685,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -16770,7 +17064,8 @@
         "ref_source": "cost",
         "loss_usd": 0.1
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -16831,7 +17126,8 @@
         "ref_source": "cost",
         "loss_usd": 0.3
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -16891,7 +17187,8 @@
         "ref_source": "cost",
         "loss_usd": 0.3
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -16941,7 +17238,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T00:00:30Z",
@@ -16991,7 +17289,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -17042,7 +17341,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -17065,7 +17365,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-mA&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -17140,7 +17441,8 @@
         "ref_source": "cost",
         "loss_usd": 0.1
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -17184,7 +17486,8 @@
         "ref_source": "cost",
         "loss_usd": 0.3
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -17228,7 +17531,8 @@
         "ref_source": "cost",
         "loss_usd": 0.3
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -17272,7 +17576,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -17307,7 +17612,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -17747,7 +18053,8 @@
         "ref_source": "cost",
         "loss_usd": 0.050762
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T00:00:30Z",
@@ -17816,7 +18123,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -17889,7 +18197,8 @@
         "ref_source": "start_mark",
         "loss_usd": 9.949238
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -17952,7 +18261,8 @@
       "max_daily_loss_veto": true,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -17994,7 +18304,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T00:00:30Z",
@@ -18036,7 +18347,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -18059,7 +18371,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": false
      },
      {
       "event_id": "writeoff-f3a0462ad83c5be5a2b2c290be07af7b",
@@ -18080,7 +18393,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m2&closed=true"
-      }
+      },
+      "writeoff_sod_late": false
      },
      {
       "event_id": "writeoff-794ed758e3e0d1ea2b15053ed002056e",
@@ -18101,7 +18415,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m3&closed=true"
-      }
+      },
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -18196,7 +18511,8 @@
         "ref_source": "cost",
         "loss_usd": 0.050762
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T00:00:30Z",
@@ -18251,7 +18567,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -18306,7 +18623,8 @@
         "ref_source": "start_mark",
         "loss_usd": 9.949238
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -18361,7 +18679,8 @@
         "ref_source": "start_mark",
         "loss_usd": 9.949238
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -18416,7 +18735,8 @@
         "ref_source": "cost",
         "loss_usd": 10.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T00:00:30Z",
@@ -18471,7 +18791,8 @@
         "ref_source": "cost",
         "loss_usd": 10.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -18518,7 +18839,7 @@
   {
    "id": "WO-29",
    "category": "broken_book",
-   "description": "关闭前盘口坏（NaN 档 / 空盘 / 交叉）→ #192 mark_invalid 按 0 计；关闭后核销不依赖盘口（坏盘口下照常核销）。",
+   "description": "关闭前盘口坏（bid NaN 档 / 空盘 / 交叉）→ #192 mark_invalid 按 0 计；12:01 首读时 bid [[0.5,1]] 有效、ask 坏档 → #195 后按 bid 估值（1 股×0.5，浮亏 9.35）；关闭后核销不依赖盘口（坏盘口下照常核销）。",
    "issue_refs": [
     "#192",
     "#197"
@@ -18711,7 +19032,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T10:00:00Z",
@@ -18758,7 +19080,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T11:00:00Z",
@@ -18805,7 +19128,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -18832,12 +19156,12 @@
       "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
-      "daily_loss_usd": 9.9,
+      "daily_loss_usd": 9.4,
       "parts": {
        "fees_usd": 0.05,
        "realized_loss_usd": 0.0,
        "writeoff_usd": 0.0,
-       "unrealized_usd": 9.85
+       "unrealized_usd": 9.35
       },
       "realized_gain_usd": 0.0,
       "max_daily_loss_veto": false,
@@ -18847,14 +19171,15 @@
        {
         "leg_key": "m1|m1-Y",
         "ref_usd": 9.85,
-        "value_usd": 0.0,
-        "source": "invalid_book",
-        "mark_invalid": true,
-        "reason": "bad_level",
+        "value_usd": 0.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
         "ref_source": "cost",
-        "loss_usd": 9.85
+        "loss_usd": 9.35
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -18901,7 +19226,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -18939,7 +19265,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -18962,7 +19289,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -19025,7 +19353,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T10:00:00Z",
@@ -19058,7 +19387,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T11:00:00Z",
@@ -19091,17 +19421,18 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
       "day": "2026-10-12",
-      "daily_loss_usd": 9.9,
+      "daily_loss_usd": 9.4,
       "parts": {
        "fees_usd": 0.05,
        "realized_loss_usd": 0.0,
        "writeoff_usd": 0.0,
-       "unrealized_usd": 9.85
+       "unrealized_usd": 9.35
       },
       "realized_gain_usd": 0.0,
       "max_daily_loss_veto": false,
@@ -19117,24 +19448,25 @@
        {
         "leg_key": "m1|m1-Y",
         "ref_usd": 9.85,
-        "value_usd": 0.0,
-        "source": "invalid_book",
-        "mark_invalid": true,
-        "reason": "bad_level",
+        "value_usd": 0.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
         "ref_source": "cost",
-        "loss_usd": 9.85
+        "loss_usd": 9.35
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
       "day": "2026-10-12",
-      "daily_loss_usd": 9.9,
+      "daily_loss_usd": 9.4,
       "parts": {
        "fees_usd": 0.05,
        "realized_loss_usd": 0.0,
        "writeoff_usd": 0.0,
-       "unrealized_usd": 9.85
+       "unrealized_usd": 9.35
       },
       "realized_gain_usd": 0.0,
       "max_daily_loss_veto": false,
@@ -19150,14 +19482,15 @@
        {
         "leg_key": "m1|m1-Y",
         "ref_usd": 9.85,
-        "value_usd": 0.0,
-        "source": "invalid_book",
-        "mark_invalid": true,
-        "reason": "bad_level",
+        "value_usd": 0.5,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
         "ref_source": "cost",
-        "loss_usd": 9.85
+        "loss_usd": 9.35
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -19190,11 +19523,12 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
-     "2026-10-12": 9.9,
+     "2026-10-12": 9.4,
      "2026-10-13": 9.85
     },
     "final": {
@@ -19210,6 +19544,7 @@
    "uses_second_source": false,
    "differs_from_dev": true,
    "diffs": [
+    "2026-10-12T12:01:40Z:daily_loss_usd 9.4 -> 9.9",
     "2026-10-13T00:00:30Z:daily_loss_usd 9.85 -> 0.0",
     "final:realized_pnl_usd -0.05 -> -9.9"
    ],
@@ -19228,7 +19563,7 @@
   {
    "id": "WO-30",
    "category": "broken_book",
-   "description": "单边盘口（保持现有双边语义，#195 未批准）：只有 bid、ask 为空 → 可估值；ask 有坏档 → mark_invalid。关闭后核销不看盘口。",
+   "description": "单边盘口（#195：只要求持有方一侧可用）：多头只有 bid、ask 为空 → 按 bid 估值；ask 有坏档（NaN）→ 仍按 bid 0.97 估值，不再 mark_invalid（10:00 浮亏 0.15）。关闭后核销不看盘口。",
    "issue_refs": [
     "#192",
     "#195",
@@ -19390,7 +19725,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T10:00:00Z",
@@ -19415,12 +19751,12 @@
       "settlement_skipped_blocked": [],
       "risk_state": "ok",
       "realized_writeoff_usd": 0.0,
-      "daily_loss_usd": 9.9,
+      "daily_loss_usd": 0.2,
       "parts": {
        "fees_usd": 0.05,
        "realized_loss_usd": 0.0,
        "writeoff_usd": 0.0,
-       "unrealized_usd": 9.85
+       "unrealized_usd": 0.15
       },
       "realized_gain_usd": 0.0,
       "max_daily_loss_veto": false,
@@ -19430,14 +19766,15 @@
        {
         "leg_key": "m1|m1-Y",
         "ref_usd": 9.85,
-        "value_usd": 0.0,
-        "source": "invalid_book",
-        "mark_invalid": true,
-        "reason": "bad_level",
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
         "ref_source": "cost",
-        "loss_usd": 9.85
+        "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -19486,7 +19823,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -19533,7 +19871,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -19571,7 +19910,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -19594,7 +19934,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -19657,17 +19998,18 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T10:00:00Z",
       "day": "2026-10-12",
-      "daily_loss_usd": 9.9,
+      "daily_loss_usd": 0.2,
       "parts": {
        "fees_usd": 0.05,
        "realized_loss_usd": 0.0,
        "writeoff_usd": 0.0,
-       "unrealized_usd": 9.85
+       "unrealized_usd": 0.15
       },
       "realized_gain_usd": 0.0,
       "max_daily_loss_veto": false,
@@ -19683,14 +20025,15 @@
        {
         "leg_key": "m1|m1-Y",
         "ref_usd": 9.85,
-        "value_usd": 0.0,
-        "source": "invalid_book",
-        "mark_invalid": true,
-        "reason": "bad_level",
+        "value_usd": 9.7,
+        "source": "bid_ladder",
+        "mark_invalid": false,
+        "reason": null,
         "ref_source": "cost",
-        "loss_usd": 9.85
+        "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -19723,7 +20066,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -19756,7 +20100,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -19789,7 +20134,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -19992,7 +20338,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -20039,7 +20386,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:30Z",
@@ -20079,7 +20427,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -20119,7 +20468,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -20142,7 +20492,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -20205,7 +20556,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -20238,7 +20590,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:30Z",
@@ -20271,7 +20624,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -20304,7 +20658,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -20371,7 +20726,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -20418,7 +20774,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:30Z",
@@ -20458,7 +20815,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -20498,7 +20856,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -20521,7 +20880,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -20728,7 +21088,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:50Z",
@@ -20777,7 +21138,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:40Z",
@@ -20824,7 +21186,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:10:00Z",
@@ -20869,7 +21232,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -20912,7 +21276,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -20935,7 +21300,8 @@
        "confirm_t": "2026-10-12T12:02:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -20998,7 +21364,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:50Z",
@@ -21031,7 +21398,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:40Z",
@@ -21064,7 +21432,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:10:00Z",
@@ -21097,7 +21466,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -21130,7 +21500,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -21305,7 +21676,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -21341,7 +21713,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -21375,7 +21748,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [],
@@ -21418,7 +21792,8 @@
        "legs": []
       },
       "settlement_booked": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -21438,7 +21813,8 @@
        "legs": []
       },
       "settlement_booked": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -21458,7 +21834,8 @@
        "legs": []
       },
       "settlement_booked": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -21687,7 +22064,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T00:00:30Z",
@@ -21734,7 +22112,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -21783,7 +22162,8 @@
         "ref_source": "start_mark",
         "loss_usd": 9.7
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -21830,7 +22210,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -21868,7 +22249,8 @@
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -21891,7 +22273,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -21953,7 +22336,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T00:00:30Z",
@@ -21986,7 +22370,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -22019,7 +22404,8 @@
         "ref_source": "start_mark",
         "loss_usd": 9.7
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -22052,7 +22438,8 @@
         "ref_source": "start_mark",
         "loss_usd": 9.7
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -22074,7 +22461,8 @@
       "settlement_booked": [
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -22290,7 +22678,8 @@
         "ref_source": "cost",
         "loss_usd": 0.1
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -22339,7 +22728,8 @@
         "ref_source": "cost",
         "loss_usd": 8.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -22386,7 +22776,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -22424,7 +22815,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -22462,7 +22854,8 @@
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -22485,7 +22878,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -22547,7 +22941,8 @@
         "ref_source": "cost",
         "loss_usd": 0.1
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -22580,7 +22975,8 @@
         "ref_source": "cost",
         "loss_usd": 8.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -22613,7 +23009,8 @@
         "ref_source": "cost",
         "loss_usd": 8.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -22646,7 +23043,8 @@
         "ref_source": "cost",
         "loss_usd": 8.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -22668,7 +23066,8 @@
       "settlement_booked": [
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -22869,7 +23268,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -22918,7 +23318,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -22956,7 +23357,8 @@
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -22992,7 +23394,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -23026,7 +23429,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [],
@@ -23082,7 +23486,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -23115,7 +23520,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -23137,7 +23543,8 @@
       "settlement_booked": [
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:03:00Z",
@@ -23157,7 +23564,8 @@
        "legs": []
       },
       "settlement_booked": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -23177,7 +23585,8 @@
        "legs": []
       },
       "settlement_booked": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -23428,7 +23837,8 @@
         "ref_source": "cost",
         "loss_usd": 0.1
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -23489,7 +23899,8 @@
         "ref_source": "cost",
         "loss_usd": 9.8
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -23539,7 +23950,8 @@
        "settle-3685d951dece907830eccd13c26b7475"
       ],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -23577,7 +23989,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -23600,7 +24013,8 @@
        "confirm_t": "2026-10-12T12:01:45Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-mB&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -23674,7 +24088,8 @@
         "ref_source": "cost",
         "loss_usd": 0.1
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -23718,7 +24133,8 @@
         "ref_source": "cost",
         "loss_usd": 9.8
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -23753,7 +24169,8 @@
         "ref_source": "cost",
         "loss_usd": 9.8
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -23786,7 +24203,8 @@
         "ref_source": "cost",
         "loss_usd": 9.8
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -24000,7 +24418,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -24049,7 +24468,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -24089,7 +24509,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:30Z",
@@ -24134,7 +24555,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:10:00Z",
@@ -24179,7 +24601,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -24217,7 +24640,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -24240,7 +24664,8 @@
        "confirm_t": "2026-10-12T12:01:45Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -24303,7 +24728,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -24336,7 +24762,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -24369,7 +24796,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:02:30Z",
@@ -24402,7 +24830,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:10:00Z",
@@ -24435,7 +24864,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -24468,7 +24898,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -24571,7 +25002,8 @@
         "confirm_t": "2026-10-12T12:01:45Z",
         "closed_time": "2026-10-12T12:00:00+00:00",
         "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-       }
+       },
+       "writeoff_sod_late": true
       },
       "bus_emitted": true
      },
@@ -24595,7 +25027,8 @@
         "confirm_t": "2026-10-12T12:01:45Z",
         "closed_time": "2026-10-12T12:00:00+00:00",
         "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-       }
+       },
+       "writeoff_sod_late": true
       },
       "bus_emitted": true
      }
@@ -24671,7 +25104,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -24709,7 +25143,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -24732,7 +25167,8 @@
        "confirm_t": "2026-10-12T12:01:45Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -24795,7 +25231,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -24828,7 +25265,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -24943,7 +25381,8 @@
         "confirm_t": "2026-10-12T12:01:45Z",
         "closed_time": "2026-10-12T12:00:00+00:00",
         "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-       }
+       },
+       "writeoff_sod_late": true
       },
       "bus_emitted": true
      },
@@ -24967,7 +25406,8 @@
         "confirm_t": "2026-10-12T12:01:45Z",
         "closed_time": "2026-10-12T12:00:00+00:00",
         "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-       }
+       },
+       "writeoff_sod_late": true
       },
       "bus_emitted": true
      }
@@ -25028,7 +25468,8 @@
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": null,
       "settlement_booked": [],
-      "max_daily_loss_veto": true
+      "max_daily_loss_veto": true,
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -25058,7 +25499,8 @@
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": null,
       "settlement_booked": [],
-      "max_daily_loss_veto": true
+      "max_daily_loss_veto": true,
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -25081,7 +25523,8 @@
        "confirm_t": "2026-10-12T12:01:45Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -25140,7 +25583,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -25173,7 +25617,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -25434,7 +25879,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -25481,7 +25927,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:00:00Z",
@@ -25521,7 +25968,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:01:00Z",
@@ -25561,7 +26009,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:02:00Z",
@@ -25601,7 +26050,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -25641,7 +26091,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -25681,7 +26132,8 @@
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-14T13:05:00Z",
@@ -25719,7 +26171,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "writeoff_events": [
@@ -25742,7 +26195,8 @@
        "confirm_t": "2026-10-12T12:01:40Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-m1&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -25804,7 +26258,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:40Z",
@@ -25837,7 +26292,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:00:00Z",
@@ -25870,7 +26326,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:01:00Z",
@@ -25903,7 +26360,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:02:00Z",
@@ -25936,7 +26394,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -25969,7 +26428,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -25991,7 +26451,8 @@
       "settlement_booked": [
        "settle-01914c635bd604b3d7cc7ad134cd9b3f"
       ],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-14T13:05:00Z",
@@ -26011,7 +26472,8 @@
        "legs": []
       },
       "settlement_booked": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -26425,7 +26887,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -26485,7 +26948,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -26544,7 +27008,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -26596,7 +27061,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T00:00:30Z",
@@ -26648,7 +27114,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -26701,7 +27168,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.7
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:05:00Z",
@@ -26750,7 +27218,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.7
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -26773,7 +27242,8 @@
        "confirm_t": "2026-10-12T12:01:45Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-mB&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -26848,7 +27318,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -26892,7 +27363,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -26936,7 +27408,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T00:00:30Z",
@@ -26980,7 +27453,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T00:00:30Z",
@@ -27024,7 +27498,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:00:00Z",
@@ -27059,7 +27534,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.7
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      },
      {
       "t": "2026-10-14T13:05:00Z",
@@ -27092,7 +27568,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.7
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -27531,7 +28008,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -27591,7 +28069,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -27650,7 +28129,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:00:00Z",
@@ -27681,7 +28161,8 @@
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": null,
       "settlement_booked": [],
-      "max_daily_loss_veto": true
+      "max_daily_loss_veto": true,
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:05:00Z",
@@ -27712,7 +28193,8 @@
       "realized_writeoff_usd": 0.0,
       "daily_loss_usd": null,
       "settlement_booked": [],
-      "max_daily_loss_veto": true
+      "max_daily_loss_veto": true,
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T09:00:00Z",
@@ -27766,7 +28248,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T10:00:00Z",
@@ -27822,7 +28305,8 @@
         "ref_source": "start_mark",
         "loss_usd": 0.0
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T10:05:00Z",
@@ -27864,7 +28348,8 @@
        "settle-3685d951dece907830eccd13c26b7475"
       ],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-14T00:00:30Z",
@@ -27904,7 +28389,8 @@
       "max_daily_loss_veto": false,
       "settlement_booked": [],
       "settlement_problems": [],
-      "marks": []
+      "marks": [],
+      "writeoff_sod_late": false
      }
     ],
     "writeoff_events": [
@@ -27927,7 +28413,8 @@
        "confirm_t": "2026-10-12T12:01:45Z",
        "closed_time": "2026-10-12T12:00:00+00:00",
        "query": "GET https://gamma-api.polymarket.com/markets?condition_ids=0xc-mB&closed=true"
-      }
+      },
+      "writeoff_sod_late": true
      }
     ],
     "day_end_daily_loss_usd": {
@@ -28002,7 +28489,8 @@
         "ref_source": "cost",
         "loss_usd": 0.15
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:00Z",
@@ -28046,7 +28534,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T12:01:45Z",
@@ -28090,7 +28579,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:00:00Z",
@@ -28134,7 +28624,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-12T13:05:00Z",
@@ -28178,7 +28669,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T09:00:00Z",
@@ -28222,7 +28714,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T10:00:00Z",
@@ -28266,7 +28759,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-13T10:05:00Z",
@@ -28301,7 +28795,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": true
      },
      {
       "t": "2026-10-14T00:00:30Z",
@@ -28334,7 +28829,8 @@
         "ref_source": "cost",
         "loss_usd": 9.85
        }
-      ]
+      ],
+      "writeoff_sod_late": false
      }
     ],
     "day_end_daily_loss_usd": {
@@ -28379,5 +28875,6 @@
     "INV-13"
    ]
   }
- ]
+ ],
+ "revision": "v3.3+r195"
 }
