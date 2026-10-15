@@ -997,6 +997,11 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter,
         # PR #342 review (Codex 6188442103 P1): same UTC day here, so the row and the day's snapshot it may write
         # are stamped, and the snapshot's lateness decided, at the write time, never the tick start.
         out = paper_ledger.apply_writeoffs(step.closes, _stamp(written_at), clock_ok=clock_ok)
+        if out.get("deferred"):  # PR #342 (Codex 6189524237 P1): commit lock busy: nothing booked, retry, no halt
+            for close in step.closes:
+                state.close_tracker.defer(close.market)
+            event(state, "writeoff_deferred_commit_lock", now, markets=sorted(c.market for c in step.closes))
+            return []
         if out["problems"]:
             # PR #342 review (Codex 6184078075 / 6184412258 P2): a partial failure, or a row on disk whose
             # post-write re-read failed (not in ``booked``): re-send every written-off leg's event before the next

@@ -372,6 +372,8 @@ def reopen_contradiction(obs: Observation, first_closed_seen: datetime | None, n
         elapsed = max(elapsed, obs.observed_mono - first_closed_mono)
     if obs.problem is not None:
         return None
+    if not isinstance(obs.closed, bool) or not (obs.accepting_orders is None or isinstance(obs.accepting_orders, bool)):
+        return None  # PR #342 review (Codex 6189524237 P2): an invalid read is neither a confirmation nor a reopen
     if obs.closed is False or obs.accepting_orders is True:
         if elapsed is not None and 0 <= elapsed < MARKET_CLOSE_REOPEN_GRACE_S:
             return None  # Gamma's by-id lag right after a close, not a contradiction

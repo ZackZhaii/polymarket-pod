@@ -1358,3 +1358,71 @@ def test_an_observation_from_the_default_view_is_stamped_when_that_response_comp
     start = clock.wall
     obs = market_close.gamma_read(slow_default, "held", start, clock=lambda: clock.wall, monotonic=lambda: clock.mono)
     assert obs.closed is True and obs.observed_at == start  # a closed read keeps the closed=true stamp
+
+
+# --- PR #342 review (Codex 6189524237) -----------------------------------------------------------------------
+
+@pytest.mark.parametrize("closed, accepting", [("true", True), (1, True), (None, True), (True, "yes"), (False, 1),
+                                               ("false", None), (True, 0)])
+def test_a_non_bool_reread_of_a_written_off_market_is_invalid_not_a_reopen(closed, accepting):
+    """P2: a non-bool closed / acceptingOrders after the grace is an invalid read: no reopen halt."""
+    first = RUN_NOW
+    at = first + timedelta(seconds=market_close.MARKET_CLOSE_REOPEN_GRACE_S + 60)
+    obs = market_close.Observation("held", at, closed=closed, accepting_orders=accepting)
+    assert market_close.reopen_contradiction(obs, first, at) is None
+    valid = market_close.Observation("held", at, closed=False, accepting_orders=True)
+    assert market_close.reopen_contradiction(valid, first, at) == market_close.HALT_REOPENED
+
+
+def _commit_lock_held():
+    lock = paper_ledger._commit_lock() if hasattr(paper_ledger, "_commit_lock") else None
+    if lock is None:  # the old code has no helper: the same path commit_if_allowed locks
+        lock = halt_store.StateLock(paper_ledger.PAPER_PATH)
+        lock.path = Path(str(paper_ledger.PAPER_PATH) + ".commit.lock")
+    assert lock.acquire(timeout_s=1.0)
+    return lock
+
+
+def test_a_writeoff_waits_for_the_commit_lock_and_never_books_inside_a_commit(runner, monkeypatch):
+    """P1: while a commit (load_state -> RiskGate -> book) holds ``<paper>.commit.lock`` a write-off books nothing
+    (old code: it booked inside the commit's check-to-book window); it books once the commit releases the lock."""
+    import threading
+    import time as _time
+    monkeypatch.setattr(paper_ledger, "COMMIT_LOCK_TIMEOUT_S", 0.3)
+    lock = _commit_lock_held()
+    try:
+        out = paper_ledger.apply_writeoffs([close("held", runner["closed_at"])], _stamp_s(RUN_NOW))
+        assert out["booked"] == [] and _writeoffs(runner["paper"]) == []
+        assert out.get("deferred") == "writeoff_commit_lock_unavailable" and out["problems"] == []
+    finally:
+        lock.release()
+    # interleaving: the commit holds the lock across its check and book; the write-off waits for the release
+    monkeypatch.setattr(paper_ledger, "COMMIT_LOCK_TIMEOUT_S", 5.0)
+    order, lock = [], _commit_lock_held()
+    worker = threading.Thread(target=lambda: order.append(
+        ("writeoff", len(paper_ledger.apply_writeoffs([close("held", runner["closed_at"])], _stamp_s(RUN_NOW))["booked"]))))
+    worker.start()
+    _time.sleep(0.3)
+    order.append(("commit_book_done", len(_writeoffs(runner["paper"]))))  # nothing written off inside the window
+    lock.release()
+    worker.join(5)
+    assert order == [("commit_book_done", 0), ("writeoff", 1)]
+
+
+def test_a_busy_commit_lock_defers_the_runners_writeoff_without_a_halt(runner, monkeypatch):
+    monkeypatch.setattr(paper_ledger, "COMMIT_LOCK_TIMEOUT_S", 0.2)
+    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _iterate(runner, getter, RUN_NOW)
+    lock = _commit_lock_held()
+    try:
+        report = _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
+    finally:
+        lock.release()
+    assert LEDGER_HALT not in report.reasons and not _halted() and _writeoffs(runner["paper"]) == []
+    assert "held" in runner["state"].close_tracker.first  # the pending read is kept
+    _iterate(runner, getter, RUN_NOW + timedelta(seconds=61))
+    assert len(_writeoffs(runner["paper"])) == 1
+
+
+def _stamp_s(moment):
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")

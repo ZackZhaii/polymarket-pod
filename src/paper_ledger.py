@@ -395,6 +395,23 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
 def apply_writeoffs(closes: list[Any], now: str | None = None,
                     books: dict[tuple[str, str], dict[str, Any]] | None = None, *,
                     clock_ok: bool = False) -> dict[str, Any]:
+    """PR #342 review (Codex 6189524237 P1): the whole read -> plan -> book path runs under the same
+    ``<PAPER_PATH>.commit.lock`` as commit_if_allowed, so no fill is written between a RiskGate check and its
+    book (the daily loss it checked cannot change underneath it). A lock that cannot be taken books nothing and
+    returns ``{"booked": [], "problems": [], "deferred": WRITEOFF_LOCK_UNAVAILABLE}``: the caller retries next tick
+    (no halt). See ``_apply_writeoffs_locked``."""
+    lock = _commit_lock()
+    if not lock.acquire(timeout_s=COMMIT_LOCK_TIMEOUT_S):
+        return {"booked": [], "problems": [], "deferred": WRITEOFF_LOCK_UNAVAILABLE}
+    try:
+        return _apply_writeoffs_locked(closes, now, books, clock_ok=clock_ok)
+    finally:
+        lock.release()
+
+
+def _apply_writeoffs_locked(closes: list[Any], now: str | None = None,
+                            books: dict[tuple[str, str], dict[str, Any]] | None = None, *,
+                            clock_ok: bool = False) -> dict[str, Any]:
     """Issue #197 (Task CK, KEY-approved): book one write-off row per open leg of each confirmed closed market.
 
     ``closes`` are src/market_close.Close values (confirmed by src/m2_runner._writeoff_hook). Idempotent: a leg
@@ -598,14 +615,23 @@ def load_state(market: str, token_id: str = "", *, clock_ok: bool = False,
 from src.thresholds import COMMIT_LOCK_TIMEOUT_S  # noqa: E402,F401 - Task DD: the commit mutex wait (THRESHOLDS.md)
 
 
-def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
-    """Task DD (#237, Codex P1): the whole load_state -> RiskGate -> book path runs under one cross-process
-    mutex on ``<PAPER_PATH>.commit.lock``, so two interleaved commits (e.g. YES and NO of one market) cannot both read
-    a state without the other's fill. A mutex that cannot be taken refuses the order (fail closed)."""
+def _commit_lock() -> Any:
+    """The commit mutex ``<PAPER_PATH>.commit.lock`` (Task DD), shared by commit_if_allowed and apply_writeoffs."""
     from src import halt_store
 
     lock = halt_store.StateLock(PAPER_PATH)
     lock.path = Path(str(PAPER_PATH) + ".commit.lock")  # not ledger_store's <ledger>.lock (taken inside book)
+    return lock
+
+
+WRITEOFF_LOCK_UNAVAILABLE = "writeoff_commit_lock_unavailable"
+
+
+def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
+    """Task DD (#237, Codex P1): the whole load_state -> RiskGate -> book path runs under one cross-process
+    mutex on ``<PAPER_PATH>.commit.lock``, so two interleaved commits (e.g. YES and NO of one market) cannot both read
+    a state without the other's fill. A mutex that cannot be taken refuses the order (fail closed)."""
+    lock = _commit_lock()
     if not lock.acquire(timeout_s=COMMIT_LOCK_TIMEOUT_S):
         summary = {"forecast_id": intent.forecast_id, "strategy": intent.strategy,
                    "reasons": [STRUCTURAL_ARB_DISABLED, "commit_lock_unavailable"],
