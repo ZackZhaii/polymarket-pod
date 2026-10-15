@@ -692,6 +692,13 @@
       "surface": "grok-bot"
     },
     {
+      "id": "ED",
+      "status": "open",
+      "title": "Issue #138: m1_rest heartbeat error_streak + Sentinel rest_error_streak (M2 pending threshold 3)",
+      "note": "Claimed by Poly桥接 as Task ED (issue #138). Non-KEY: monitoring tighten only; REST_ERROR_STREAK_ALERT=3 M2 pending; no risk.toml change.",
+      "surface": "grok-bot"
+    },
+    {
       "id": "CK",
       "status": "done",
       "title": "Issue #197 (KEY) close-then-write-off + #255 uplift recompute; option A clock tightenings",

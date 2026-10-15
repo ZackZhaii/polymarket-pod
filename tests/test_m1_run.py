@@ -454,6 +454,55 @@ class BeatLog:
         self.beats.append((state, dict(progress or {}), force))
 
 
+def test_rest_sampler_error_streak_counts_all_fail_rounds_and_clears_on_success():
+    """Issue #138: progress.error_streak is consecutive all-asset-fail rounds; one success clears it."""
+    clock = Clock()
+    sink, events = ListSink(), ListSink()
+    beats = BeatLog()
+    fail = {"n": 0}
+
+    def get(url):
+        fail["n"] += 1
+        if fail["n"] <= 4:  # samples 1-2: both A and B fail (4 GETs)
+            raise OSError("down")
+        return {"bids": [{"price": "0.4", "size": "1"}], "asks": [{"price": "0.6", "size": "1"}],
+                "timestamp": str(BASE_MS + 1000), "hash": "0xh"}
+
+    sampler = r.RestSampler([A, B], {}, sink, events, every_s=10, deadline_s=1e6, getter=get,
+                            now=clock.now, monotonic=clock.monotonic, heartbeat=beats)
+    sampler.sample_once()  # all fail -> streak 1
+    assert sampler.error_streak == 1 and beats.beats[-1][1]["error_streak"] == 1
+    sampler.sample_once()  # all fail -> streak 2
+    assert sampler.error_streak == 2 and beats.beats[-1][1]["error_streak"] == 2
+    sampler.sample_once()  # success -> streak 0
+    assert sampler.error_streak == 0 and beats.beats[-1][1]["error_streak"] == 0
+    assert sink.rows  # at least one row published
+    assert all("error_streak" in progress for _, progress, _ in beats.beats)
+
+
+def test_rest_sampler_partial_success_clears_error_streak():
+    """Issue #138: a round where any asset succeeds is not an all-fail round (clears the streak)."""
+    clock = Clock()
+    beats = BeatLog()
+    n = {"i": 0}
+
+    def get(url):
+        n["i"] += 1
+        if n["i"] <= 2:  # sample 1: both fail
+            raise OSError("down")
+        if "111" in url:  # sample 2: A fails, B succeeds
+            raise OSError("down")
+        return {"bids": [{"price": "0.4", "size": "1"}], "asks": [{"price": "0.6", "size": "1"}],
+                "timestamp": str(BASE_MS + 1000), "hash": "0xh"}
+
+    sampler = r.RestSampler([A, B], {}, ListSink(), ListSink(), every_s=10, deadline_s=1e6, getter=get,
+                            now=clock.now, monotonic=clock.monotonic, heartbeat=beats)
+    sampler.sample_once()
+    assert sampler.error_streak == 1
+    sampler.sample_once()
+    assert sampler.error_streak == 0 and beats.beats[-1][1]["error_streak"] == 0
+
+
 def test_rest_sampler_a_pre_stopped_run_makes_zero_requests():
     clock = Clock()
     calls: list[str] = []

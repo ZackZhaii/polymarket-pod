@@ -281,6 +281,9 @@ HEARTBEAT_RECORDER_EVERY_S = 10.0
 HEARTBEAT_RECORDER_TIMEOUT_S = 120.0
 # M2 pending. m1_run REST sampler: stale (alert) once its heartbeat (one per sample) is this old.
 HEARTBEAT_REST_TIMEOUT_S = 900.0
+# M2 pending. Issue #138: consecutive m1_rest sample rounds where every asset failed; Sentinel alerts
+# rest_error_streak (warn) at this streak. Tightens monitoring only; raising the value loosens it.
+REST_ERROR_STREAK_ALERT = 3
 # M2 pending. Scanner (and endgame_scan) write start/finish: a start with no finish after this is hung (alert).
 SCANNER_HANG_S = 1800.0
 # M2 pending. The latest successful scan (exit 0) older than this raises an alert.

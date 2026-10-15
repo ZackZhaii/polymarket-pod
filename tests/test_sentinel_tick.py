@@ -10,8 +10,8 @@ import pytest
 from src import halt_store, heartbeat, sentinel_tick as st
 from src.podlib import read_jsonl
 from src.thresholds import (HEARTBEAT_CONSUMER_TIMEOUT_S, HEARTBEAT_PAPER_CYCLE_TIMEOUT_S,
-                            HEARTBEAT_RECORDER_TIMEOUT_S, HEARTBEAT_REST_TIMEOUT_S, SCANNER_HANG_S,
-                            SCANNER_MAX_SUCCESS_AGE_S, SENTINEL_TICK_S)
+                            HEARTBEAT_RECORDER_TIMEOUT_S, HEARTBEAT_REST_TIMEOUT_S, REST_ERROR_STREAK_ALERT,
+                            SCANNER_HANG_S, SCANNER_MAX_SUCCESS_AGE_S, SENTINEL_TICK_S)
 
 PIN = "0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04"
 NOW = datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc)
@@ -134,6 +134,34 @@ def test_rest_staleness_alerts_without_halting(env):
     env()
     beat("m1_rest", age_s=HEARTBEAT_REST_TIMEOUT_S + 1)
     assert env()["alerts"] == ["heartbeat_stale"]  # re-armed after it cleared
+
+
+
+def test_rest_error_streak_alerts_at_threshold_once_and_rearms(env):
+    """Issue #138: m1_rest progress.error_streak >= REST_ERROR_STREAK_ALERT -> warn rest_error_streak;
+    exactly one alert while the condition holds; a success (streak 0) clears and later failures re-arm."""
+    assert REST_ERROR_STREAK_ALERT == 3
+    beat("m1_rest", progress={"samples": 1, "rows": 0, "errors": 2, "error_streak": 1})
+    assert env()["alerts"] == [] and alerts() == []
+    beat("m1_rest", progress={"samples": 2, "rows": 0, "errors": 4, "error_streak": 2})
+    assert env()["alerts"] == [] and alerts() == []
+    beat("m1_rest", progress={"samples": 3, "rows": 0, "errors": 6, "error_streak": 3})
+    result = env()
+    assert result["halts"] == [] and result["alerts"] == ["rest_error_streak"]
+    assert alerts() == ["rest_error_streak"]
+    beat("m1_rest", progress={"samples": 4, "rows": 0, "errors": 8, "error_streak": 4})
+    assert env()["alerts"] == [] and alerts() == ["rest_error_streak"]  # once while it holds
+    beat("m1_rest", progress={"samples": 5, "rows": 2, "errors": 8, "error_streak": 0})
+    env()  # success clears the latch
+    beat("m1_rest", progress={"samples": 6, "rows": 2, "errors": 10, "error_streak": 3})
+    assert env()["alerts"] == ["rest_error_streak"]  # re-armed
+
+
+@pytest.mark.parametrize("bad", ["3", True, 1.5, None], ids=["str", "bool", "float", "none"])
+def test_malformed_rest_error_streak_halts(env, bad):
+    """Issue #138: a non-int (or bool) error_streak is heartbeat_malformed (fail closed)."""
+    beat("m1_rest", progress={"samples": 1, "rows": 0, "errors": 1, "error_streak": bad})
+    assert env()["halts"] == ["global:*:heartbeat_malformed:m1_rest"]
 
 
 def test_paper_cycle_alerts_at_181_and_halts_at_361(env):
