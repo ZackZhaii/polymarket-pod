@@ -219,6 +219,7 @@ def _hook(state, monkeypatch, clock):
     from src import market_close
     monkeypatch.setattr(market_close, "detect", lambda *a, **k: market_close.Step(closes=[close("m")]))
     now = datetime(2026, 9, 1, 0, 0, 10, tzinfo=timezone.utc)
+    state.clock = lambda: now  # the runner clock at the write (PR #342: write-off booked at the write time)
     return m2_runner._writeoff_hook(state, now, lambda url: [], clock)
 
 
