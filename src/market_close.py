@@ -179,23 +179,29 @@ def gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime, *,
         if monotonic is not None:
             stamps["observed_mono"] = monotonic()
 
-    obs = _gamma_read(getter, market_id, now, stamp)
+    # PR #342 review (Codex 6188442103 P2): an observation built from the DEFAULT view (the market reads open: a
+    # reopen) is stamped when that response completed, so a slow default view never shortens the reopen grace.
+    obs = _gamma_read(getter, market_id, now, stamp, stamp)
     if not stamps:
         stamp()  # the closed=true read itself failed: stamp the failure now
     return dataclasses.replace(obs, **stamps) if stamps else obs
 
 
 def _gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime,
-                stamp: Callable[[], None] | None = None) -> Observation:
+                stamp: Callable[[], None] | None = None,
+                stamp_default: Callable[[], None] | None = None) -> Observation:
     """Read one held market: ``closed=true`` first (the only read that can show a close), then the default query
     (it can only show the market open). In neither list: unknown (a read failure). In both: unknown too (Gamma's
     views split for a few minutes around a close)."""
     rows: dict[bool, dict[str, Any]] = {}
+    default_done: Callable[[], None] | None = None
     for closed in (True, False):
         try:
             data = getter(gamma_url(market_id, closed=closed))
             if closed and stamp is not None:
                 stamp()
+            elif not closed:
+                default_done = stamp_default
         except Exception as exc:  # noqa: BLE001 - any failed read is a read failure (never a halt by itself)
             return failed(market_id, now, f"gamma_read_failed:{type(exc).__name__}")
         row, problem = _match(data, market_id)
@@ -209,6 +215,8 @@ def _gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime,
         return failed(market_id, now, "gamma_views_disagree")
     if False in rows and rows[False].get("closed") is True:
         return failed(market_id, now, "gamma_default_view_closed")  # a close is only seen through closed=true
+    if True not in rows and default_done is not None:
+        default_done()  # the observation is the default view's: its stamp is that response's completion
     try:
         return observation_from_row(market_id, rows.get(True) or rows[False], now)
     except (OverflowError, ValueError, TypeError) as exc:  # PR #342 (Codex 6185588835 P2): an invalid read

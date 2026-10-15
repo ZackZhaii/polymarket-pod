@@ -331,6 +331,21 @@ class IterationReport:
 
 # ---------------------------------------------------------------- small I/O helpers
 
+def _decision_time(now: datetime, clock: Callable[[], datetime] | None) -> datetime:
+    """PR #342 review (Codex 6188442103 P1): the time a write-off / day-snapshot decision is made and stamped:
+    max(tick start, runner clock), within the tick start's UTC day. A later UTC day keeps the tick start: the
+    write-off defers to the next tick (``_writeoff_hook``) and the day's evaluation stays on the tick's day."""
+    if clock is None:
+        return now
+    try:
+        later = clock()
+    except Exception:  # noqa: BLE001 - an unusable clock decides nothing later than the tick start
+        return now
+    if not isinstance(later, datetime) or later.tzinfo is None or later <= now:
+        return now
+    return later if _stamp(later)[:10] == _stamp(now)[:10] else now
+
+
 def _stamp(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -428,7 +443,8 @@ def runner_clock_ok(state: "RunnerState") -> bool:
 
 def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = None, clock_ok: bool = False,
               ledger_path: Path | None = None, settle: Callable[[], list[str]] | None = None,
-              clock_check: Callable[[], str | None] | None = None) -> Preflight:
+              clock_check: Callable[[], str | None] | None = None,
+              clock: Callable[[], datetime] | None = None) -> Preflight:
     """The C.2 checks, in order; the first failing one decides. Writes no fill itself.
 
     Issue #206 (Task CO): ``settle`` (the runner's settlement step, ``_settle_tick``) runs after the KILL / live /
@@ -483,7 +499,10 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
         if problem is not None:
             return Preflight(ACT_PAUSE, [problem], ledger_rows=len(read.rows))
     rows = len(read.rows)
-    risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), _stamp(now), clock_ok=clock_ok)
+    # PR #342 review (Codex 6188442103): the day's snapshot this evaluation may write decides lateness at the
+    # evaluation time (max(tick start, runner clock), same UTC day), never the tick start.
+    risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), _stamp(_decision_time(now, clock)),
+                                        clock_ok=clock_ok)
     if risk["problems"]:
         problems = [str(p) for p in risk["problems"][:10]]
         _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": problems})
@@ -975,7 +994,9 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter,
             event(state, "writeoff_deferred_day_boundary", now, markets=sorted(c.market for c in step.closes),
                   written_at=_stamp(written_at))
             return []
-        out = paper_ledger.apply_writeoffs(step.closes, _stamp(now), clock_ok=clock_ok)
+        # PR #342 review (Codex 6188442103 P1): same UTC day here, so the row and the day's snapshot it may write
+        # are stamped, and the snapshot's lateness decided, at the write time, never the tick start.
+        out = paper_ledger.apply_writeoffs(step.closes, _stamp(written_at), clock_ok=clock_ok)
         if out["problems"]:
             # PR #342 review (Codex 6184078075 / 6184412258 P2): a partial failure, or a row on disk whose
             # post-write re-read failed (not in ``booked``): re-send every written-off leg's event before the next
@@ -1047,7 +1068,7 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     try:
         check = preflight(state.paths, now=now, risk_path=state.risk_path, clock_ok=runner_clock_ok(state),
                           settle=lambda: _settle_tick(state, now, gamma, lambda: _tick_clock(state, book_get, now)),
-                          clock_check=lambda: _tick_clock(state, book_get, now))
+                          clock_check=lambda: _tick_clock(state, book_get, now), clock=state.clock)
     except WriteFailed as exc:
         state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return IterationReport(ACT_WRITE_FAILED, [str(exc)])

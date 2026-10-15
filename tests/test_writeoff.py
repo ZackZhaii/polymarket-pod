@@ -1276,3 +1276,85 @@ def test_the_reopen_grace_takes_the_larger_of_the_wall_and_monotonic_intervals()
                                         observed_mono=1310.0)
     assert market_close.reopen_contradiction(reopened, first, first, 1000.0) == market_close.HALT_REOPENED
     assert market_close.reopen_contradiction(reopened, first, first) is None  # wall only: inside the grace
+
+
+# --- PR #342 review 6188707330 (Codex 6188442103): decide and stamp at the write / evaluation time -----------
+
+def _slow_first_held_read(inner, clock, seconds):
+    """A getter whose next held-market read (the tick's first: src/resolution_watch, before the write-off hook
+    and preflight's daily-loss evaluation) takes ``seconds``. Arm with ``getter.arm()`` before a tick."""
+    seen = {"armed": False}
+
+    def getter(url):
+        if seen["armed"] and "id=held" in url:
+            clock.advance(seconds)
+            seen["armed"] = False
+        return inner(url)
+    getter.arm = lambda: seen.update(armed=True)
+    return getter
+
+
+def _verified(monkeypatch):
+    monkeypatch.setattr(m2_runner, "_clock_problem", lambda *a, **k: None)  # /time verified on every tick
+    monkeypatch.setattr(m2_runner, "runner_clock_ok", lambda state: True)
+
+
+def test_a_writeoff_written_after_the_day_start_lag_books_at_the_late_reference(runner, monkeypatch):
+    """P1: the first closed read is on the previous day; the confirming tick starts at 00:01:55 and the write
+    happens at 00:02:15, past the 120 s day-start lag: the day's first snapshot (written by the write-off) is late
+    and the row says so (decided at the tick start it was on time: the on-time reference under-counts)."""
+    _verified(monkeypatch)
+    midnight = (RUN_NOW + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+    clock = _Time(midnight - timedelta(seconds=10))
+    _timed_runner(runner, clock)
+    inner = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = _slow_first_held_read(inner, clock, 20.0)
+    _tick_at(runner, getter, clock)  # 23:59:50 the previous day: the pending read
+    clock.advance(125.0)  # the confirming tick starts at 00:01:55
+    getter.arm()
+    report = _tick_at(runner, getter, clock)
+    assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
+    rows = _writeoffs(runner["paper"])
+    assert len(rows) == 1 and rows[0]["ts"].startswith(midnight.strftime("%Y-%m-%dT00:02:15"))
+    snap = daily_marks.read_snapshot(paper_ledger.DAILY_MARKS_DIR, midnight.strftime("%Y-%m-%d"))[0]
+    assert snap is not None and snap["late"] is True and rows[0]["writeoff_sod_late"] is True
+
+
+def test_preflights_day_snapshot_decides_lateness_at_the_evaluation_time(runner, monkeypatch):
+    """Sweep: the same rule on preflight's daily-loss evaluation (it writes the day's first snapshot when no
+    write-off did). Tick starts 00:01:55, its reads take 20 s: the snapshot is written at 00:02:15, late."""
+    _verified(monkeypatch)
+    midnight = (RUN_NOW + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+    clock = _Time(midnight + timedelta(seconds=115))
+    _timed_runner(runner, clock)
+    getter = _slow_first_held_read(RunnerGamma(gamma("held", closed=False, accepting=True, closed_time=None)),
+                                   clock, 20.0)
+    getter.arm()
+    report = _tick_at(runner, getter, clock)
+    assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
+    snap = daily_marks.read_snapshot(paper_ledger.DAILY_MARKS_DIR, midnight.strftime("%Y-%m-%d"))[0]
+    assert snap is not None and snap["late"] is True
+    assert snap["created_at"].startswith(midnight.strftime("%Y-%m-%dT00:02:15"))
+
+
+def test_an_observation_from_the_default_view_is_stamped_when_that_response_completes():
+    """P2: the market reads open (only the default view lists it): the observation is stamped after the default
+    view's response, so a slow default view never shortens the reopen grace."""
+    clock = _Time(RUN_NOW)
+    inner = RunnerGamma(gamma("held", closed=False, accepting=True, closed_time=None))
+
+    def getter(url):
+        if url == market_close.gamma_url("held", closed=False):
+            clock.advance(20.0)
+        return inner(url)
+    obs = market_close.gamma_read(getter, "held", RUN_NOW, clock=lambda: clock.wall, monotonic=lambda: clock.mono)
+    assert obs.closed is False and obs.observed_at == RUN_NOW + timedelta(seconds=20) and obs.observed_mono == 1020.0
+    closed = RunnerGamma(gamma("held", closed_time=CLOSED_TS))
+
+    def slow_default(url):
+        if url == market_close.gamma_url("held", closed=False):
+            clock.advance(20.0)
+        return closed(url)
+    start = clock.wall
+    obs = market_close.gamma_read(slow_default, "held", start, clock=lambda: clock.wall, monotonic=lambda: clock.mono)
+    assert obs.closed is True and obs.observed_at == start  # a closed read keeps the closed=true stamp
