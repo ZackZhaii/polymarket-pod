@@ -711,3 +711,54 @@ def test_a_writeoff_interrupted_between_two_legs_writes_off_the_remaining_leg_af
         _iterate(runner, getter, RUN_NOW + timedelta(seconds=seconds))
     assert len(_writeoffs(runner["paper"])) == 2
     assert ledger_store.verify(ledger_store.read_ledger(runner["paper"])[1]) == []
+
+
+# --- PR #342 review 6183672536 (Codex 6183403293 P1): clock rollback after a write-off fails closed ----------
+
+def _rb_obs(closed, accepting, at, problem=None):
+    return market_close.Observation("held", at, closed=closed, accepting_orders=accepting, problem=problem)
+
+
+@pytest.mark.parametrize("seconds_after_first_seen, expected", [
+    (-1, market_close.HALT_CLOCK_ROLLBACK),       # negative elapsed: never counted as grace
+    (-3600, market_close.HALT_CLOCK_ROLLBACK),
+    (0, None),                                     # 0 <= elapsed < grace: Gamma lag, ignored
+    (market_close.MARKET_CLOSE_REOPEN_GRACE_S - 1, None),
+    (market_close.MARKET_CLOSE_REOPEN_GRACE_S, market_close.HALT_REOPENED),
+])
+def test_the_reopen_grace_applies_only_for_non_negative_elapsed(seconds_after_first_seen, expected):
+    first = RUN_NOW
+    now = first + timedelta(seconds=seconds_after_first_seen)
+    assert market_close.reopen_contradiction(_rb_obs(False, True, now), first, now) == expected
+
+
+@pytest.mark.parametrize("obs_kwargs", [dict(closed=True, accepting=False), dict(closed=False, accepting=True),
+                                        dict(closed=None, accepting=None, problem="timeout")])
+def test_a_first_seen_in_the_future_halts_on_every_read(obs_kwargs):
+    now = RUN_NOW
+    future = now + timedelta(minutes=5)
+    assert market_close.reopen_contradiction(_rb_obs(at=now, **obs_kwargs), future, now) == market_close.HALT_CLOCK_ROLLBACK
+
+
+def test_a_clock_rollback_after_a_writeoff_halts_the_runner_even_when_the_market_reads_open(runner):
+    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _iterate(runner, getter, RUN_NOW)
+    _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
+    assert len(_writeoffs(runner["paper"])) == 1
+    getter.row = gamma("held", closed=False, accepting=True, closed_time=None)  # reopened
+    runner["state"] = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(runner["run"]))  # restart
+    report = _iterate(runner, getter, RUN_NOW - timedelta(minutes=10))  # wall clock rolled back
+    assert f"{market_close.HALT_CLOCK_ROLLBACK}:held" in report.reasons and _halted()
+    assert len(_writeoffs(runner["paper"])) == 1  # no rollback of the write-off
+
+
+def test_an_unparseable_close_record_with_a_remaining_leg_is_a_halt_not_a_silent_skip():
+    rows = [fill("buy", 20.0, 0.5, market="held", token="t1"), fill("buy", 10.0, 0.4, market="held", token="t2")]
+    rows = [{"fill_id": f"r{i}", **row} for i, row in enumerate(rows)]
+    written = {"fill_id": "writeoff-x", "kind": ledger_store.WRITEOFF_KIND, "market": "held", "token_id": "t1",
+               "counts_toward_risk": True, "hypothetical": False, "closed_ts": "not-a-time",
+               "close_first_seen_ts": RUN_NOW.isoformat(), "close_confirmed_ts": RUN_NOW.isoformat(),
+               "close_confirmed_by": market_close.BY_REREAD}
+    reads = {"held": _rb_obs(True, False, RUN_NOW + timedelta(minutes=1))}
+    step = market_close.detect(market_close.CloseTracker(), rows + [written], reads, RUN_NOW + timedelta(minutes=1))
+    assert step.closes == [] and step.halts == [f"{market_close.HALT_CLOSE_UNPARSEABLE}:held"]

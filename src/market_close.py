@@ -75,6 +75,8 @@ READ_FAILED = "close_read_failed"
 INVALID_TYPE = "close_read_invalid_type"
 ALREADY = "already_written_off"
 HALT_REOPENED = "closed_flag_contradiction_after_writeoff"
+HALT_CLOCK_ROLLBACK = "writeoff_close_first_seen_in_future"  # PR #342: clock rollback after a write-off
+HALT_CLOSE_UNPARSEABLE = "writeoff_close_record_unparseable"  # PR #342: remaining legs cannot be resumed
 
 
 @dataclass(frozen=True)
@@ -282,11 +284,17 @@ def written_off_legs(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], di
 
 
 def reopen_contradiction(obs: Observation, first_closed_seen: datetime | None, now: datetime) -> str | None:
-    """A written-off market read again: the halt reason, or None (ignored). See the module docstring."""
+    """A written-off market read again: the halt reason, or None (ignored). See the module docstring.
+
+    PR #342 review (Codex 6183403293, fail closed): a first closed read stamped after ``now`` is a clock rollback,
+    a halt on every read; the reopen grace applies only for 0 <= elapsed < MARKET_CLOSE_REOPEN_GRACE_S."""
+    elapsed = None if first_closed_seen is None else (now - first_closed_seen).total_seconds()
+    if elapsed is not None and elapsed < 0:
+        return HALT_CLOCK_ROLLBACK
     if obs.problem is not None:
         return None
     if obs.closed is False or obs.accepting_orders is True:
-        if first_closed_seen is not None and (now - first_closed_seen).total_seconds() < MARKET_CLOSE_REOPEN_GRACE_S:
+        if elapsed is not None and 0 <= elapsed < MARKET_CLOSE_REOPEN_GRACE_S:
             return None  # Gamma's by-id lag right after a close, not a contradiction
         return HALT_REOPENED
     return None
@@ -346,7 +354,9 @@ def detect(tracker: CloseTracker, ledger_rows: list[dict[str, Any]], reads: Mapp
                 # from the close already confirmed (plan_writeoffs skips every leg that has its row).
                 if any((market, token) not in written for token in held[market]):
                     resumed = _close_from_row(market, rows[0])
-                    if resumed is not None:
+                    if resumed is None:  # never a silent skip: the open leg would keep no write-off forever
+                        out.halts.append(f"{HALT_CLOSE_UNPARSEABLE}:{market}")
+                    else:
                         out.closes.append(resumed)
                         out.reasons[market] = RESUMED
             continue
