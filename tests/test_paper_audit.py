@@ -18,14 +18,17 @@ hypothetical fill joins and takes part in the copy checks like any modern fill (
 ``ledger.hypothetical_fills``); a ledger row without fill_id is pre-Task-AF history — it is never
 guessed into a join, is reported UNKNOWN (``unknowns``, the derived ``legacy:`` id as a stable
 name) and counted (``ledger.legacy_rows``); the coverage gate keeps all-empty or nothing-verified
-runs at verdict ``unknown``, never PASS. Review P1: the remaining check (SHA256, counts, reasons) is
-still a later acceptance item, so even a clean join ends verdict ``unknown`` with a non-zero exit
-and never claims PASS; review P2: damaged ledgers (tampered content, missing or mistyped
-risk-control fields, non-finite numbers, a conflicting duplicate) must fail with a non-zero exit.
+runs at verdict ``unknown``, never PASS. Acceptance 6: with every check of the issue now running,
+a problem-free run that cross-checked at least one fill and has no legacy row is verdict ``pass``
+with exit 0, and the JSON report carries each input's SHA256, the verified / unverified counts
+(``counts``) and the named difference reasons (``problems`` etc.); the independent RiskGate allow
+attribution and mark-to-market are explicitly UNKNOWN in every run (``unknown_checks``) — honest
+non-claims that never gate the verdict.
 """
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import socket
 import subprocess
@@ -101,7 +104,11 @@ def test_the_module_imports_the_standard_library_and_first_party_src_only():
             assert root in sys.stdlib_module_names or root == "src", node.module
 
 
-def test_a_clean_join_is_verdict_unknown_not_pass(tmp_path, capsys):
+def test_a_clean_join_is_a_full_pass_with_sha256_and_counts(tmp_path, capsys):
+    """Acceptance 6: every check of issue #69 now runs, so a clean join with at least one
+    cross-checked fill and no legacy row is verdict ``pass`` / exit 0, and the report carries each
+    input's SHA256 (of the exact bytes on disk — read after the run, so the inputs are proven
+    unchanged too), the verified / unverified counts and the two permanent UNKNOWN non-claims."""
     ledger = tmp_path / "paper.jsonl"
     rows = [book_fill(ledger, market="m1"), book_fill(ledger, market="m2")]
     bus = tmp_path / "bus.jsonl"
@@ -109,15 +116,16 @@ def test_a_clean_join_is_verdict_unknown_not_pass(tmp_path, capsys):
     write_jsonl(bus, [bus_fill(rows[0], ts="2027-01-01T00:00:00Z"), bus_fill(rows[1])])
     code = paper_audit.main(argv_for(ledger, bus))
     report = json.loads(capsys.readouterr().out)
-    assert code == paper_audit.EXIT_MISMATCH == 1  # P1: never PASS before the remaining checks land
-    assert report["ledger_verified"] is True and report["verdict"] == "unknown"
+    assert code == paper_audit.EXIT_OK == 0  # the fully checked pass is reachable now
+    assert report["ledger_verified"] is True and report["verdict"] == "pass"
     assert report["matched"] == 2 and report["ledger_only"] == [] and report["bus_only"] == []
     assert report["problems"] == []  # equal payloads and outer markets: acceptance 3 is checked
-    assert "payload_equality_by_fill_id" not in report["unverified"]  # it is verified now
-    assert "bus_sender_roles" not in report["unverified"]  # acceptance 4 is verified now too
-    assert "legacy_and_hypothetical_unknown" not in report["unverified"]  # acceptance 5 is too
-    assert "input_sha256_and_counts" in report["unverified"]  # acceptance 6 is not
+    assert report["ledger"]["sha256"] == hashlib.sha256(ledger.read_bytes()).hexdigest()
+    assert report["bus"]["sha256"] == hashlib.sha256(bus.read_bytes()).hexdigest()
+    assert report["counts"] == {"verified_fills": 2, "unverified_rows": 0}
     assert report["unknowns"] == [] and report["ledger"]["legacy_rows"] == 0
+    assert report["unknown_checks"] == ["riskgate_allow_attribution", "mark_to_market"]
+    assert "unverified" not in report  # nothing is left unimplemented
 
 
 def test_a_changed_payload_field_on_the_bus_side_fails(tmp_path, capsys):
@@ -130,7 +138,11 @@ def test_a_changed_payload_field_on_the_bus_side_fails(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert code == paper_audit.EXIT_MISMATCH == 1
     assert report["verdict"] == "fail" and report["matched"] == 1
-    assert any(problem.startswith(f"payload_mismatch:{row['fill_id']}") for problem in report["problems"])
+    # acceptance 6: the fill was cross-checked (counted verified) and the difference carries a
+    # named reason — the drifted field — rather than a bare count
+    assert report["counts"]["verified_fills"] == 1 and report["counts"]["unverified_rows"] == 0
+    assert any(problem.startswith(f"payload_mismatch:{row['fill_id']}:notional_usd")
+               for problem in report["problems"])
 
 
 @pytest.mark.parametrize("damage", [{"shares": 10}, {"hypothetical": 0}, {"counts_toward_risk": 1},
@@ -174,8 +186,8 @@ def test_key_order_and_json_formatting_are_normalized_away(tmp_path, capsys):
                    encoding="utf-8")
     code = paper_audit.main(argv_for(ledger, bus))
     report = json.loads(capsys.readouterr().out)
-    assert code == paper_audit.EXIT_MISMATCH == 1  # unknown, not fail: normalization saw no drift
-    assert report["verdict"] == "unknown" and report["problems"] == []
+    assert code == paper_audit.EXIT_OK == 0  # pass, not fail: normalization saw no drift
+    assert report["verdict"] == "pass" and report["problems"] == []
 
 
 @pytest.mark.parametrize("outer", ["other-market", None, 42])
@@ -350,7 +362,7 @@ def test_offline_the_audit_never_opens_a_socket(tmp_path, monkeypatch):
     row = book_fill(ledger)
     bus = tmp_path / "bus.jsonl"
     write_jsonl(bus, [bus_fill(row)])
-    assert paper_audit.main(argv_for(ledger, bus)) == paper_audit.EXIT_MISMATCH  # unknown, not pass
+    assert paper_audit.main(argv_for(ledger, bus)) == paper_audit.EXIT_OK  # clean pass, offline
 
 
 def test_the_inputs_are_read_only(tmp_path):
@@ -359,7 +371,7 @@ def test_the_inputs_are_read_only(tmp_path):
     bus = tmp_path / "bus.jsonl"
     write_jsonl(bus, [bus_fill(row)])
     before = (ledger.read_bytes(), bus.read_bytes())
-    assert paper_audit.main(argv_for(ledger, bus)) == paper_audit.EXIT_MISMATCH
+    assert paper_audit.main(argv_for(ledger, bus)) == paper_audit.EXIT_OK
     assert (ledger.read_bytes(), bus.read_bytes()) == before  # nothing written back
 
 
@@ -370,9 +382,10 @@ def test_python_dash_m_entry_point_runs_from_the_repo_root(tmp_path):
     write_jsonl(bus, [bus_fill(row)])
     done = subprocess.run([sys.executable, "-m", "src.paper_audit", *argv_for(ledger, bus)],
                           cwd=str(ROOT), capture_output=True, text=True, timeout=120)
-    assert done.returncode == 1, done.stderr  # verdict unknown: never PASS before the deep checks
+    assert done.returncode == 0, done.stderr  # a clean run is the fully checked pass now
     report = json.loads(done.stdout)
-    assert report["matched"] == 1 and report["verdict"] == "unknown"
+    assert report["matched"] == 1 and report["verdict"] == "pass"
+    assert report["counts"] == {"verified_fills": 1, "unverified_rows": 0}
 
 
 def test_usage_error_for_bad_flags(capsys):
@@ -411,10 +424,9 @@ def test_identical_duplicate_bus_copies_count_once_and_report_the_count(tmp_path
                       bus_fill(row, ts="2026-10-12T00:00:09Z")])
     code = paper_audit.main(argv_for(ledger, bus))
     report = json.loads(capsys.readouterr().out)
-    assert code == paper_audit.EXIT_MISMATCH == 1  # unknown, not pass: acceptance 5-6 remain
-    assert report["verdict"] == "unknown" and report["problems"] == []
+    assert code == paper_audit.EXIT_OK == 0  # identical extra copies are not a difference
+    assert report["verdict"] == "pass" and report["problems"] == []
     assert report["matched"] == 1 and report["bus"]["duplicate_fills"] == 1
-    assert "duplicate_and_conflict_copies" not in report["unverified"]
 
 
 def test_conflicting_duplicate_bus_copies_fail(tmp_path, capsys):
@@ -440,8 +452,8 @@ def test_settlement_rows_are_counted_separately_and_are_not_orphans(tmp_path, ca
     write_jsonl(bus, [bus_fill(row)])  # the settlement has no bus copy, on purpose
     code = paper_audit.main(argv_for(ledger, bus))
     report = json.loads(capsys.readouterr().out)
-    assert code == paper_audit.EXIT_MISMATCH == 1  # unknown, not pass: acceptance 5-6 remain
-    assert report["verdict"] == "unknown" and report["problems"] == []
+    assert code == paper_audit.EXIT_OK == 0  # the settlement is by-design ledger-only: no problem
+    assert report["verdict"] == "pass" and report["problems"] == []
     assert report["ledger"]["settlements"] == 1 and report["matched"] == 1
     assert report["ledger_only"] == [] and report["bus_only"] == []
 
@@ -503,8 +515,8 @@ def test_a_modern_hypothetical_fill_joins_and_participates_in_the_copy_check(tmp
                       bus_fill(row, ts="2026-10-12T00:00:09Z")])  # identical extra copy
     code = paper_audit.main(argv_for(ledger, bus))
     report = json.loads(capsys.readouterr().out)
-    assert code == paper_audit.EXIT_MISMATCH == 1  # unknown, not pass: acceptance 6 remains
-    assert report["verdict"] == "unknown" and report["problems"] == []
+    assert code == paper_audit.EXIT_OK == 0  # a hypothetical clean join is a pass like any other
+    assert report["verdict"] == "pass" and report["problems"] == []
     assert report["matched"] == 1 and report["bus"]["duplicate_fills"] == 1
     assert report["ledger"]["hypothetical_fills"] == 1
 
@@ -537,6 +549,8 @@ def test_legacy_rows_without_fill_id_are_unknown_and_counted_not_guessed(tmp_pat
     assert report["ledger"]["legacy_rows"] == 2 and len(report["unknowns"]) == 2
     assert all(name.startswith("legacy:") for name in report["unknowns"])
     assert report["matched"] == 0 and report["ledger_only"] == [] and report["bus_only"] == []
+    # acceptance 6: the unverified count names the rows that can never be joined
+    assert report["counts"] == {"verified_fills": 0, "unverified_rows": 2}
 
 
 def test_a_legacy_prefix_with_a_modern_fill_on_top_reports_both(tmp_path, capsys):
@@ -567,3 +581,8 @@ def test_all_empty_inputs_are_unknown_not_a_full_pass(tmp_path, capsys):
     assert code == paper_audit.EXIT_MISMATCH == 1
     assert report["verdict"] == "unknown" and report["matched"] == 0 and report["problems"] == []
     assert report["ledger"]["rows"] == 0 and report["bus"]["rows"] == 0
+    # acceptance 6: counts and hashes are reported even for empty inputs (hash of zero bytes)
+    assert report["counts"] == {"verified_fills": 0, "unverified_rows": 0}
+    assert report["ledger"]["sha256"] == hashlib.sha256(b"").hexdigest()
+    assert report["bus"]["sha256"] == hashlib.sha256(b"").hexdigest()
+    assert report["unknown_checks"] == ["riskgate_allow_attribution", "mark_to_market"]

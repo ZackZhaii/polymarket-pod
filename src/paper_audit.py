@@ -15,10 +15,18 @@ UTF-8 JSONL — a bad JSON line, a non-object line, a torn last line or an unrea
 named failure; no lenient reader that skips bad lines is used. Only a ledger that verifies is
 joined, by explicit ``fill_id``.
 
-Honesty rule (review P1 on PR #202): the input SHA256 / counts / reasons of the report are the
-later acceptance items of issue #69 and are not implemented yet, so this tool never reports PASS:
-a run without problems still ends with verdict ``unknown`` and a non-zero exit, and the report
-names every check that remains unverified.
+Honesty rule (review P1 on PR #202, closed by acceptance 6 of issue #69): every check of the issue
+now runs, and the report carries each input's SHA256 (``ledger`` / ``bus`` ``sha256``, of the exact
+bytes read), the verified / unverified counts (``counts``: fills whose two copies were cross-checked
+by the join vs legacy rows that can never be joined) and the difference reasons (the named
+``problems``, ``ledger_only`` / ``bus_only`` and ``input_problems`` entries, each naming the fill
+and the drifted field). Two aspects this audit cannot verify on its own evidence are explicitly
+UNKNOWN in every run (``unknown_checks``): the independent RiskGate allow attribution (the decision
+summary carries no fill_id / token_id / decision_id to join on, src/paper_ledger.py) and
+mark-to-market (part of neither log). They are honest non-claims, not differences, and do not gate
+the verdict — the verdict speaks only to the checks this tool runs. A problem-free run that
+cross-checked at least one fill and has no unverified legacy row is verdict ``pass`` / exit 0; the
+acceptance 5 coverage gate keeps an all-empty or legacy-only run at ``unknown`` / exit 1.
 
 Acceptance 5 of issue #69 (this change): a modern hypothetical fill (``hypothetical`` true,
 ``counts_toward_risk`` false) carries a ``fill_id`` like every modern fill and is written to both
@@ -29,7 +37,7 @@ guessed: the row is reported UNKNOWN (``unknowns``, its derived ``legacy:`` id u
 name, never a join key) and counted (``ledger.legacy_rows``), not named a problem. Coverage gate:
 a run that cross-checked no fill at all (all-empty inputs, or nothing joinable) or that still has
 unverified legacy rows proved nothing about the logs as a whole, so it can never report the full
-pass — verdict ``unknown`` (which additionally stays behind acceptance 6).
+pass — verdict ``unknown``.
 
 Acceptance 3 of issue #69: every joined fill is compared in full. The ledger row and
 the Executor fill's ``payload`` must be equal under a type-sensitive normalized JSON comparison —
@@ -49,8 +57,9 @@ orphan on either side is a named failure. NEW-3b (ruled into #69): settlement ro
 separately (``ledger.settlements``) and are not orphans; a settlement row without a fill_id, or a
 bus fill carrying a settlement's fill_id, is a named problem.
 
-Exit codes: 0 reserved for the fully checked pass (not reachable until the acceptance 6 items
-land, and the coverage gate above keeps an empty or legacy-only run at ``unknown`` even then); 1 a
+Exit codes: 0 the fully checked pass — every check ran, nothing differs, at least one fill was
+cross-checked and no unverified legacy row remains (the coverage gate keeps an all-empty or
+legacy-only run at ``unknown``); 1 a
 problem — the ledger failed ``ledger_store.verify``, an orphan, a content mismatch or a join
 problem on either side — or verdict ``unknown`` (the logs are not validated as agreeing); 2 usage
 error, or an input that cannot be read in full (bad flags, a missing or unreadable file,
@@ -59,6 +68,7 @@ undecodable bytes, a malformed or non-object line, a torn last line). Registry: 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -77,14 +87,13 @@ FILL_ID_FIELD = "fill_id"
 BUS_FILL_FROM = "Executor"
 BUS_FILL_TO = "Sentinel"
 
-# Review P1 on PR #202: until these later acceptance items of issue #69 land, a clean fill_id join
-# with equal payloads is not proof that the two logs agree, so the verdict stays "unknown" and the
-# exit stays non-zero. Acceptance 3 (full payload, outer market), acceptance 4 (sender roles,
-# duplicate / conflict copies) and acceptance 5 (hypothetical copies join; legacy rows are UNKNOWN,
-# never guessed; the coverage gate) are checked and no longer listed.
-UNVERIFIED_CHECKS = (
-    "input_sha256_and_counts",  # acceptance 6: input hashes, verified / unverified counts, reasons
-)
+# Acceptance 6 of issue #69: aspects this audit cannot verify on its own evidence and therefore
+# reports as UNKNOWN in every run — an honest non-claim, never a pass claim and never a difference.
+# The RiskGate decision summary carries no fill_id / token_id / decision_id (src/paper_ledger.py),
+# so an "allow" cannot be attributed to a fill independently of the two copies agreeing, and
+# mark-to-market revaluation is part of neither log. Neither gates the verdict: the verdict speaks
+# only to the checks this tool actually runs.
+UNKNOWN_CHECKS = ("riskgate_allow_attribution", "mark_to_market")
 
 
 def parse_jsonl(data: bytes, label: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -163,16 +172,19 @@ def _changed_fields(ledger_row: dict[str, Any], payload: dict[str, Any]) -> list
 
 def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
     """Read both files read-only; the ledger must pass ledger_store.verify before any join."""
-    report: dict[str, Any] = {"ledger": {"path": str(ledger_path)}, "bus": {"path": str(bus_path)},
+    report: dict[str, Any] = {"ledger": {"path": str(ledger_path), "sha256": None},
+                              "bus": {"path": str(bus_path), "sha256": None},
                               "matched": 0, "ledger_only": [], "bus_only": [], "problems": [],
                               "input_problems": [], "ledger_verified": False, "verdict": "fail",
-                              "unknowns": [], "unverified": list(UNVERIFIED_CHECKS)}
+                              "unknowns": [], "unknown_checks": list(UNKNOWN_CHECKS),
+                              "counts": {"verified_fills": 0, "unverified_rows": 0}}
     try:
         ledger_data = ledger_path.read_bytes()
     except OSError as exc:
         report["input_problems"].append(f"ledger:unreadable:{type(exc).__name__}")
         report["problems"] = list(report["input_problems"])
         return report
+    report["ledger"]["sha256"] = hashlib.sha256(ledger_data).hexdigest()
     ledger_read = ledger_store.parse_ledger(ledger_data)
     report["ledger"]["rows"] = len(ledger_read.rows)
     report["ledger"]["duplicates_ignored"] = ledger_read.duplicates_ignored
@@ -196,6 +208,7 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
         report["input_problems"].append(f"bus:unreadable:{type(exc).__name__}")
         report["problems"] = list(report["input_problems"])
         return report
+    report["bus"]["sha256"] = hashlib.sha256(bus_data).hexdigest()
     bus_rows, bus_problems = parse_jsonl(bus_data, "bus")
     report["bus"]["rows"] = len(bus_rows)
     report["input_problems"].extend(bus_problems)
@@ -292,13 +305,16 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
             outer_market = _canonical(message.get("market"))
             if outer_market is None or outer_market != _canonical(ledger_row.get("market")):
                 report["problems"].append(f"outer_market_mismatch:{fill_id}")
+    # Acceptance 6: the verified / unverified counts. Verified = fills whose two copies were read
+    # and fully cross-checked by the join (a drifted copy is verified too — the difference is what
+    # the named reasons report); unverified = legacy rows, which can never be joined.
+    report["counts"] = {"verified_fills": report["matched"], "unverified_rows": legacy_rows}
     # Acceptance 5, coverage gate: a run that cross-checked no fill at all (all-empty inputs, or
     # nothing joinable) or that still has unverified legacy rows proved nothing about the logs as a
-    # whole, so it can never report the full pass. "pass" additionally stays behind acceptance 6
-    # (the input SHA256 / counts / reasons above), which is why it is unreachable today.
+    # whole, so it can never report the full pass.
     if report["problems"] or report["ledger_only"] or report["bus_only"]:
         report["verdict"] = "fail"
-    elif report["unverified"] or report["unknowns"] or report["matched"] == 0:
+    elif report["unknowns"] or report["matched"] == 0:
         report["verdict"] = "unknown"
     else:
         report["verdict"] = "pass"
@@ -310,9 +326,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m src.paper_audit",
         description="Offline, read-only cross-check of the paper ledger against Executor bus fills "
                     "by fill_id (issue #69). The ledger must pass ledger_store.verify first.",
-        epilog="Exit codes: 0 reserved for the fully checked pass (not reachable yet); 1 a problem "
-               "or verdict unknown (the logs are not validated as agreeing); 2 usage error or an "
-               "input that cannot be read in full. See docs/EXIT_CODES.md.")
+        epilog="Exit codes: 0 the fully checked pass (every check ran and agrees; the coverage gate "
+               "keeps an all-empty or legacy-only run unknown); 1 a problem or verdict unknown (the "
+               "logs are not validated as agreeing); 2 usage error or an input that cannot be read "
+               "in full. See docs/EXIT_CODES.md.")
     parser.add_argument("--ledger", type=Path, required=True, help="the paper ledger JSONL file")
     parser.add_argument("--bus", type=Path, required=True, help="the bus JSONL file")
     parser.add_argument("--json", action="store_true", help="print the full report as JSON")
@@ -332,8 +349,11 @@ def main(argv: list[str] | None = None) -> int:
               f"ledger_only={','.join(report['ledger_only']) or '-'} "
               f"bus_only={','.join(report['bus_only']) or '-'} "
               f"verdict={report['verdict']}")
-        for name in report["unverified"]:
-            print(f"  unverified {name}")
+        counts = report["counts"]
+        print(f"  verified_fills={counts['verified_fills']} "
+              f"unverified_rows={counts['unverified_rows']}")
+        for name in report["unknown_checks"]:
+            print(f"  unknown check {name}")  # acceptance 6: honest non-claims, never a pass claim
         for name in report["unknowns"]:
             print(f"  unknown {name}")
         for problem in report["problems"]:
