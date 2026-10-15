@@ -396,9 +396,9 @@ def plan_writeoffs(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], clo
                 "writeoff_usd": amount + uplift,
                 "writeoff_cost_usd": amount,
                 "writeoff_sod_uplift_usd": uplift,
+                **({} if snapshot is None else {"writeoff_sod_late": snapshot.get("late") is True}),
                 # #197 option A (家伟 2026-10-14): the snapshot's lateness; a clock anomaly makes it late and the
                 # write-off is still booked at the late reference. Recomputed by leg_marks.writeoff_uplift_problems.
-                "writeoff_sod_late": None if snapshot is None else snapshot.get("late") is True,
                 "closed_ts": close.closed_ts,
                 "close_first_seen_ts": close.first_seen.isoformat(),
                 "close_confirmed_ts": close.confirmed_at.isoformat(),

@@ -175,7 +175,8 @@ def control_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
         problems.append(f"invalid_kind:{fill_id}")
     if "risk_decision" not in row:
         problems.append(f"missing_risk_decision:{fill_id}")
-    elif row["risk_decision"] != (KIND_DECISIONS.get(kind, None) if KIND_FIELD in row else "allow"):  # type: ignore[arg-type]
+    elif row["risk_decision"] != ((KIND_DECISIONS.get(kind) if isinstance(kind, str) else None)
+                                  if KIND_FIELD in row else "allow"):  # unhashable kind ([] / {}): invalid, never raise
         problems.append(f"invalid_risk_decision:{fill_id}")
     if kind == SETTLEMENT_KIND:
         problems.extend(settlement_field_problems(row, fill_id))
@@ -232,7 +233,8 @@ def writeoff_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
           and all(row.get(name) is None or (number(name) is not None and number(name) >= 0.0)  # type: ignore[operator]
                   for name in ("writeoff_cost_usd", "writeoff_sod_uplift_usd"))
           # #197 option A: the start-of-day snapshot's lateness, when present, is a bool
-          and (row.get("writeoff_sod_late") is None or isinstance(row.get("writeoff_sod_late"), bool)))
+          # (an explicit null is invalid: the key is absent or a strict bool, PR #342 review 6183015083)
+          and ("writeoff_sod_late" not in row or isinstance(row["writeoff_sod_late"], bool)))
     return [] if ok else [f"invalid_writeoff:{fill_id}"]
 
 

@@ -207,6 +207,8 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
     ledger_by_id: dict[str, dict[str, Any]] = {}
     settlement_ids: set[str] = set()
     settlements = 0
+    writeoffs = 0
+    writeoff_ids: set[str] = set()
     hypotheticals = 0
     legacy_rows = 0
     for row, derived_id in zip(ledger_read.rows, ledger_read.ids):
@@ -227,6 +229,11 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
             # they are counted separately and never read as ledger-only orphans.
             settlements += 1
             settlement_ids.add(fill_id)
+        elif ledger_store.is_writeoff(row):
+            # #197 (Task CK): a write-off row is ledger-only like a settlement (its event is a
+            # ``writeoff`` bus event, never a fill), counted separately and never a ledger_only orphan.
+            writeoffs += 1
+            writeoff_ids.add(fill_id)
         else:
             ledger_ids.append(fill_id)
             ledger_by_id[fill_id] = row
@@ -252,11 +259,14 @@ def audit(ledger_path: Path, bus_path: Path) -> dict[str, Any]:
         # NEW-3b: a settlement is ledger-only; a bus fill with its id contradicts that.
         if fill_id in settlement_ids:
             report["problems"].append(f"settlement_with_bus_fill:{fill_id}")
+        if fill_id in writeoff_ids:  # #197: a write-off is ledger-only too
+            report["problems"].append(f"writeoff_with_bus_fill:{fill_id}")
         bus_ids.append(fill_id)
         bus_by_id.setdefault(fill_id, []).append(row)
     report["bus"]["fills"] = bus_fills
     report["ledger"]["fills"] = len(ledger_ids)
     report["ledger"]["settlements"] = settlements
+    report["ledger"]["writeoffs"] = writeoffs
     report["ledger"]["hypothetical_fills"] = hypotheticals
     report["ledger"]["legacy_rows"] = legacy_rows  # acceptance 5: the unverified count
     report["bus"]["duplicate_fills"] = len(bus_ids) - len(set(bus_ids))  # extra copies, reported

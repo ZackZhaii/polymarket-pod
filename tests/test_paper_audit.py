@@ -567,3 +567,42 @@ def test_all_empty_inputs_are_unknown_not_a_full_pass(tmp_path, capsys):
     assert code == paper_audit.EXIT_MISMATCH == 1
     assert report["verdict"] == "unknown" and report["matched"] == 0 and report["problems"] == []
     assert report["ledger"]["rows"] == 0 and report["bus"]["rows"] == 0
+
+
+def _writeoff_row(ledger, market="m1", token="t1"):
+    from datetime import datetime, timezone
+
+    from src import market_close
+    rows, ids = ledger_store.read_ledger(ledger)[1].rows, ledger_store.read_ledger(ledger)[1].ids
+    when = datetime(2026, 10, 12, 0, 0, tzinfo=timezone.utc)
+    close = market_close.Close(market, when, when, when, market_close.BY_REREAD)
+    plan = market_close.plan_writeoffs(rows, list(ids), [close], rows[-1]["ts"])
+    assert plan.problems == [] and len(plan.rows) == 1
+    return ledger_store.book(ledger, plan.rows[0])
+
+
+def test_writeoff_rows_are_counted_separately_and_are_not_orphans(tmp_path, capsys):
+    """#197 (PR #342 review 6183015083 item 4): a write-off row is ledger-only (its bus message is a
+    ``writeoff`` event, never a fill), so it is counted apart and never read as ledger_only."""
+    ledger = tmp_path / "paper.jsonl"
+    row = book_fill(ledger, market="m1", token="t1")
+    _writeoff_row(ledger)
+    bus = tmp_path / "bus.jsonl"
+    write_jsonl(bus, [bus_fill(row)])
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "unknown" and report["problems"] == []
+    assert report["ledger"]["writeoffs"] == 1 and report["ledger"]["fills"] == 1 and report["matched"] == 1
+    assert report["ledger_only"] == [] and report["bus_only"] == []
+
+
+def test_a_bus_fill_with_a_writeoffs_fill_id_fails(tmp_path, capsys):
+    ledger = tmp_path / "paper.jsonl"
+    row = book_fill(ledger, market="m1", token="t1")
+    written = _writeoff_row(ledger)
+    bus = tmp_path / "bus.jsonl"
+    write_jsonl(bus, [bus_fill(row), bus_fill(written)])
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH and report["verdict"] == "fail"
+    assert f"writeoff_with_bus_fill:{written['fill_id']}" in report["problems"]

@@ -897,6 +897,25 @@ def _writeoff_events(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return market_close.bus_events(rows)
 
 
+def _resend_writeoff_events(state: RunnerState, now: datetime, rows: list[dict[str, Any]] | None = None) -> list[str]:
+    """Issue #197 (PR #342 review 6183015083): the first tick after a start re-sends the write-off events of every
+    written-off unsettled leg BEFORE settlement, so a write-off that was booked but whose event was lost in a crash
+    is never dropped by a settlement that closes its leg on the restart tick. The flag is set only after the send."""
+    if state.writeoff_events_resent:
+        return []
+    if rows is None:
+        try:
+            _, ledger = ledger_store.read_ledger(Path(paper_ledger.PAPER_PATH))
+        except Exception as exc:  # noqa: BLE001 - preflight verified the ledger; a re-read failure is a problem
+            return [f"writeoff_ledger_unreadable:{type(exc).__name__}"]
+        rows = ledger.rows
+    pending = list(market_close.written_off_legs(rows).values())
+    if pending:
+        event(state, "writeoff", now, resent=True, events=_writeoff_events(pending))
+    state.writeoff_events_resent = True
+    return []
+
+
 def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter) -> list[str]:
     """Issue #197 (Task CK, KEY-approved): close-then-write-off, AFTER settlement and BEFORE the daily loss.
 
@@ -917,11 +936,7 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter) -> l
         _, ledger = ledger_store.read_ledger(Path(paper_ledger.PAPER_PATH))
     except Exception as exc:  # noqa: BLE001 - preflight verified the ledger; a re-read failure is a problem
         return [f"writeoff_ledger_unreadable:{type(exc).__name__}"]
-    if not state.writeoff_events_resent:
-        pending = list(market_close.written_off_legs(ledger.rows).values())
-        if pending:
-            event(state, "writeoff", now, resent=True, events=_writeoff_events(pending))
-        state.writeoff_events_resent = True
+    _resend_writeoff_events(state, now, ledger.rows)  # no-op after _settle_tick ran it (before settlement)
     held = market_close.held_markets(ledger.rows)
     reads = {market: market_close.gamma_read(gamma, market, now) for market in sorted(held)}
     step = market_close.detect(state.close_tracker, ledger.rows, reads, now)
@@ -953,6 +968,9 @@ def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> lis
     3. ``_writeoff_hook`` (CK).
     Returns problems (invalid_risk_state); WriteFailed (events) propagates to the iteration.
     """
+    problems = _resend_writeoff_events(state, now)  # PR #342 review: before settlement, never after
+    if problems:
+        return problems
     try:
         held = _held_markets()
     except Exception as exc:  # noqa: BLE001 - preflight verified the ledger; a re-read failure is a problem

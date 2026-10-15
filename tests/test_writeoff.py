@@ -657,3 +657,21 @@ def test_a_reopen_after_writeoff_halts_every_market_and_its_settlement_stays_blo
     assert not _halted()
     assert "held" in paper_ledger.settlement_blocked_markets()
     assert len(_writeoffs(runner["paper"])) == 1
+
+
+def test_e2e_real_settle_hook_with_a_paused_clock_writes_off_and_the_daily_loss_counts_it(runner):
+    """#197 option A (PR #342 review, non-blocking): through the real _settle_tick/_writeoff_hook. The runner's
+    clock is never verified here (no /time answer), so runner_clock_ok is False on every tick: the write-off is
+    still booked, at the late reference, and the daily loss counts it."""
+    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _iterate(runner, getter, RUN_NOW)
+    assert m2_runner.runner_clock_ok(runner["state"]) is False
+    report = _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
+    assert report.action == m2_runner.ACT_PAUSE  # the clock pause; the write-off ran before it
+    booked = _writeoffs(runner["paper"])
+    assert len(booked) == 1 and booked[0]["writeoff_sod_late"] is True
+    assert booked[0]["writeoff_usd"] == pytest.approx(10.0)
+    read = ledger_store.read_ledger(runner["paper"])[1]
+    stamp = (RUN_NOW + timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), stamp, clock_ok=False)
+    assert risk["problems"] == [] and risk["loss_usd"] >= 10.0 - 1e-9

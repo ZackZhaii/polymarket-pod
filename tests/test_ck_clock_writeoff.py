@@ -104,7 +104,7 @@ def test_a_writeoff_sod_late_that_is_not_the_snapshots_fails_closed(env, late):
     assert any(p.startswith("writeoff_sod_late_mismatch") for p in state["ledger_problems"]), state["ledger_problems"]
 
 
-@pytest.mark.parametrize("bad", ["true", 1, 0.0])
+@pytest.mark.parametrize("bad", [None, 0, 1, 0.0, "true", "false"])
 def test_a_non_bool_writeoff_sod_late_is_an_invalid_row(env, bad):
     _roll(env)
     row = dict(paper_ledger.apply_writeoffs([close("m")], ROLL, clock_ok=False)["booked"][0])
@@ -147,3 +147,44 @@ def test_e2e_clock_paused_preflight_still_writes_off_and_the_daily_loss_counts_i
     # the next tick (clock still paused, no clock_check): the breaker reads the same ledger, no invalid_risk_state
     again = m2_runner.preflight(paths, now=now, clock_ok=False, ledger_path=env["ledger"])
     assert m2_runner.LEDGER_HALT_REASON not in again.reasons, again.reasons
+
+
+def test_no_snapshot_omits_writeoff_sod_late_instead_of_writing_null(env):
+    """PR #342 review item 1: the writer never produces null (no snapshot: the key is absent)."""
+    from src import market_close
+    _roll(env)
+    read = ledger_store.read_ledger(env["ledger"])[1]
+    row = market_close.plan_writeoffs(read.rows, list(read.ids), [close("m")], ROLL, None).rows[0]
+    assert "writeoff_sod_late" not in row
+    assert ledger_store.writeoff_field_problems(row, row["fill_id"]) == []
+
+
+@pytest.mark.parametrize("raw", ["null", "0"])
+def test_a_null_or_zero_writeoff_sod_late_fails_closed_on_a_later_day(env, raw):
+    """PR #342 review item 1, cross-day: #255's recompute checks the write-off day only, so the row's own field
+    check must reject an explicit null / 0 on every later day too (verify, load_state: invalid_risk_state)."""
+    _roll(env)
+    assert paper_ledger.apply_writeoffs([close("m")], ROLL, clock_ok=False)["problems"] == []
+    text = env["ledger"].read_text(encoding="utf-8")
+    assert text.count('"writeoff_sod_late":true') == 1
+    env["ledger"].write_text(text.replace('"writeoff_sod_late":true', f'"writeoff_sod_late":{raw}'), encoding="utf-8")
+    env["clock"]["now"] = "2026-09-03T12:00:00Z"  # two days later
+    state = paper_ledger.load_state("x", "t")
+    assert state["daily_loss_usd"] is None
+    assert any(p.startswith("invalid_writeoff") for p in state["ledger_problems"]), state["ledger_problems"]
+
+
+# ---------------------------------------------------------------- PR #342 review item 2: unhashable kind
+
+@pytest.mark.parametrize("kind", [[], {}, ["writeoff"], {"k": 1}])
+def test_an_unhashable_kind_is_invalid_and_never_raises(env, kind):
+    row = {"fill_id": "bad-0001", "kind": kind, "hypothetical": False, "counts_toward_risk": True,
+           "risk_decision": "writeoff"}
+    problems = ledger_store.control_field_problems(row, "bad-0001")
+    assert "invalid_kind:bad-0001" in problems
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    import json as _json
+    with env["ledger"].open("a", encoding="utf-8") as handle:  # a damaged line on disk
+        handle.write(_json.dumps({**row, "ts": "2026-09-01T00:00:00Z", "market": "m", "token_id": "t"}) + "\n")
+    state = paper_ledger.load_state("x", "t")  # must not raise TypeError
+    assert state["daily_loss_usd"] is None and state["ledger_problems"]

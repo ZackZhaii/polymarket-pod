@@ -435,3 +435,30 @@ def test_settlement_books_during_a_clock_pause(env, server, reason):
     booked = _settlements(env)
     assert len(booked) == 1 and booked[0]["token_id"] == LOSER and booked[0]["settlement_payout"] == 0.0
     assert len(_events(env, "settled")) == 1 and not _global_halt()
+
+
+# ---------------------------------------------------------------- #197 (PR #342 review 6183015083 item 3)
+
+def test_a_restart_resends_lost_writeoff_events_before_the_same_tick_settles_the_leg(env, tmp_path, monkeypatch):
+    """Crash after the write-off row was fsynced but before its event; the restart tick settles the leg at once.
+    The re-send runs before settlement, so the event is never lost (it used to run after: no open written-off
+    leg left, flag set, event gone for good)."""
+    from src import market_close
+    monkeypatch.setattr(paper_ledger, "DAILY_MARKS_DIR", tmp_path / "daily_marks")
+    _hold_loser(env)
+    closed = market_close.Close(rig.MARKET_ID, NOW - timedelta(hours=72), NOW - timedelta(minutes=2),
+                                NOW - timedelta(minutes=1), market_close.BY_REREAD)
+    out = paper_ledger.apply_writeoffs([closed], NOW.strftime("%Y-%m-%dT%H:%M:%SZ"), clock_ok=False)
+    assert out["problems"] == [] and len(out["booked"]) == 1  # on disk; the runner's event never went out
+    key = out["booked"][0]["fill_id"]
+    assert _events(env, "writeoff") == []
+    restarted = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(env["run"]))  # a fresh process
+    env["state"] = restarted
+    _tick(env, Gamma(resolved_row()))
+    assert len(_settlements(env)) == 1  # settled on the restart tick
+    path = env["run"] / "events.jsonl"
+    kinds = [row.get("event") for row in map(json.loads, path.read_text().splitlines())]
+    sent = _events(env, "writeoff")
+    assert len(sent) == 1 and sent[0]["resent"] is True and [e["key"] for e in sent[0]["events"]] == [key]
+    assert kinds.index("writeoff") < kinds.index("settled")  # re-sent BEFORE settlement
+    assert restarted.writeoff_events_resent is True
