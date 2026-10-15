@@ -41,7 +41,10 @@ def _aware(value: object) -> bool:
 
 
 def parse_end_date(value: object) -> datetime | None:
-    """Return the end date as an aware UTC datetime, or None when it is not a zoned ISO string."""
+    """Return the end date as an aware UTC datetime, or None when it is not a zoned ISO string.
+
+    A zoned timestamp whose UTC conversion leaves datetime's range (``0001-01-01T00:00:00+01:00``,
+    ``9999-12-31T23:59:59-01:00``) is None too: unparseable, never an OverflowError for the caller."""
     if not isinstance(value, str):
         return None
     text = value.strip()
@@ -55,7 +58,10 @@ def parse_end_date(value: object) -> datetime | None:
         return None
     if not _aware(parsed):
         return None
-    return parsed.astimezone(timezone.utc)
+    try:
+        return parsed.astimezone(timezone.utc)
+    except (OverflowError, ValueError):  # PR #342 review (Codex 6185588835 P2): e.g. 0001-01-01T00:00:00+01:00
+        return None
 
 
 def hours_to_expiry(end_date: object, now: datetime) -> float | None:

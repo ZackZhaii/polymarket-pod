@@ -51,7 +51,7 @@ from typing import Any, Iterable, Mapping
 
 from src.book_staleness import book_age_problem, parse_book_ts
 from src.daily_loss import SIDES, counts_today
-from src.ledger_store import KIND_FIELD, SETTLEMENT_KIND, counts, is_writeoff, leg_key
+from src.ledger_store import FILL_ID_FIELD, KIND_FIELD, SETTLEMENT_KIND, counts, is_writeoff, leg_key
 from src.thresholds import LEDGER_OPEN_EPS, MAX_BOOK_AGE_S
 
 SOURCE_BID_LADDER = "bid_ladder"
@@ -284,6 +284,9 @@ def positions(rows: Iterable[dict[str, Any]], today: str, ids: Iterable[str] | N
         key = leg_key(row.get("market"), row.get("token_id"))
         leg = legs.setdefault(key, LegPosition())
         if is_writeoff(row):  # issue #197: moves nothing; the leg's cost is realized (src/daily_loss.py)
+            if FILL_ID_FIELD not in row:  # PR #342 review (Codex 6185588835 P1): never clears a leg without its id
+                result.problems.append(f"leg_marks_invalid_row:{label}")
+                continue
             leg.written_off = abs(leg.shares) > LEDGER_OPEN_EPS
             continue
         if is_today and qty > 0 and abs(leg.shares) > LEDGER_OPEN_EPS and (leg.shares > 0) != (side == "buy"):

@@ -58,7 +58,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from src.book_staleness import parse_book_ts
-from src.ledger_store import counts, is_writeoff, leg_key
+from src.ledger_store import FILL_ID_FIELD, counts, is_writeoff, leg_key
 from src.thresholds import LEDGER_OPEN_EPS
 
 SIDES = ("buy", "sell")
@@ -147,7 +147,8 @@ def daily_loss(rows: Iterable[dict[str, Any]], today: str, ids: Iterable[str] | 
             amount = writeoff_amount(leg)
             booked = _number(row.get("writeoff_usd"))
             shares = _number(row.get("writeoff_shares"))
-            if (amount is None or leg["written_off"] or booked is None or shares is None
+            # PR #342 review (Codex 6185588835 P1): a write-off without its fill_id never clears a leg
+            if (amount is None or leg["written_off"] or booked is None or shares is None or FILL_ID_FIELD not in row
                     or abs(shares - abs(leg["shares"])) > LEDGER_OPEN_EPS
                     or not _writeoff_amount_ok(row, booked, amount, abs(leg["shares"]))):
                 result.problems.append(f"daily_loss_invalid_writeoff:{label}")

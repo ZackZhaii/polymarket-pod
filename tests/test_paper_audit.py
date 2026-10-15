@@ -460,8 +460,9 @@ def test_a_bus_fill_with_a_settlements_fill_id_fails(tmp_path, capsys):
 
 
 def test_a_settlement_row_without_a_fill_id_is_a_named_problem(tmp_path, capsys):
-    """NEW-3b: 结算行仍需有 fill_id，缺失照样报 problem. Both rows below are pre-Task-AF legacy
-    rows (no fill_id), so ledger_store.verify passes and the audit itself must name the defect."""
+    """NEW-3b: 结算行仍需有 fill_id，缺失照样报 problem. Both rows below sit in the legacy prefix (no fill_id).
+    PR #342 review (Codex 6185588835 P1): a kind row is never a legacy row, so ledger_store.verify itself now
+    refuses it (missing_fill_id) and the audit refuses to join: verdict fail, exit 1."""
     ledger = tmp_path / "paper.jsonl"
     legacy_buy = {"ts": "2026-10-11T00:00:00Z", "market": "m1", "token_id": "t1", "side": "buy",
                   "shares": 10.0, "notional_usd": 5.0, "fee_rate": 0.0, "fee_usd": 0.0,
@@ -473,7 +474,8 @@ def test_a_settlement_row_without_a_fill_id_is_a_named_problem(tmp_path, capsys)
     code = paper_audit.main(argv_for(ledger, bus))
     report = json.loads(capsys.readouterr().out)
     assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
-    assert "ledger:settlement_without_fill_id" in report["problems"]
+    assert any(p.startswith("ledger:verify:missing_fill_id:legacy:2:") for p in report["problems"])
+    assert report["ledger_verified"] is False
 
 
 # --- acceptance 5: hypothetical copies join; legacy rows are UNKNOWN, never guessed --------------

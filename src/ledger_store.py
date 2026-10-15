@@ -19,6 +19,10 @@ nothing more. All of this is tightening only and fails closed. No orders, keys o
     (the old schema could not tell a retry from a second fill), so they are never collapsed and no
     exposure is hidden. Appends never change earlier line numbers, so the id is stable.
     A row without ``fill_id`` after an id'd row is ``missing_fill_id`` (invalid state).
+    PR #342 review (Codex 6185588835 P1): a row that carries ``kind`` (a settlement or write-off row, or any
+    other kind) postdates Task AF, so it is never a legacy row: without ``fill_id`` it fails ``verify`` with
+    ``missing_fill_id:<derived id>`` even in the legacy prefix, and its control fields are checked like a modern
+    row's. A legacy-prefix write-off without an id used to skip every check and still mark its leg written off.
 
 (b) Atomic writes
     ``atomic_append`` writes the old bytes plus the new line to a temp file in the same
@@ -82,7 +86,8 @@ nothing more. All of this is tightening only and fails closed. No orders, keys o
     row: ``kind`` "writeoff", ``risk_decision`` "writeoff", a real row (hypothetical false, counts_toward_risk
     true) that moves nothing: ``shares``, ``notional_usd``, both prices, ``fee_rate`` and ``fee_usd`` are all 0,
     so cash, shares and cost basis stay as they were (the leg still holds every limit until it settles). It
-    names the closing side of the leg, ``writeoff_shares`` (the whole open leg, exactly), ``writeoff_usd``
+    names the closing side of the leg, carries a ``fill_id`` that starts with ``writeoff-`` (none or any other is
+    ``invalid_writeoff``), ``writeoff_shares`` (the whole open leg, exactly), ``writeoff_usd``
     (finite, >= 0: the amount realized, checked by src/daily_loss.py against the average-cost replay) and
     ``closed_ts`` (the market's zoned closedTime). RiskGate's correction (#197, issuecomment-6109537257): shares
     held since the start of the UTC day are written off at max(cost, start-of-day mark), so the row also carries
@@ -101,7 +106,7 @@ import math
 import os
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +129,7 @@ SETTLEMENT_DECISION = "settlement"
 SETTLEMENT_PAYOUTS = (0.0, 1.0)
 WRITEOFF_KIND = "writeoff"  # issue #197 (Task CK)
 WRITEOFF_DECISION = "writeoff"
+WRITEOFF_ID_PREFIX = "writeoff-"  # a write-off row's fill_id (src/market_close.writeoff_fill_id)
 KIND_DECISIONS = {SETTLEMENT_KIND: SETTLEMENT_DECISION, WRITEOFF_KIND: WRITEOFF_DECISION}
 
 
@@ -222,6 +228,9 @@ def writeoff_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
 
     shares, amount = number("writeoff_shares"), number("writeoff_usd")
     ok = (row.get("hypothetical") is False and row.get("counts_toward_risk") is True
+          # PR #342 review (Codex 6185588835 P1): its own write-off fill_id (src/market_close.writeoff_fill_id,
+          # derived from the leg); a row without one is never valid
+          and isinstance(row.get(FILL_ID_FIELD), str) and row[FILL_ID_FIELD].startswith(WRITEOFF_ID_PREFIX)
           and row.get("side") in SIDES
           and all(number(name) == 0.0 for name in ("shares", "notional_usd", "market_price", "effective_price",
                                                    "fee_rate", "fee_usd"))
@@ -249,7 +258,13 @@ def _zoned_ts(value: object) -> bool:
         parsed = datetime.fromisoformat(text)
     except ValueError:
         return False
-    return parsed.tzinfo is not None and parsed.utcoffset() is not None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return False
+    try:  # PR #342 review (Codex 6185588835 P2): a stamp that cannot be read in UTC is not a timestamp
+        parsed.astimezone(timezone.utc)
+    except (OverflowError, ValueError):
+        return False
+    return True
 
 
 def leg_key(market: object, token_id: object) -> tuple[str, str]:
@@ -406,6 +421,11 @@ def replay(rows: list[dict[str, Any]], ids: list[str]) -> tuple[float, dict[tupl
     control: list[str] = []
     for row, fill_id in zip(rows, ids):
         if FILL_ID_FIELD in row:
+            control.extend(control_field_problems(row, fill_id))
+        elif KIND_FIELD in row:
+            # PR #342 review (Codex 6185588835 P1): a kind row (settlement / write-off) postdates Task AF, so it is
+            # never a legacy row: without its fill_id it is refused, and its fields are checked all the same.
+            control.append(f"missing_fill_id:{fill_id}")
             control.extend(control_field_problems(row, fill_id))
     if control:
         return PAPER_EQUITY_USD, {}, control

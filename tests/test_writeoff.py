@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -901,3 +902,180 @@ def test_the_tracker_needs_both_clocks_to_agree():
     tracker.step(first, T0)
     unmeasured = dataclasses.replace(first, observed_at=T0 + timedelta(seconds=31), observed_mono=None)
     assert tracker.step(unmeasured, T0 + timedelta(seconds=31)) == (None, market_close.CLOCK_DISAGREE)
+
+
+# --- PR #342 review (Codex 6185588835, head 0ed5029) ------------------------------------------------------
+# P1: a kind row (write-off / settlement) without fill_id in the legacy prefix used to skip every control-field
+# check and still mark the leg written off (missing closed_ts, writeoff_sod_late=0: next-day loss 10 -> 0).
+
+def _write_lines(path: Path, rows) -> None:
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+
+def _legacy_writeoff(**change):
+    legacy_buy = fill("buy", 20.0, 0.5, ts=YESTERDAY, market="m", token="t")  # no fill_id: a pre-Task-AF row
+    row = market_close.plan_writeoffs([legacy_buy], ["legacy:1:x"], [close("m")], DAY1).rows[0]
+    row.update(change)
+    return legacy_buy, row
+
+
+def _malformed_legacy_writeoff():
+    legacy_buy, row = _legacy_writeoff(writeoff_sod_late=0)
+    del row["fill_id"], row["closed_ts"]
+    return [legacy_buy, row]
+
+
+def _well_formed_legacy_writeoff():
+    legacy_buy, row = _legacy_writeoff()
+    del row["fill_id"]
+    return [legacy_buy, row]
+
+
+def _legacy_settlement():
+    legacy_buy = fill("buy", 20.0, 0.5, ts=YESTERDAY, market="m", token="t")
+    return [legacy_buy, settle("m", "t", 20.0, 1.0, DAY1)]
+
+
+@pytest.mark.parametrize("make", [_malformed_legacy_writeoff, _well_formed_legacy_writeoff, _legacy_settlement])
+def test_a_kind_row_without_fill_id_in_a_legacy_prefix_is_refused(env, make):
+    _write_lines(env["ledger"], make())
+    read = ledger_store.read_ledger(env["ledger"])[1]
+    assert read.problems == []  # the strict reader keeps it (legacy prefix) ...
+    problems = ledger_store.verify(read)
+    assert f"missing_fill_id:{read.ids[1]}" in problems  # ... and verify refuses it
+
+
+def test_a_malformed_legacy_writeoff_does_not_clear_the_next_day_loss(env):
+    """Codex repro: the legacy buy alone carries its worst-case loss on day 2; the malformed write-off row used to
+    take it to 0. Now the ledger is invalid: no loss figure at all and RiskGate vetoes invalid_risk_state."""
+    rows = _malformed_legacy_writeoff()
+    _write_lines(env["ledger"], rows[:1])
+    env["clock"]["now"] = DAY2
+    baseline = paper_ledger.load_state("x", "t")["daily_loss_usd"]
+    assert baseline is not None and baseline > 0
+    _write_lines(env["ledger"], rows)
+    state = paper_ledger.load_state("x", "t")
+    assert state["daily_loss_usd"] is None
+    assert any(p.startswith("missing_fill_id:legacy:2:") for p in state["ledger_problems"])
+    assert "invalid_risk_state" in paper_ledger.evaluate(_intent(), load_risk(), state).reasons
+    assert paper_ledger.apply_writeoffs([close("m")])["booked"] == []  # nothing more is booked either
+
+
+def test_replay_checks_a_kind_row_without_fill_id_like_a_modern_row():
+    rows = _malformed_legacy_writeoff()
+    _, _, problems = ledger_store.replay(rows, ["legacy:1:a", "legacy:2:b"])
+    assert "missing_fill_id:legacy:2:b" in problems and "invalid_writeoff:legacy:2:b" in problems
+
+
+def test_a_writeoff_row_without_a_writeoff_fill_id_is_refused(env):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    row = market_close.plan_writeoffs(_rows(env["ledger"]), ["ck-0000"], [close("m")], DAY1).rows[0]
+    with pytest.raises(ledger_store.LedgerIntegrityError) as caught:
+        ledger_store.book(env["ledger"], {**row, "fill_id": "f00d" * 8})  # a plain fill's id
+    assert any("invalid_writeoff" in problem for problem in caught.value.problems)
+    assert row["fill_id"] == market_close.writeoff_fill_id("m", "t")
+    ledger_store.book(env["ledger"], row)  # the derived id books
+
+
+def test_daily_loss_and_leg_marks_ignore_no_writeoff_without_fill_id():
+    """Defence in depth for callers that pass rows without the strict reader: the leg is never cleared."""
+    rows = _malformed_legacy_writeoff()
+    day = daily_loss.daily_loss(rows, "2026-09-02")
+    assert any(p.startswith("daily_loss_invalid_writeoff") for p in day.problems)
+    from src import leg_marks
+    pos = leg_marks.positions(rows, "2026-09-02")
+    assert any(p.startswith("leg_marks_invalid_row") for p in pos.problems)
+
+
+# P1: the confirmation interval is measured from the closed=true response, never padded by the default view.
+
+def _slow_default_gamma(row, clock):
+    """``clock.slow`` seconds pass inside the close step's trailing default-view read (src/market_close.gamma_read);
+    settlement's own earlier reads of the market (src/resolution_watch) are not slowed."""
+    inner = RunnerGamma(row)
+
+    def getter(url):
+        out = inner(url)
+        from_close_step = any(frame.f_globals.get("__name__") == "src.market_close"
+                              for frame, _ in traceback.walk_stack(None))
+        if clock.slow and from_close_step and "id=held" in url and "closed=true" not in url:
+            clock.advance(clock.slow)  # the trailing default-view read is slow
+            clock.slow = 0.0
+        return out
+    return getter
+
+
+def test_a_slow_default_view_read_does_not_pad_the_confirmation_interval(runner):
+    """Two closed=true responses 10 s apart; the second tick's default-view read takes another 30 s. The old stamp
+    (after both reads) measured 40 s and wrote off; the close responses are only 10 s apart: no write-off."""
+    clock = _Time(RUN_NOW)
+    _timed_runner(runner, clock)
+    getter = _slow_default_gamma(gamma("held", closed_time=runner["closed_at"]), clock)
+    _tick_at(runner, getter, clock)  # close response at +0 s
+    clock.advance(10.0)
+    clock.slow = 30.0
+    _tick_at(runner, getter, clock)  # close response at +10 s, default view finishes at +40 s
+    assert _writeoffs(runner["paper"]) == []
+    clock.advance(25.0)  # +65 s: 65 s after the pending (first) close response at +0 s: confirmed now
+    _tick_at(runner, getter, clock)
+    assert len(_writeoffs(runner["paper"])) == 1
+
+
+def test_gamma_read_stamps_the_close_response_not_the_trailing_default_view():
+    stamps = {"wall": T0, "mono": 0.0}
+
+    def getter(url):
+        is_closed = parse_qs(urlsplit(url).query).get("closed") == ["true"]
+        if not is_closed:  # the default view runs after the close response and takes 30 s
+            stamps["wall"] += timedelta(seconds=30)
+            stamps["mono"] += 30.0
+            return []
+        stamps["wall"] += timedelta(seconds=2)
+        stamps["mono"] += 2.0
+        return [gamma()]
+
+    obs = market_close.gamma_read(getter, "m", T0, clock=lambda: stamps["wall"], monotonic=lambda: stamps["mono"])
+    assert obs.problem is None and obs.observed_at == T0 + timedelta(seconds=2) and obs.observed_mono == 2.0
+
+
+# P2: a closedTime whose UTC conversion overflows is an invalid read (pending dropped), never an exception.
+
+OVERFLOW_TIMES = ["0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"]
+
+
+@pytest.mark.parametrize("raw", OVERFLOW_TIMES)
+def test_an_overflowing_closed_time_is_unparseable_not_an_exception(raw):
+    from src import expiry_rule
+    assert expiry_rule.parse_end_date(raw) is None
+    assert expiry_rule.expiry_problem(raw, T0) == expiry_rule.INVALID_END_DATE
+    obs = market_close.observation_from_row("m", gamma(closed_time=raw), T0)
+    assert obs.closed_time is None and market_close.predicate(obs, T0) == "closed_time_invalid"
+    assert market_close.gamma_read(Gamma(closed=[gamma(closed_time=raw)]), "m", T0).closed_time is None
+    tracker = market_close.CloseTracker()
+    tracker.step(_obs(gamma()), T0)
+    assert tracker.step(obs, T0 + timedelta(seconds=31)) == (None, "confirmation_failed:closed_time_invalid")
+    assert tracker.first == {}  # the pending read is dropped
+
+
+@pytest.mark.parametrize("raw", OVERFLOW_TIMES)
+def test_an_overflowing_closed_time_drops_the_pending_read_in_the_runner(runner, raw):
+    good = gamma("held", closed_time=runner["closed_at"])
+    getter = RunnerGamma(good)
+    _iterate(runner, getter, RUN_NOW)  # pending
+    getter.row = gamma("held", closed_time=raw)
+    report = _iterate(runner, getter, RUN_NOW + timedelta(seconds=31))  # no exception escapes the runner
+    assert "market_close_halt" not in report.reasons and _writeoffs(runner["paper"]) == []
+    getter.row = good
+    _iterate(runner, getter, RUN_NOW + timedelta(seconds=62))  # a new first read, not a confirmation
+    assert _writeoffs(runner["paper"]) == []
+    _iterate(runner, getter, RUN_NOW + timedelta(seconds=93))
+    assert len(_writeoffs(runner["paper"])) == 1
+
+
+@pytest.mark.parametrize("raw", OVERFLOW_TIMES)
+def test_a_writeoff_or_settlement_row_with_an_overflowing_closed_ts_is_refused(env, raw):
+    _book(env["ledger"], [fill("buy", 20.0, 0.5, market="m", token="t")])
+    row = market_close.plan_writeoffs(_rows(env["ledger"]), ["ck-0000"], [close("m")], DAY1).rows[0]
+    with pytest.raises(ledger_store.LedgerIntegrityError):
+        ledger_store.book(env["ledger"], {**row, "closed_ts": raw})
+    assert ledger_store._zoned_ts(raw) is False
