@@ -1815,7 +1815,7 @@ Status: done. Claimed by Poly桥接 at Poly指挥's request. Docs, lint and test
 
 ## Task EF — Issue #350: fees._finite fails closed on 10**400 (no OverflowError)
 
-Status: todo. Registered by Poly指挥 (Risk gaps backlog #46, pure code). Non-KEY, non-HOLD. Baseline ab7739a.
+Status: done (codex-local, 2026-10-16). Registered by Poly指挥 (Risk gaps backlog #46, pure code). Non-KEY, non-HOLD. Registration baseline ab7739a; implementation baseline 269e053.
 
 - `src/fees.py` `_finite` returns None on huge ints (±10**400); `fee_per_share` returns None when fee_rate,
   market_price or effective_price overflows. `ledger_store.verify` reports a problem and `paper_ledger.load_state`
@@ -1823,6 +1823,11 @@ Status: todo. Registered by Poly指挥 (Risk gaps backlog #46, pure code). Non-K
 - Tests and acceptance: issue #350 comment 6206469807 (20 strict xfails + control). Boundary: src/fees.py (+ ledger
   store / paper ledger only to catch this overflow), new tests. Full pytest + guard 12/12.
   config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+- Implemented: fees._finite catches conversion OverflowError; ledger_store rejects overflow in the three fee inputs
+  as invalid_fee, preserving the existing invalid-price notional fallback. paper_ledger needs no change.
+- The draft cases are 21 normal assertions with a complete conservation snapshot and exact invalid_fee reasons.
+  Focused suite: 347 passed. Final released-state full suite: 5638 passed, 8 skipped, 9 existing xfailed, 0 failed.
+  First full run's sole failure (active claim against released-state assertion) is retained in the handoff evidence.
 
 ## Task EG — Issue #349: three settlement-blocking prefixes actually written
 
@@ -1836,6 +1841,11 @@ Status: todo. Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-K
   tests. Full pytest + guard 12/12. config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 ## Latest
+- 2026-10-16: Task EF (#350), codex-local: oversized fee_rate/market_price/effective_price fail closed; ledger reports invalid_fee, load_state loss=None.
+- Validation: TDD 20 expected failures + 1 control; focused 347 passed; released-state full pytest 5638 passed, 8 skipped, 9 existing xfailed, 0 failed. First full queue-state failure retained.
+- Non-author QC: internal capability_audit checked frozen code/tests, 12 oversized-integer cases, 12 existing-price-fallback cases and 14 finite/type controls; actual receipts accompany the PR.
+- Safety: risk.toml unchanged (0aea23af…bc04), live_enabled=false; no threshold/fee formula/signing/order/runtime change; paper_ledger unchanged.
+- Handoff: EF released done, claim=null; EG (#349) remains todo and was not taken. State is proposed through this base=dev PR; author does not self-merge.
 - 2026-10-16: Registered Task EF (#350, fees._finite overflow) then Task EG (#349, settlement-blocking prefixes) as todo; Risk gaps pure code, non-KEY. #353 (Gamma keyset, after #342) takes the next letter when registered. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task EE: #343 follow-ups — malformed m1_rest error_streak documented as global halt heartbeat_malformed:m1_rest (not warn-only); sentinel_tick F541 fix; tests: seal mid-round does not count toward error_streak, missing field counts as 0. Non-KEY, no threshold change. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task ED (issue #138): m1_rest heartbeat progress.error_streak (consecutive all-asset REST sample failures; success clears); Sentinel warn rest_error_streak at REST_ERROR_STREAK_ALERT=3 (M2 pending); malformed streak → global halt heartbeat_malformed:m1_rest. Monitoring tighten only, non-KEY. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
