@@ -462,3 +462,29 @@ def test_o_commit_if_allowed_vetoes_on_ledger_verify_failed_halts_global_and_boo
     assert _global_halt()
     assert [h["market"] for h in _blocking_market_halts()] == [rig.MARKET_ID]
     assert env["paper"].read_bytes() == before  # nothing booked
+
+
+# ---------------------------------------------------------------- PR #360 review 6215179366 (Poly风控, head d0d67cf)
+
+@pytest.mark.parametrize("order", list(__import__("itertools").permutations(range(3))))
+def test_p_a_conflict_halts_every_market_of_every_snapshot_of_the_condition_in_every_order(order):
+    """P1 (Codex 6214998517): legacy(a), [a,b]->a, [x,y]->x of one condition. Every order halts all four markets
+    (the union of the tokens of every snapshot seen), so a global resume alone never lets mB settle; nothing settles."""
+    rows = [fill("buy", 5.0, 0.5, _stamp(NOW), market=f"m{t.upper()}", token=t) for t in "abxy"]
+    trio = [_legacy("0xc", "a"), _snap("0xc", ["a", "b"], "a"), _snap("0xc", ["x", "y"], "x")]
+    planned = settlement.plan(rows, [f"i{i}" for i in range(4)], [trio[i] for i in order], _stamp(NOW))
+    assert planned.rows == [] and planned.problems
+    assert all(p.startswith("settlement_conflict:0xc:") for p in planned.problems)
+    for reason in {r for _m, r in planned.market_halts}:
+        assert {m for m, r in planned.market_halts if r == reason} == {"mA", "mB", "mX", "mY"}
+    assert all(settlement.blocks_settlement(r) for _m, r in planned.market_halts)
+
+
+def test_p2_token_in_two_conditions_halts_both_conditions_markets():
+    """Same rule for the other conflict: a token in two conditions halts every market of both conditions."""
+    rows = [fill("buy", 5.0, 0.5, _stamp(NOW), market=m, token=t)
+            for m, t in (("mA", "t1"), ("mB", "t2"), ("mC", "t3"), ("mZ", "t9"))]
+    planned = settlement.plan(rows, ["i0", "i1", "i2", "i3"],
+                              [_snap("0xa", ["t1", "t2"], "t1"), _snap("0xb", ["t3", "t1"], "t3")], _stamp(NOW))
+    assert planned.rows == []
+    assert {m for m, _r in planned.market_halts} == {"mA", "mB", "mC"}

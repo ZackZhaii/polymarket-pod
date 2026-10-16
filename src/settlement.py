@@ -104,6 +104,12 @@ def _plan_market_halt(result: Plan, reason: str, markets: Iterable[str]) -> None
             result.market_halts.append((market, reason))
 
 
+def _defer_market_halt(conflicts: list[tuple[str, list[str]]], reason: str, conditions: list[str]) -> None:
+    """PR #360 review 6215179366: a settlement_conflict market halt, planned after the snapshot loop over the
+    union of every token the conditions' confirmed snapshots name (plan() below)."""
+    conflicts.append((reason, conditions))
+
+
 def _markets_touching(rows: Iterable[dict[str, Any]], tokens: Iterable[str], condition: str | None = None) -> list[str]:
     """Issue #349: the ledger markets a settlement contradiction is about: every row (open, closed or settled) on
     one of ``tokens``, or a settlement row booked from ``condition``."""
@@ -194,10 +200,16 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
     by_condition: dict[str, dict[str, Any]] = {}
     mapped_by_condition: dict[str, dict[str, Any]] = {}  # the first explicit outcome_token_ids mapping per condition
     full_mapping: set[str] = set()  # PR #360 review (P2): conditions with an explicit outcome_token_ids mapping
+    # PR #360 review 6215179366 (P1): every token any confirmed snapshot of a condition names (agreeing or not), and
+    # the conflicts found; their market halts are written AFTER the loop over that whole union (fail closed), so a
+    # market seen in another snapshot of the condition (before or after the conflicting one) is never left out
+    seen_tokens: dict[str, set[str]] = {}
+    conflicts: list[tuple[str, list[str]]] = []  # (reason, conditions it is about)
     for snap in resolutions:
         if not confirmed(snap):
             pending.update(_tokens(snap))
             continue
+        seen_tokens.setdefault(str(snap.get("condition_id")), set()).update(_tokens(snap))
         # PR #194 review (P1): consistency is per condition, not per token. Two confirmed snapshots of one
         # condition with another winner or token mapping ([a,b]->a vs [c,b]->c) are a contradiction.
         condition = str(snap.get("condition_id"))
@@ -218,8 +230,7 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
                     break
             if conflict is not None:
                 result.problems.append(f"settlement_conflict:{condition}:{conflict}")
-                _plan_market_halt(result, f"settlement_conflict:{condition}:{conflict}",
-                                  _markets_touching(ledger_rows, _tokens(prior) + _tokens(snap), condition))
+                _defer_market_halt(conflicts, f"settlement_conflict:{condition}:{conflict}", [condition])
                 continue
             # PR #360 review (P2): an agreeing snapshot of the same condition is merged (a legacy snapshot and a
             # full one, in either order, give the same tokens), never dropped
@@ -234,11 +245,17 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
             other = final.get(token)
             if other is not None and other[1].get("condition_id") != snap.get("condition_id"):
                 result.problems.append(f"settlement_conflict:{token}:token_in_two_conditions")
-                _plan_market_halt(result, f"settlement_conflict:{token}:token_in_two_conditions",
-                                  _markets_touching(ledger_rows, [token]))
+                # PR #360 review 6215179366: both conditions' whole token union, not only the shared token
+                _defer_market_halt(conflicts, f"settlement_conflict:{token}:token_in_two_conditions",
+                                   [str(other[1].get("condition_id")), condition])
                 continue
             if other is None:
                 final[token] = (payout, snap)
+    for reason, conds in conflicts:
+        markets: set[str] = set()
+        for cond in conds:
+            markets.update(_markets_touching(ledger_rows, seen_tokens.get(cond, set()), cond))
+        _plan_market_halt(result, reason, markets)
     # Issue #349 (Task EG): a booked settlement read again with another result. The confirmed snapshot its token
     # maps to now names another condition, winner or payout than the booked row: a contradiction (settle nothing)
     # and a market halt of that market. PR #360 review (P1): checked BEFORE returning on any other problem, so every
