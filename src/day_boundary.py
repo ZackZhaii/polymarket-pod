@@ -32,7 +32,10 @@ def day_start_lag_s(now: object) -> float | None:
         stamp = None
     if stamp is None:
         return None
-    stamp = stamp.astimezone(timezone.utc)
+    try:
+        stamp = stamp.astimezone(timezone.utc)
+    except (OverflowError, ValueError):  # PR #342 (Codex 6193266276): out of range in UTC: fail closed
+        return None
     midnight = stamp.replace(hour=0, minute=0, second=0, microsecond=0)
     lag = (stamp - midnight).total_seconds()
     return lag if lag >= 0 else None
