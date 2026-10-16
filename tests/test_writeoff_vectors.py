@@ -14,6 +14,7 @@ import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -88,6 +89,8 @@ def _seed_writeoffs(path: Path, seeds: list[dict]) -> None:
                "writeoff_shares": src["shares"], "writeoff_usd": src["cost_basis_usd"],
                "closed_ts": src["evidence"]["closed_time"], "close_first_seen_ts": src["evidence"]["first_read_t"],
                "close_confirmed_ts": src["evidence"]["confirm_t"], "close_confirmed_by": "gamma_reread"}
+        if "writeoff_sod_late" in src:  # PR #342 review (Codex 6213024425): the seed's own flag (v3.6 rows carry it);
+            row["writeoff_sod_late"] = src["writeoff_sod_late"]  # dropping it fails the #255 recompute in daily_risk_loss
         key = row["fill_id"]
         if key not in first:
             first[key] = ledger_store.book(path, row)
@@ -110,6 +113,25 @@ POST_195_UNREALIZED = {
     ("WO-29", "2026-10-12T12:01:00Z"): 9.35,
     ("WO-30", "2026-10-12T10:00:00Z"): 0.15,
 }
+
+
+# PR #342 review (Codex 6213024425, P2): the production daily loss (paper_ledger.daily_risk_loss, what RiskGate and
+# preflight use) is fees + gross cost losses + write-offs + the closed-part reference topup + open-leg losses. The v3
+# vectors leave the topup out. The topup is an Owner-approved tightening that predates them (Codex回迁, 2026-10-13,
+# src/leg_marks.closed_loss_topup): a part closed by a SETTLEMENT today keeps its reference loss as if it exited at
+# the worst no-book value (a confirmed winner is not credited back within the UTC day; its gain stays a separate
+# realized gain). It never applies to a write-off (``written_off``: already realized at the reference). Expected
+# production topup per (vector, step); every other step must have a topup of exactly 0:
+SETTLED_WINNER_TOPUP = {
+    ("WO-37", "2026-10-12T12:01:45Z"): 9.85,  # mA settled as the winner (cost 9.85); mB written off (9.80)
+    ("WO-43", "2026-10-13T10:05:00Z"): 9.85,  # mA settled as the winner after the resume (cost 9.85)
+}
+
+
+def _production_risk_loss(read, t: str, books: dict, clock_ok: bool) -> dict:
+    """The real paper_ledger.daily_risk_loss with this step's books (mark_books patched to the vector's books)."""
+    with mock.patch.object(paper_ledger, "mark_books", lambda _path: books):
+        return paper_ledger.daily_risk_loss(read.rows, list(read.ids), t, clock_ok=clock_ok)
 
 
 @pytest.mark.parametrize("vector", VECTORS, ids=[v["id"] for v in VECTORS])
@@ -230,8 +252,12 @@ def _run(env, vector, *, clock_ok: bool = True, check_parts: bool = True) -> dic
         # verified clock, clock_ok=True; a clock anomaly is covered by tests/test_da_day_start_clock.py).
         unrealized = paper_ledger.daily_unrealized(read.rows, list(read.ids), t, books, clock_ok=clock_ok)
         assert unrealized["problems"] == [], (label, unrealized["problems"])
+        risk = _production_risk_loss(read, t, books, clock_ok)
+        assert risk["problems"] == [], (label, risk["problems"])  # includes the #255 write-off uplift recompute
+        topup = SETTLED_WINNER_TOPUP.get((vector["id"], t), 0.0)
+        assert risk["marks"]["realized_topup_usd"] == pytest.approx(topup, abs=TOL), (label, risk["marks"])
         seen[t] = {"late": unrealized["late"], "unrealized_usd": unrealized["loss_usd"],
-                   "daily_loss_usd": day.total_usd + unrealized["loss_usd"]}
+                   "daily_loss_usd": risk["loss_usd"]}
         if not check_parts:
             continue
         parts = dict(exp["parts"])
@@ -245,7 +271,9 @@ def _run(env, vector, *, clock_ok: bool = True, check_parts: bool = True) -> dic
         for name, value in parts.items():
             assert got[name] == pytest.approx(value, abs=TOL), (label, name, got, parts)
         total = day.total_usd + unrealized["loss_usd"]
-        assert total == pytest.approx(expected_total, abs=TOL), (label, got)
+        assert total == pytest.approx(expected_total, abs=TOL), (label, got)  # the vector's own parts
+        # the production total (Codex 6213024425): the vector total plus the settled-winner topup above
+        assert risk["loss_usd"] == pytest.approx(expected_total + topup, abs=TOL), (label, risk["loss_usd"], got)
         assert day.realized_gain_usd == pytest.approx(exp["realized_gain_usd"], abs=TOL), label
         open_legs = sorted(f"{m}|{tok}" for m, tok in market_close.open_legs(read.rows))
         assert open_legs == sorted(exp["occupancy"]["legs"]) and len(open_legs) == exp["occupancy"]["count"], label
@@ -278,3 +306,39 @@ def test_poly_risk_225_control_with_clock_anomaly_is_late_030(env):
     seen = _run(env, _vector("WO-27-ONTIME"), clock_ok=False, check_parts=False)
     for t in ("2026-10-14T00:00:30Z", "2026-10-14T13:00:00Z"):
         assert seen[t]["late"] is True and seen[t]["unrealized_usd"] == pytest.approx(0.30, abs=TOL), (t, seen[t])
+
+
+def test_the_settled_winner_topup_pushes_wo_37_over_the_daily_cap(env):
+    """Codex 6213024425: a case where the topup decides the veto. WO-37 at 12:01:45 is 9.80 (write-off) + 9.85
+    (settled winner topup) = 19.65 in production. A 12.00 realized loss on another market today makes it 31.65:
+    over the 30 USD cap (max_daily_loss_pct x paper equity), vetoed; without the topup (vector formula) it is 21.80,
+    under the cap, so this veto exists only because the production path counts the topup."""
+    from src.intent_builder import PAPER_EQUITY_USD
+    from src.podlib import load_risk
+    from src.risk_gate import Intent
+
+    vector = next(v for v in VECTORS if v["id"] == "WO-37")
+    seen = _run(env, {**vector, "inputs": {**vector["inputs"], "steps": vector["inputs"]["steps"][:3]},
+                      "expected": {**vector["expected"], "steps": vector["expected"]["steps"][:3]}},
+                check_parts=False)
+    t = "2026-10-12T12:01:45Z"
+    assert seen[t]["daily_loss_usd"] == pytest.approx(19.65, abs=TOL)
+    cap = load_risk()["max_daily_loss_pct"] * PAPER_EQUITY_USD
+    assert cap == pytest.approx(30.0)
+    for row in ({"fill_id": "c1", "side": "buy", "effective_price": 0.6, "notional_usd": 12.0},
+                {"fill_id": "c2", "side": "sell", "effective_price": 0.0, "notional_usd": 0.0}):
+        ledger_store.book(env, _fill({"ts": "2026-10-12T12:02:00Z", "market": "mC", "token_id": "mC-Y",
+                                      "shares": 20.0, "fee_usd": 0.0, **row}))
+    read = ledger_store.read_ledger(env)[1]
+    risk = _production_risk_loss(read, "2026-10-12T12:03:00Z", {}, True)
+    assert risk["problems"] == [] and risk["loss_usd"] == pytest.approx(31.65, abs=TOL)
+    without_topup = risk["loss_usd"] - risk["marks"]["realized_topup_usd"]
+    assert without_topup == pytest.approx(21.80, abs=TOL) and without_topup < cap
+    with mock.patch.object(paper_ledger, "mark_books", lambda _path: {}), \
+            mock.patch.object(paper_ledger, "utc_now", lambda: "2026-10-12T12:03:00Z"):
+        state = paper_ledger.load_state("mD", "mD-Y", clock_ok=True)
+        intent = Intent(strategy="ck-test", market="mD", side="buy", model_prob=0.6, market_price=0.4,
+                        assumed_slippage=0.005, fee_rate=0.0, liquidity_usd=50_000.0, spread=0.01, token_id="mD-Y",
+                        book_ts="2026-10-12T12:02:59Z", tags=("ck-test",), min_order_size=5.0)
+        assert state["daily_loss_usd"] == pytest.approx(31.65, abs=TOL)
+        assert "max_daily_loss" in paper_ledger.evaluate(intent, load_risk(), state).reasons
