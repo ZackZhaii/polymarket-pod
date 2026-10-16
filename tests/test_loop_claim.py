@@ -88,8 +88,8 @@ def test_pin_guard_rejects_live_without_editing_the_file():
     assert RISK_PATH.read_bytes() == before
 
 
-def test_repo_queue_has_i_done_and_no_open_task():
-    """After I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z, AA, AB, AC, AD, AE, AF, AG, AH, AI, AJ, AK, AL, AN, AQ, AR, AS, AU, AW, AY, BA, BC and BD close, the committed queue has no claim and no todo. The file is not written."""
+def test_repo_queue_has_ef_done_and_eg_next():
+    """The released queue has EF done, EG next and no claim; reading it changes no bytes."""
     path = loop_claim.STATE_PATH
     before = path.read_bytes()
     state = json.loads(before.decode("utf-8"))
@@ -190,6 +190,8 @@ def test_repo_queue_has_i_done_and_no_open_task():
     assert task_bj["status"] == "done" and task_bj["surface"] == "grok-bot"
     task_bl = next(task for task in state["tasks"] if task["id"] == "BL")
     assert task_bl["status"] == "done" and task_bl["surface"] == "grok-bot"
-    # Tasks EF (#350) then EG (#349) are queued todo; EF is first.
-    assert loop_claim.next_todo(state)["id"] == "EF"
+    # EF (#350) is complete; EG (#349) stays the next todo.
+    task_ef = next(task for task in state["tasks"] if task["id"] == "EF")
+    assert task_ef["status"] == "done" and task_ef["surface"] == "codex-local"
+    assert loop_claim.next_todo(state)["id"] == "EG"
     assert path.read_bytes() == before
