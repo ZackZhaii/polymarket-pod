@@ -1813,7 +1813,30 @@ Status: done. Claimed by Poly桥接 at Poly指挥's request. Docs, lint and test
 - Tests: a stop-seal mid-round leaves `error_streak` unchanged and publishes no heartbeat;
   a heartbeat without `error_streak` counts as 0 (no alert, no halt). No threshold value changed.
 
+## Task EF — Issue #350: fees._finite fails closed on 10**400 (no OverflowError)
+
+Status: todo. Registered by Poly指挥 (Risk gaps backlog #46, pure code). Non-KEY, non-HOLD. Baseline ab7739a.
+
+- `src/fees.py` `_finite` returns None on huge ints (±10**400); `fee_per_share` returns None when fee_rate,
+  market_price or effective_price overflows. `ledger_store.verify` reports a problem and `paper_ledger.load_state`
+  returns `daily_loss_usd=None` with `ledger_problems` (invalid_risk_state); nothing crashes.
+- Tests and acceptance: issue #350 comment 6206469807 (20 strict xfails + control). Boundary: src/fees.py (+ ledger
+  store / paper ledger only to catch this overflow), new tests. Full pytest + guard 12/12.
+  config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+## Task EG — Issue #349: three settlement-blocking prefixes actually written
+
+Status: todo. Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-KEY, non-HOLD. Baseline ab7739a.
+
+- `settlement_result_changed`, `settlement_conflict`, `invalid_settlement_payout` are in the blocking prefix tuple
+  but no `halt(` ever writes them. Write a scope=market, blocks_settlement halt (global halt kept). The three prefixes
+  stay and `blocks_settlement` keeps returning True for them; removing or weakening one is a risk change (Poly风控 +
+  家伟), not this task. Existing rejection tests (`tests/test_runner_settlement.py`) stay unchanged.
+- Tests and acceptance: issue #349 comment 6206470263 (4 strict xfails + control; correction comment below it). Boundary: src/settlement.py, new
+  tests. Full pytest + guard 12/12. config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
 ## Latest
+- 2026-10-16: Registered Task EF (#350, fees._finite overflow) then Task EG (#349, settlement-blocking prefixes) as todo; Risk gaps pure code, non-KEY. #353 (Gamma keyset, after #342) takes the next letter when registered. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task EE: #343 follow-ups — malformed m1_rest error_streak documented as global halt heartbeat_malformed:m1_rest (not warn-only); sentinel_tick F541 fix; tests: seal mid-round does not count toward error_streak, missing field counts as 0. Non-KEY, no threshold change. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task ED (issue #138): m1_rest heartbeat progress.error_streak (consecutive all-asset REST sample failures; success clears); Sentinel warn rest_error_streak at REST_ERROR_STREAK_ALERT=3 (M2 pending); malformed streak → global halt heartbeat_malformed:m1_rest. Monitoring tighten only, non-KEY. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task EC: EXIT_CODES.md tick order (scan → ingest/seal → decide → commit) and m2_start exit 5 on child exit (no timeout wait); EA state entry with real test counts and the src/exit_codes.py change; TLS deadline test skips without openssl; operator CLI veto test uses a bus stub and asserts logs/bus.jsonl untouched (Codex 6179446901 P2); Task CI (#195) registered. Docs/tests only, non-KEY. risk.toml unchanged (0aea23af…bc04), live_enabled=false.

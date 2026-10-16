@@ -190,5 +190,6 @@ def test_repo_queue_has_i_done_and_no_open_task():
     assert task_bj["status"] == "done" and task_bj["surface"] == "grok-bot"
     task_bl = next(task for task in state["tasks"] if task["id"] == "BL")
     assert task_bl["status"] == "done" and task_bl["surface"] == "grok-bot"
-    assert loop_claim.next_todo(state) is None
+    # Tasks EF (#350) then EG (#349) are queued todo; EF is first.
+    assert loop_claim.next_todo(state)["id"] == "EF"
     assert path.read_bytes() == before
