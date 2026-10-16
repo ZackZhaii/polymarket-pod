@@ -478,8 +478,14 @@ def load_state(market: str, token_id: str = "", *, clock_ok: bool = False,
     except TypeError:
         # Task DD (#280) backstop: a quote history the checks cannot read is unusable -> wash_input_invalid.
         own_quotes, quote_problems, market_pair = None, list(quote_problems) + ["quote_type_error"], None
-    bad_rows = non_finite_ledger_rows(rows)
-    problems = ledger_store.verify(ledger)
+    # Task EG / Codex P1 on #360: verify (or the adjacent non_finite check) may raise
+    # (e.g. settlement_payout=10**400 with prices still 0/1; the verify fix is #350/EF). A raise is the
+    # same fail-closed invalid state as when verify returns problems — never propagates into commit.
+    try:
+        bad_rows = non_finite_ledger_rows(rows)
+        problems = ledger_store.verify(ledger)
+    except Exception as exc:  # noqa: BLE001 - fail closed, never raised into the commit path
+        bad_rows, problems = [], [f"ledger_verify_failed:{type(exc).__name__}"]
     if bad_rows or problems:
         # Fail closed (Task U / AF): RiskGate vetoes invalid_risk_state; nothing is netted.
         return {

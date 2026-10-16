@@ -561,6 +561,34 @@ def test_s_the_commit_path_halts_an_invalid_payout_market_with_no_snapshot(env):
     assert env["paper"].read_bytes() == before
 
 
+def test_s_empty_history_payout_only_huge_int_commit_halts_without_raising(env):
+    """Codex P1 (#360 / 6216577479): empty resolutions history + settlement_payout=10**400 (prices stay 0/1).
+    apply_settlements early-returns without reading the ledger; load_state must not let verify's OverflowError
+    escape — commit_if_allowed fail-closes with invalid_risk_state, global halt, and the market halt."""
+    from src.podlib import load_risk, utc_now
+    from src.risk_gate import Intent
+
+    _hold_loser(env)
+    _tick(env, Gamma(resolved_row()))
+    good = _settlements(env)[0]
+    assert good["market_price"] in (0.0, 1.0) and good["effective_price"] in (0.0, 1.0)
+    row = dict(good, fill_id="settle-huge-payout-only", settlement_payout=10**400)
+    with env["paper"].open("ab") as handle:
+        handle.write((json.dumps(row) + "\n").encode("utf-8"))
+    _write_history(env, [])
+    before = env["paper"].read_bytes()
+    intent = Intent(strategy="eg-test", market="m-new", side="buy", model_prob=0.6, market_price=0.4,
+                    assumed_slippage=0.005, fee_rate=0.0, liquidity_usd=50_000.0, spread=0.01, token_id="n1",
+                    book_ts=utc_now(), tags=("eg-test",), min_order_size=5.0)
+    out = paper_ledger.commit_if_allowed(intent, load_risk())
+    assert out["allow"] is False and out.get("halt_reason") == "invalid_risk_state" and _global_halt()
+    assert any(str(p).startswith("ledger_verify_failed:") for p in out.get("ledger_problems") or [])
+    blocks = _blocking_market_halts()
+    assert [h["market"] for h in blocks] == [rig.MARKET_ID]
+    assert blocks[0]["reason"].startswith("invalid_settlement_payout:")
+    assert env["paper"].read_bytes() == before
+
+
 def test_s2_control_no_snapshot_and_a_clean_ledger_is_nothing(env):
     _hold_loser(env)
     env["res"].parent.mkdir(parents=True, exist_ok=True)
