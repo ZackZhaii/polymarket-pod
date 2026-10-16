@@ -461,6 +461,13 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
         problems = list(day.problems)
     if problems or read is None:
         _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": [str(p) for p in problems[:10]]})
+        if read is not None:  # issue #349 (Task EG): a settlement row paid outside {0, 1} also halts its market
+            try:
+                from src import settlement
+
+                settlement.record_market_halts(settlement.invalid_payout_halts(read.rows))
+            except Exception as exc:  # noqa: BLE001 - the global halt above is recorded; fail closed, never raise
+                halt_store.write_fallback(f"{PROC} settlement_market_halt record_failed {type(exc).__name__}")
         return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]]])
     if settle is not None:  # issue #206: settlement before the daily-loss breaker (see the docstring)
         problems = [str(p) for p in settle()]

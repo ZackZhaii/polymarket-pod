@@ -359,11 +359,17 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
         return out  # nothing can settle: the ledger is not even read (the commit path reads it as before)
     _, ledger = ledger_store.read_ledger(PAPER_PATH)
     if ledger_store.verify(ledger) or non_finite_ledger_rows(ledger.rows):
+        # Issue #349 (Task EG): a settlement row paid outside {0, 1} is also its market's settlement-blocking halt
+        settlement.record_market_halts(settlement.invalid_payout_halts(ledger.rows), quotes_path=QUOTES_PATH,
+                                       emit=_emit)
         return out
     planned = settlement.plan(ledger.rows, list(ledger.ids), snaps or [], now or utc_now())
     out["unsettled_closed_legs"] = planned.unsettled_closed_legs
     if planned.problems:
-        out["problems"] = planned.problems
+        # Issue #349 (Task EG): the contradiction is also a market halt of the markets it is about (the caller's
+        # global invalid_risk_state is unchanged)
+        out["problems"] = planned.problems + settlement.record_market_halts(
+            planned.market_halts, quotes_path=QUOTES_PATH, emit=_emit)
         return out
     for row in planned.rows:
         if str(row.get("market")) in skip_markets:
