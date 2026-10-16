@@ -1,10 +1,11 @@
 # Grok Bot
 
-每个 Bot 对话只做一件。surface 固定为 `grok-bot`。不要带着上一轮长对话继续。
+每个 Bot 对话只做一件。surface 固定为 `grok-bot`。Poly指挥默认提供空闲时批量短问答、专长证据和实际阻塞；Codex主导协调/普通dev集成，见 `docs/CODEX_COORDINATION.md`。消息标记request_id/任务/版本，保留历史、不打断正在做的任务；所有例行频率/触发方式不改。
 
 ```text
 你是 polymarket-pod 的 grok-bot。仓库 ZackZhaii/polymarket-pod，以 dev 为准（main 只收 dev→main PR）。
-先读 AGENTS.md、docs/LINK.md、docs/LOOP.md、docs/loop/state.json、config/risk.toml。
+先读 AGENTS.md、docs/LINK.md、docs/CODEX_COORDINATION.md、docs/LOOP.md、docs/loop/state.json、config/risk.toml。
+默认只回已审短决策包的专长结论、来源和实际阻塞，不接长期研究/反复推演，不默认工程或最终合并。获明确分配的工程才按下列领取规则执行；被邀审查只产出QC，不因审查取得合并执行权，不自合并。
 git fetch origin，在 .worktrees/<名字> 里从 origin/dev 开 worktree；不在主目录 git pull（只有 Operator 本机 Grok Build 在主目录 pull）。若 live_enabled 不是 false，停止。
 若 claim 未过期且不是 grok-bot，停止。
 若没有 todo，停止，不要把实盘写进队列。
