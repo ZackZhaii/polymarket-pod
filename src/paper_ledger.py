@@ -356,7 +356,8 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
         out["problems"] = problems
         return out
     if not snaps:
-        return out  # nothing can settle: the ledger is not even read (the commit path reads it as before)
+        return out  # nothing can settle: the ledger is not even read (commit_if_allowed's invalid_risk_state halt
+        # adds the invalid-payout market halts itself: PR #360 review 6215585310)
     _, ledger = ledger_store.read_ledger(PAPER_PATH)
     # PR #360 review 6214147426 (P1): verify itself may raise (10**400 in settlement_payout with prices 0/1; the
     # verify fix is #350/EF). A raise is a ledger that does not verify: veto (a problem) AND the market halts.
@@ -551,6 +552,19 @@ def load_state(market: str, token_id: str = "", *, clock_ok: bool = False,
 from src.thresholds import COMMIT_LOCK_TIMEOUT_S  # noqa: E402,F401 - Task DD: the commit mutex wait (THRESHOLDS.md)
 
 
+def _invalid_payout_market_halts() -> list[str]:
+    """PR #360 review 6215585310 (P2): the invalid_settlement_payout market halts of the paper ledger, for the
+    commit path's invalid_risk_state halt. Never raises; returns a problem per halt not written (fail closed)."""
+    from src import settlement
+
+    try:
+        _, ledger = ledger_store.read_ledger(PAPER_PATH)
+        return settlement.record_market_halts(settlement.invalid_payout_halts(ledger.rows), quotes_path=QUOTES_PATH,
+                                              emit=_emit)
+    except Exception as exc:  # noqa: BLE001 - reported with the global halt, never raised
+        return [f"settlement_market_halt_failed:-:{type(exc).__name__}"]
+
+
 def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
     """Task DD (#237, Codex P1): the whole load_state -> RiskGate -> book path runs under one cross-process
     mutex on ``<PAPER_PATH>.commit.lock``, so two interleaved commits (e.g. YES and NO of one market) cannot both read
@@ -606,6 +620,9 @@ def _commit_locked(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: b
             problems = [str(p) for p in state.get("ledger_problems") or []]
             if state.get("non_finite_ledger_rows"):
                 problems.append(f"non_finite_ledger_rows={state.get('non_finite_ledger_rows')}")
+            # PR #360 review 6215585310 (P2): whatever the resolutions file holds (apply_settlements does not read
+            # the ledger without a snapshot), a settlement row paid outside {0, 1} also halts its market here
+            problems += _invalid_payout_market_halts()
             sentinel.halt(reason="invalid_risk_state", market=intent.market, scope="global",
                           quotes_path=QUOTES_PATH, emit=_emit,
                           extra={"ledger_problems": problems, "strategy": intent.strategy,

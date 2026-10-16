@@ -488,3 +488,83 @@ def test_p2_token_in_two_conditions_halts_both_conditions_markets():
                               [_snap("0xa", ["t1", "t2"], "t1"), _snap("0xb", ["t3", "t1"], "t3")], _stamp(NOW))
     assert planned.rows == []
     assert {m for m, _r in planned.market_halts} == {"mA", "mB", "mC"}
+
+
+# ---------------------------------------------------------------- PR #360 review 6215585310 (Poly风控, head 1060dac)
+
+_PERMS3 = list(__import__("itertools").permutations(range(3)))
+
+
+@pytest.mark.parametrize("order", _PERMS3)
+def test_q_a_conflicting_snapshot_still_counts_for_the_cross_condition_check(order):
+    """P1 (Codex 6215527516): C1=[a,b]->a, C1=[x,y]->x (conflict) and C2=[x,z]->x: x is named by two conditions in
+    every order, so mZ is halted too (union of both conditions' tokens); nothing settles."""
+    rows = [fill("buy", 5.0, 0.5, _stamp(NOW), market=f"m{t.upper()}", token=t) for t in "abxyz"]
+    trio = [_snap("0xc1", ["a", "b"], "a"), _snap("0xc1", ["x", "y"], "x"), _snap("0xc2", ["x", "z"], "x")]
+    planned = settlement.plan(rows, [f"i{i}" for i in range(5)], [trio[i] for i in order], _stamp(NOW))
+    assert planned.rows == []
+    assert "settlement_conflict:x:token_in_two_conditions" in planned.problems
+    two = {m for m, r in planned.market_halts if r == "settlement_conflict:x:token_in_two_conditions"}
+    assert two == {"mA", "mB", "mX", "mY", "mZ"}
+    assert {m for m, _r in planned.market_halts} == {"mA", "mB", "mX", "mY", "mZ"}
+
+
+_SCENARIOS = {
+    "legacy_two_mappings": [_legacy("0xc", "a"), _snap("0xc", ["a", "b"], "a"), _snap("0xc", ["a", "c"], "a")],
+    "legacy_ab_xy": [_legacy("0xc", "a"), _snap("0xc", ["a", "b"], "a"), _snap("0xc", ["x", "y"], "x")],
+    "conflict_plus_cross": [_snap("0xc1", ["a", "b"], "a"), _snap("0xc1", ["x", "y"], "x"),
+                            _snap("0xc2", ["x", "z"], "x")],
+    "legacy_full_agree": [_legacy("0xc", "a"), _snap("0xc", ["a", "b"], "a"), _snap("0xd", ["d", "e"], "e")],
+    "two_conditions_share": [_snap("0xa", ["t1", "t2"], "t1"), _snap("0xb", ["t3", "t1"], "t3"),
+                             _snap("0xd", ["d", "e"], "d")],
+}
+
+
+@pytest.mark.parametrize("name", sorted(_SCENARIOS))
+def test_r_plan_is_order_independent(name):
+    """Collect first, decide second: every permutation of the history gives the same problems, market halts and
+    rows (with open legs and booked settlements on every token involved)."""
+    snaps = _SCENARIOS[name]
+    tokens = sorted({t for s in snaps for t in (s.get("outcome_token_ids") or [s["winning_token_id"]])}
+                    | {"b", "c"})
+    rows = [fill("buy", 5.0, 0.5, _stamp(NOW), market=f"m-{t}", token=t) for t in tokens]
+    rows.append(_settled_row("m-old", "b", "0xc", "a", 0.0))
+    ids = [r.get("fill_id", f"i{i}") for i, r in enumerate(rows)]
+    seen = set()
+    for order in _PERMS3:
+        planned = settlement.plan(rows, ids, [snaps[i] for i in order], _stamp(NOW))
+        seen.add((tuple(sorted(planned.problems)), tuple(sorted(planned.market_halts)),
+                  tuple(sorted((r["market"], r["token_id"], r["settlement_payout"]) for r in planned.rows))))
+    assert len(seen) == 1, seen
+
+
+def test_s_the_commit_path_halts_an_invalid_payout_market_with_no_snapshot(env):
+    """P2: with an empty resolutions history apply_settlements does not read the ledger; commit_if_allowed's
+    invalid_risk_state halt writes the invalid_settlement_payout market halt itself (veto, global halt, nothing
+    booked)."""
+    from src.podlib import load_risk, utc_now
+    from src.risk_gate import Intent
+
+    _hold_loser(env)
+    _tick(env, Gamma(resolved_row()))
+    _invalid_payout(env, _history(env)[0])
+    _write_history(env, [])
+    before = env["paper"].read_bytes()
+    intent = Intent(strategy="eg-test", market="m-new", side="buy", model_prob=0.6, market_price=0.4,
+                    assumed_slippage=0.005, fee_rate=0.0, liquidity_usd=50_000.0, spread=0.01, token_id="n1",
+                    book_ts=utc_now(), tags=("eg-test",), min_order_size=5.0)
+    out = paper_ledger.commit_if_allowed(intent, load_risk())
+    assert out["allow"] is False and out.get("halt_reason") == "invalid_risk_state" and _global_halt()
+    blocks = _blocking_market_halts()
+    assert [h["market"] for h in blocks] == [rig.MARKET_ID]
+    assert blocks[0]["reason"].startswith("invalid_settlement_payout:")
+    assert env["paper"].read_bytes() == before
+
+
+def test_s2_control_no_snapshot_and_a_clean_ledger_is_nothing(env):
+    _hold_loser(env)
+    env["res"].parent.mkdir(parents=True, exist_ok=True)
+    _write_history(env, [])
+    out = paper_ledger.apply_settlements(_stamp(NOW))
+    assert out == {"booked": [], "unsettled_closed_legs": [], "problems": []}
+    assert _blocking_market_halts() == []

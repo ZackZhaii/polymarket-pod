@@ -197,65 +197,63 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
     booked = set(ledger_ids)
     final: dict[str, tuple[float, dict[str, Any]]] = {}
     pending: set[str] = set()
-    by_condition: dict[str, dict[str, Any]] = {}
-    mapped_by_condition: dict[str, dict[str, Any]] = {}  # the first explicit outcome_token_ids mapping per condition
-    full_mapping: set[str] = set()  # PR #360 review (P2): conditions with an explicit outcome_token_ids mapping
-    # PR #360 review 6215179366 (P1): every token any confirmed snapshot of a condition names (agreeing or not), and
-    # the conflicts found; their market halts are written AFTER the loop over that whole union (fail closed), so a
-    # market seen in another snapshot of the condition (before or after the conflicting one) is never left out
+    # PR #360 review 6215585310: collect first, decide second, so nothing depends on the order of the history.
+    # 1. every confirmed snapshot, grouped by condition, and every token any of them names (agreeing or not)
+    groups: dict[str, list[dict[str, Any]]] = {}
     seen_tokens: dict[str, set[str]] = {}
-    conflicts: list[tuple[str, list[str]]] = []  # (reason, conditions it is about)
     for snap in resolutions:
         if not confirmed(snap):
             pending.update(_tokens(snap))
             continue
-        seen_tokens.setdefault(str(snap.get("condition_id")), set()).update(_tokens(snap))
-        # PR #194 review (P1): consistency is per condition, not per token. Two confirmed snapshots of one
-        # condition with another winner or token mapping ([a,b]->a vs [c,b]->c) are a contradiction.
         condition = str(snap.get("condition_id"))
-        prior = by_condition.get(condition)
-        if prior is not None:
-            # PR #360 review 6214537139 (P1): compare with the first snapshot AND the first explicit mapping of the
-            # condition, so [legacy, [a,b], [a,c]] is a mapping conflict in every order (fail closed)
-            conflict = None
-            for base in (prior, mapped_by_condition.get(condition)):
-                if base is None or base is snap:
-                    continue
+        groups.setdefault(condition, []).append(snap)
+        seen_tokens.setdefault(condition, set()).update(_tokens(snap))
+    conflicts: list[tuple[str, list[str]]] = []  # (reason, conditions it is about); halts planned in step 4
+    # 2. per condition (PR #194 review P1: consistency is per condition): EVERY pair of its confirmed snapshots must
+    # agree (winner, prices, closed_ts and, when both carry it, the mapping: resolutions.content_conflict). The reason
+    # named is the smallest one found, so it does not depend on the order either.
+    consistent: dict[str, list[dict[str, Any]]] = {}
+    for condition in sorted(groups):
+        snaps = groups[condition]
+        found: set[str] = set()
+        for i in range(len(snaps)):
+            for j in range(i + 1, len(snaps)):
                 try:
-                    conflict = content_conflict(base, snap)
+                    conflict = content_conflict(snaps[i], snaps[j])
                 except (KeyError, TypeError, ValueError):
                     conflict = "unreadable"
                 if conflict is not None:
-                    prior = base
-                    break
-            if conflict is not None:
-                result.problems.append(f"settlement_conflict:{condition}:{conflict}")
-                _defer_market_halt(conflicts, f"settlement_conflict:{condition}:{conflict}", [condition])
-                continue
-            # PR #360 review (P2): an agreeing snapshot of the same condition is merged (a legacy snapshot and a
-            # full one, in either order, give the same tokens), never dropped
+                    found.add(conflict)
+        if found:
+            _defer_market_halt(conflicts, f"settlement_conflict:{condition}:{min(found)}", [condition])
+            result.problems.append(conflicts[-1][0])
         else:
-            by_condition[condition] = snap
-        if isinstance(snap.get("outcome_token_ids"), list):
-            full_mapping.add(condition)
-            mapped_by_condition.setdefault(condition, snap)
-        winner = str(snap.get("winning_token_id"))
-        for token in _tokens(snap):
-            payout = 1.0 if token == winner else 0.0
-            other = final.get(token)
-            if other is not None and other[1].get("condition_id") != snap.get("condition_id"):
-                result.problems.append(f"settlement_conflict:{token}:token_in_two_conditions")
-                # PR #360 review 6215179366: both conditions' whole token union, not only the shared token
-                _defer_market_halt(conflicts, f"settlement_conflict:{token}:token_in_two_conditions",
-                                   [str(other[1].get("condition_id")), condition])
-                continue
-            if other is None:
-                final[token] = (payout, snap)
+            consistent[condition] = snaps
+    # 3. a token named by two conditions (over ALL confirmed snapshots, conflicting ones included: Codex 6215527516)
+    owners: dict[str, set[str]] = {}
+    for condition, tokens in seen_tokens.items():
+        for token in tokens:
+            owners.setdefault(token, set()).add(condition)
+    shared = {token for token, conds in owners.items() if len(conds) > 1}
+    for token in sorted(shared):
+        _defer_market_halt(conflicts, f"settlement_conflict:{token}:token_in_two_conditions", sorted(owners[token]))
+        result.problems.append(conflicts[-1][0])
+    # 4. each conflict halts every market of the union of the tokens of its condition(s) (PR #360 review 6215179366)
     for reason, conds in conflicts:
         markets: set[str] = set()
         for cond in conds:
             markets.update(_markets_touching(ledger_rows, seen_tokens.get(cond, set()), cond))
         _plan_market_halt(result, reason, markets)
+    # 5. what the agreeing conditions say (all their snapshots agree, so which one is used does not matter)
+    by_condition: dict[str, dict[str, Any]] = {}
+    full_mapping: set[str] = set()  # PR #360 review (P2): conditions with an explicit outcome_token_ids mapping
+    for condition, snaps in consistent.items():
+        by_condition[condition] = snaps[0]
+        if any(isinstance(snap.get("outcome_token_ids"), list) for snap in snaps):
+            full_mapping.add(condition)
+        winner = str(snaps[0].get("winning_token_id"))
+        for token in seen_tokens[condition] - shared:
+            final[token] = (1.0 if token == winner else 0.0, snaps[0])
     # Issue #349 (Task EG): a booked settlement read again with another result. The confirmed snapshot its token
     # maps to now names another condition, winner or payout than the booked row: a contradiction (settle nothing)
     # and a market halt of that market. PR #360 review (P1): checked BEFORE returning on any other problem, so every
