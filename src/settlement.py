@@ -12,6 +12,13 @@ each day. Settling it closes the leg once:
 * the confirmed snapshots of one condition must agree exactly (winner, final prices, closed_ts, token
   mapping: ``resolutions.content_conflict``), and a token may belong to one condition only. Any
   contradiction is a problem and nothing at all is settled (the caller halts: invalid_risk_state);
+* issue #349 (Task EG): each such contradiction is ALSO a scope=market halt of the ledger markets it is about
+  (``Plan.market_halts``, written by ``record_market_halts``), with the reason prefix that blocks settlement
+  (SETTLEMENT_BLOCKING_HALT_PREFIXES): settlement_conflict (two confirmed results for one condition, or a token in
+  two conditions), settlement_result_changed (a booked settlement row whose confirmed snapshot now says another
+  condition, winner or payout) and invalid_settlement_payout (a booked settlement row paid outside {0, 1}:
+  ``invalid_payout_halts``). The global halt is kept; an Operator resume of only the global halt leaves that
+  market unsettled until its own market halt is resumed;
 * the row closes the whole open leg at the payout (src/ledger_store.py, (e)): a long is sold, a short
   bought back. Its realized P&L belongs to the row's ``ts``, the time it is booked (src/daily_loss.py), so a
   settled loss counts once, on the booking day, and the leg is gone on every later day. A gain never
@@ -25,6 +32,7 @@ derived fill_id is the dedupe key). Pure planning here; paper_ledger.apply_settl
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -33,7 +41,9 @@ from src.ledger_store import (
     KIND_FIELD,
     SETTLEMENT_DECISION,
     SETTLEMENT_KIND,
+    SETTLEMENT_PAYOUTS,
     counts,
+    is_settlement,
     leg_key,
 )
 from src.resolutions import content_conflict
@@ -56,7 +66,10 @@ SETTLEMENT_BLOCKING_HALT_PREFIXES = (
 def blocks_settlement(halt_reason: object) -> bool:
     """True when a market halt with this reason must block that market's settlement (see above)."""
     return isinstance(halt_reason, str) and halt_reason.strip().startswith(SETTLEMENT_BLOCKING_HALT_PREFIXES)
+
+
 STRATEGY = "settlement"
+MARKET_HALT_SOURCE = "Sentinel"  # issue #349: who records the settlement market halts (as the global ones)
 
 
 def settlement_fill_id(condition_id: str, market: str, token_id: str) -> str:
@@ -80,6 +93,89 @@ class Plan:
     rows: list[dict[str, Any]] = field(default_factory=list)       # settlement rows to book, in order
     unsettled_closed_legs: list[str] = field(default_factory=list)  # "market|token": closed, not confirmed
     problems: list[str] = field(default_factory=list)
+    # issue #349 (Task EG): (market, reason) market halts for the problems above; reason starts with a blocking prefix
+    market_halts: list[tuple[str, str]] = field(default_factory=list)
+
+
+def _plan_market_halt(result: Plan, reason: str, markets: Iterable[str]) -> None:
+    """Issue #349 (Task EG): the problem ``reason`` is also a market halt of each of ``markets`` (once each)."""
+    for market in sorted({str(market) for market in markets if market}):
+        if (market, reason) not in result.market_halts:
+            result.market_halts.append((market, reason))
+
+
+def _defer_market_halt(conflicts: list[tuple[str, list[str]]], reason: str, conditions: list[str]) -> None:
+    """PR #360 review 6215179366: a settlement_conflict market halt, planned after the snapshot loop over the
+    union of every token the conditions' confirmed snapshots name (plan() below)."""
+    conflicts.append((reason, conditions))
+
+
+def _markets_touching(rows: Iterable[dict[str, Any]], tokens: Iterable[str], condition: str | None = None) -> list[str]:
+    """Issue #349: the ledger markets a settlement contradiction is about: every row (open, closed or settled) on
+    one of ``tokens``, or a settlement row booked from ``condition``."""
+    wanted = {str(token) for token in tokens}
+    found: set[str] = set()
+    for row in rows:
+        market = row.get("market")
+        if not market:
+            continue
+        if str(row.get("token_id")) in wanted or (
+                condition is not None and is_settlement(row) and str(row.get("condition_id")) == condition):
+            found.add(str(market))
+    return sorted(found)
+
+
+def _number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):  # PR #360 review (P1): 10**400 is invalid (None), never an OverflowError
+        return None
+    return number if math.isfinite(number) else None
+
+
+def invalid_payout_halts(rows: Iterable[dict[str, Any]]) -> list[tuple[str, str]]:
+    """Issue #349 (Task EG): a booked settlement row paid outside {0, 1} (market_price, effective_price or
+    settlement_payout not exactly 0 or 1) -> its market halt ``invalid_settlement_payout:<market>|<token>``.
+
+    ledger_store.verify already refuses such a row (invalid_settlement: the global invalid_risk_state, unchanged);
+    the callers whose ledger does not verify add this market halt, so a global resume alone cannot settle it."""
+    result = Plan()
+    for row in rows:
+        if not isinstance(row, dict) or not is_settlement(row):
+            continue
+        payouts = [_number(row.get(name)) for name in ("market_price", "effective_price", "settlement_payout")]
+        if all(payout in SETTLEMENT_PAYOUTS for payout in payouts):
+            continue
+        market, token = str(row.get("market") or ""), str(row.get("token_id"))
+        _plan_market_halt(result, f"invalid_settlement_payout:{market}|{token}", [market])
+    return result.market_halts
+
+
+def record_market_halts(halts: Iterable[tuple[str, str]], *, quotes_path: Any = None, emit: Any = None) -> list[str]:
+    """Issue #349 (Task EG): write each planned (market, reason) as a scope=market halt (src/sentinel.halt: the
+    halt state first, that market's open paper quotes cancelled, a bus line). Only adds halts: it never lifts or
+    replaces one, and the caller still records its global invalid_risk_state. An identical active market halt is
+    not written again. Never raises; returns a problem per halt that could not be written (the caller halts)."""
+    from src import halt_store, sentinel  # local: planning above stays pure and settlement's import time unchanged
+
+    problems: list[str] = []
+    for market, reason in halts:
+        try:
+            if halt_store.has_active_halt(scope=halt_store.SCOPE_MARKET, market=market, reason_prefix=reason) is True:
+                continue
+            message = sentinel.halt(reason=reason, market=market, scope=halt_store.SCOPE_MARKET,
+                                    source=MARKET_HALT_SOURCE, to="Executor", quotes_path=quotes_path, emit=emit,
+                                    extra={"blocks_settlement": True})
+            # PR #360 review (P2): sentinel.halt reports a failed step in its returned ``failures`` (it already
+            # wrote the global fallback); pass it to the caller instead of swallowing it
+            failures = message.get("failures") if isinstance(message, dict) else ["no_message"]
+            if failures:
+                problems.append(f"settlement_market_halt_failed:{market}:{','.join(str(f) for f in failures)}")
+        except Exception as exc:  # noqa: BLE001 - reported to the caller (a global halt), never raised
+            problems.append(f"settlement_market_halt_failed:{market}:{type(exc).__name__}")
+    return problems
 
 
 def open_legs(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str], float]:
@@ -101,32 +197,89 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
     booked = set(ledger_ids)
     final: dict[str, tuple[float, dict[str, Any]]] = {}
     pending: set[str] = set()
-    by_condition: dict[str, dict[str, Any]] = {}
+    # PR #360 review 6215585310: collect first, decide second, so nothing depends on the order of the history.
+    # 1. every confirmed snapshot, grouped by condition, and every token any of them names (agreeing or not)
+    groups: dict[str, list[dict[str, Any]]] = {}
+    seen_tokens: dict[str, set[str]] = {}
     for snap in resolutions:
         if not confirmed(snap):
             pending.update(_tokens(snap))
             continue
-        # PR #194 review (P1): consistency is per condition, not per token. Two confirmed snapshots of one
-        # condition with another winner or token mapping ([a,b]->a vs [c,b]->c) are a contradiction.
         condition = str(snap.get("condition_id"))
-        prior = by_condition.get(condition)
-        if prior is not None:
-            try:
-                conflict = content_conflict(prior, snap)
-            except (KeyError, TypeError, ValueError):
-                conflict = "unreadable"
-            if conflict is not None:
-                result.problems.append(f"settlement_conflict:{condition}:{conflict}")
+        groups.setdefault(condition, []).append(snap)
+        seen_tokens.setdefault(condition, set()).update(_tokens(snap))
+    conflicts: list[tuple[str, list[str]]] = []  # (reason, conditions it is about); halts planned in step 4
+    # 2. per condition (PR #194 review P1: consistency is per condition): EVERY pair of its confirmed snapshots must
+    # agree (winner, prices, closed_ts and, when both carry it, the mapping: resolutions.content_conflict). The reason
+    # named is the smallest one found, so it does not depend on the order either.
+    consistent: dict[str, list[dict[str, Any]]] = {}
+    for condition in sorted(groups):
+        snaps = groups[condition]
+        found: set[str] = set()
+        for i in range(len(snaps)):
+            for j in range(i + 1, len(snaps)):
+                try:
+                    conflict = content_conflict(snaps[i], snaps[j])
+                except (KeyError, TypeError, ValueError):
+                    conflict = "unreadable"
+                if conflict is not None:
+                    found.add(conflict)
+        if found:
+            _defer_market_halt(conflicts, f"settlement_conflict:{condition}:{min(found)}", [condition])
+            result.problems.append(conflicts[-1][0])
+        else:
+            consistent[condition] = snaps
+    # 3. a token named by two conditions (over ALL confirmed snapshots, conflicting ones included: Codex 6215527516)
+    owners: dict[str, set[str]] = {}
+    for condition, tokens in seen_tokens.items():
+        for token in tokens:
+            owners.setdefault(token, set()).add(condition)
+    shared = {token for token, conds in owners.items() if len(conds) > 1}
+    for token in sorted(shared):
+        _defer_market_halt(conflicts, f"settlement_conflict:{token}:token_in_two_conditions", sorted(owners[token]))
+        result.problems.append(conflicts[-1][0])
+    # 4. each conflict halts every market of the union of the tokens of its condition(s) (PR #360 review 6215179366)
+    for reason, conds in conflicts:
+        markets: set[str] = set()
+        for cond in conds:
+            markets.update(_markets_touching(ledger_rows, seen_tokens.get(cond, set()), cond))
+        _plan_market_halt(result, reason, markets)
+    # 5. what the agreeing conditions say (all their snapshots agree, so which one is used does not matter)
+    by_condition: dict[str, dict[str, Any]] = {}
+    full_mapping: set[str] = set()  # PR #360 review (P2): conditions with an explicit outcome_token_ids mapping
+    for condition, snaps in consistent.items():
+        by_condition[condition] = snaps[0]
+        if any(isinstance(snap.get("outcome_token_ids"), list) for snap in snaps):
+            full_mapping.add(condition)
+        winner = str(snaps[0].get("winning_token_id"))
+        for token in seen_tokens[condition] - shared:
+            final[token] = (1.0 if token == winner else 0.0, snaps[0])
+    # Issue #349 (Task EG): a booked settlement read again with another result. The confirmed snapshot its token
+    # maps to now names another condition, winner or payout than the booked row: a contradiction (settle nothing)
+    # and a market halt of that market. PR #360 review (P1): checked BEFORE returning on any other problem, so every
+    # market with its own contradiction gets its own halt in the same plan.
+    for row in ledger_rows:
+        if not isinstance(row, dict) or not is_settlement(row):
             continue
-        by_condition[condition] = snap
-        winner = str(snap.get("winning_token_id"))
-        for token in _tokens(snap):
-            payout = 1.0 if token == winner else 0.0
-            other = final.get(token)
-            if other is not None and other[1].get("condition_id") != snap.get("condition_id"):
-                result.problems.append(f"settlement_conflict:{token}:token_in_two_conditions")
+        market, token = str(row.get("market") or ""), str(row.get("token_id"))
+        hit = final.get(token)
+        if hit is None:
+            # PR #360 review (P1/P2): the token left the EXPLICIT mapping of its still-confirmed condition (winner
+            # a -> x, [a,b] -> [a,x]): the result changed. A legacy snapshot (no mapping) proves only its winner,
+            # so it never proves a removal; no confirmed snapshot for the token nor its condition: nothing to compare.
+            cond_snap = by_condition.get(str(row.get("condition_id")))
+            winner_moved = cond_snap is not None and str(row.get("winning_token_id")) != str(
+                cond_snap.get("winning_token_id"))  # any confirmed snapshot names the condition's winner
+            if str(row.get("condition_id")) not in full_mapping and not winner_moved:
                 continue
-            final[token] = (payout, snap)
+        else:
+            payout, snap = hit
+            if (str(row.get("condition_id")) == str(snap["condition_id"])
+                    and str(row.get("winning_token_id")) == str(snap["winning_token_id"])
+                    and _number(row.get("settlement_payout")) == payout):
+                continue
+        result.problems.append(f"settlement_result_changed:{market}|{token}")
+        _plan_market_halt(result, f"settlement_result_changed:{market}|{token}", [market])
     if result.problems:
         return result  # any contradiction: settle nothing at all
     for (market, token), shares in sorted(open_legs(ledger_rows).items()):
