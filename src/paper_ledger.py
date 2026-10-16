@@ -358,7 +358,14 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
     if not snaps:
         return out  # nothing can settle: the ledger is not even read (the commit path reads it as before)
     _, ledger = ledger_store.read_ledger(PAPER_PATH)
-    if ledger_store.verify(ledger) or non_finite_ledger_rows(ledger.rows):
+    # PR #360 review 6214147426 (P1): verify itself may raise (10**400 in settlement_payout with prices 0/1; the
+    # verify fix is #350/EF). A raise is a ledger that does not verify: veto (a problem) AND the market halts.
+    try:
+        raised = None
+        bad = bool(ledger_store.verify(ledger) or non_finite_ledger_rows(ledger.rows))
+    except Exception as exc:  # noqa: BLE001 - fail closed, never raised into the commit path
+        raised, bad = f"ledger_verify_failed:{type(exc).__name__}", True
+    if bad:
         # Issue #349 (Task EG): a settlement row paid outside {0, 1} is also its market's settlement-blocking halt
         # PR #360 review (P1/P2): never raises here, and a market halt that could not be written is a problem the
         # caller sees (fail closed; the global invalid_risk_state from load_state is unchanged)
@@ -367,8 +374,8 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
                                                     quotes_path=QUOTES_PATH, emit=_emit)
         except Exception as exc:  # noqa: BLE001 - reported to the caller, never raised
             failed = [f"settlement_market_halt_failed:-:{type(exc).__name__}"]
-        if failed:
-            out["problems"] = failed
+        if failed or raised:
+            out["problems"] = ([raised] if raised else []) + failed
         return out
     planned = settlement.plan(ledger.rows, list(ledger.ids), snaps or [], now or utc_now())
     out["unsettled_closed_legs"] = planned.unsettled_closed_legs

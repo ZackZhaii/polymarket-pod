@@ -335,3 +335,89 @@ def test_j3_the_runner_preflight_reports_an_unwritten_market_halt(env, monkeypat
     report = _tick(env, Gamma(resolved_row()), NOW + timedelta(seconds=60))
     assert report.reasons[0] == m2_runner.LEDGER_HALT_REASON and _global_halt()
     assert "settlement_market_halt_failed:m:x" in report.reasons
+
+
+# ---------------------------------------------------------------- PR #360 review 6214147426 (Poly风控, head 77b39f1)
+
+def test_k_a_payout_only_huge_int_with_valid_prices_vetoes_and_halts_the_market(env):
+    """P1-1: prices stay 0/1 and only settlement_payout=10**400; ledger_store.verify raises (its fix is #350/EF).
+    apply_settlements does not raise: a problem (the commit path's veto + global halt) AND the market halt."""
+    _hold_loser(env)
+    _tick(env, Gamma(resolved_row()))
+    good = _settlements(env)[0]
+    assert good["market_price"] in (0.0, 1.0) and good["effective_price"] in (0.0, 1.0)
+    row = dict(good, fill_id="settle-huge-payout-only", settlement_payout=10**400)
+    with env["paper"].open("ab") as handle:
+        handle.write((json.dumps(row) + "\n").encode("utf-8"))
+    out = paper_ledger.apply_settlements(_stamp(NOW + timedelta(seconds=60)))
+    assert out["booked"] == []
+    assert any(str(p).startswith("ledger_verify_failed:") for p in out["problems"]), out
+    blocks = _blocking_market_halts()
+    assert [h["market"] for h in blocks] == [rig.MARKET_ID]
+    assert blocks[0]["reason"].startswith("invalid_settlement_payout:")
+
+
+def test_l_a_conflict_and_another_markets_result_change_both_get_market_halts():
+    """P1-2: condition C1's snapshots conflict AND market M2's booked settlement changed: both markets halted in
+    the same plan (no early return before the result-change check); nothing settles."""
+    rows = [fill("buy", 5.0, 0.5, _stamp(NOW), market="m1", token="a1"),
+            fill("buy", 5.0, 0.5, _stamp(NOW), market="m2", token="b2"),
+            _settled_row("m2", "b2", "0xc2", "a2", 0.0)]
+    ids = [row.get("fill_id", f"id{i}") for i, row in enumerate(rows)]
+    snaps = [_snap("0xc1", ["a1", "b1"], "a1"), _snap("0xc1", ["a1", "b1"], "b1"),  # C1 conflict
+             _snap("0xc2", ["a2", "b2"], "b2")]                                       # M2 result changed
+    planned = settlement.plan(rows, ids, snaps, _stamp(NOW))
+    assert planned.rows == []
+    halted = {market for market, _reason in planned.market_halts}
+    assert halted == {"m1", "m2"}
+    assert ("m2", "settlement_result_changed:m2|b2") in planned.market_halts
+    assert any(r.startswith("settlement_conflict:0xc1:") for m, r in planned.market_halts if m == "m1")
+    assert all(settlement.blocks_settlement(reason) for _m, reason in planned.market_halts)
+
+
+def test_l2_a_token_in_two_conditions_and_a_result_change_both_halt():
+    rows = [fill("buy", 5.0, 0.5, _stamp(NOW), market="mA", token="t1"),
+            _settled_row("mZ", "z1", "0xz", "z1", 1.0)]
+    snaps = [_snap("0xa", ["t1", "t2"], "t1"), _snap("0xb", ["t3", "t1"], "t3"), _snap("0xz", ["z1", "z2"], "z2")]
+    planned = settlement.plan(rows, ["x", rows[1]["fill_id"]], snaps, _stamp(NOW))
+    assert {m for m, _r in planned.market_halts} == {"mA", "mZ"} and planned.rows == []
+
+
+def _legacy(condition, winner):
+    snap = _snap(condition, [winner], winner)
+    del snap["outcome_token_ids"]
+    return snap
+
+
+@pytest.mark.parametrize("order", ["legacy_first", "full_first"])
+def test_m_a_legacy_and_a_full_snapshot_of_one_unchanged_result_settle_the_same_in_either_order(order):
+    """P2: an unchanged result stored once as a legacy snapshot (no outcome_token_ids) and once in full is no
+    result change in either order; the settled loser b and the open winner a behave the same."""
+    rows = [_settled_row("mB", "b", "0xc", "a", 0.0),  # b already settled (its leg is closed)
+            fill("buy", 5.0, 0.5, _stamp(NOW), market="mA", token="a")]
+    ids = [row.get("fill_id", f"id{i}") for i, row in enumerate(rows)]
+    pair = [_legacy("0xc", "a"), _snap("0xc", ["a", "b"], "a")]
+    snaps = pair if order == "legacy_first" else pair[::-1]
+    planned = settlement.plan(rows, ids, snaps, _stamp(NOW))
+    assert planned.problems == [] and planned.market_halts == []
+    assert [(r["market"], r["token_id"], r["settlement_payout"]) for r in planned.rows] == [("mA", "a", 1.0)]
+
+
+@pytest.mark.parametrize("order", ["legacy_first", "full_first"])
+def test_m2_a_real_change_is_caught_in_either_order(order):
+    """P2 control (fail closed kept): the full mapping drops the settled b (winner a -> x) with a legacy snapshot
+    of the same new winner present; settlement_result_changed in both orders."""
+    rows = [_settled_row("mB", "b", "0xc", "a", 0.0)]
+    pair = [_legacy("0xc", "x"), _snap("0xc", ["a", "x"], "x")]
+    snaps = pair if order == "legacy_first" else pair[::-1]
+    planned = settlement.plan(rows, [rows[0]["fill_id"]], snaps, _stamp(NOW))
+    assert planned.problems == ["settlement_result_changed:mB|b"]
+    assert planned.market_halts == [("mB", "settlement_result_changed:mB|b")]
+
+
+def test_m3_a_legacy_snapshot_alone_never_proves_a_removal_but_a_changed_winner_still_halts():
+    rows = [_settled_row("mB", "b", "0xc", "a", 0.0), _settled_row("mA", "a", "0xc", "a", 1.0)]
+    unchanged = settlement.plan(rows, [r["fill_id"] for r in rows], [_legacy("0xc", "a")], _stamp(NOW))
+    assert unchanged.problems == []  # legacy proves only its winner: b's absence is no evidence
+    changed = settlement.plan(rows, [r["fill_id"] for r in rows], [_legacy("0xc", "b")], _stamp(NOW))
+    assert set(changed.problems) == {"settlement_result_changed:mB|b", "settlement_result_changed:mA|a"}

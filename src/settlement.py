@@ -192,6 +192,7 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
     final: dict[str, tuple[float, dict[str, Any]]] = {}
     pending: set[str] = set()
     by_condition: dict[str, dict[str, Any]] = {}
+    full_mapping: set[str] = set()  # PR #360 review (P2): conditions with an explicit outcome_token_ids mapping
     for snap in resolutions:
         if not confirmed(snap):
             pending.update(_tokens(snap))
@@ -209,8 +210,13 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
                 result.problems.append(f"settlement_conflict:{condition}:{conflict}")
                 _plan_market_halt(result, f"settlement_conflict:{condition}:{conflict}",
                                   _markets_touching(ledger_rows, _tokens(prior) + _tokens(snap), condition))
-            continue
-        by_condition[condition] = snap
+                continue
+            # PR #360 review (P2): an agreeing snapshot of the same condition is merged (a legacy snapshot and a
+            # full one, in either order, give the same tokens), never dropped
+        else:
+            by_condition[condition] = snap
+        if isinstance(snap.get("outcome_token_ids"), list):
+            full_mapping.add(condition)
         winner = str(snap.get("winning_token_id"))
         for token in _tokens(snap):
             payout = 1.0 if token == winner else 0.0
@@ -220,7 +226,34 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
                 _plan_market_halt(result, f"settlement_conflict:{token}:token_in_two_conditions",
                                   _markets_touching(ledger_rows, [token]))
                 continue
-            final[token] = (payout, snap)
+            if other is None:
+                final[token] = (payout, snap)
+    # Issue #349 (Task EG): a booked settlement read again with another result. The confirmed snapshot its token
+    # maps to now names another condition, winner or payout than the booked row: a contradiction (settle nothing)
+    # and a market halt of that market. PR #360 review (P1): checked BEFORE returning on any other problem, so every
+    # market with its own contradiction gets its own halt in the same plan.
+    for row in ledger_rows:
+        if not isinstance(row, dict) or not is_settlement(row):
+            continue
+        market, token = str(row.get("market") or ""), str(row.get("token_id"))
+        hit = final.get(token)
+        if hit is None:
+            # PR #360 review (P1/P2): the token left the EXPLICIT mapping of its still-confirmed condition (winner
+            # a -> x, [a,b] -> [a,x]): the result changed. A legacy snapshot (no mapping) proves only its winner,
+            # so it never proves a removal; no confirmed snapshot for the token nor its condition: nothing to compare.
+            cond_snap = by_condition.get(str(row.get("condition_id")))
+            winner_moved = cond_snap is not None and str(row.get("winning_token_id")) != str(
+                cond_snap.get("winning_token_id"))  # any confirmed snapshot names the condition's winner
+            if str(row.get("condition_id")) not in full_mapping and not winner_moved:
+                continue
+        else:
+            payout, snap = hit
+            if (str(row.get("condition_id")) == str(snap["condition_id"])
+                    and str(row.get("winning_token_id")) == str(snap["winning_token_id"])
+                    and _number(row.get("settlement_payout")) == payout):
+                continue
+        result.problems.append(f"settlement_result_changed:{market}|{token}")
+        _plan_market_halt(result, f"settlement_result_changed:{market}|{token}", [market])
     if result.problems:
         return result  # any contradiction: settle nothing at all
     for (market, token), shares in sorted(open_legs(ledger_rows).items()):
@@ -260,33 +293,4 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
             "settlement_payout": payout,
             "note": "Paper settlement of a resolved market (UMA confirmed). No exchange action.",
         })
-    # Issue #349 (Task EG): a booked settlement read again with another result. The confirmed snapshot its token
-    # maps to now names another condition, winner or payout than the booked row: a contradiction (settle nothing)
-    # and a market halt of that market. A token dropped from its still-confirmed condition is a change too (below).
-    changed = False
-    for row in ledger_rows:
-        if not isinstance(row, dict) or not is_settlement(row):
-            continue
-        market, token = str(row.get("market") or ""), str(row.get("token_id"))
-        hit = final.get(token)
-        if hit is None:
-            # PR #360 review (P1): the token is no longer in any confirmed mapping, but the condition it was settled
-            # from is still confirmed (winner a -> x, mapping [a,b] -> [a,x]): the result changed. No confirmed
-            # snapshot for the token nor its condition: nothing to compare (as before).
-            by_cond = by_condition.get(str(row.get("condition_id")))
-            if by_cond is None:
-                continue
-            changed = True
-            result.problems.append(f"settlement_result_changed:{market}|{token}")
-            _plan_market_halt(result, f"settlement_result_changed:{market}|{token}", [market])
-            continue
-        payout, snap = hit
-        if (str(row.get("condition_id")) != str(snap["condition_id"])
-                or str(row.get("winning_token_id")) != str(snap["winning_token_id"])
-                or _number(row.get("settlement_payout")) != payout):
-            changed = True
-            result.problems.append(f"settlement_result_changed:{market}|{token}")
-            _plan_market_halt(result, f"settlement_result_changed:{market}|{token}", [market])
-    if changed:
-        result.rows = []  # any contradiction: settle nothing at all
     return result
