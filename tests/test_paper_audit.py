@@ -24,6 +24,15 @@ with exit 0, and the JSON report carries each input's SHA256, the verified / unv
 (``counts``) and the named difference reasons (``problems`` etc.); the independent RiskGate allow
 attribution and mark-to-market are explicitly UNKNOWN in every run (``unknown_checks``) — honest
 non-claims that never gate the verdict.
+
+Acceptance 7 (this change, tests only): the same audit runs against two logs produced by the real
+``paper_ledger.commit_if_allowed`` in a temp directory (the real ``ledger_store.book`` ledger write
+and the real ``podlib.bus`` Executor fill on disk, nothing mocked on the write path), then damaged
+on purpose — a deleted line on either side, a modified field on either side, identical and
+conflicting duplicate bus copies — and the LF/CRLF, torn-tail, legacy-history-row, empty-input,
+network-tripwire and inputs-unchanged scenarios are covered with those real records too. The
+all-empty case and the ledger torn tail stay covered by the earlier tests
+(``test_all_empty_inputs_are_unknown_not_a_full_pass``, ``test_a_torn_ledger_line_is_not_a_pass``).
 """
 from __future__ import annotations
 
@@ -37,7 +46,9 @@ from pathlib import Path
 
 import pytest
 
-from src import ledger_store, paper_audit
+from src import ledger_store, paper_audit, paper_ledger, podlib
+from src.podlib import load_risk, utc_now
+from src.risk_gate import Intent
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -586,3 +597,221 @@ def test_all_empty_inputs_are_unknown_not_a_full_pass(tmp_path, capsys):
     assert report["ledger"]["sha256"] == hashlib.sha256(b"").hexdigest()
     assert report["bus"]["sha256"] == hashlib.sha256(b"").hexdigest()
     assert report["unknown_checks"] == ["riskgate_allow_attribution", "mark_to_market"]
+
+
+# --- acceptance 7: the audit against records written by the real commit_if_allowed ----------------
+
+
+@pytest.fixture
+def real_records(tmp_path, monkeypatch):
+    """Both logs produced by the real ``paper_ledger.commit_if_allowed`` in the test's temp dir.
+
+    Nothing on the write path is mocked: the ledger line comes from the real ``ledger_store.book``
+    (conservation-checked, atomic) and the bus line from the real ``podlib.bus`` Executor→Sentinel
+    fill written to ``podlib.BUS_PATH``. conftest already isolates every other path (quotes, books,
+    marks, halts, heartbeats); this redirects the ledger and the bus the same way.
+    """
+    ledger = tmp_path / "paper.jsonl"
+    bus = tmp_path / "bus.jsonl"
+    monkeypatch.setattr(paper_ledger, "PAPER_PATH", ledger)
+    monkeypatch.setattr(podlib, "BUS_PATH", bus)
+
+    def commit(market: str = "m1", token: str = "t1") -> dict:
+        intent = Intent(strategy="paper-audit", market=market, side="buy", model_prob=0.6,
+                        market_price=0.4, assumed_slippage=0.005, fee_rate=0.0,
+                        liquidity_usd=50_000.0, spread=0.01, token_id=token, book_ts=utc_now(),
+                        tags=("paper-audit",), min_order_size=5.0)  # tagged + a book minimum, or RiskGate vetoes
+        out = paper_ledger.commit_if_allowed(intent, load_risk())
+        assert out["allow"] is True, out["decision"].get("reasons")  # the real RiskGate allowed
+        return out["fill"]
+
+    return {"ledger": ledger, "bus": bus, "commit": commit}
+
+
+def raw_fill_line(bus: Path, fill_id: str) -> bytes:
+    """The exact on-disk bytes of one bus fill line (without its newline)."""
+    for line in bus.read_bytes().split(b"\n"):
+        if line.strip():
+            row = json.loads(line)
+            if row.get("type") == "fill" and row.get("payload", {}).get("fill_id") == fill_id:
+                return line
+    raise AssertionError(f"no bus fill line for {fill_id}")
+
+
+def test_records_from_the_real_commit_join_to_a_full_pass(real_records, capsys):
+    """The two records the pipeline really writes (book first, bus second) audit to exit 0. The
+    real bus also holds the RiskGate signal lines; only fills are this audit's evidence."""
+    real_records["commit"]("m1", "t1")
+    real_records["commit"]("m2", "t2")
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_OK == 0 and report["verdict"] == "pass"
+    assert report["matched"] == 2 and report["problems"] == []
+    assert report["counts"] == {"verified_fills": 2, "unverified_rows": 0}
+    assert {row["type"] for row in lines_of(real_records["bus"])} == {"signal", "fill"}
+    assert report["bus"]["fills"] == 2 and report["ledger"]["fills"] == 2
+
+
+def test_a_deleted_bus_fill_line_is_a_ledger_only_orphan(real_records, capsys):
+    """删行 on the bus side: the booked fill loses its Executor copy and is a named orphan."""
+    real_records["commit"]("m1", "t1")
+    second = real_records["commit"]("m2", "t2")
+    dropped = raw_fill_line(real_records["bus"], second["fill_id"])
+    real_records["bus"].write_bytes(
+        real_records["bus"].read_bytes().replace(dropped + b"\n", b""))
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
+    assert report["ledger_only"] == [second["fill_id"]] and report["bus_only"] == []
+    assert report["matched"] == 1
+
+
+def test_a_deleted_ledger_line_breaks_conservation(real_records, capsys):
+    """删行 on the ledger side: the surviving row's cash snapshot no longer replays, so the audit
+    refuses to join the ledger at all (exit 1, ledger never verified)."""
+    real_records["commit"]("m1", "t1")
+    real_records["commit"]("m2", "t2")
+    rewrite(real_records["ledger"], lines_of(real_records["ledger"])[1:])
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
+    assert report["ledger_verified"] is False
+    assert any(problem.startswith("ledger:verify:") for problem in report["problems"])
+
+
+def test_a_modified_bus_payload_field_is_a_named_mismatch(real_records, capsys):
+    """改字段 on the bus side only: the joined fill is cross-checked and the drifted field named."""
+    fill = real_records["commit"]()
+    rows = lines_of(real_records["bus"])
+    for row in rows:
+        if row.get("type") == "fill":
+            row["payload"]["notional_usd"] += 1.0
+    rewrite(real_records["bus"], rows)
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
+    assert report["matched"] == 1 and report["counts"]["verified_fills"] == 1
+    assert f"payload_mismatch:{fill['fill_id']}:notional_usd" in report["problems"]
+
+
+def test_a_modified_ledger_row_fails_ledger_verify(real_records, capsys):
+    """改字段 on the ledger side only: conservation no longer replays, so verify fails first."""
+    real_records["commit"]()
+    rows = lines_of(real_records["ledger"])
+    rows[0]["shares"] += 1.0
+    rewrite(real_records["ledger"], rows)
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1
+    assert report["ledger_verified"] is False
+    assert any(problem.startswith("ledger:verify:") for problem in report["problems"])
+
+
+def test_an_identical_duplicate_bus_fill_line_counts_once(real_records, capsys):
+    """重复: the exact same fill bytes appended again count once and are reported, not a failure."""
+    fill = real_records["commit"]()
+    with real_records["bus"].open("ab") as handle:
+        handle.write(raw_fill_line(real_records["bus"], fill["fill_id"]) + b"\n")
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_OK == 0 and report["verdict"] == "pass"
+    assert report["problems"] == [] and report["matched"] == 1
+    assert report["bus"]["duplicate_fills"] == 1
+
+
+def test_a_conflicting_duplicate_bus_fill_line_fails(real_records, capsys):
+    """冲突: a second copy of one fill with drifted content is a named conflict and a mismatch."""
+    fill = real_records["commit"]()
+    drifted = json.loads(raw_fill_line(real_records["bus"], fill["fill_id"]))
+    drifted["payload"]["shares"] += 1.0
+    with real_records["bus"].open("ab") as handle:
+        handle.write(json.dumps(drifted).encode("utf-8") + b"\n")
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
+    assert f"duplicate_conflict:{fill['fill_id']}" in report["problems"]
+    assert any(problem.startswith(f"payload_mismatch:{fill['fill_id']}:shares")
+               for problem in report["problems"])
+
+
+def test_crlf_line_endings_on_both_real_logs_still_audit(real_records, capsys):
+    """LF/CRLF: both strict readers accept CRLF-terminated lines, so the verdict is unchanged."""
+    real_records["commit"]()
+    for path in (real_records["ledger"], real_records["bus"]):
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_OK == 0 and report["verdict"] == "pass"
+    assert report["problems"] == [] and report["matched"] == 1
+
+
+def test_a_torn_bus_tail_on_real_records_is_a_usage_error(real_records, capsys):
+    """断尾 on the bus side: the file cannot be read in full (exit 2), never a partial pass."""
+    real_records["commit"]()
+    raw = real_records["bus"].read_bytes()
+    assert raw.endswith(b"\n")
+    real_records["bus"].write_bytes(raw[:-1])
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_USAGE == 2
+    assert "bus:torn_last_row" in report["problems"]
+
+
+def test_a_legacy_history_row_below_a_real_fill_is_unknown(real_records, capsys):
+    """历史行: pre-Task-AF history booked before the real commit (so conservation still replays)
+    has no fill_id and no honest join — UNKNOWN and counted, never guessed into an orphan."""
+    write_jsonl(real_records["ledger"], [legacy_row(market="m0", token_id="t0")])
+    real_records["commit"]("m1", "t1")
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "unknown"
+    assert report["matched"] == 1 and report["ledger"]["legacy_rows"] == 1
+    assert report["problems"] == [] and report["ledger_only"] == [] and report["bus_only"] == []
+    assert report["counts"] == {"verified_fills": 1, "unverified_rows": 1}
+    assert [name for name in report["unknowns"] if name.startswith("legacy:")] == report["unknowns"]
+
+
+def test_an_emptied_bus_file_fails_with_every_fill_ledger_only(real_records, capsys):
+    """空输入 on one side: with fills booked, an empty bus is a named orphan per fill, never a
+    pass (the all-empty case is ``test_all_empty_inputs_are_unknown_not_a_full_pass`` above)."""
+    first = real_records["commit"]("m1", "t1")
+    second = real_records["commit"]("m2", "t2")
+    real_records["bus"].write_bytes(b"")
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
+    assert sorted(report["ledger_only"]) == sorted([first["fill_id"], second["fill_id"]])
+    assert report["matched"] == 0 and report["bus"]["fills"] == 0
+
+
+def test_the_audit_of_real_records_never_touches_the_network(real_records, monkeypatch, capsys):
+    """网络绊线 with real records: the full failing path runs with sockets refused, offline."""
+    def refused(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("paper_audit must not touch the network")
+
+    monkeypatch.setattr(socket, "socket", refused)
+    monkeypatch.setattr(socket, "create_connection", refused)
+    fill = real_records["commit"]()
+    rows = lines_of(real_records["bus"])
+    for row in rows:  # damage the copy so the audit does the full comparison work, offline
+        if row.get("type") == "fill":
+            row["payload"]["fee_usd"] += 0.25
+    rewrite(real_records["bus"], rows)
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH == 1
+    assert any(problem.startswith(f"payload_mismatch:{fill['fill_id']}:fee_usd")
+               for problem in report["problems"])
+
+
+def test_a_failing_audit_leaves_both_real_logs_byte_identical(real_records, capsys):
+    """输入字节不变 on a failing run: even a problem report writes nothing back to either log."""
+    real_records["commit"]("m1", "t1")
+    real_records["commit"]("m2", "t2")
+    rows = lines_of(real_records["ledger"])
+    rows[0]["cash_after_usd"] += 1.0  # a failing input: conservation no longer holds
+    rewrite(real_records["ledger"], rows)
+    before = (real_records["ledger"].read_bytes(), real_records["bus"].read_bytes())
+    code = paper_audit.main(argv_for(real_records["ledger"], real_records["bus"]))
+    assert code == paper_audit.EXIT_MISMATCH == 1
+    assert (real_records["ledger"].read_bytes(), real_records["bus"].read_bytes()) == before
