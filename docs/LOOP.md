@@ -1813,7 +1813,30 @@ Status: done. Claimed by Poly桥接 at Poly指挥's request. Docs, lint and test
 - Tests: a stop-seal mid-round leaves `error_streak` unchanged and publishes no heartbeat;
   a heartbeat without `error_streak` counts as 0 (no alert, no halt). No threshold value changed.
 
+## Task EF — Issue #350: fees._finite fails closed on 10**400 (no OverflowError)
+
+Status: todo. Registered by Poly指挥 (Risk gaps backlog #46, pure code). Non-KEY, non-HOLD. Baseline ab7739a.
+
+- `src/fees.py` `_finite` returns None on huge ints (±10**400); `fee_per_share` returns None when fee_rate,
+  market_price or effective_price overflows. `ledger_store.verify` reports a problem and `paper_ledger.load_state`
+  returns `daily_loss_usd=None` with `ledger_problems` (invalid_risk_state); nothing crashes.
+- Tests and acceptance: issue #350 comment 6206469807 (20 strict xfails + control). Boundary: src/fees.py (+ ledger
+  store / paper ledger only to catch this overflow), new tests. Full pytest + guard 12/12.
+  config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
+## Task EG — Issue #349: three settlement-blocking prefixes actually written
+
+Status: todo. Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-KEY, non-HOLD. Baseline ab7739a.
+
+- `settlement_result_changed`, `settlement_conflict`, `invalid_settlement_payout` are in the blocking prefix tuple
+  but no `halt(` ever writes them. Write a scope=market, blocks_settlement halt (global halt kept). The three prefixes
+  stay and `blocks_settlement` keeps returning True for them; removing or weakening one is a risk change (Poly风控 +
+  家伟), not this task. Existing rejection tests (`tests/test_runner_settlement.py`) stay unchanged.
+- Tests and acceptance: issue #349 comment 6206470263 (4 strict xfails + control; correction comment below it). Boundary: src/settlement.py, new
+  tests. Full pytest + guard 12/12. config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+
 ## Latest
+- 2026-10-16: Registered Task EF (#350, fees._finite overflow) then Task EG (#349, settlement-blocking prefixes) as todo; Risk gaps pure code, non-KEY. #353 (Gamma keyset, after #342) takes the next letter when registered. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task CK (issue #197, KEY+HOLD; #255): close-then-write-off, option A (家伟 2026-10-14 22:25: a failed clock check still writes off at the late reference). Write-off rows carry `writeoff_sod_late`; #255's recompute fails closed on `writeoff_sod_late_mismatch`. Poly执行 K1-K4 clock x write-off tests + end-to-end paused-clock preflight test. Merge only after 家伟 「批准 #342」. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task CK PR #342 review 6183015083 fixes: writeoff_sod_late absent or strict bool (null never written or accepted); unhashable kind is invalid_kind (no TypeError); restart re-sends write-off events before settlement; paper_audit counts write-offs apart (not ledger_only); real-hook e2e. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task CK PR #342 review 6183384298: write-off completion per leg (an interrupted multi-leg write-off resumes the remaining legs after a restart, exactly once). Merge only after 家伟 「批准 #342」. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
