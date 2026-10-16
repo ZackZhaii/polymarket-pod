@@ -1815,7 +1815,7 @@ Status: done. Claimed by Poly桥接 at Poly指挥's request. Docs, lint and test
 
 ## Task EG — Issue #350: fees._finite fails closed on 10**400 (no OverflowError)
 
-Status: todo. Registered by Poly指挥 (Risk gaps, pure code). Non-KEY, non-HOLD. Baseline ab7739a.
+Status: todo. Registered by Poly指挥 (Risk gaps backlog #46, pure code). Non-KEY, non-HOLD. Baseline ab7739a.
 
 - `src/fees.py` `_finite` returns None on huge ints (±10**400); `fee_per_share` returns None when fee_rate,
   market_price or effective_price overflows. `ledger_store.verify` reports a problem and `paper_ledger.load_state`
@@ -1826,12 +1826,13 @@ Status: todo. Registered by Poly指挥 (Risk gaps, pure code). Non-KEY, non-HOLD
 
 ## Task EH — Issue #349: three settlement-blocking prefixes actually written
 
-Status: todo. Registered by Poly指挥 (Risk gaps, pure code). Non-KEY, non-HOLD. Baseline ab7739a.
+Status: todo. Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-KEY, non-HOLD. Baseline ab7739a.
 
 - `settlement_result_changed`, `settlement_conflict`, `invalid_settlement_payout` are in the blocking prefix tuple
-  but no `halt(` ever writes them. Write a scope=market, blocks_settlement halt (global halt kept), or remove dead
-  prefixes and assert they are gone. No halt is loosened; any change to an existing global halt goes to Poly风控.
-- Tests and acceptance: issue #349 comment 6206470263 (4 strict xfails + control). Boundary: src/settlement.py, new
+  but no `halt(` ever writes them. Write a scope=market, blocks_settlement halt (global halt kept). The three prefixes
+  stay and `blocks_settlement` keeps returning True for them; removing or weakening one is a risk change (Poly风控 +
+  家伟), not this task. Existing rejection tests (`tests/test_runner_settlement.py`) stay unchanged.
+- Tests and acceptance: issue #349 comment 6206470263 (4 strict xfails + control; correction comment below it). Boundary: src/settlement.py, new
   tests. Full pytest + guard 12/12. config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
 ## Latest
