@@ -192,6 +192,7 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
     final: dict[str, tuple[float, dict[str, Any]]] = {}
     pending: set[str] = set()
     by_condition: dict[str, dict[str, Any]] = {}
+    mapped_by_condition: dict[str, dict[str, Any]] = {}  # the first explicit outcome_token_ids mapping per condition
     full_mapping: set[str] = set()  # PR #360 review (P2): conditions with an explicit outcome_token_ids mapping
     for snap in resolutions:
         if not confirmed(snap):
@@ -202,10 +203,19 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
         condition = str(snap.get("condition_id"))
         prior = by_condition.get(condition)
         if prior is not None:
-            try:
-                conflict = content_conflict(prior, snap)
-            except (KeyError, TypeError, ValueError):
-                conflict = "unreadable"
+            # PR #360 review 6214537139 (P1): compare with the first snapshot AND the first explicit mapping of the
+            # condition, so [legacy, [a,b], [a,c]] is a mapping conflict in every order (fail closed)
+            conflict = None
+            for base in (prior, mapped_by_condition.get(condition)):
+                if base is None or base is snap:
+                    continue
+                try:
+                    conflict = content_conflict(base, snap)
+                except (KeyError, TypeError, ValueError):
+                    conflict = "unreadable"
+                if conflict is not None:
+                    prior = base
+                    break
             if conflict is not None:
                 result.problems.append(f"settlement_conflict:{condition}:{conflict}")
                 _plan_market_halt(result, f"settlement_conflict:{condition}:{conflict}",
@@ -217,6 +227,7 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
             by_condition[condition] = snap
         if isinstance(snap.get("outcome_token_ids"), list):
             full_mapping.add(condition)
+            mapped_by_condition.setdefault(condition, snap)
         winner = str(snap.get("winning_token_id"))
         for token in _tokens(snap):
             payout = 1.0 if token == winner else 0.0

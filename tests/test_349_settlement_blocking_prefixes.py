@@ -421,3 +421,44 @@ def test_m3_a_legacy_snapshot_alone_never_proves_a_removal_but_a_changed_winner_
     assert unchanged.problems == []  # legacy proves only its winner: b's absence is no evidence
     changed = settlement.plan(rows, [r["fill_id"] for r in rows], [_legacy("0xc", "b")], _stamp(NOW))
     assert set(changed.problems) == {"settlement_result_changed:mB|b", "settlement_result_changed:mA|a"}
+
+
+# ---------------------------------------------------------------- PR #360 review 6214537139 (Poly风控, head c548d51)
+
+@pytest.mark.parametrize("order", list(__import__("itertools").permutations(range(3))))
+def test_n_legacy_plus_two_different_mappings_is_a_conflict_in_every_order(order):
+    """P1 (Codex 6214486218): legacy, [a,b], [a,c] of one condition (same winner a): the two explicit mappings
+    disagree. Every one of the 6 orders reports the mapping conflict, halts the markets and settles nothing."""
+    rows = [fill("buy", 5.0, 0.5, _stamp(NOW), market="mB", token="b"),
+            fill("buy", 5.0, 0.5, _stamp(NOW), market="mC", token="c")]
+    trio = [_legacy("0xc", "a"), _snap("0xc", ["a", "b"], "a"), _snap("0xc", ["a", "c"], "a")]
+    planned = settlement.plan(rows, ["i0", "i1"], [trio[i] for i in order], _stamp(NOW))
+    assert planned.rows == []
+    assert planned.problems == ["settlement_conflict:0xc:upgrade_token_mapping_conflict"]
+    assert {m for m, _r in planned.market_halts} == {"mB", "mC"}
+    assert all(settlement.blocks_settlement(r) for _m, r in planned.market_halts)
+
+
+def test_o_commit_if_allowed_vetoes_on_ledger_verify_failed_halts_global_and_books_nothing(env):
+    """P1 follow-up: the real commit_if_allowed with a payout-only 10**400 settlement row (verify raises): veto,
+    global invalid_risk_state halt, the market's settlement-blocking halt, and the trade is not booked."""
+    from src.podlib import load_risk, utc_now
+    from src.risk_gate import Intent
+
+    _hold_loser(env)
+    _tick(env, Gamma(resolved_row()))
+    row = dict(_settlements(env)[0], fill_id="settle-huge-payout-only", settlement_payout=10**400)
+    with env["paper"].open("ab") as handle:
+        handle.write((json.dumps(row) + "\n").encode("utf-8"))
+    before = env["paper"].read_bytes()
+    assert not _global_halt()
+    intent = Intent(strategy="eg-test", market="m-new", side="buy", model_prob=0.6, market_price=0.4,
+                    assumed_slippage=0.005, fee_rate=0.0, liquidity_usd=50_000.0, spread=0.01, token_id="n1",
+                    book_ts=utc_now(), tags=("eg-test",), min_order_size=5.0)
+    out = paper_ledger.commit_if_allowed(intent, load_risk())
+    assert out["allow"] is False and out["halted"] is True and out["halt_reason"] == "invalid_risk_state"
+    assert out["decision"]["risk_decision"] == "veto"
+    assert any(str(p).startswith("ledger_verify_failed:") for p in out["ledger_problems"])
+    assert _global_halt()
+    assert [h["market"] for h in _blocking_market_halts()] == [rig.MARKET_ID]
+    assert env["paper"].read_bytes() == before  # nothing booked
