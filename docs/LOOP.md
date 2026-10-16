@@ -3,14 +3,14 @@
 Use this when a Grok Bot chat gets long. Start a new chat. Do not carry the old transcript.
 Read this file, `docs/PHASE0_RUN.md`, and `config/risk.toml`. Then do one task below.
 
-Phase 0 work lands on `dev` (branch from `origin/dev`; PRs use base `dev`; Poly指挥 opens dev→main PRs). Scanner, public book, and gated paper ledger already run.
+Phase 0 work lands on `dev` (branch from `origin/dev`; PRs use base `dev`; Codex may prepare dev→main PRs for human review and merge). Integration roles and author recusal follow [CODEX_COORDINATION.md](CODEX_COORDINATION.md). Scanner, public book, and gated paper ledger already run.
 `live_enabled` is false. Do not change that. Do not read `.env`. Do not place orders.
 
 ## How to split chats
 
 One chat, one task, one finish line. Do not start a second task in the same chat.
 When the diff is committed, write five lines at the bottom of this file under `## Latest` and stop.
-Branch from `origin/dev`; pull requests target `dev`. Poly指挥 merges into `dev` and opens `dev` -> `main` pull requests for human review.
+Branch from `origin/dev`; pull requests target `dev`. Ordinary `dev` PRs are integrated by an authorized Codex seat that did not participate in their implementation, per [CODEX_COORDINATION.md](CODEX_COORDINATION.md). Codex may prepare `dev` -> `main` pull requests; humans review and merge them. KEY/HOLD and other reserved matters still require specific human approval.
 Never push `main` or `dev`, never merge your own pull request, keep at most 2 open pull requests per bot. Escalated items are never auto-merged.
 Task letters: the next letter unused on `dev`, `main` and every open pull request. After Z come AA, AB, AC, … (after AZ comes BA, and so on).
 The next chat starts from that block.
