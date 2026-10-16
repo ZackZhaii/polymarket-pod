@@ -705,6 +705,22 @@
       "title": "#343 follow-ups: malformed error_streak = global halt wording, sentinel_tick F541, seal/missing-field error_streak tests",
       "note": "Claimed by Poly桥接 as Task EE at Poly指挥's request. Non-KEY: docs/lint/tests only, no threshold change, no risk.toml change.",
       "surface": "grok-bot"
+    },
+    {
+      "id": "EG",
+      "status": "todo",
+      "title": "Issue #350: fees._finite fails closed (None) on huge ints like 10**400 instead of raising OverflowError; ledger verify/load_state report problems, never crash",
+      "finish": "src/fees.py _finite returns None on OverflowError (and fee_per_share for fee_rate/market_price/effective_price); ledger_store.verify returns a problem and paper_ledger.load_state returns daily_loss_usd=None with ledger_problems (invalid_risk_state) for ledger rows with huge ints. Tests from the #350 draft (issue comment 6206469807): 20 strict xfails turned into plain asserts + ordinary-values control. Full python -m pytest (--basetemp outside the repo) 0 failed; guard --require-git 12/12. config/risk.toml unchanged, live_enabled false.",
+      "note": "Registered by Poly指挥 (Risk gaps, pure code). Non-KEY, non-HOLD: fail-closed tighten only. Baseline ab7739a. Boundary: src/fees.py (+ ledger_store/paper_ledger only to catch this overflow), new tests, LOOP/state.",
+      "surface": "grok-bot"
+    },
+    {
+      "id": "EH",
+      "status": "todo",
+      "title": "Issue #349: settlement_result_changed / settlement_conflict / invalid_settlement_payout actually written as market-scope settlement-blocking halts (or dead prefixes removed)",
+      "finish": "src/settlement.py writes a scope=market halt that blocks_settlement for each of the three prefixes (global halt kept), or removes prefixes that can never fire with the test rewritten to assert they are gone. Tests from the #349 draft (issue comment 6206470263): 4 strict xfails resolved + control; test_a_contradiction_in_the_resolutions_is_a_global_halt still passes. Full python -m pytest 0 failed; guard --require-git 12/12. No halt loosened. config/risk.toml unchanged, live_enabled false.",
+      "note": "Registered by Poly指挥 (Risk gaps, pure code). Non-KEY, non-HOLD: tighten only; any change to existing global halt goes to Poly风控. Baseline ab7739a. Boundary: src/settlement.py, new tests, LOOP/state.",
+      "surface": "grok-bot"
     }
   ]
 }
