@@ -122,7 +122,10 @@ def _markets_touching(rows: Iterable[dict[str, Any]], tokens: Iterable[str], con
 def _number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):  # PR #360 review (P1): 10**400 is invalid (None), never an OverflowError
+        return None
     return number if math.isfinite(number) else None
 
 
@@ -156,8 +159,14 @@ def record_market_halts(halts: Iterable[tuple[str, str]], *, quotes_path: Any = 
         try:
             if halt_store.has_active_halt(scope=halt_store.SCOPE_MARKET, market=market, reason_prefix=reason) is True:
                 continue
-            sentinel.halt(reason=reason, market=market, scope=halt_store.SCOPE_MARKET, source=MARKET_HALT_SOURCE,
-                          to="Executor", quotes_path=quotes_path, emit=emit, extra={"blocks_settlement": True})
+            message = sentinel.halt(reason=reason, market=market, scope=halt_store.SCOPE_MARKET,
+                                    source=MARKET_HALT_SOURCE, to="Executor", quotes_path=quotes_path, emit=emit,
+                                    extra={"blocks_settlement": True})
+            # PR #360 review (P2): sentinel.halt reports a failed step in its returned ``failures`` (it already
+            # wrote the global fallback); pass it to the caller instead of swallowing it
+            failures = message.get("failures") if isinstance(message, dict) else ["no_message"]
+            if failures:
+                problems.append(f"settlement_market_halt_failed:{market}:{','.join(str(f) for f in failures)}")
         except Exception as exc:  # noqa: BLE001 - reported to the caller (a global halt), never raised
             problems.append(f"settlement_market_halt_failed:{market}:{type(exc).__name__}")
     return problems
@@ -253,7 +262,7 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
         })
     # Issue #349 (Task EG): a booked settlement read again with another result. The confirmed snapshot its token
     # maps to now names another condition, winner or payout than the booked row: a contradiction (settle nothing)
-    # and a market halt of that market. No confirmed snapshot for the token now: nothing to compare (as before).
+    # and a market halt of that market. A token dropped from its still-confirmed condition is a change too (below).
     changed = False
     for row in ledger_rows:
         if not isinstance(row, dict) or not is_settlement(row):
@@ -261,6 +270,15 @@ def plan(ledger_rows: list[dict[str, Any]], ledger_ids: list[str], resolutions: 
         market, token = str(row.get("market") or ""), str(row.get("token_id"))
         hit = final.get(token)
         if hit is None:
+            # PR #360 review (P1): the token is no longer in any confirmed mapping, but the condition it was settled
+            # from is still confirmed (winner a -> x, mapping [a,b] -> [a,x]): the result changed. No confirmed
+            # snapshot for the token nor its condition: nothing to compare (as before).
+            by_cond = by_condition.get(str(row.get("condition_id")))
+            if by_cond is None:
+                continue
+            changed = True
+            result.problems.append(f"settlement_result_changed:{market}|{token}")
+            _plan_market_halt(result, f"settlement_result_changed:{market}|{token}", [market])
             continue
         payout, snap = hit
         if (str(row.get("condition_id")) != str(snap["condition_id"])

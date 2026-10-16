@@ -212,3 +212,126 @@ def test_g_no_problem_no_market_halt(env):
     planned = settlement.plan(read.rows, list(read.ids), _history(env), _stamp(NOW))
     assert planned.problems == [] and planned.market_halts == []
     assert settlement.invalid_payout_halts(read.rows) == []
+
+
+# ---------------------------------------------------------------- PR #360 review (Codex 6213482409, Poly风控 6213662139)
+
+def _snap(condition, tokens, winner):
+    return {"condition_id": condition, "winning_token_id": winner, "outcome_prices_final": [1.0, 0.0],
+            "closed_ts": "2026-01-01T00:00:00Z", "snapshot_ts": "2026-01-03T00:00:00Z", "status": "resolved",
+            "uma_checked": True, "outcome_token_ids": tokens}
+
+
+def _settled_row(market, token, condition, winner, payout):
+    return {"fill_id": settlement.settlement_fill_id(condition, market, token), "kind": "settlement",
+            "market": market, "token_id": token, "condition_id": condition, "winning_token_id": winner,
+            "settlement_payout": payout, "market_price": payout, "effective_price": payout}
+
+
+@pytest.mark.parametrize("huge", [10**400, -10**400])
+def test_h_a_huge_int_payout_is_invalid_not_an_overflow(huge):
+    """P1-1: 10**400 in a settlement row is invalid (None) and halts its market, never an OverflowError."""
+    assert settlement._number(huge) is None
+    row = _settled_row("m1", "t1", "0xc", "t1", 1.0)
+    row["settlement_payout"] = huge
+    assert settlement.invalid_payout_halts([row]) == [("m1", "invalid_settlement_payout:m1|t1")]
+    planned = settlement.plan([row], [row["fill_id"]], [_snap("0xc", ["t1", "t2"], "t1")], _stamp(NOW))
+    assert planned.rows == [] and planned.problems == ["settlement_result_changed:m1|t1"]
+
+
+def test_h2_the_commit_path_with_a_huge_int_payout_records_the_market_halt(env):
+    """P1-1 end to end: apply_settlements on a ledger with settlement_payout=10**400 does not crash and writes the
+    invalid_settlement_payout market halt (the ledger does not verify: load_state's global halt as before)."""
+    _hold_loser(env)
+    _tick(env, Gamma(resolved_row()))
+    row = dict(_settlements(env)[0], fill_id="settle-huge-payout", market_price=0.5, effective_price=0.5,
+               settlement_payout=10**400)
+    with env["paper"].open("ab") as handle:
+        handle.write((json.dumps(row) + "\n").encode("utf-8"))
+    out = paper_ledger.apply_settlements(_stamp(NOW + timedelta(seconds=60)))
+    assert out["booked"] == [] and out["problems"] == []
+    blocks = _blocking_market_halts()
+    assert [h["market"] for h in blocks] == [rig.MARKET_ID]
+    assert blocks[0]["reason"].startswith("invalid_settlement_payout:")
+
+
+def test_h3_the_runner_with_a_huge_int_payout_halts_global_and_market(env):
+    _hold_loser(env)
+    _tick(env, Gamma(resolved_row()))
+    row = dict(_settlements(env)[0], fill_id="settle-huge-payout", settlement_payout=10**400)
+    with env["paper"].open("ab") as handle:
+        handle.write((json.dumps(row) + "\n").encode("utf-8"))
+    report = _tick(env, Gamma(resolved_row()), NOW + timedelta(seconds=60))
+    assert report.reasons[0] == m2_runner.LEDGER_HALT_REASON and _global_halt()
+    assert [h["market"] for h in _blocking_market_halts()] == [rig.MARKET_ID]
+
+
+def test_i_a_settled_token_dropped_from_its_confirmed_mapping_is_a_result_change():
+    """P1-2: winner a -> x and mapping [a,b] -> [a,x]: the booked settlement of b no longer maps to any snapshot,
+    but its condition is still confirmed. settlement_result_changed + market halt; nothing settles (not even x)."""
+    rows = [fill("buy", 5.0, 0.5, _stamp(NOW), market="mB", token="b"),
+            _settled_row("mB", "b", "0xc", "a", 0.0),
+            fill("buy", 5.0, 0.5, _stamp(NOW), market="mX", token="x")]
+    ids = [row.get("fill_id", f"id{i}") for i, row in enumerate(rows)]
+    planned = settlement.plan(rows, ids, [_snap("0xc", ["a", "x"], "x")], _stamp(NOW))
+    assert planned.rows == []
+    assert planned.problems == ["settlement_result_changed:mB|b"]
+    assert planned.market_halts == [("mB", "settlement_result_changed:mB|b")]
+    assert all(settlement.blocks_settlement(reason) for _m, reason in planned.market_halts)
+
+
+def test_i2_control_no_confirmed_snapshot_for_the_token_or_its_condition_is_nothing_to_compare():
+    rows = [_settled_row("mB", "b", "0xc", "a", 0.0)]
+    planned = settlement.plan(rows, [rows[0]["fill_id"]], [_snap("0xother", ["o1", "o2"], "o1")], _stamp(NOW))
+    assert planned.problems == [] and planned.market_halts == []
+
+
+def test_i3_control_an_unchanged_settled_token_is_no_problem():
+    rows = [_settled_row("mB", "b", "0xc", "a", 0.0)]
+    planned = settlement.plan(rows, [rows[0]["fill_id"]], [_snap("0xc", ["a", "b"], "a")], _stamp(NOW))
+    assert planned.problems == [] and planned.market_halts == []
+
+
+def _failing_halt(**kwargs):
+    return {"type": "halt", "failures": ["halt_record_fallback"]}
+
+
+def test_j_record_market_halts_reports_sentinel_failures_and_exceptions(monkeypatch):
+    """P2: a failure sentinel.halt returns (not raises) is reported to the caller, as is a raised one."""
+    from src import sentinel
+
+    monkeypatch.setattr(halt_store, "has_active_halt", lambda **kw: False)
+    monkeypatch.setattr(sentinel, "halt", _failing_halt)
+    assert settlement.record_market_halts([("m1", "settlement_conflict:x")]) == [
+        "settlement_market_halt_failed:m1:halt_record_fallback"]
+
+    def boom(**kwargs):
+        raise OSError("disk")
+    monkeypatch.setattr(sentinel, "halt", boom)
+    assert settlement.record_market_halts([("m1", "settlement_conflict:x")]) == [
+        "settlement_market_halt_failed:m1:OSError"]
+    monkeypatch.setattr(sentinel, "halt", lambda **kw: {"type": "halt"})
+    assert settlement.record_market_halts([("m1", "settlement_conflict:x")]) == []  # control
+
+
+@pytest.mark.parametrize("prefix", DEAD)
+def test_j2_the_commit_path_reports_an_unwritten_market_halt(env, monkeypatch, prefix):
+    from src import sentinel
+
+    _hold_loser(env)
+    _tick(env, Gamma(resolved_row()))
+    SCENARIOS[prefix](env, _history(env)[0])
+    monkeypatch.setattr(sentinel, "halt", _failing_halt)
+    out = paper_ledger.apply_settlements(_stamp(NOW + timedelta(seconds=60)))
+    assert out["booked"] == []
+    assert f"settlement_market_halt_failed:{rig.MARKET_ID}:halt_record_fallback" in out["problems"]
+
+
+def test_j3_the_runner_preflight_reports_an_unwritten_market_halt(env, monkeypatch):
+    _hold_loser(env)
+    _tick(env, Gamma(resolved_row()))
+    _invalid_payout(env, _history(env)[0])
+    monkeypatch.setattr(settlement, "record_market_halts", lambda halts, **kw: ["settlement_market_halt_failed:m:x"])
+    report = _tick(env, Gamma(resolved_row()), NOW + timedelta(seconds=60))
+    assert report.reasons[0] == m2_runner.LEDGER_HALT_REASON and _global_halt()
+    assert "settlement_market_halt_failed:m:x" in report.reasons

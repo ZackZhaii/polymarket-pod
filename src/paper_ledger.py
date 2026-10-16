@@ -360,8 +360,15 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
     _, ledger = ledger_store.read_ledger(PAPER_PATH)
     if ledger_store.verify(ledger) or non_finite_ledger_rows(ledger.rows):
         # Issue #349 (Task EG): a settlement row paid outside {0, 1} is also its market's settlement-blocking halt
-        settlement.record_market_halts(settlement.invalid_payout_halts(ledger.rows), quotes_path=QUOTES_PATH,
-                                       emit=_emit)
+        # PR #360 review (P1/P2): never raises here, and a market halt that could not be written is a problem the
+        # caller sees (fail closed; the global invalid_risk_state from load_state is unchanged)
+        try:
+            failed = settlement.record_market_halts(settlement.invalid_payout_halts(ledger.rows),
+                                                    quotes_path=QUOTES_PATH, emit=_emit)
+        except Exception as exc:  # noqa: BLE001 - reported to the caller, never raised
+            failed = [f"settlement_market_halt_failed:-:{type(exc).__name__}"]
+        if failed:
+            out["problems"] = failed
         return out
     planned = settlement.plan(ledger.rows, list(ledger.ids), snaps or [], now or utc_now())
     out["unsettled_closed_legs"] = planned.unsettled_closed_legs

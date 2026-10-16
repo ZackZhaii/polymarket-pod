@@ -451,8 +451,10 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
     if halts:
         return Preflight(ACT_PAUSE, ["global_halt", *halts])
     ledger = Path(ledger_path) if ledger_path is not None else Path(paper_ledger.PAPER_PATH)
+    read = halt_rows = None
     try:
         _, read = ledger_store.read_ledger(ledger)
+        halt_rows = read  # PR #360 review (P1): a read ledger whose verify raises still gets its market halts
         problems = ledger_store.verify(read)
     except Exception as exc:  # noqa: BLE001 - an unreadable ledger is invalid (fail closed)
         read, problems = None, [f"ledger_unreadable:{type(exc).__name__}"]
@@ -461,14 +463,17 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
         problems = list(day.problems)
     if problems or read is None:
         _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": [str(p) for p in problems[:10]]})
-        if read is not None:  # issue #349 (Task EG): a settlement row paid outside {0, 1} also halts its market
+        halt_failed: list[str] = []
+        if halt_rows is not None:  # issue #349 (Task EG): a settlement row paid outside {0, 1} also halts its market
             try:
                 from src import settlement
 
-                settlement.record_market_halts(settlement.invalid_payout_halts(read.rows))
+                halt_failed = settlement.record_market_halts(settlement.invalid_payout_halts(halt_rows.rows))
             except Exception as exc:  # noqa: BLE001 - the global halt above is recorded; fail closed, never raise
-                halt_store.write_fallback(f"{PROC} settlement_market_halt record_failed {type(exc).__name__}")
-        return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]]])
+                halt_failed = [f"settlement_market_halt_failed:-:{type(exc).__name__}"]
+            if halt_failed:  # PR #360 review (P2): reported, not swallowed
+                halt_store.write_fallback(f"{PROC} settlement_market_halt record_failed {','.join(halt_failed)}")
+        return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]], *halt_failed])
     if settle is not None:  # issue #206: settlement before the daily-loss breaker (see the docstring)
         problems = [str(p) for p in settle()]
         if not problems:
