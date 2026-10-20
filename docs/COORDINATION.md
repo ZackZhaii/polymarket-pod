@@ -4,13 +4,13 @@ Phase 0：只读扫描 + 纸面信号。`config/risk.toml` 固定 mode=paper、l
 谁都不读 `.env`，不签名，不下单，不撤单，不装交易 MCP，不对外发消息。单边成交是方向敞口，不是无风险套利。
 
 ## 唯一协调面
-- 真相源：GitHub `ZackZhaii/polymarket-pod` 的 `dev`（日常集成）；`main` 只收 Poly指挥 开、人审查合并的 `dev`→`main` PR（本文最初写于 26667aa 之上）。
+- 真相源：GitHub `ZackZhaii/polymarket-pod` 的 `dev`（日常集成）；Codex 主导协调、单 writer 派活、独立 QC 和普通 `dev` PR 最终集成，作者必须回避。Codex 可准备并开 `dev`→`main` PR，仍由人审查合并。当前协议见 [CODEX_COORDINATION.md](CODEX_COORDINATION.md)；下文历史队列/裁定保留历史含义。
 - 任务队列：`docs/loop/state.json`（机器可读，`src/loop_claim.py` 领取/释放）+ `docs/LOOP.md`（人读）。两处必须同时更新。
 - 规则：一个对话只领一件、只领第一件 todo（loop_claim 强制顺序），做完释放并在 `## Latest` 写五行。
 - 新任务进队列：Operator 直接写；或 bot 从下方 Risk gaps backlog 挑纯代码项，开 PR 登记（LOOP.md + state.json）。PR 合并进 `dev` = Operator 加入，关闭 PR = 拒绝。bot 不自造清单外任务，不加实盘任务。
 - 每个 bot 同时最多开着 2 个 PR（自选任务、文档、验收都算）。任务字母用 `dev`、`main` 和未关闭 PR 都没用过的下一个；Z 之后依次用 AA、AB、AC……（AZ 之后是 BA，以此类推）。
 - 写 git 只在 `.worktrees/<名字>` 的 worktree 里（`.git/info/exclude`），做完 `git worktree remove`。主目录归 Operator 本机 Grok Build，只有它在主目录 pull。提交用 `git -c user.name=ZackZhaii -c user.email=17690114@qq.com commit ...`，不改全局配置。
-- 分支从 `origin/dev` 开，PR 的 base 一律是 `dev`。Poly指挥 把 PR 合并进 `dev`；`dev`→`main` 的 PR 只由 Poly指挥 开，由人审查合并。bot 不推 `main` 也不推 `dev`，不合并自己的 PR。升级给 Operator 的事项（risk.toml、live、风控阈值提案等）永不自动合并。
+- 分支从 `origin/dev` 开，PR 的 base 一律是 `dev`。普通 `dev` PR 由 Codex 按统一协议集成；当前主控/实现worker参与实现时，交另一个未参与实现且获授权的Codex集成席或Owner。bot 不直推 `main` 或 `dev`，不自合并。main、risk.toml、live、风控阈值、KEY/HOLD 等仍逐项人审；现有例行频率/触发方式不改。
 - `D:\AI_Workspace\OpenClaw\workspace\polymarket-pod` 是平行草稿树，不合并。
 - **分支 `docs/grok-link` / PR #1：不合并（operator decision 2026-10-08）。** 其中 "Task F — Grok link" 的字母与 main 上 Task F（Endgame）冲突，以 main 为准。
 
@@ -19,7 +19,7 @@ ROLES.md 仅作历史参考；ROLES 独有的 Researcher / ArbMerge / CryptoPuls
 
 | Bot | ROSTER 角色（总线 `from` 用此名） | Phase 0 权限 |
 |---|---|---|
-| Poly指挥 | （无总线角色；协调/收口） | 分发、审查、起草，合并进 dev，开 dev→main PR；不交易，不推 main |
+| Poly指挥 | （无总线角色；专长咨询） | 空闲时批量短问答、专长证据、实际阻塞；不再默认指挥或最终集成，不交易、不直推；获明确授权的非作者工作仍按统一协议 |
 | Poly扫描 | Scanner | 只读 Gamma |
 | Poly盘口 | BookWatcher | 只读 CLOB /book，报陈旧 |
 | Poly研判 | NewsForecaster | 新闻/X 概率，只出 signal，不出单 |

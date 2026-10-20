@@ -3,14 +3,14 @@
 Use this when a Grok Bot chat gets long. Start a new chat. Do not carry the old transcript.
 Read this file, `docs/PHASE0_RUN.md`, and `config/risk.toml`. Then do one task below.
 
-Phase 0 work lands on `dev` (branch from `origin/dev`; PRs use base `dev`; Poly指挥 opens dev→main PRs). Scanner, public book, and gated paper ledger already run.
+Phase 0 work lands on `dev` (branch from `origin/dev`; PRs use base `dev`; Codex may prepare dev→main PRs for human review and merge). Integration roles and author recusal follow [CODEX_COORDINATION.md](CODEX_COORDINATION.md). Scanner, public book, and gated paper ledger already run.
 `live_enabled` is false. Do not change that. Do not read `.env`. Do not place orders.
 
 ## How to split chats
 
 One chat, one task, one finish line. Do not start a second task in the same chat.
 When the diff is committed, write five lines at the bottom of this file under `## Latest` and stop.
-Branch from `origin/dev`; pull requests target `dev`. Poly指挥 merges into `dev` and opens `dev` -> `main` pull requests for human review.
+Branch from `origin/dev`; pull requests target `dev`. Ordinary `dev` PRs are integrated by an authorized Codex seat that did not participate in their implementation, per [CODEX_COORDINATION.md](CODEX_COORDINATION.md). Codex may prepare `dev` -> `main` pull requests; humans review and merge them. KEY/HOLD and other reserved matters still require specific human approval.
 Never push `main` or `dev`, never merge your own pull request, keep at most 2 open pull requests per bot. Escalated items are never auto-merged.
 Task letters: the next letter unused on `dev`, `main` and every open pull request. After Z come AA, AB, AC, … (after AZ comes BA, and so on).
 The next chat starts from that block.
@@ -1815,7 +1815,7 @@ Status: done. Claimed by Poly桥接 at Poly指挥's request. Docs, lint and test
 
 ## Task EF — Issue #350: fees._finite fails closed on 10**400 (no OverflowError)
 
-Status: todo. Registered by Poly指挥 (Risk gaps backlog #46, pure code). Non-KEY, non-HOLD. Baseline ab7739a.
+Status: done (codex-local, 2026-10-16). Registered by Poly指挥 (Risk gaps backlog #46, pure code). Non-KEY, non-HOLD. Registration baseline ab7739a; implementation baseline 269e053.
 
 - `src/fees.py` `_finite` returns None on huge ints (±10**400); `fee_per_share` returns None when fee_rate,
   market_price or effective_price overflows. `ledger_store.verify` reports a problem and `paper_ledger.load_state`
@@ -1823,6 +1823,11 @@ Status: todo. Registered by Poly指挥 (Risk gaps backlog #46, pure code). Non-K
 - Tests and acceptance: issue #350 comment 6206469807 (20 strict xfails + control). Boundary: src/fees.py (+ ledger
   store / paper ledger only to catch this overflow), new tests. Full pytest + guard 12/12.
   config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+- Implemented: fees._finite catches conversion OverflowError; ledger_store rejects overflow in the three fee inputs
+  as invalid_fee, preserving the existing invalid-price notional fallback. paper_ledger needs no change.
+- The draft cases are 21 normal assertions with a complete conservation snapshot and exact invalid_fee reasons.
+  Focused suite: 347 passed. Final released-state full suite: 5638 passed, 8 skipped, 9 existing xfailed, 0 failed.
+  First full run's sole failure (active claim against released-state assertion) is retained in the handoff evidence.
 
 ## Task EG — Issue #349: three settlement-blocking prefixes actually written
 
@@ -1858,6 +1863,11 @@ Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-KEY, non-HOLD: 
 - 2026-10-16: Task EG PR #360 review 6214147426 (Poly风控; Codex 6214035038, flash 6214128436): apply_settlements treats a raising verify (payout-only 10**400) as a veto problem plus the invalid_settlement_payout market halt; settlement.plan checks result changes before returning on any conflict (every market gets its halt); agreeing legacy/full snapshots merge order-independently, removal judged only from an explicit mapping (a moved winner still halts). Tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-16: Task EG PR #360 review (Codex 6213482409 / flash 6213576333 / Poly风控 6213662139): settlement._number treats 10**400 as invalid (invalid_settlement_payout market halt, no OverflowError; runner records it even when verify raises); a settled token dropped from its still-confirmed condition mapping is settlement_result_changed + market halt; sentinel.halt failures and record_market_halts problems reach the caller (apply_settlements problems, preflight reasons). Tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-16: Task EG (#349) done by Poly桥接: settlement_conflict / settlement_result_changed / invalid_settlement_payout are now also scope=market settlement-blocking halts (global invalid_risk_state kept, no prefix removed); minimal hooks in paper_ledger.apply_settlements and m2_runner.preflight. Non-KEY, tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-10-16: Task EF (#350), codex-local: oversized fee_rate/market_price/effective_price fail closed; ledger reports invalid_fee, load_state loss=None.
+- Validation: TDD 20 expected failures + 1 control; focused 347 passed; released-state full pytest 5638 passed, 8 skipped, 9 existing xfailed, 0 failed. First full queue-state failure retained.
+- Non-author QC: internal capability_audit checked frozen code/tests, 12 oversized-integer cases, 12 existing-price-fallback cases and 14 finite/type controls; actual receipts accompany the PR.
+- Safety: risk.toml unchanged (0aea23af…bc04), live_enabled=false; no threshold/fee formula/signing/order/runtime change; paper_ledger unchanged.
+- Handoff: EF released done, claim=null; EG (#349) remains todo and was not taken. State is proposed through this base=dev PR; author does not self-merge.
 - 2026-10-16: Registered Task EF (#350, fees._finite overflow) then Task EG (#349, settlement-blocking prefixes) as todo; Risk gaps pure code, non-KEY. #353 (Gamma keyset, after #342) takes the next letter when registered. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task EE: #343 follow-ups — malformed m1_rest error_streak documented as global halt heartbeat_malformed:m1_rest (not warn-only); sentinel_tick F541 fix; tests: seal mid-round does not count toward error_streak, missing field counts as 0. Non-KEY, no threshold change. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task ED (issue #138): m1_rest heartbeat progress.error_streak (consecutive all-asset REST sample failures; success clears); Sentinel warn rest_error_streak at REST_ERROR_STREAK_ALERT=3 (M2 pending); malformed streak → global halt heartbeat_malformed:m1_rest. Monitoring tighten only, non-KEY. risk.toml unchanged (0aea23af…bc04), live_enabled=false.

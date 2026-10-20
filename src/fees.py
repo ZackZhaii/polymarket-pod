@@ -40,7 +40,10 @@ def _finite(value: object) -> float | None:
     """A finite int or float; bools, strings, None, NaN and inf are None."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
     return number if math.isfinite(number) else None
 
 
