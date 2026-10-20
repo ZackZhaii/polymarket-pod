@@ -708,11 +708,12 @@
     },
     {
       "id": "EF",
-      "status": "todo",
+      "status": "done",
       "title": "Issue #350: fees._finite fails closed (None) on huge ints like 10**400 instead of raising OverflowError; ledger verify/load_state report problems, never crash",
       "finish": "src/fees.py _finite returns None on OverflowError (and fee_per_share for fee_rate/market_price/effective_price); ledger_store.verify returns a problem and paper_ledger.load_state returns daily_loss_usd=None with ledger_problems (invalid_risk_state) for ledger rows with huge ints. Tests from the #350 draft (issue comment 6206469807): 20 strict xfails turned into plain asserts + ordinary-values control. Full python -m pytest (--basetemp outside the repo) 0 failed; guard --require-git 12/12. config/risk.toml unchanged, live_enabled false.",
       "note": "Registered by Poly指挥 (Risk gaps backlog #46, pure code). Non-KEY, non-HOLD: fail-closed tighten only. Baseline ab7739a. Boundary: src/fees.py (+ ledger_store/paper_ledger only to catch this overflow), new tests, LOOP/state.",
-      "surface": "grok-bot"
+      "surface": "codex-local",
+      "done_at": "2026-10-16T08:52:32Z"
     },
     {
       "id": "EG",

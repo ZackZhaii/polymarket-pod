@@ -337,6 +337,12 @@ def _snapshot(cash: float, legs: dict[tuple[str, str], dict[str, float]], row: d
 
 
 def _fee_problems(row: dict[str, Any], fill_id: str) -> list[str]:
+    # ledger_fee's invalid-price fallback must not hide a float-conversion overflow.
+    try:
+        for name in ("fee_rate", "market_price", "effective_price"):
+            _finite(row.get(name))
+    except OverflowError:
+        return [f"invalid_fee:{fill_id}"]
     booked = _finite(row.get("fee_usd"))
     expected = ledger_fee(row.get("fee_rate"), row.get("market_price"), row.get("effective_price"),
                           row.get("notional_usd"), row.get("shares"))
