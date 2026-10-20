@@ -1,8 +1,10 @@
 # polymarket-pod
 
-纸面项目。你是入口之一：`grok-build-local`（本机 Grok Build）、`grok-web`、`grok-bot`、`codex-local`（Codex 桌面，编码执行席）、`dsh`（DeepSeek Harness，验证/监督席）。
+纸面项目。你是入口之一：`grok-build-local`（本机 Grok Build）、`grok-web`、`grok-bot`、`codex-local`（Codex 桌面，协调/编码/集成席）、`dsh`（DeepSeek Harness，研究/验证席）。
 共享记忆只有 GitHub 仓库：https://github.com/ZackZhaii/polymarket-pod 。日常集成在 `dev`；`main` 只收 `dev`→`main` PR
 不要相信上一轮聊天。不要碰咖啡业务、StarHive 或其他交易仓库。
+Codex 主导日常协调与普通 `dev` PR 的最终集成；具体分工、作者回避和复盘见 `docs/CODEX_COORDINATION.md`。所有既有例行频率/触发方式不改。
+下方领取/无 todo 停止条款约束工程实现；明确获准的协调、治理、审查和集成按统一协议核范围执行，不授予自行造代码任务或越过队列的权限。
 
 ## 每次开工
 
@@ -21,7 +23,7 @@ python src/loop_claim.py claim --surface grok-build-local --task F
 python src/loop_claim.py release --surface grok-build-local --done
 ```
 
-网页端把 surface 写成 `grok-web`，Grok Bot 写成 `grok-bot`，Codex 桌面写 `codex-local`，DSH 写 `dsh`。DSH 默认做审查、复跑测试和红线巡检，不抢队列第一件 `todo`；确实领取任务时与其他入口同队列同纪律。
+网页端把 surface 写成 `grok-web`，Grok Bot 写成 `grok-bot`，Codex 桌面写 `codex-local`，DSH 写 `dsh`。DSH 默认做获准的研究、反证与非作者审查，不抢队列第一件 `todo`；确实领取任务时与其他入口同队列同纪律。
 
 ## 写 git
 
@@ -29,7 +31,7 @@ python src/loop_claim.py release --surface grok-build-local --done
   `.worktrees/` 写进 `.git/info/exclude`，不写 `.gitignore`
 - 主目录留给 Operator 本机 Grok Build。只有它可以在主目录 `git pull`；别的执行者在主目录只做 `git fetch` 和 worktree 增删
 - 提交身份：`git -c user.name=ZackZhaii -c user.email=17690114@qq.com commit ...`。不改全局 git 配置
-- 分支从 `origin/dev` 开，PR 的 base 一律是 `dev`。Poly指挥 把 PR 合并进 `dev`；`dev`→`main` 的 PR 只由 Poly指挥 开，由人审查合并。bot 不推 `main` 也不推 `dev`，不合并自己的 PR。升级给 Operator 的事项（risk.toml、live、风控阈值提案等）永不自动合并
+- 分支从 `origin/dev` 开，PR 的 base 一律是 `dev`。普通 `dev` PR 由 Codex 按 `docs/CODEX_COORDINATION.md` 做最终检查并集成；当前主控/实现worker参与实现时，交另一个未参与实现且获授权的Codex集成席或Owner，任何作者都不自合并。Codex 可准备并开 `dev`→`main` PR，仍由人审查合并。bot 不直推 `main` 或 `dev`。升级给 Operator 的事项（risk.toml、live、风控阈值、KEY/HOLD 等）仍逐项人审，永不自动合并
 
 ## 自选任务
 
@@ -45,4 +47,4 @@ python src/loop_claim.py release --surface grok-build-local --done
 - 不做对敲、自成交、刷量、幌骗，不写绕过地理限制的步骤
 - 单边成交是方向敞口，不是锁定利润。不承诺收益
 - 一次只做一件任务
-- 队列状态（`docs/loop/state.json`、`docs/loop/status.json`、`docs/LOOP.md` 的领取、释放和 `## Latest`）禁止 `git push origin main` 和 `git push origin dev`。开分支，开 PR（base=`dev`），等 Poly指挥 合并
+- 队列状态（`docs/loop/state.json`、`docs/loop/status.json`、`docs/LOOP.md` 的领取、释放和 `## Latest`）禁止 `git push origin main` 和 `git push origin dev`。开分支，开 PR（base=`dev`），等有权非作者按 `docs/CODEX_COORDINATION.md` 集成
