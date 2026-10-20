@@ -46,7 +46,7 @@ from src.book_staleness import book_age_problem, parse_book_ts
 from src.podlib import PAPER_EQUITY_USD, pin_problems
 from src.thresholds import EDGE_TOLERANCE, MAX_BOOK_AGE_S, MIN_EDGE  # Task AC: values in src/thresholds.py
 from src.thresholds import ASSUMED_SLIPPAGE  # Task AU: the slippage floor (Task AT's one slippage)
-from src.thresholds import INTENT_SHARE_STEP  # issue #104: booked shares on intent_builder's share grid
+from src.thresholds import INTENT_SHARE_STEP, LEDGER_OPEN_EPS  # issue #104: booked shares on intent_builder's share grid
 from src.wash_detect import wash_problems
 
 BANNED_STRATEGY_TOKENS = ("wash", "self-trade", "self_trade", "spoof", "layering")
@@ -677,6 +677,14 @@ def evaluate(
             reasons.append("reduce_exceeds_position")
         elif shares > 0 and shares < min_order:
             reasons.append("size_below_min_order")
+        elif cap_shares is not None and shares > 0:
+            # Issue #265 (b): a sell (reduce / close) never leaves 0 < remainder < min_order_size; it vetoes
+            # fail-closed and is never resized. A remainder under one INTENT_SHARE_STEP cannot be booked and
+            # counts as a full close. (a) "full close exempt from the minimum" is suspended (no evidence).
+            # Only added when nothing else vetoed yet (the order is vetoed either way; goldens keep one reason).
+            remainder = abs(_finite_number(state.get("leg_net_shares")) or 0.0) - shares
+            if not reasons and INTENT_SHARE_STEP - LEDGER_OPEN_EPS <= remainder < min_order - LEDGER_OPEN_EPS:
+                reasons.append("reduce_leaves_residual_below_min")
     notional = shares * effective if shares > 0 else 0.0
     # Task AE: the booked fee comes from the same module; never below notional * fee_rate.
     booked = fees.ledger_fee(intent.fee_rate, intent.market_price, effective, notional, shares)
