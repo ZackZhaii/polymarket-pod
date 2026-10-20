@@ -98,6 +98,7 @@ from src import (  # noqa: E402
     heartbeat,
     intent_builder,
     ledger_store,
+    market_close,
     paper_ledger,
     pins,
     podlib,
@@ -292,6 +293,9 @@ class RunnerState:
     last_book_age_s_max: float | None = None
     disk_free_gb: float | None = None
     ledger_rows: int | None = None
+    close_tracker: market_close.CloseTracker = field(default_factory=market_close.CloseTracker)  # issue #197
+    writeoff_events_resent: bool = False  # issue #197: the first tick after a start re-sends write-off events
+    tick_clock_result: tuple[str | None] | None = None  # PR #342: this tick's CLOB /time result, once per tick
     # Issue #120 (Task CJ): suspend / resume tracking
     last_iter_wall: datetime | None = None
     last_iter_mono: float | None = None
@@ -326,6 +330,34 @@ class IterationReport:
 
 
 # ---------------------------------------------------------------- small I/O helpers
+
+def _decision_time(now: datetime, clock: Callable[[], datetime] | None) -> tuple[datetime, bool]:
+    """PR #342 review (Codex 6188442103 P1): (the time a day-snapshot / daily-loss decision is made and stamped,
+    whether the clock was usable). max(tick start, runner clock) within the tick start's UTC day; a later UTC day
+    keeps the tick start (the write-off defers, the day's evaluation stays on the tick's day). PR #342 review
+    (Poly风控 6194515074): an unusable clock (raises, naive, out of range in UTC) returns (tick start, False):
+    the caller must decide fail closed (a snapshot written then is late), never "on time" at an earlier time."""
+    later = _clock_after(now, clock)
+    if later is None:
+        return now, False
+    return (later if _stamp(later)[:10] == _stamp(now)[:10] else now), True
+
+
+def _clock_after(now: datetime, clock: Callable[[], datetime] | None) -> datetime | None:
+    """max(tick start, runner clock) in UTC; no clock injected: the tick start. PR #342 review (Poly风控
+    6194515074): an unusable clock (raises, naive, or out of range in UTC, Codex 6193266276) is None: the caller
+    fails closed (defer / late), never falls back to the earlier tick start."""
+    if clock is None:
+        return now
+    try:
+        later = clock()
+    except Exception:  # noqa: BLE001 - an unusable clock: fail closed at the caller
+        return None
+    later = parse_book_ts(later) if isinstance(later, datetime) else None
+    if later is None:
+        return None
+    return later if later > now else now
+
 
 def _stamp(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -424,7 +456,8 @@ def runner_clock_ok(state: "RunnerState") -> bool:
 
 def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = None, clock_ok: bool = False,
               ledger_path: Path | None = None, settle: Callable[[], list[str]] | None = None,
-              clock_check: Callable[[], str | None] | None = None) -> Preflight:
+              clock_check: Callable[[], str | None] | None = None,
+              clock: Callable[[], datetime] | None = None) -> Preflight:
     """The C.2 checks, in order; the first failing one decides. Writes no fill itself.
 
     Issue #206 (Task CO): ``settle`` (the runner's settlement step, ``_settle_tick``) runs after the KILL / live /
@@ -479,7 +512,13 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
         if problem is not None:
             return Preflight(ACT_PAUSE, [problem], ledger_rows=len(read.rows))
     rows = len(read.rows)
-    risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), _stamp(now), clock_ok=clock_ok)
+    # PR #342 review (Codex 6188442103): the day's snapshot this evaluation may write decides lateness at the
+    # evaluation time (max(tick start, runner clock), same UTC day), never the tick start.
+    # PR #342 review (Poly风控 6194515074): an unusable clock evaluates the tick's day with clock_ok False, so a
+    # snapshot written now is late (the most conservative reference: max(cost, previous day's last mark)).
+    decided_at, clock_usable = _decision_time(now, clock)
+    risk = paper_ledger.daily_risk_loss(read.rows, list(read.ids), _stamp(decided_at),
+                                        clock_ok=clock_ok and clock_usable)
     if risk["problems"]:
         problems = [str(p) for p in risk["problems"][:10]]
         _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": problems})
@@ -890,17 +929,118 @@ def _held_markets() -> list[str]:
     return sorted({market for market, _token in settlement.open_legs(read.rows) if market})
 
 
-def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter) -> list[str]:
-    """Issue #197 (Task CK) hook: close-then-write-off runs here, AFTER settlement and BEFORE the daily loss.
+def _writeoff_events(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return market_close.bus_events(rows)
 
-    Poly风控's tick order (#197, issuecomment-6106669720): halted -> end; settle; write off the legs that are
-    neither settled nor written off; #124 daily loss; RiskGate. CK is not merged (it waits for 家伟), so this is
-    a no-op that returns no problems; CK replaces the body. Problems it returns are invalid_risk_state.
-    """
+
+def _resend_writeoff_events(state: RunnerState, now: datetime, rows: list[dict[str, Any]] | None = None) -> list[str]:
+    """Issue #197 (PR #342 review 6183015083): the first tick after a start re-sends the write-off events of every
+    written-off unsettled leg BEFORE settlement, so a write-off that was booked but whose event was lost in a crash
+    is never dropped by a settlement that closes its leg on the restart tick. The flag is set only after the send."""
+    if state.writeoff_events_resent:
+        return []
+    if rows is None:
+        try:
+            _, ledger = ledger_store.read_ledger(Path(paper_ledger.PAPER_PATH))
+        except Exception as exc:  # noqa: BLE001 - preflight verified the ledger; a re-read failure is a problem
+            return [f"writeoff_ledger_unreadable:{type(exc).__name__}"]
+        rows = ledger.rows
+    pending = list(market_close.written_off_legs(rows).values())
+    if pending:
+        event(state, "writeoff", now, resent=True, events=_writeoff_events(pending))
+    state.writeoff_events_resent = True
     return []
 
 
-def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> list[str]:
+def _tick_clock(state: RunnerState, getter: GuardedGetter, now: datetime) -> str | None:
+    """PR #342 review (Codex 6184412258 P1): this tick's clock check, run at most once per tick. The write-off
+    (inside the settle step) asks for it before preflight's own clock step, which then reuses the same result."""
+    if state.tick_clock_result is None:
+        state.tick_clock_result = (_clock_check(state, getter, now),)
+    return state.tick_clock_result[0]
+
+
+def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter,
+                   clock: Callable[[], str | None] | None = None) -> list[str]:
+    """Issue #197 (Task CK, KEY-approved): close-then-write-off, AFTER settlement and BEFORE the daily loss.
+
+    Poly风控's tick order (#197, issuecomment-6106669720): halted -> end; settle; write off; #124 daily loss;
+    RiskGate. Every market with an open leg (settled legs are gone already) is read from Gamma
+    (src/market_close.gamma_read: explicit closed=true; an empty result is unknown). A market that is not written
+    off is confirmed by a re-read MARKET_CLOSE_RECHECK_S later and its open legs are written off once
+    (paper_ledger.apply_writeoffs: ledger row + fsync first, then the ``writeoff`` event). A read failure, an
+    invalid type or a re-read that does not confirm writes nothing off and is NOT a halt (the leg keeps its #124
+    worst-case mark). A written-off market is read on until it settles, only to find a reopen
+    (src/market_close.reopen_contradiction): that, or a write-off the ledger refuses (two different rows for one
+    leg key), is returned as a problem: invalid_risk_state, global halt, nothing rolled back.
+
+    The write-off events are at least once (consumers dedupe by ``key``, the leg's write-off fill_id; nothing
+    tracks what was sent): after a restart the first tick sends them again for every written-off unsettled leg.
+    """
+    try:
+        _, ledger = ledger_store.read_ledger(Path(paper_ledger.PAPER_PATH))
+    except Exception as exc:  # noqa: BLE001 - preflight verified the ledger; a re-read failure is a problem
+        return [f"writeoff_ledger_unreadable:{type(exc).__name__}"]
+    _resend_writeoff_events(state, now, ledger.rows)  # no-op after _settle_tick ran it (before settlement)
+    held = market_close.held_markets(ledger.rows)
+    reads = {market: market_close.gamma_read(gamma, market, now, clock=state.clock, monotonic=state.monotonic)
+             for market in sorted(held)}  # PR #342: stamped when each read finishes (wall + monotonic)
+    step = market_close.detect(state.close_tracker, ledger.rows, reads, now)
+    unread = {market: obs.problem for market, obs in reads.items() if obs.problem is not None}
+    if unread:
+        event(state, "close_read_skipped", now, markets=unread)  # no write-off this tick, no halt
+    if step.halts:
+        for halt in step.halts:  # PR #211: this market's settlement stays blocked until the Operator resumes it
+            reason, _, market = halt.rpartition(":")
+            halt_store.record_halt(scope=halt_store.SCOPE_MARKET, market=market, reason=reason, source="m2_runner")
+        return step.halts
+    if step.closes:
+        # PR #342 review (Codex 6184412258 P1): THIS tick's clock, never the previous tick's. Not checked (no
+        # clock step given) or failed: clock_ok False, so a day's first snapshot is late and the write-off is
+        # still booked at the late reference (#197 option A).
+        clock_ok = clock is not None and clock() is None and runner_clock_ok(state)
+        # PR #342 review (Codex 6186452953 P1 / 6187405980 P1): the write-off, its day's snapshot and this tick's
+        # daily-loss evaluation (preflight, at the tick start ``now``) must share one UTC day. When the reads ran
+        # past UTC midnight the write is deferred: nothing booked, the pending reads stay pending, no halt; the
+        # next tick (new day) confirms, books, snapshots and evaluates on the new day.
+        written_at = _clock_after(now, state.clock)
+        if written_at is None:  # PR #342 review (Poly风控 6194515074): no usable time: book nothing, defer, no halt
+            for close in step.closes:
+                state.close_tracker.defer(close.market)
+            event(state, "writeoff_deferred_clock_unavailable", now, markets=sorted(c.market for c in step.closes))
+            return []
+        if _stamp(written_at)[:10] != _stamp(now)[:10]:
+            for close in step.closes:
+                state.close_tracker.defer(close.market)
+            event(state, "writeoff_deferred_day_boundary", now, markets=sorted(c.market for c in step.closes),
+                  written_at=_stamp(written_at))
+            return []
+        # PR #342 review (Codex 6188442103 P1): same UTC day here, so the row and the day's snapshot it may write
+        # are stamped, and the snapshot's lateness decided, at the write time, never the tick start.
+        out = paper_ledger.apply_writeoffs(step.closes, _stamp(written_at), clock_ok=clock_ok, clock=state.clock)
+        if out.get("deferred"):
+            # PR #342 (Codex 6189524237 / 6192075048 P1): commit lock busy, or the time read again inside the lock
+            # is on a later UTC day: nothing booked, the pending reads stay pending, no halt; retry next tick.
+            for close in step.closes:
+                state.close_tracker.defer(close.market)
+            name = {paper_ledger.WRITEOFF_DAY_BOUNDARY: "writeoff_deferred_day_boundary",
+                    paper_ledger.WRITEOFF_CLOCK_UNAVAILABLE: "writeoff_deferred_clock_unavailable"}.get(
+                        out["deferred"], "writeoff_deferred_commit_lock")
+            event(state, name, now, markets=sorted(c.market for c in step.closes))
+            return []
+        if out["problems"]:
+            # PR #342 review (Codex 6184078075 / 6184412258 P2): a partial failure, or a row on disk whose
+            # post-write re-read failed (not in ``booked``): re-send every written-off leg's event before the next
+            # settle step, so no booked write-off loses its event.
+            state.writeoff_events_resent = False
+            return [str(problem) for problem in out["problems"]]
+        if out["booked"]:  # on disk and fsynced (ledger_store.book) before the event
+            event(state, "writeoff", now, resent=False, events=_writeoff_events(out["booked"]))
+    return []
+
+
+def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter,
+                 clock: Callable[[], str | None] | None = None) -> list[str]:
     """Issue #206 (Task CO): this tick's settlement step (called by ``preflight``, see its docstring).
 
     1. Collect settlement snapshots from Gamma for the markets with an open leg only (src/resolution_watch).
@@ -911,6 +1051,9 @@ def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> lis
     3. ``_writeoff_hook`` (CK).
     Returns problems (invalid_risk_state); WriteFailed (events) propagates to the iteration.
     """
+    problems = _resend_writeoff_events(state, now)  # PR #342 review: before settlement, never after
+    if problems:
+        return problems
     try:
         held = _held_markets()
     except Exception as exc:  # noqa: BLE001 - preflight verified the ledger; a re-read failure is a problem
@@ -939,7 +1082,7 @@ def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> lis
                                                    "token_id": row.get("token_id"),
                                                    "settlement_payout": row.get("settlement_payout")}
                                                   for row in out["booked"]])
-    return _writeoff_hook(state, now, gamma)
+    return _writeoff_hook(state, now, gamma, clock)
 
 
 def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> IterationReport:
@@ -949,13 +1092,14 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
     state.tick_clock_verified = False  # Task DC: per tick
     state.tick_clock_vetoed = False
     state.tick_time_ok = False
+    state.tick_clock_result = None  # PR #342: one clock check per tick, shared by the write-off and preflight
     _note_clock_anomaly(state, now)  # issue #289: heartbeat stamp for an anomaly held from startup
     gamma = GuardedGetter(getters.gamma, state.on_get)  # one guarded Gamma getter per tick: settlement, scan, fee
     book_get = GuardedGetter(getters.book, state.on_get)  # shared read-only transport for /time and later /book
     try:
         check = preflight(state.paths, now=now, risk_path=state.risk_path, clock_ok=runner_clock_ok(state),
-                          settle=lambda: _settle_tick(state, now, gamma),
-                          clock_check=lambda: _clock_check(state, book_get, now))
+                          settle=lambda: _settle_tick(state, now, gamma, lambda: _tick_clock(state, book_get, now)),
+                          clock_check=lambda: _tick_clock(state, book_get, now), clock=state.clock)
     except WriteFailed as exc:
         state.last_iter_wall, state.last_iter_mono = now, state.monotonic()
         return IterationReport(ACT_WRITE_FAILED, [str(exc)])

@@ -29,7 +29,8 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -186,7 +187,10 @@ def _previous_day(day: str) -> str | None:
         return None
     from datetime import timedelta
 
-    return (stamp - timedelta(days=1)).strftime("%Y-%m-%d")
+    try:
+        return (stamp - timedelta(days=1)).strftime("%Y-%m-%d")
+    except OverflowError:  # PR #342 (Codex 6193266276): 0001-01-01 has no previous day
+        return None
 
 
 def _previous_day_marks(today: str, start: dict, current: dict) -> tuple[dict, list[str]]:
@@ -226,6 +230,36 @@ def _record_last_marks(today: str, now: str, marks: dict) -> list[str]:
     return []
 
 
+def ensure_daily_snapshot(pos: leg_marks.Positions, today: str, now: str, now_dt: Any,
+                          book_map: dict[tuple[str, str], dict[str, Any]], *,
+                          clock_ok: bool = False) -> tuple[dict[str, Any] | None, list[str]]:
+    """The day's start-of-day snapshot: read it, or write it once (Task CF #124). Shared by daily_unrealized and,
+    issue #255, apply_writeoffs (a write-off on the day's first tick must not book its uplift before the snapshot).
+    Task CX (#225) / Task DA: lateness is src/day_boundary.day_start_late (the one UTC day-boundary rule, with
+    the caller's ``clock_ok``); a late snapshot's reference is max(cost, previous day's last valid mark).
+    Returns (snapshot, problems); any problem is fail closed for the caller."""
+    snap, problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, today)
+    if problems or snap is not None:
+        return snap, problems
+    start_marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt)
+                   for key, leg in pos.start.items()}
+    # Task CX (#225, D1/D2): late = written more than DAY_START_MAX_LAG_S after today's 00:00 UTC
+    # (or a clock anomaly), whatever this process did yesterday.
+    late = day_boundary.day_start_late(now, clock_ok=clock_ok)
+    if late:
+        start_marks, problems = _previous_day_marks(today, pos.start, start_marks)
+        if problems:
+            return None, problems
+    try:
+        return daily_marks.create_snapshot(DAILY_MARKS_DIR, today, now, late,
+                                           leg_marks.snapshot_legs(pos.start, start_marks)), []
+    except daily_marks.SnapshotExists:  # another process wrote it first: use that one
+        snap, problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, today)
+        return snap, problems or ([] if snap is not None else ["daily_marks_missing_after_create"])
+    except (OSError, ValueError) as exc:
+        return None, [f"daily_marks_write_failed:{type(exc).__name__}"]
+
+
 def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
                      books: dict[tuple[str, str], dict[str, Any]] | None = None, *,
                      clock_ok: bool = False) -> dict[str, Any]:
@@ -251,33 +285,12 @@ def daily_unrealized(rows: list[dict[str, Any]], ids: list[str], now: str,
             result["problems"] = pos.problems
             return result
         book_map = mark_books(MARK_BOOKS_PATH) if books is None else books
-        snap, problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, today)
-        if problems:
-            result["problems"] = problems
+        snap, problems = ensure_daily_snapshot(pos, today, now, now_dt, book_map, clock_ok=clock_ok)
+        if problems or snap is None:
+            result["problems"] = problems or ["daily_marks_missing_after_create"]
             return result
-        if snap is None:
-            start_marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt)
-                           for key, leg in pos.start.items()}
-            # Task CX (#225, D1/D2): late = written more than DAY_START_MAX_LAG_S after today's 00:00 UTC
-            # (or a clock anomaly), whatever this process did yesterday.
-            late = day_boundary.day_start_late(now, clock_ok=clock_ok)
-            if late:
-                start_marks, problems = _previous_day_marks(today, pos.start, start_marks)
-                if problems:
-                    result["problems"] = problems
-                    return result
-            try:
-                snap = daily_marks.create_snapshot(DAILY_MARKS_DIR, today, now, late,
-                                                   leg_marks.snapshot_legs(pos.start, start_marks))
-            except daily_marks.SnapshotExists:  # another process wrote it first: use that one
-                snap, problems = daily_marks.read_snapshot(DAILY_MARKS_DIR, today)
-                if problems or snap is None:
-                    result["problems"] = problems or ["daily_marks_missing_after_create"]
-                    return result
-            except (OSError, ValueError) as exc:
-                result["problems"] = [f"daily_marks_write_failed:{type(exc).__name__}"]
-                return result
         _LAST_EVAL_DAY = today
+        result["snapshot"] = snap
         marks = {key: leg_marks.liquidation_mark(leg.shares, book_map.get(key), now_dt) for key, leg in pos.now.items()}
         problems = _record_last_marks(today, now, {key: (marks[key], leg.shares) for key, leg in pos.now.items()})
         if problems:
@@ -307,6 +320,8 @@ def daily_risk_loss(rows: list[dict[str, Any]], ids: list[str], now: str, *,
     marks = (daily_unrealized(rows, ids, now, clock_ok=clock_ok) if not day.problems
              else {"loss_usd": None, "realized_topup_usd": None, "legs": [], "late": None, "problems": []})
     problems = list(day.problems) + list(marks["problems"])
+    if not problems:  # issue #255: every write-off booked today, its uplift recomputed from the day's snapshot
+        problems = leg_marks.writeoff_uplift_problems(rows, ids, now[:10], marks.get("snapshot"))
     total = None if problems else day.total_usd + marks["realized_topup_usd"] + marks["loss_usd"]
     return {"loss_usd": total, "day": day, "marks": marks, "problems": problems}
 
@@ -377,6 +392,110 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
             return out
         except OSError as exc:
             out["problems"] = [f"settlement_write_failed:{type(exc).__name__}"]
+            return out
+    return out
+
+
+def apply_writeoffs(closes: list[Any], now: str | None = None,
+                    books: dict[tuple[str, str], dict[str, Any]] | None = None, *,
+                    clock_ok: bool = False, clock: Callable[[], Any] | None = None) -> dict[str, Any]:
+    """PR #342 review (Codex 6189524237 P1): the whole read -> plan -> book path runs under the same
+    ``<PAPER_PATH>.commit.lock`` as commit_if_allowed, so no fill is written between a RiskGate check and its
+    book (the daily loss it checked cannot change underneath it). A lock that cannot be taken books nothing and
+    returns ``{"booked": [], "problems": [], "deferred": WRITEOFF_LOCK_UNAVAILABLE}``: the caller retries next tick
+    (no halt). See ``_apply_writeoffs_locked``."""
+    lock = _commit_lock()
+    if not lock.acquire(timeout_s=COMMIT_LOCK_TIMEOUT_S):
+        return {"booked": [], "problems": [], "deferred": WRITEOFF_LOCK_UNAVAILABLE}
+    try:
+        if clock is not None and now is not None:
+            # PR #342 review (Codex 6192075048 P1): the time is read again INSIDE the lock (the wait may have been
+            # long): a later UTC day defers (nothing booked, no halt); the same day restamps the row and the
+            # day's snapshot and decides lateness at this time.
+            now, deferred = _locked_write_time(now, clock)
+            if deferred:
+                return {"booked": [], "problems": [], "deferred": deferred}
+        return _apply_writeoffs_locked(closes, now, books, clock_ok=clock_ok)
+    finally:
+        lock.release()
+
+
+WRITEOFF_DAY_BOUNDARY = "writeoff_day_boundary"
+WRITEOFF_CLOCK_UNAVAILABLE = "writeoff_clock_unavailable"
+
+
+def _locked_write_time(now: str, clock: Callable[[], Any]) -> tuple[str, str | None]:
+    """(the write stamp, None) = max(the caller's stamp, the clock now) on the caller's UTC day; (now,
+    WRITEOFF_DAY_BOUNDARY) when the clock is on a later UTC day. PR #342 review (Poly风控 6194515074): an
+    unusable clock (raises, naive, out of range in UTC) or caller stamp is (now, WRITEOFF_CLOCK_UNAVAILABLE):
+    nothing is booked (the caller defers), never stamped at the earlier caller time."""
+    base = parse_book_ts(now)
+    try:
+        later = clock()
+    except Exception:  # noqa: BLE001 - an unusable clock: fail closed
+        return now, WRITEOFF_CLOCK_UNAVAILABLE
+    later = parse_book_ts(later) if isinstance(later, datetime) else None  # naive / out of range: unusable
+    if base is None or later is None:
+        return now, WRITEOFF_CLOCK_UNAVAILABLE
+    if later <= base:
+        return now, None
+    stamp = later.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    if stamp[:10] != now[:10]:
+        return now, WRITEOFF_DAY_BOUNDARY
+    return stamp, None
+
+
+def _apply_writeoffs_locked(closes: list[Any], now: str | None = None,
+                            books: dict[tuple[str, str], dict[str, Any]] | None = None, *,
+                            clock_ok: bool = False) -> dict[str, Any]:
+    """Issue #197 (Task CK, KEY-approved): book one write-off row per open leg of each confirmed closed market.
+
+    ``closes`` are src/market_close.Close values (confirmed by src/m2_runner._writeoff_hook). Idempotent: a leg
+    already written off is never written off again (the row's fill_id is the leg key, src/market_close.writeoff_fill_id),
+    so a restart repeats nothing. Returns {"booked": [rows], "problems": [...]}; any problem (a
+    ledger that does not verify, a contradiction, a refused or failed write) must make the caller record
+    invalid_risk_state as a global halt.
+    """
+    from src import market_close
+
+    out: dict[str, Any] = {"booked": [], "problems": []}
+    try:
+        _, ledger = ledger_store.read_ledger(PAPER_PATH)
+    except OSError as exc:
+        out["problems"] = [f"writeoff_ledger_unreadable:{type(exc).__name__}"]
+        return out
+    problems = ledger_store.verify(ledger)
+    if problems or non_finite_ledger_rows(ledger.rows):
+        out["problems"] = [f"writeoff_ledger_invalid:{problem}" for problem in problems] or ["writeoff_ledger_invalid"]
+        return out
+    now = now or utc_now()
+    # #197 correction (issuecomment-6109537257): start-of-day shares at max(cost, start-of-day mark). Issue #255:
+    # on the day's first tick the snapshot is written here first (the same code path as #124's daily_unrealized),
+    # never an uplift of 0 for want of it; a damaged or unwritable one books nothing (fail closed).
+    now_dt = parse_book_ts(now)
+    pos = leg_marks.positions(ledger.rows, now[:10], list(ledger.ids))
+    if now_dt is None or pos.problems:
+        out["problems"] = [f"writeoff_daily_marks_invalid:{p}" for p in (pos.problems or ["invalid_now"])]
+        return out
+    snap, snap_problems = ensure_daily_snapshot(pos, now[:10], now, now_dt,
+                                                mark_books(MARK_BOOKS_PATH) if books is None else books,
+                                                clock_ok=clock_ok)
+    if snap_problems or snap is None:
+        snap_problems = snap_problems or ["daily_marks_missing_after_create"]
+        out["problems"] = [f"writeoff_daily_marks_invalid:{problem}" for problem in snap_problems]
+        return out
+    planned = market_close.plan_writeoffs(ledger.rows, list(ledger.ids), list(closes), now, snap)
+    if planned.problems:
+        out["problems"] = planned.problems
+        return out
+    for row in planned.rows:
+        try:
+            out["booked"].append(ledger_store.book(PAPER_PATH, row))
+        except LedgerIntegrityError as exc:
+            out["problems"] = [f"writeoff_refused:{problem}" for problem in exc.problems]
+            return out
+        except OSError as exc:
+            out["problems"] = [f"writeoff_write_failed:{type(exc).__name__}"]
             return out
     return out
 
@@ -519,6 +638,7 @@ def load_state(market: str, token_id: str = "", *, clock_ok: bool = False,
         "unsettled_closed_legs": _unsettled_closed_legs(rows),  # issue #126: diagnosis only
         "daily_realized_loss_usd": day.realized_loss_usd,
         "daily_realized_gain_usd": day.realized_gain_usd,
+        "daily_writeoff_usd": day.writeoff_usd,  # issue #197: diagnosis (already in daily_realized_loss_usd)
         "ledger_problems": [],
         "duplicate_fill_rows": ledger.duplicates_ignored,
         "recent_fills": rows,
@@ -531,14 +651,23 @@ def load_state(market: str, token_id: str = "", *, clock_ok: bool = False,
 from src.thresholds import COMMIT_LOCK_TIMEOUT_S  # noqa: E402,F401 - Task DD: the commit mutex wait (THRESHOLDS.md)
 
 
-def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
-    """Task DD (#237, Codex P1): the whole load_state -> RiskGate -> book path runs under one cross-process
-    mutex on ``<PAPER_PATH>.commit.lock``, so two interleaved commits (e.g. YES and NO of one market) cannot both read
-    a state without the other's fill. A mutex that cannot be taken refuses the order (fail closed)."""
+def _commit_lock() -> Any:
+    """The commit mutex ``<PAPER_PATH>.commit.lock`` (Task DD), shared by commit_if_allowed and apply_writeoffs."""
     from src import halt_store
 
     lock = halt_store.StateLock(PAPER_PATH)
     lock.path = Path(str(PAPER_PATH) + ".commit.lock")  # not ledger_store's <ledger>.lock (taken inside book)
+    return lock
+
+
+WRITEOFF_LOCK_UNAVAILABLE = "writeoff_commit_lock_unavailable"
+
+
+def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
+    """Task DD (#237, Codex P1): the whole load_state -> RiskGate -> book path runs under one cross-process
+    mutex on ``<PAPER_PATH>.commit.lock``, so two interleaved commits (e.g. YES and NO of one market) cannot both read
+    a state without the other's fill. A mutex that cannot be taken refuses the order (fail closed)."""
+    lock = _commit_lock()
     if not lock.acquire(timeout_s=COMMIT_LOCK_TIMEOUT_S):
         summary = {"forecast_id": intent.forecast_id, "strategy": intent.strategy,
                    "reasons": [STRUCTURAL_ARB_DISABLED, "commit_lock_unavailable"],
@@ -726,7 +855,7 @@ def _price(value: object) -> tuple[float | None, str | None]:
     """A top-of-book price: a finite number strictly between 0 and 1 (bool and str refused)."""
     if value is None:
         return None, "missing"
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value < 1:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < 1 or not math.isfinite(value):
         return None, "invalid"
     return float(value), None
 
@@ -781,7 +910,7 @@ def _fraction(value: object) -> tuple[float | None, str | None]:
     """A Kelly fraction: a finite number in (0, 1] (bool and str refused); else None and missing / invalid."""
     if value is None:
         return None, "missing"
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value <= 1:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= 1 or not math.isfinite(value):
         return None, "invalid"
     return float(value), None
 

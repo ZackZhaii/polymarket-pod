@@ -374,6 +374,8 @@ def ledger_view(path: Path) -> LedgerView:
         if not token:
             view.problems.append(f"ledger_fill_without_token_id:{fill_id}")
             continue
+        if ledger_store.is_writeoff(row):
+            continue  # issue #197: a paper write-off moves no shares (shares 0) and is not a trade
         shares = _number(row.get("shares"))
         if shares is None or shares <= 0:
             view.problems.append(f"ledger_fill_invalid_shares:{fill_id}")
