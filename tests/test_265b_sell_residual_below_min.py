@@ -91,3 +91,22 @@ def test_b6_short_buyback_leaving_residual_below_min_is_vetoed(tmp_path, monkeyp
     assert state["leg_net_shares"] < 0
     d = evaluate(_intent(token_id=YES, side="buy", model_prob=0.90, shares=buy, min_order_size=5.0), load_risk(), state)
     assert d.allow is allow and d.reasons == ([] if allow else [CODE]), (d.shares, d.reasons)
+
+
+@pytest.mark.parametrize("held,sell", [(10.03, 5.03), (5.0 + 5.03, 5.03)])
+def test_b7_residual_the_next_close_would_floor_below_min_is_vetoed(tmp_path, monkeypatch, held, sell):
+    """Codex P2 (140d158): 10.03 - 5.03 = 4.999999999999999, which reduce_cap floors to 4.99 (< min, stuck leg)."""
+    rest = held - sell
+    d = evaluate(_sell(sell), load_risk(), _long(tmp_path, monkeypatch, held))
+    from src.risk_gate import reduce_cap
+    if reduce_cap("sell", {"leg_already_open": True, "leg_net_shares": rest}) < 5.0:
+        assert d.allow is False and d.reasons == [CODE], (rest, d.reasons)
+    else:
+        assert d.allow is True, (rest, d.reasons)
+
+
+def test_b7b_the_left_leg_closes_in_one_order(tmp_path, monkeypatch):
+    """Whatever b allows to remain must itself be closable: a leg of 10.03 - 5.03 cannot be closed (stuck)."""
+    rest = 10.03 - 5.03
+    d = evaluate(_sell(39.21), load_risk(), _long(tmp_path, monkeypatch, rest))
+    assert d.allow is False  # documents why b7 must veto the first sell

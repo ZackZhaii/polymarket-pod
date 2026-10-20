@@ -683,7 +683,8 @@ def evaluate(
             # counts as a full close. (a) "full close exempt from the minimum" is suspended (no evidence).
             # Only added when nothing else vetoed yet (the order is vetoed either way; goldens keep one reason).
             remainder = abs(_finite_number(state.get("leg_net_shares")) or 0.0) - shares
-            if not reasons and INTENT_SHARE_STEP - LEDGER_OPEN_EPS <= remainder < min_order - LEDGER_OPEN_EPS:
+            if not reasons and INTENT_SHARE_STEP - LEDGER_OPEN_EPS <= remainder and (
+                    remainder < min_order - LEDGER_OPEN_EPS or _floor_to_step(remainder) < min_order - LEDGER_OPEN_EPS):
                 reasons.append("reduce_leaves_residual_below_min")
     notional = shares * effective if shares > 0 else 0.0
     # Task AE: the booked fee comes from the same module; never below notional * fee_rate.
