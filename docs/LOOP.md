@@ -1835,7 +1835,18 @@ Status: todo. Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-K
 - Tests and acceptance: issue #349 comment 6206470263 (4 strict xfails + control; correction comment below it). Boundary: src/settlement.py, new
   tests. Full pytest + guard 12/12. config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
+## Task EH — Issue #265 (b): no sell leaves a residual below min_order_size (KEY, HOLD)
+
+Status: hold (in review, PR #363; done=false). Queue exception: KEY + HOLD, so the status is `hold`, which `src/loop_claim.py`
+never claims (only `todo` / `doing`). Set to done when #363 merges after Poly风控 review and 家伟's 「批准 #363」.
+
+- `src/risk_gate.py`: a reduce/close leaving 0 < remainder < min_order_size (remainder rounded down as the next close rounds)
+  vetoes `reduce_leaves_residual_below_min`; never resized. Sub-step dust counts as a full close. (a) 全平仓豁免最小单量
+  suspended (no official evidence). No new threshold; config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+- Tests: `tests/test_265b_sell_residual_below_min.py`. Full pytest 0 failed.
+
 ## Latest
+- 2026-10-20: Registered Task EH (#265 (b), PR #363) as hold (KEY + HOLD, in review); not claimable by the loop. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-16: Registered Task EF (#350, fees._finite overflow) then Task EG (#349, settlement-blocking prefixes) as todo; Risk gaps pure code, non-KEY. #353 (Gamma keyset, after #342) takes the next letter when registered. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task EE: #343 follow-ups — malformed m1_rest error_streak documented as global halt heartbeat_malformed:m1_rest (not warn-only); sentinel_tick F541 fix; tests: seal mid-round does not count toward error_streak, missing field counts as 0. Non-KEY, no threshold change. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-15: Task ED (issue #138): m1_rest heartbeat progress.error_streak (consecutive all-asset REST sample failures; success clears); Sentinel warn rest_error_streak at REST_ERROR_STREAK_ALERT=3 (M2 pending); malformed streak → global halt heartbeat_malformed:m1_rest. Monitoring tighten only, non-KEY. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
