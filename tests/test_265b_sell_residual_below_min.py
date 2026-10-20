@@ -76,3 +76,18 @@ def test_b4_large_remainder_is_allowed(tmp_path, monkeypatch):
 def test_b5_missing_or_invalid_min_on_sell_is_vetoed(tmp_path, monkeypatch, value):
     d = evaluate(_sell(5.0, min_order_size=value), load_risk(), _long(tmp_path, monkeypatch, 10.0))
     assert d.allow is False and "missing_min_order_size" in d.reasons, d.reasons
+
+
+def _short(tmp_path, monkeypatch, shares: float):
+    _ledger(tmp_path, monkeypatch, [_row(MARKET, YES, "sell", shares, round(shares * 0.4, 6), ts=OLD_TS)])
+    return paper_ledger.load_state(MARKET, YES)
+
+
+@pytest.mark.parametrize("held,buy,allow", [(10.0, 5.01, False), (9.99, 5.0, False), (10.0, 5.0, True),
+                                            (10.0, 10.0, True), (10.0, 39.21, True)])
+def test_b6_short_buyback_leaving_residual_below_min_is_vetoed(tmp_path, monkeypatch, held, buy, allow):
+    """Buying back a short leg follows the same rule (|net| - shares): 10->5.01 / 9.99->5 veto; 5 left or flat ok."""
+    state = _short(tmp_path, monkeypatch, held)
+    assert state["leg_net_shares"] < 0
+    d = evaluate(_intent(token_id=YES, side="buy", model_prob=0.90, shares=buy, min_order_size=5.0), load_risk(), state)
+    assert d.allow is allow and d.reasons == ([] if allow else [CODE]), (d.shares, d.reasons)
