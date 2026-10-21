@@ -156,6 +156,7 @@ def test_b9_min_just_above_five_is_strict(tmp_path, monkeypatch):
     (10.005, 10.0, True),   # sub-step dust; selling all of reduce_cap is a full close
     (11.0, 6.0, True),      # exactly min left
     (10.99, 6.0, False),    # 4.99 left
+    (10.0, 10.0 - 5e-12, True),  # within grid noise: judged as q = 10.00 (full close), not as a raw-float remainder
 ])
 def test_b10_dust_branch_boundaries(tmp_path, monkeypatch, held, sell, allow):
     """Directly pins the hundredths / full-close branch (kills a `rem_c > 1` / `min - 1` style mutation)."""
@@ -204,3 +205,18 @@ def test_b12b_real_commit_path_reduce_then_full_close(tmp_path, monkeypatch):
     assert second["allow"] is True, second
     monkeypatch.setattr(paper_ledger, "DAILY_MARKS_DIR", tmp_path / "marks3")
     assert abs(paper_ledger.load_state(MARKET, YES)["leg_net_shares"] or 0.0) < 0.01
+
+
+def test_b12c_real_commit_path_grid_noise_sell_is_judged_on_booked_size(tmp_path, monkeypatch):
+    """Codex P2 (bbd136f) / Poly风控 6313021080: 10.03 sell 5.03 - 5e-12 books 5.03 -> 4.999999999999999 left, which
+    reduce_cap floors to 4.99 (stuck leg, same as b7). Judged on q = 5.03 it vetoes; the ledger is unchanged."""
+    from src import halt_store
+    _long(tmp_path, monkeypatch, 10.03)
+    monkeypatch.setattr(halt_store, "HALT_STATE_PATH", tmp_path / "halt_state.json")
+    monkeypatch.setattr(halt_store, "HALT_FALLBACK_PATH", tmp_path / "HALT")
+    monkeypatch.setattr(paper_ledger, "bus", lambda *a, **k: None)
+    before = paper_ledger.PAPER_PATH.read_text(encoding="utf-8")
+    result = paper_ledger.commit_if_allowed(_sell(5.03 - 5e-12), load_risk())
+    assert result["allow"] is False and result["decision"]["reasons"] == [CODE], result
+    assert paper_ledger.PAPER_PATH.read_text(encoding="utf-8") == before
+    assert paper_ledger.load_state(MARKET, YES)["leg_net_shares"] == pytest.approx(10.03)
