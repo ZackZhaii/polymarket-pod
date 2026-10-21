@@ -688,7 +688,13 @@ def evaluate(
             remainder = abs(_finite_number(state.get("leg_net_shares")) or 0.0) - shares
             full_close = shares >= cap_shares  # type: ignore[operator]
             rem_hundredths = math.floor(remainder / INTENT_SHARE_STEP + 1e-6) if remainder > 0 else 0
-            if not reasons and not full_close and rem_hundredths > 0 and _floor_to_step(remainder) < min_order:
+            # Codex P2 (9e49882): the ledger books round(shares, 8), not the gate's float, so a reduce whose size
+            # is off the INTENT_SHARE_STEP grid (5.029999999, 9.995) can leave a leg the next close cannot sell.
+            # Tolerance 1e-9 steps (the _floor_to_step guard): float noise only, 5.029999999 is off grid.
+            # Tightening only: such a reduce vetoes; it is never resized (#104 rounding is unchanged).
+            if not reasons and abs(shares / INTENT_SHARE_STEP - round(shares / INTENT_SHARE_STEP)) > 1e-9:
+                reasons.append("reduce_size_off_grid")
+            elif not reasons and not full_close and rem_hundredths > 0 and _floor_to_step(remainder) < min_order:
                 reasons.append("reduce_leaves_residual_below_min")
     notional = shares * effective if shares > 0 else 0.0
     # Task AE: the booked fee comes from the same module; never below notional * fee_rate.

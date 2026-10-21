@@ -156,9 +156,51 @@ def test_b9_min_just_above_five_is_strict(tmp_path, monkeypatch):
     (10.005, 10.0, True),   # sub-step dust; selling all of reduce_cap is a full close
     (11.0, 6.0, True),      # exactly min left
     (10.99, 6.0, False),    # 4.99 left
-    (10.0, 9.995, True),    # off-grid 0.005 left: rem_c == 0 (pins the +1e-6 tolerance; dust leg is a separate issue)
 ])
 def test_b10_dust_branch_boundaries(tmp_path, monkeypatch, held, sell, allow):
     """Directly pins the hundredths / full-close branch (kills a `rem_c > 1` / `min - 1` style mutation)."""
     d = evaluate(_sell(sell), load_risk(), _long(tmp_path, monkeypatch, held))
     assert d.allow is allow and d.reasons == ([] if allow else [CODE]), (d.shares, d.reasons)
+
+
+@pytest.mark.parametrize("held,sell", [(10.0, 9.995), (10.03, 5.029999999), (10.0, 9.999), (50.0, 5.005), (20.0, 5.000000001)])
+def test_b11_off_grid_reduce_is_vetoed(tmp_path, monkeypatch, held, sell):
+    """Codex P2 (9e49882) / Poly风控 6312297678 (a): a reduce off the 0.01 grid vetoes (the ledger books round(x, 8))."""
+    d = evaluate(_sell(sell), load_risk(), _long(tmp_path, monkeypatch, held))
+    assert d.allow is False and d.reasons == ["reduce_size_off_grid"], (d.shares, d.reasons)
+
+
+@pytest.mark.parametrize("held,sell", [(20.0, 5.03), (20.0, 0.07 * 100), (20.0, 0.1 * 3 + 5.0)])
+def test_b11b_on_grid_float_noise_is_not_off_grid(tmp_path, monkeypatch, held, sell):
+    d = evaluate(_sell(sell), load_risk(), _long(tmp_path, monkeypatch, held))
+    assert "reduce_size_off_grid" not in d.reasons and d.allow is True, (d.shares, d.reasons)
+
+
+def test_b12_real_commit_path_off_grid_sell_books_nothing(tmp_path, monkeypatch):
+    """Through paper_ledger.commit_if_allowed: 10.03 sell 5.029999999 is vetoed and no stranded leg is booked."""
+    from src import halt_store
+    _long(tmp_path, monkeypatch, 10.03)
+    monkeypatch.setattr(halt_store, "HALT_STATE_PATH", tmp_path / "halt_state.json")
+    monkeypatch.setattr(halt_store, "HALT_FALLBACK_PATH", tmp_path / "HALT")
+    monkeypatch.setattr(paper_ledger, "bus", lambda *a, **k: None)
+    before = paper_ledger.PAPER_PATH.read_text(encoding="utf-8")
+    result = paper_ledger.commit_if_allowed(_sell(5.029999999), load_risk())
+    assert result["allow"] is False and "reduce_size_off_grid" in result["decision"]["reasons"], result
+    assert paper_ledger.PAPER_PATH.read_text(encoding="utf-8") == before
+    assert paper_ledger.load_state(MARKET, YES)["leg_net_shares"] == pytest.approx(10.03)
+
+
+def test_b12b_real_commit_path_reduce_then_full_close(tmp_path, monkeypatch):
+    """Through commit_if_allowed (round(shares, 8) booking): 10.04 -> sell 5.03 -> full close leaves a flat leg."""
+    from src import halt_store
+    _long(tmp_path, monkeypatch, 10.04)
+    monkeypatch.setattr(halt_store, "HALT_STATE_PATH", tmp_path / "halt_state.json")
+    monkeypatch.setattr(halt_store, "HALT_FALLBACK_PATH", tmp_path / "HALT")
+    monkeypatch.setattr(paper_ledger, "bus", lambda *a, **k: None)
+    first = paper_ledger.commit_if_allowed(_sell(5.03), load_risk())
+    assert first["allow"] is True, first
+    monkeypatch.setattr(paper_ledger, "DAILY_MARKS_DIR", tmp_path / "marks2")
+    second = paper_ledger.commit_if_allowed(_sell(39.21), load_risk())
+    assert second["allow"] is True, second
+    monkeypatch.setattr(paper_ledger, "DAILY_MARKS_DIR", tmp_path / "marks3")
+    assert abs(paper_ledger.load_state(MARKET, YES)["leg_net_shares"] or 0.0) < 0.01
