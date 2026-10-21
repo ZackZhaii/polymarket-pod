@@ -722,6 +722,14 @@
       "finish": "src/settlement.py writes a scope=market halt that blocks_settlement for each of the three prefixes (global halt kept). The three prefixes stay in the blocking tuple and blocks_settlement keeps returning True for them; removing or weakening any of them is out of scope (a risk change needing Poly风控 and 家伟, not this task). Existing rejection tests (tests/test_runner_settlement.py) stay unchanged. Tests from the #349 draft (issue comments 6206470263, correction below it): 4 strict xfails resolved by writing the halts + control; test_a_contradiction_in_the_resolutions_is_a_global_halt still passes. Full python -m pytest 0 failed; guard --require-git 12/12. No halt loosened. config/risk.toml unchanged, live_enabled false.",
       "note": "Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-KEY, non-HOLD: tighten only, prefixes kept; any change to existing global halt goes to Poly风控. Baseline ab7739a. Boundary: src/settlement.py, new tests, LOOP/state.",
       "surface": "grok-bot"
+    },
+    {
+      "id": "EH",
+      "status": "hold",
+      "title": "Issue #265 (b): a sell (reduce/close) never leaves 0 < remainder < min_order_size; veto reduce_leaves_residual_below_min (paper path, KEY)",
+      "finish": "PR #363 (task-265b/min-size-remainder -> dev) merged after Poly风控 review and 家伟's explicit 「批准 #363」 on the final head. Tests tests/test_265b_sell_residual_below_min.py; full pytest (--basetemp outside the repo) 0 failed. config/risk.toml unchanged (0aea23af…bc04), live_enabled false.",
+      "note": "KEY + HOLD (家伟 chose d=a+b on 2026-10-18; (a) 全平仓豁免最小单量 suspended, no official evidence). In review as PR #363 by grok-bot; status hold = not claimable by the loop (loop_claim only claims todo/doing). Set done when #363 merges. Boundary: src/risk_gate.py, new tests, LOOP/state.",
+      "surface": "grok-bot"
     }
   ]
 }
