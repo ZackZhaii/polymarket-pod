@@ -156,6 +156,7 @@ def test_b9_min_just_above_five_is_strict(tmp_path, monkeypatch):
     (10.005, 10.0, True),   # sub-step dust; selling all of reduce_cap is a full close
     (11.0, 6.0, True),      # exactly min left
     (10.99, 6.0, False),    # 4.99 left
+    (10.02, 5.02, True),    # Codex P2 (f299019): round(steps) * 0.01 = 5.0200000000000005 wrongly vetoed this
     (10.0, 10.0 - 5e-12, True),  # within grid noise: judged as q = 10.00 (full close), not as a raw-float remainder
 ])
 def test_b10_dust_branch_boundaries(tmp_path, monkeypatch, held, sell, allow):
@@ -220,3 +221,72 @@ def test_b12c_real_commit_path_grid_noise_sell_is_judged_on_booked_size(tmp_path
     assert result["allow"] is False and result["decision"]["reasons"] == [CODE], result
     assert paper_ledger.PAPER_PATH.read_text(encoding="utf-8") == before
     assert paper_ledger.load_state(MARKET, YES)["leg_net_shares"] == pytest.approx(10.03)
+
+
+def _commit_env(tmp_path, monkeypatch, held):
+    from src import halt_store
+    _long(tmp_path, monkeypatch, held)
+    monkeypatch.setattr(halt_store, "HALT_STATE_PATH", tmp_path / "halt_state.json")
+    monkeypatch.setattr(halt_store, "HALT_FALLBACK_PATH", tmp_path / "HALT")
+    monkeypatch.setattr(paper_ledger, "bus", lambda *a, **k: None)
+
+
+def _next_close_feasible(h_cents: int, s_cents: int, min_order: float = 5.0) -> bool:
+    """Expected rule (option A): allowed iff the next full close is feasible. A full close is always allowed;
+    otherwise the exact remainder is >= min in cents AND reduce_cap of the leg the ledger will hold (held minus the
+    booked round(shares, 8), in float) reaches min. Item 5: a float 4.999999999999999 floors to 4.99 -> vetoed."""
+    from src.risk_gate import reduce_cap
+    if s_cents == h_cents:
+        return True
+    rest = h_cents / 100 - round(s_cents / 100, 8)
+    return h_cents - s_cents >= round(min_order * 100) and \
+        reduce_cap("sell", {"leg_already_open": True, "leg_net_shares": rest}) >= min_order
+
+
+def test_b13_full_grid_sweep_matches_next_close_feasible():
+    """Holding 5.00-29.99 x every on-grid sell >= 5 (3,126,250 pairs) through the gate's own #265(b) check."""
+    from src.risk_gate import reduce_cap, reduce_residual_problem
+    mismatches, item5 = [], 0
+    for h in range(500, 3000):
+        held = h / 100
+        cap = reduce_cap("sell", {"leg_already_open": True, "leg_net_shares": held})
+        for s in range(500, h + 1):
+            allowed = reduce_residual_problem(s / 100, held, cap, 5.0) is None
+            expected = _next_close_feasible(h, s)
+            if allowed != expected:
+                mismatches.append((held, s / 100))
+            item5 += h - s >= 500 and not expected
+    assert mismatches == []
+    assert item5 == 192  # exact remainder >= 5.00 but the ledger leg floors to 4.99 (item 5 / b7): vetoed
+
+
+@pytest.mark.parametrize("held,sell", [(10.03, 5.03), (10.02, 5.02), (12.12, 7.12), (10.1, 5.1), (10.27, 5.27),
+                                       (16.06, 11.06), (20.99, 15.99), (10.0, 5.01), (29.99, 24.99), (15.0, 10.0)])
+def test_b13b_sampled_real_commit_path_matches_rule(tmp_path, monkeypatch, held, sell):
+    _commit_env(tmp_path, monkeypatch, held)
+    result = paper_ledger.commit_if_allowed(_sell(sell), load_risk())
+    expected = _next_close_feasible(round(held * 100), round(sell * 100))
+    assert result["allow"] is expected, (held, sell, result.get("decision"))
+    if expected:  # the left leg closes in one order
+        monkeypatch.setattr(paper_ledger, "DAILY_MARKS_DIR", tmp_path / "marks2")
+        close = paper_ledger.commit_if_allowed(_sell(39.21), load_risk())
+        assert close["allow"] is True, close.get("decision")
+
+
+def test_b12d_real_commit_path_10_02_sell_5_02_then_full_close(tmp_path, monkeypatch):
+    """Codex P2 (f299019) / Poly风控 6313829544: books 5.02, leaves exactly 5.0, the next full close succeeds."""
+    _commit_env(tmp_path, monkeypatch, 10.02)
+    first = paper_ledger.commit_if_allowed(_sell(5.02), load_risk())
+    assert first["allow"] is True, first.get("decision")
+    monkeypatch.setattr(paper_ledger, "DAILY_MARKS_DIR", tmp_path / "marks2")
+    second = paper_ledger.commit_if_allowed(_sell(39.21), load_risk())
+    assert second["allow"] is True and second["fill"]["shares"] == pytest.approx(5.0), second.get("decision")
+    monkeypatch.setattr(paper_ledger, "DAILY_MARKS_DIR", tmp_path / "marks3")
+    assert abs(paper_ledger.load_state(MARKET, YES)["leg_net_shares"] or 0.0) < 0.01
+
+
+def test_b9b_off_grid_leg_is_judged_on_the_floored_remainder(tmp_path, monkeypatch):
+    """Leg 10.015 (sub-step dust from before #265), min 5.000000000000001: selling 5.01 leaves 5.005, which the next
+    close can only offer as 5.00 < min -> veto (the raw remainder 5.005 would wrongly pass)."""
+    d = evaluate(_sell(5.01, 5.000000000000001), load_risk(), _long(tmp_path, monkeypatch, 10.015))
+    assert d.allow is False and d.reasons == [CODE], (d.shares, d.reasons)

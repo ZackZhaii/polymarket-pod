@@ -413,6 +413,30 @@ def _floor_to_step(shares: float) -> float:
     return max(stepped, 0.0)
 
 
+def reduce_residual_problem(shares: float, net: float | None, cap_shares: float, min_order: float) -> str | None:
+    """Issue #265 (b) for a reduce / close of `shares` (> 0, already capped to cap_shares) on a leg of net `net`.
+
+    Codex P2 (9e49882): the ledger books round(shares, 8), not the gate's float, so a reduce whose size is off the
+    INTENT_SHARE_STEP grid (5.029999999, 9.995) can leave a leg the next close cannot sell. Tolerance 1e-9 steps
+    (the _floor_to_step guard): float noise only. Tightening only: such a reduce vetoes; never resized (#104).
+    Codex P2 (bbd136f / f299019): remainder and full close use the size the ledger books, q = round(shares, 8)
+    (paper_ledger.commit_if_allowed), not the raw float and not round(steps) * STEP (which adds its own error).
+    Allowed iff the next full close is feasible: the remainder's floored size (what reduce_cap will offer) reaches
+    min_order strictly. A float remainder of 4.999999999999999 floors to 4.99 and vetoes (item 5 / b7).
+    """
+    steps = shares / INTENT_SHARE_STEP
+    if abs(steps - round(steps)) > 1e-9:
+        return "reduce_size_off_grid"
+    q = round(shares, 8)
+    if q >= cap_shares:
+        return None  # full close: what is left is below one step and can never be booked
+    remainder = abs(net or 0.0) - q
+    rem_hundredths = math.floor(remainder / INTENT_SHARE_STEP + 1e-6) if remainder > 0 else 0
+    if rem_hundredths > 0 and _floor_to_step(remainder) < min_order:
+        return "reduce_leaves_residual_below_min"
+    return None
+
+
 def _intent_size(intent: Intent) -> tuple[float | None, list[str]]:
     """Issue #104: the intent's own shares (None: not given) and any problem with shares / limit_price."""
     problems: list[str] = []
@@ -685,22 +709,11 @@ def evaluate(
             # size must reach min_order strictly, the same test as the final size check above (no eps).
             # (a) "full close exempt from the minimum" is suspended (no evidence).
             # Only added when nothing else vetoed yet (the order is vetoed either way; goldens keep one reason).
-            # Codex P2 (9e49882): the ledger books round(shares, 8), not the gate's float, so a reduce whose size
-            # is off the INTENT_SHARE_STEP grid (5.029999999, 9.995) can leave a leg the next close cannot sell.
-            # Tolerance 1e-9 steps (the _floor_to_step guard): float noise only, 5.029999999 is off grid.
-            # Tightening only: such a reduce vetoes; it is never resized (#104 rounding is unchanged).
-            steps = shares / INTENT_SHARE_STEP
-            if not reasons and abs(steps - round(steps)) > 1e-9:
-                reasons.append("reduce_size_off_grid")
-            elif not reasons:
-                # Codex P2 (bbd136f): remainder and full close use the grid size q the ledger books, not the raw
-                # float (5.03 - 5e-12 books 5.03, so it must be judged as 5.03).
-                q = round(steps) * INTENT_SHARE_STEP
-                remainder = abs(_finite_number(state.get("leg_net_shares")) or 0.0) - q
-                full_close = q >= cap_shares  # type: ignore[operator]
-                rem_hundredths = math.floor(remainder / INTENT_SHARE_STEP + 1e-6) if remainder > 0 else 0
-                if not full_close and rem_hundredths > 0 and _floor_to_step(remainder) < min_order:
-                    reasons.append("reduce_leaves_residual_below_min")
+            if not reasons:
+                residual = reduce_residual_problem(shares, _finite_number(state.get("leg_net_shares")), cap_shares,
+                                                   min_order)
+                if residual is not None:
+                    reasons.append(residual)
     notional = shares * effective if shares > 0 else 0.0
     # Task AE: the booked fee comes from the same module; never below notional * fee_rate.
     booked = fees.ledger_fee(intent.fee_rate, intent.market_price, effective, notional, shares)
