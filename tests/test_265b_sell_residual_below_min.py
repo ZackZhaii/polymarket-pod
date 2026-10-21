@@ -110,3 +110,54 @@ def test_b7b_the_left_leg_closes_in_one_order(tmp_path, monkeypatch):
     rest = 10.03 - 5.03
     d = evaluate(_sell(39.21), load_risk(), _long(tmp_path, monkeypatch, rest))
     assert d.allow is False  # documents why b7 must veto the first sell
+
+
+def _apply_sell(tmp_path, monkeypatch, held, sells, min_order_size=5.0):
+    """Book `held`, then each allowed sell in order through the real ledger; returns the decisions."""
+    rows = [_row(MARKET, YES, "buy", held, round(held * 0.4, 6), ts=OLD_TS)]
+    out = []
+    for i, s in enumerate(sells, 1):
+        step = tmp_path / f"step{i}"  # fresh dir: the daily-marks snapshot belongs to one ledger state
+        step.mkdir()
+        _ledger(step, monkeypatch, rows)
+        monkeypatch.setattr(paper_ledger, "DAILY_MARKS_DIR", step / "daily_marks")
+        d = evaluate(_sell(s, min_order_size), load_risk(), paper_ledger.load_state(MARKET, YES))
+        out.append(d)
+        if d.allow:
+            rows.append(_row(MARKET, YES, "sell", d.shares, round(d.shares * 0.4, 6),
+                             ts=f"2026-01-01T00:0{i}:00Z"))
+    return out
+
+
+def test_b8_reduce_then_full_close_sequence_is_allowed(tmp_path, monkeypatch):
+    """Codex P2-1: 10.04 -> sell 5.03 (5.01 left) -> full close; the ledger nets 5.009999999999999."""
+    d1, d2 = _apply_sell(tmp_path, monkeypatch, 10.04, [5.03, 39.21])
+    assert d1.allow is True and d1.shares == pytest.approx(5.03), d1.reasons
+    assert d2.allow is True and d2.reasons == [], d2.reasons
+
+
+@pytest.mark.parametrize("held,first", [(10.04, 5.03), (20.0, 7.5), (15.07, 10.07)])
+def test_b8b_every_allowed_sell_leaves_a_closable_leg(tmp_path, monkeypatch, held, first):
+    d1, d2 = _apply_sell(tmp_path, monkeypatch, held, [first, 39.21])
+    assert d1.allow is True, d1.reasons
+    assert d2.allow is True, (d2.shares, d2.reasons)
+
+
+def test_b9_min_just_above_five_is_strict(tmp_path, monkeypatch):
+    """Codex P2-2: min=5.000000000000001, 10.01 sell 5.01 leaves 5.00 < min -> veto (no eps fail-open)."""
+    d = evaluate(_sell(5.01, 5.000000000000001), load_risk(), _long(tmp_path, monkeypatch, 10.01))
+    assert d.allow is False and d.reasons == [CODE], (d.shares, d.reasons)
+
+
+@pytest.mark.parametrize("held,sell,allow", [
+    (10.01, 10.0, False),   # one hundredth left (rem_c == 1) -> veto
+    (10.0, 9.99, False),
+    (10.0, 10.0, True),     # rem_c == 0
+    (10.005, 10.0, True),   # sub-step dust; selling all of reduce_cap is a full close
+    (11.0, 6.0, True),      # exactly min left
+    (10.99, 6.0, False),    # 4.99 left
+])
+def test_b10_dust_branch_boundaries(tmp_path, monkeypatch, held, sell, allow):
+    """Directly pins the hundredths / full-close branch (kills a `rem_c > 1` / `min - 1` style mutation)."""
+    d = evaluate(_sell(sell), load_risk(), _long(tmp_path, monkeypatch, held))
+    assert d.allow is allow and d.reasons == ([] if allow else [CODE]), (d.shares, d.reasons)

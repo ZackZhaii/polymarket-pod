@@ -679,12 +679,16 @@ def evaluate(
             reasons.append("size_below_min_order")
         elif cap_shares is not None and shares > 0:
             # Issue #265 (b): a sell (reduce / close) never leaves 0 < remainder < min_order_size; it vetoes
-            # fail-closed and is never resized. A remainder under one INTENT_SHARE_STEP cannot be booked and
-            # counts as a full close. (a) "full close exempt from the minimum" is suspended (no evidence).
+            # fail-closed and is never resized. Selling everything reduce_cap lets us sell is a full close: what
+            # is left is below one INTENT_SHARE_STEP on the ledger's own grid and can never be booked. Otherwise
+            # the remainder is counted in integer hundredths of a share (dust = 0) and the next close's floored
+            # size must reach min_order strictly, the same test as the final size check above (no eps).
+            # (a) "full close exempt from the minimum" is suspended (no evidence).
             # Only added when nothing else vetoed yet (the order is vetoed either way; goldens keep one reason).
             remainder = abs(_finite_number(state.get("leg_net_shares")) or 0.0) - shares
-            if not reasons and INTENT_SHARE_STEP - LEDGER_OPEN_EPS <= remainder and (
-                    remainder < min_order - LEDGER_OPEN_EPS or _floor_to_step(remainder) < min_order - LEDGER_OPEN_EPS):
+            full_close = shares >= cap_shares  # type: ignore[operator]
+            rem_hundredths = math.floor(remainder / INTENT_SHARE_STEP + 1e-6) if remainder > 0 else 0
+            if not reasons and not full_close and rem_hundredths > 0 and _floor_to_step(remainder) < min_order:
                 reasons.append("reduce_leaves_residual_below_min")
     notional = shares * effective if shares > 0 else 0.0
     # Task AE: the booked fee comes from the same module; never below notional * fee_rate.
