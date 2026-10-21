@@ -156,6 +156,7 @@ def test_b9_min_just_above_five_is_strict(tmp_path, monkeypatch):
     (10.005, 10.0, True),   # sub-step dust; selling all of reduce_cap is a full close
     (11.0, 6.0, True),      # exactly min left
     (10.99, 6.0, False),    # 4.99 left
+    (10.0, 9.995, True),    # off-grid 0.005 left: rem_c == 0 (pins the +1e-6 tolerance; dust leg is a separate issue)
 ])
 def test_b10_dust_branch_boundaries(tmp_path, monkeypatch, held, sell, allow):
     """Directly pins the hundredths / full-close branch (kills a `rem_c > 1` / `min - 1` style mutation)."""
