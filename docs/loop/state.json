@@ -722,6 +722,14 @@
       "finish": "src/settlement.py writes a scope=market halt that blocks_settlement for each of the three prefixes (global halt kept). The three prefixes stay in the blocking tuple and blocks_settlement keeps returning True for them; removing or weakening any of them is out of scope (a risk change needing Poly风控 and 家伟, not this task). Existing rejection tests (tests/test_runner_settlement.py) stay unchanged. Tests from the #349 draft (issue comments 6206470263, correction below it): 4 strict xfails resolved by writing the halts + control; test_a_contradiction_in_the_resolutions_is_a_global_halt still passes. Full python -m pytest 0 failed; guard --require-git 12/12. No halt loosened. config/risk.toml unchanged, live_enabled false.",
       "note": "Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-KEY, non-HOLD: tighten only, prefixes kept; any change to existing global halt goes to Poly风控. Baseline ab7739a. Boundary: src/settlement.py, new tests, LOOP/state.",
       "surface": "grok-bot"
+    },
+    {
+      "id": "EI",
+      "status": "todo",
+      "title": "C0: isolated strict execution record contracts, raw JSON decoder and canonical hashes.",
+      "finish": "After registration merges into dev, EG closes and EI becomes first todo, implement C0 only in src/execution/__init__.py (empty, no imports), src/execution/contracts.py, tests/execution/test_contracts.py and tests/fixtures/execution/contracts.json, plus normal LOOP/state completion. Produce Record, ValidationError, validate_record, canonical_sha256 and decode_record only; strict 14 kinds and nested unions, deep copies, zero IO, raw duplicate-key rejection, bounded finite types and noncircular hashes. All seven named C0 contract tests and parameter sets actually execute without skip/xfail; full pytest and guard --require-git pass; freeze schema/fixture SHA. Inputs: docs/superpowers/plans/2026-10-25-execution-s0/README.md and seven bound snapshots. config/risk.toml unchanged, live_enabled false.",
+      "note": "Human-directed C0 package registration only, queue ID EI; not bot-selected or implemented. EG remains first todo and claim remains null. Future legal claim budget 1h; registration merge into dev, EG closure and EI first todo are prerequisites. Later P/T/L/A/S/E/V are not registered or authorized to start by this PR. No live, SDK, account, funds or runtime permission.",
+      "surface": "codex-local"
     }
   ]
 }
