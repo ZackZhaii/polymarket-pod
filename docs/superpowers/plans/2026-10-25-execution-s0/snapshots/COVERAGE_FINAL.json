@@ -1,0 +1,316 @@
+{
+  "schema": "poly_implementation_coverage/1",
+  "status": "PLANNED_NOT_RUN",
+  "authority": "IMPLEMENTATION_PLAN.md + 00-control/C0_CONTRACT_TASK.md",
+  "supersedes": "08-test-plan/coverage.json ReviewFocus numbering and any overlapping writer allocations only; preserve original evidence bytes",
+  "future_root": "D:/projects/polymarket-pod",
+  "rf_definitions": "IMPLEMENTATION_PLAN.md Review Focus",
+  "rows": [
+    {
+      "id": "X01",
+      "owner": "T",
+      "review_focus": [
+        "RF5"
+      ],
+      "test_file": "tests/execution/test_transport_boundary.py",
+      "nodes": [
+        "test_recursive_s0_tripwires_record_swallowed_attempts",
+        "test_s0_imports_no_credentials_or_order_sdk"
+      ],
+      "assertions": "All recursive execution paths have zero prohibited IO attempts, including swallowed exceptions; only local gethostname is exempt.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X02",
+      "owner": "P",
+      "review_focus": [
+        "RF4"
+      ],
+      "test_file": "tests/execution/test_policy_separation.py",
+      "nodes": [
+        "test_default_zero_profile_denies_submit",
+        "test_approval_mode_cannot_cross_channel_to_strategy",
+        "test_strategy_live_requires_bound_promotion"
+      ],
+      "assertions": "Default zero, malformed, missing, wrong mode/scope and unverified approval give allowed=false/permit=None with no submit.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X03",
+      "owner": "L",
+      "review_focus": [
+        "RF1",
+        "RF3"
+      ],
+      "test_file": "tests/execution/test_reserve_races.py",
+      "nodes": [
+        "test_native_distinct_commands_race_one_budget_across_run_ids",
+        "test_native_same_command_and_signal_never_reserves_twice",
+        "test_native_sqlite_busy_holds_without_retry"
+      ],
+      "assertions": "One atomic reserve maximum, no duplicate intent/key budget across runs, busy fails without send or retry.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X04",
+      "owner": "L",
+      "review_focus": [
+        "RF1"
+      ],
+      "test_file": "tests/execution/test_submit_unknown.py",
+      "nodes": [
+        "test_crash_boundary_matrix_never_resends",
+        "test_restart_submitting_becomes_unknown"
+      ],
+      "assertions": "Every durable SUBMITTING crash reopens UNKNOWN, full reserve retained, zero automatic resend.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X05",
+      "owner": "L",
+      "review_focus": [
+        "RF1"
+      ],
+      "test_file": "tests/execution/test_submit_unknown.py",
+      "nodes": [
+        "test_response_lost_never_resubmits"
+      ],
+      "assertions": "Timeout/HTTP/bad JSON/not found cannot imply rejected or permit replacement command.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X06",
+      "owner": "L",
+      "review_focus": [
+        "RF2"
+      ],
+      "test_file": "tests/execution/test_cancel_confirm.py",
+      "nodes": [
+        "test_cancel_race_keeps_fill_and_remaining_reserve"
+      ],
+      "assertions": "Cancel ACK/200/timeout retains remainder; verified terminal plus complete fill/fee/account reconciliation releases only proved residue.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X07",
+      "owner": "L",
+      "review_focus": [
+        "RF2",
+        "RF3"
+      ],
+      "test_file": "tests/execution/test_partial_fill.py",
+      "nodes": [
+        "test_partial_fill_counts_position_and_remaining_exposure"
+      ],
+      "assertions": "0.4 filled +0.6 remaining exposure retained; no opposite-leg auto order or locked-profit claim.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X08",
+      "owner": "A",
+      "review_focus": [
+        "RF3"
+      ],
+      "test_file": "tests/execution/test_account_projection.py",
+      "nodes": [
+        "test_same_tx_distinct_verified_fill_ids_both_apply",
+        "test_exact_repeat_applies_once",
+        "test_same_event_id_conflict_holds",
+        "test_terminal_late_fill_kept_and_holds"
+      ],
+      "assertions": "Verified external IDs dedupe, same tx can have multiple fills; late evidence retained, conflict HOLD.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X09",
+      "owner": "L",
+      "review_focus": [
+        "RF1",
+        "RF3"
+      ],
+      "test_file": "tests/execution/test_restart_reconcile.py",
+      "nodes": [
+        "test_restart_reconciles_before_new_order",
+        "test_external_funding_and_manual_order_holds"
+      ],
+      "assertions": "Full account/fills/pages/watermark before new order; no renewal, no ignoring manual activity.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X10",
+      "owner": "A",
+      "review_focus": [
+        "RF3",
+        "RF4"
+      ],
+      "test_file": "tests/execution/test_account_reconcile.py",
+      "nodes": [
+        "test_missing_page_cursor_gap_or_stale_holds",
+        "test_known_local_additional_reserve_not_remote_cash_mismatch",
+        "test_reused_external_reserve_cannot_cover_two_local_groups"
+      ],
+      "assertions": "Unknown source/fee/cash/finality/cursor or reused overlap HOLD. total10/ext0.5/local0.51/overlap0.5 gives effective available9.49, remote9.5 not a mismatch.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X11",
+      "owner": "A",
+      "review_focus": [
+        "RF3"
+      ],
+      "test_file": "tests/execution/test_settlement_receipt.py",
+      "nodes": [
+        "test_resolved_or_redeemable_does_not_credit_cash",
+        "test_final_manual_receipt_proves_nonbinary_net_cash",
+        "test_reorg_never_overwrites_prior_receipt"
+      ],
+      "assertions": "No early cash; manual final receipt needs tx/block/finality/token+collateral deltas/all fees; no funds action.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X12",
+      "owner": "S",
+      "review_focus": [
+        "RF2",
+        "RF5"
+      ],
+      "test_file": "tests/execution/test_safety.py",
+      "nodes": [
+        "test_stop_does_not_disable_observation_or_scoped_cancel",
+        "test_stop_after_submit_claim_preserves_inflight_uncertainty",
+        "test_kill_does_not_imply_remote_cancel"
+      ],
+      "assertions": "Durable stop denies new risk, preserves scope-checked control plane and all unknown liabilities; kill is not cancel.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X13",
+      "owner": "T",
+      "review_focus": [
+        "RF4"
+      ],
+      "test_file": "tests/execution/test_transport_boundary.py",
+      "nodes": [
+        "test_permit_payload_hash_and_limits_are_immutable"
+      ],
+      "assertions": "Mutation of canonical permitted payload fails before transport; signed max_spend resizing is separately blocked before S1.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X14",
+      "owner": "S",
+      "review_focus": [
+        "RF5"
+      ],
+      "test_file": "tests/execution/test_receipt_export.py",
+      "nodes": [
+        "test_receipt_unknown_submit_and_missing_fee_remain_unknown",
+        "test_closeout_keeps_all_cross_run_commands_and_unknowns"
+      ],
+      "assertions": "Mode and evidence class explicit; all commands/residual exposure retained; missing fee UNKNOWN, no actual profit certification.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X15",
+      "owner": "P",
+      "review_focus": [
+        "RF2",
+        "RF4"
+      ],
+      "test_file": "tests/execution/test_policy_bounds.py",
+      "nodes": [
+        "test_attempts_cap_zero_and_exhausted_deny",
+        "test_submit_expiry_is_exclusive_and_not_renewed",
+        "test_cumulative_loss_counts_positions_open_unknown_and_fees"
+      ],
+      "assertions": "Per-approval and global attempts/spend/disjoint loss caps/expiry/revocation deny new risk; cancel separately scoped.",
+      "status": "PLANNED_NOT_RUN"
+    },
+    {
+      "id": "X16",
+      "owner": "V",
+      "review_focus": [
+        "RF5"
+      ],
+      "test_file": "tests/execution/test_paper_compatibility.py",
+      "nodes": [
+        "test_paper_entrypoints_do_not_import_execution",
+        "test_paper_pins_and_golden_remain_byte_identical"
+      ],
+      "assertions": "Old paper inputs/outputs/pins/guard/schema preserved; new recursive tripwires do not weaken old guard.",
+      "status": "PLANNED_NOT_RUN"
+    }
+  ],
+  "additional_review_tests": [
+    {
+      "owner": "C0",
+      "file": "tests/execution/test_contracts.py",
+      "nodes": [
+        "test_contract_rejects_noncanonical_numeric_and_duplicate_json",
+        "test_hash_preimages_are_non_circular_and_bound"
+      ],
+      "rf": [
+        "RF4"
+      ],
+      "assertions": "Reject duplicate raw keys before dict, numeric/time/extra invalid forms; all canonical preimages stable without cycles."
+    },
+    {
+      "owner": "L",
+      "file": "tests/execution/test_cancel_confirm.py",
+      "nodes": [
+        "test_blocked_submit_does_not_block_stop_or_scoped_cancel"
+      ],
+      "rf": [
+        "RF2"
+      ],
+      "assertions": "Block fake submit using Event; while blocked, durable stop and cancellation of another verified scoped order complete within 5s without a second submit; release/join own workers in finally."
+    },
+    {
+      "owner": "L",
+      "file": "tests/execution/test_execution_store.py",
+      "nodes": [
+        "test_store_host_identity_uses_no_dns_or_network"
+      ],
+      "rf": [
+        "RF5"
+      ],
+      "assertions": "Only gethostname local metadata allowed; DNS/connect/connect_ex/create_connection/sendto/bind/listen/TLS/HTTP forbidden, attempts recorded before raising."
+    },
+    {
+      "owner": "S",
+      "file": "tests/execution/test_receipt_export.py",
+      "nodes": [
+        "test_closeout_signed_cash_delta"
+      ],
+      "rf": [
+        "RF5"
+      ],
+      "assertions": "Valid finalized buy cash delta -0.21 remains canonical signed string, never abs/zero."
+    },
+    {
+      "owner": "E",
+      "file": "tests/test_economic_validation.py",
+      "nodes": [
+        "test_min_edge_and_endgame_eligibility_without_threshold_change",
+        "test_endgame_signal_does_not_authorize_or_pay"
+      ],
+      "rf": [
+        "RF5"
+      ],
+      "assertions": "riskgate slippage floor .005 and edge .02 remain; Endgame q>=.98,p<=1 => edge<=.015 before fee; no intent eligible, no fabricated probabilities/profit."
+    },
+    {
+      "owner": "L",
+      "file": "tests/execution/test_partial_fill.py",
+      "nodes": [
+        "test_command_cost_summary_uses_actual_unique_events_not_limit_estimate",
+        "test_cost_summary_survives_reopen_and_conflict_holds"
+      ],
+      "rf": [
+        "RF3",
+        "RF5"
+      ],
+      "assertions": "CommandState accounting_summary uses deduped finalized per-command actual fills/fees and inclusive fee links, not permitted upper bound; missing fee UNKNOWN, reopen same projection, conflict HOLD. This is the pure receipt input source."
+    }
+  ]
+}
