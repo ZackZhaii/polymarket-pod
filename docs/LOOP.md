@@ -1840,6 +1840,21 @@ Status: todo. Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-K
 - Tests and acceptance: issue #349 comment 6206470263 (4 strict xfails + control; correction comment below it). Boundary: src/settlement.py, new
   tests. Full pytest + guard 12/12. config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
 
+## Task EI — C0: isolated strict execution record contracts, raw JSON decoder and canonical hashes
+
+Status: todo (registration proposed, codex-local). Human-directed C0 package; queue ID EI. Implement only after this registration merges into dev, EG closes and EI is first todo; acquire the normal one-hour claim then. EG remains first todo and claim=null now.
+
+- Input authority and seven byte-bound GitHub-readable snapshots: [C0 packet](superpowers/plans/2026-10-25-execution-s0/README.md). README routes historical paths and records fresh approval; snapshot bytes stay unchanged.
+- Future exclusive files: `src/execution/__init__.py` (empty, no imports), `src/execution/contracts.py`, `tests/execution/test_contracts.py`, `tests/fixtures/execution/contracts.json`, plus normal LOOP/state completion. Only Record/ValidationError/validate_record/canonical_sha256/decode_record; strict 14 kinds/nested unions, deep copies, zero IO, raw duplicate-key rejection, bounded finite types, noncircular hashes.
+- Future acceptance: all seven named C0 tests/parameter sets execute without skip/xfail, full pytest + guard --require-git, schema/fixture SHA freeze. This registration implements none of C0 and claims no C0 test results.
+- Later P/T/L/A/S/E/V are not registered or authorized to start by this PR. No live/SDK/account/funds/runtime authority. config/risk.toml unchanged, live_enabled=false; runtime/real orders NOT_RUN, profitability UNKNOWN.
+
+## Latest
+- 2026-10-25: Proposed EI registration for human-directed C0 only; effective enqueue requires this base=dev PR to merge.
+- Queue preserved: all 80 existing tasks unchanged, EG stays first todo and claim=null; EI appended after EG without claim/completion.
+- Inputs: seven exact-byte snapshots and SHA bindings under docs/superpowers/plans/2026-10-25-execution-s0; README routes historical paths.
+- Future C0: four files, five interfaces, seven strict tests, full pytest/guard and schema/fixture SHA freeze; no C0 implementation/result claimed now.
+- Gates: EG closes and EI first todo with legal 1h claim; later P/T/L/A/S/E/V unregistered; trading off, runtime NOT_RUN, profit UNKNOWN.
 ## Task EH — Issue #265 (b): no sell leaves a residual below min_order_size (KEY, HOLD)
 
 Status: hold (in review, PR #363; done=false). Queue exception: KEY + HOLD, so the status is `hold`, which `src/loop_claim.py`
