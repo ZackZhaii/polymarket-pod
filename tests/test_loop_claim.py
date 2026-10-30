@@ -5,6 +5,8 @@ import copy
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 import src.loop_claim as loop_claim
 from src.podlib import RISK_PATH
 
@@ -88,12 +90,34 @@ def test_pin_guard_rejects_live_without_editing_the_file():
     assert RISK_PATH.read_bytes() == before
 
 
-def test_repo_queue_has_ef_done_and_eg_next():
-    """The released queue has EF done, EG next and no claim; reading it changes no bytes."""
-    path = loop_claim.STATE_PATH
+@pytest.fixture(params=[None, "todo", "doing", "done"], ids=["actual", "todo", "doing", "done"])
+def ei_queue_path(request, tmp_path, monkeypatch):
+    if request.param is None:
+        return loop_claim.STATE_PATH
+    state = json.loads(loop_claim.STATE_PATH.read_text(encoding="utf-8"))
+    task = next(task for task in state["tasks"] if task["id"] == "EI")
+    task["status"] = "todo"
+    task.pop("done_at", None)
+    state["claim"] = None
+    if request.param in {"doing", "done"}:
+        loop_claim.claim_state(state, "codex-local", "EI", NOW)
+        with pytest.raises(RuntimeError, match="busy"):
+            loop_claim.claim_state(state, "grok-bot", "EI", NOW + timedelta(minutes=59))
+    if request.param == "done":
+        loop_claim.release_state(state, "codex-local", True, NOW + timedelta(minutes=30))
+        with pytest.raises(PermissionError, match="closed"):
+            loop_claim.claim_state(state, "codex-local", "EI", NOW + timedelta(minutes=31))
+    path = tmp_path / "ei-state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(loop_claim, "STATE_PATH", path)
+    return path
+
+
+def test_repo_queue_keeps_completed_tasks_closed_through_ei_lifecycle(ei_queue_path):
+    """Completed tasks stay closed while EI is waiting, claimed or done; reads change no bytes."""
+    path = ei_queue_path
     before = path.read_bytes()
     state = json.loads(before.decode("utf-8"))
-    assert state.get("claim") is None
     task_i = next(task for task in state["tasks"] if task["id"] == "I")
     assert task_i["status"] == "done"
     task_j = next(task for task in state["tasks"] if task["id"] == "J")
@@ -190,10 +214,30 @@ def test_repo_queue_has_ef_done_and_eg_next():
     assert task_bj["status"] == "done" and task_bj["surface"] == "grok-bot"
     task_bl = next(task for task in state["tasks"] if task["id"] == "BL")
     assert task_bl["status"] == "done" and task_bl["surface"] == "grok-bot"
-    # EF (#350, dev 0cb7188) and EG (#349, PR #360) are both complete; EI (#367, dev 4e65e88) is the next todo.
+    # EF (#350) and EG (#349) stay complete throughout EI's claim/release lifecycle.
     task_ef = next(task for task in state["tasks"] if task["id"] == "EF")
     assert task_ef["status"] == "done" and task_ef["surface"] == "codex-local"
     task_eg = next(task for task in state["tasks"] if task["id"] == "EG")
     assert task_eg["status"] == "done" and task_eg["surface"] == "grok-bot"
-    assert loop_claim.next_todo(state)["id"] == "EI"
+    task_ei = next(task for task in state["tasks"] if task["id"] == "EI")
+    assert task_ei["status"] in {"todo", "doing", "done"}
+    assert state["claim_hours"] == 1
+    doing = [task["id"] for task in state["tasks"] if task["status"] == "doing"]
+    claim = state.get("claim")
+    if task_ei["status"] == "doing":
+        assert doing == ["EI"]
+        assert isinstance(claim, dict) and set(claim) == {"surface", "task", "since", "until"}
+        assert claim["task"] == "EI" and claim["surface"] == "codex-local"
+        since = loop_claim.parse_stamp(claim["since"])
+        until = loop_claim.parse_stamp(claim["until"])
+        assert claim["since"] == loop_claim.utc_stamp(since)
+        assert claim["until"] == loop_claim.utc_stamp(until)
+        assert until - since == timedelta(hours=1)
+    else:
+        assert doing == [] and claim is None
+    waiting = loop_claim.next_todo(state)
+    if task_ei["status"] == "todo":
+        assert waiting is not None and waiting["id"] == "EI"
+    else:
+        assert waiting is None
     assert path.read_bytes() == before
