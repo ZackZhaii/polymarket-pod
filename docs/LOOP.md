@@ -1858,7 +1858,7 @@ Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-KEY, non-HOLD: 
 
 ## Task EI — C0: isolated strict execution record contracts, raw JSON decoder and canonical hashes
 
-Status: doing (claim proposed, codex-local), 2026-10-30T06:30:51Z to 2026-10-30T07:30:51Z. EI registration merged via #367; EG closed via #360. This branch only proposes the one-hour EI claim and necessary queue-test maintenance. C0 product implementation remains unstarted until a non-author integrates the claim, the actual dev lease is verified unexpired, and the explicit implementation gate opens.
+Status: doing (visible codex-local claim via #368), 2026-10-30T06:30:51Z to 2026-10-30T07:30:51Z. EI registration merged via #367; EG closed via #360. Product implementation opened on actual dev df2095d. The four-file C0 candidate is frozen at 393e4eb; full exact-head CI and independent acceptance remain pending. This draft does not release or declare EI complete, renew the claim, or open later tasks/runtime.
 
 - Input authority and seven byte-bound GitHub-readable snapshots: [C0 packet](superpowers/plans/2026-10-25-execution-s0/README.md). README routes historical paths and records fresh approval; snapshot bytes stay unchanged.
 - Future exclusive files: `src/execution/__init__.py` (empty, no imports), `src/execution/contracts.py`, `tests/execution/test_contracts.py`, `tests/fixtures/execution/contracts.json`, plus normal LOOP/state completion. Only Record/ValidationError/validate_record/canonical_sha256/decode_record; strict 14 kinds/nested unions, deep copies, zero IO, raw duplicate-key rejection, bounded finite types, noncircular hashes.
@@ -1866,6 +1866,11 @@ Status: doing (claim proposed, codex-local), 2026-10-30T06:30:51Z to 2026-10-30T
 - Later P/T/L/A/S/E/V are not registered or authorized to start by this PR. No live/SDK/account/funds/runtime authority. config/risk.toml unchanged, live_enabled=false; runtime/real orders NOT_RUN, profitability UNKNOWN.
 
 ## Latest
+- 2026-10-30: EI/C0 four-file candidate 393e4eb frozen; 109 synthetic fixtures cover 14 kinds and nested unions, five public names, strict decoder/hash/copy/zero-IO boundary. EI remains doing pending full CI and independent acceptance.
+- TDD: original business RED 151 failures/224 cases with no collection errors; later failures retained; final seven groups/314 cases passed with zero skip/xfail. Candidate local guard --require-git 12/12 passed.
+- Freeze uses committed Git blob bytes: contracts.py SHA256 54e57cf69055f80edea5e41237716763a30f3c70b92ce2f174e6d7ef048ada2d; contracts.json SHA256 536626ca27d17eb177d0f8b82f2b36c908d8c4412ebca53b9c7adcd902ca36f3 (CRLF checkout representation recorded separately).
+- Review pending: FULL capability marker and permitted UNKNOWN intent-lineage versus COMPLETE semantics; no review/CI success or C0 completion inferred from the prior claim CI. Product writer is stopped; normal completion state waits for the acceptance gates.
+- Gate: own visible codex-local/EI claim expires 2026-10-30T07:30:51Z; no automatic renewal, later P/T/L/A/S/E/V remain unregistered, paper/live=false/human gate and risk pins unchanged; author does not self-merge this draft.
 - 2026-10-30: EI/C0 claim proposed by the sole codex-local controller, from 2026-10-30T06:30:51Z until 2026-10-30T07:30:51Z; EG remains done and all other task objects are preserved.
 - Scope: normal LOOP/state claim plus the existing tests/test_loop_claim.py repository-state test and lifecycle fixture; no src/loop_claim.py or C0 product files changed.
 - Checks: clean baseline 40 passed; old assertions failed on the lawful claim and done fixture; revised actual/todo/doing/done coverage and focused queue/pin regression 43 passed, with no skip/xfail.
