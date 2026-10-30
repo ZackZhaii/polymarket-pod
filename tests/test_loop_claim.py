@@ -190,8 +190,10 @@ def test_repo_queue_has_ef_done_and_eg_next():
     assert task_bj["status"] == "done" and task_bj["surface"] == "grok-bot"
     task_bl = next(task for task in state["tasks"] if task["id"] == "BL")
     assert task_bl["status"] == "done" and task_bl["surface"] == "grok-bot"
-    # EF (#350) is complete; EG (#349) stays the next todo.
+    # EF (#350, dev 0cb7188) and EG (#349, PR #360) are both complete; EI (#367, dev 4e65e88) is the next todo.
     task_ef = next(task for task in state["tasks"] if task["id"] == "EF")
     assert task_ef["status"] == "done" and task_ef["surface"] == "codex-local"
-    assert loop_claim.next_todo(state)["id"] == "EG"
+    task_eg = next(task for task in state["tasks"] if task["id"] == "EG")
+    assert task_eg["status"] == "done" and task_eg["surface"] == "grok-bot"
+    assert loop_claim.next_todo(state)["id"] == "EI"
     assert path.read_bytes() == before
