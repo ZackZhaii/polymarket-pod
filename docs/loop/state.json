@@ -735,6 +735,14 @@
       "finish": "After registration merges into dev, EG closes and EI becomes first todo, implement C0 only in src/execution/__init__.py (empty, no imports), src/execution/contracts.py, tests/execution/test_contracts.py and tests/fixtures/execution/contracts.json, plus normal LOOP/state completion. Produce Record, ValidationError, validate_record, canonical_sha256 and decode_record only; strict 14 kinds and nested unions, deep copies, zero IO, raw duplicate-key rejection, bounded finite types and noncircular hashes. All seven named C0 contract tests and parameter sets actually execute without skip/xfail; full pytest and guard --require-git pass; freeze schema/fixture SHA. Inputs: docs/superpowers/plans/2026-10-25-execution-s0/README.md and seven bound snapshots. config/risk.toml unchanged, live_enabled false.",
       "note": "Human-directed C0 package registration only, queue ID EI; not bot-selected or implemented. EG remains first todo and claim remains null. Future legal claim budget 1h; registration merge into dev, EG closure and EI first todo are prerequisites. Later P/T/L/A/S/E/V are not registered or authorized to start by this PR. No live, SDK, account, funds or runtime permission.",
       "surface": "codex-local"
+    },
+    {
+      "id": "EH",
+      "status": "hold",
+      "title": "Issue #265 (b): a sell (reduce/close) never leaves 0 < remainder < min_order_size; veto reduce_leaves_residual_below_min (paper path, KEY)",
+      "finish": "PR #363 (task-265b/min-size-remainder -> dev) merged after Poly风控 review and 家伟's explicit 「批准 #363」 on the final head. Tests tests/test_265b_sell_residual_below_min.py; full pytest (--basetemp outside the repo) 0 failed. config/risk.toml unchanged (0aea23af…bc04), live_enabled false.",
+      "note": "KEY + HOLD (家伟 chose d=a+b on 2026-10-18; (a) 全平仓豁免最小单量 suspended, no official evidence). In review as PR #363 by grok-bot; status hold = not claimable by the loop (loop_claim only claims todo/doing). Set done when #363 merges. Boundary: src/risk_gate.py, new tests, LOOP/state.",
+      "surface": "grok-bot"
     }
   ]
 }

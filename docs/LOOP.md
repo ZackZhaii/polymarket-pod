@@ -1865,6 +1865,16 @@ Status: doing (claim proposed, codex-local), 2026-10-30T06:30:51Z to 2026-10-30T
 - Future acceptance: all seven named C0 tests/parameter sets execute without skip/xfail, full pytest + guard --require-git, schema/fixture SHA freeze. This registration implements none of C0 and claims no C0 test results.
 - Later P/T/L/A/S/E/V are not registered or authorized to start by this PR. No live/SDK/account/funds/runtime authority. config/risk.toml unchanged, live_enabled=false; runtime/real orders NOT_RUN, profitability UNKNOWN.
 
+## Task EH — Issue #265 (b): no sell leaves a residual below min_order_size (KEY, HOLD)
+
+Status: hold (in review, PR #363; done=false). Queue exception: KEY + HOLD, so the status is `hold`, which `src/loop_claim.py`
+never claims (only `todo` / `doing`). Set to done when #363 merges after Poly风控 review and 家伟's 「批准 #363」.
+
+- `src/risk_gate.py`: a reduce/close leaving 0 < remainder < min_order_size (remainder rounded down as the next close rounds)
+  vetoes `reduce_leaves_residual_below_min`; never resized. Sub-step dust counts as a full close. (a) 全平仓豁免最小单量
+  suspended (no official evidence). No new threshold; config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+- Tests: `tests/test_265b_sell_residual_below_min.py`. Full pytest 0 failed.
+
 ## Latest
 - 2026-10-30: EI/C0 claim proposed by the sole codex-local controller, from 2026-10-30T06:30:51Z until 2026-10-30T07:30:51Z; EG remains done and all other task objects are preserved.
 - Scope: normal LOOP/state claim plus the existing tests/test_loop_claim.py repository-state test and lifecycle fixture; no src/loop_claim.py or C0 product files changed.
@@ -1882,6 +1892,7 @@ Status: doing (claim proposed, codex-local), 2026-10-30T06:30:51Z to 2026-10-30T
 - 2026-10-16: Task EG PR #360 review 6214147426 (Poly风控; Codex 6214035038, flash 6214128436): apply_settlements treats a raising verify (payout-only 10**400) as a veto problem plus the invalid_settlement_payout market halt; settlement.plan checks result changes before returning on any conflict (every market gets its halt); agreeing legacy/full snapshots merge order-independently, removal judged only from an explicit mapping (a moved winner still halts). Tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-16: Task EG PR #360 review (Codex 6213482409 / flash 6213576333 / Poly风控 6213662139): settlement._number treats 10**400 as invalid (invalid_settlement_payout market halt, no OverflowError; runner records it even when verify raises); a settled token dropped from its still-confirmed condition mapping is settlement_result_changed + market halt; sentinel.halt failures and record_market_halts problems reach the caller (apply_settlements problems, preflight reasons). Tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-16: Task EG (#349) done by Poly桥接: settlement_conflict / settlement_result_changed / invalid_settlement_payout are now also scope=market settlement-blocking halts (global invalid_risk_state kept, no prefix removed); minimal hooks in paper_ledger.apply_settlements and m2_runner.preflight. Non-KEY, tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-10-20: Registered Task EH (#265 (b), PR #363) as hold (KEY + HOLD, in review); not claimable by the loop. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-16: Task EF (#350), codex-local: oversized fee_rate/market_price/effective_price fail closed; ledger reports invalid_fee, load_state loss=None.
 - Validation: TDD 20 expected failures + 1 control; focused 347 passed; released-state full pytest 5638 passed, 8 skipped, 9 existing xfailed, 0 failed. First full queue-state failure retained.
 - Non-author QC: internal capability_audit checked frozen code/tests, 12 oversized-integer cases, 12 existing-price-fallback cases and 14 finite/type controls; actual receipts accompany the PR.
