@@ -3,7 +3,12 @@
   "branch": "main",
   "claim_hours": 1,
   "cadence_minutes": 30,
-  "claim": null,
+  "claim": {
+    "surface": "codex-local",
+    "task": "EI",
+    "since": "2026-10-30T06:30:51Z",
+    "until": "2026-10-30T07:30:51Z"
+  },
   "assignment": {
     "grok-web": "first open todo when the claim is free",
     "grok-build-local": "same queue; stop if grok-web holds the claim",
@@ -725,7 +730,7 @@
     },
     {
       "id": "EI",
-      "status": "todo",
+      "status": "doing",
       "title": "C0: isolated strict execution record contracts, raw JSON decoder and canonical hashes.",
       "finish": "After registration merges into dev, EG closes and EI becomes first todo, implement C0 only in src/execution/__init__.py (empty, no imports), src/execution/contracts.py, tests/execution/test_contracts.py and tests/fixtures/execution/contracts.json, plus normal LOOP/state completion. Produce Record, ValidationError, validate_record, canonical_sha256 and decode_record only; strict 14 kinds and nested unions, deep copies, zero IO, raw duplicate-key rejection, bounded finite types and noncircular hashes. All seven named C0 contract tests and parameter sets actually execute without skip/xfail; full pytest and guard --require-git pass; freeze schema/fixture SHA. Inputs: docs/superpowers/plans/2026-10-25-execution-s0/README.md and seven bound snapshots. config/risk.toml unchanged, live_enabled false.",
       "note": "Human-directed C0 package registration only, queue ID EI; not bot-selected or implemented. EG remains first todo and claim remains null. Future legal claim budget 1h; registration merge into dev, EG closure and EI first todo are prerequisites. Later P/T/L/A/S/E/V are not registered or authorized to start by this PR. No live, SDK, account, funds or runtime permission.",

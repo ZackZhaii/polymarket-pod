@@ -1858,7 +1858,7 @@ Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-KEY, non-HOLD: 
 
 ## Task EI — C0: isolated strict execution record contracts, raw JSON decoder and canonical hashes
 
-Status: todo (registration proposed, codex-local). Human-directed C0 package; queue ID EI. Implement only after this registration merges into dev, EG closes and EI is first todo; acquire the normal one-hour claim then. EG remains first todo and claim=null now.
+Status: doing (claim proposed, codex-local), 2026-10-30T06:30:51Z to 2026-10-30T07:30:51Z. EI registration merged via #367; EG closed via #360. This branch only proposes the one-hour EI claim and necessary queue-test maintenance. C0 product implementation remains unstarted until a non-author integrates the claim, the actual dev lease is verified unexpired, and the explicit implementation gate opens.
 
 - Input authority and seven byte-bound GitHub-readable snapshots: [C0 packet](superpowers/plans/2026-10-25-execution-s0/README.md). README routes historical paths and records fresh approval; snapshot bytes stay unchanged.
 - Future exclusive files: `src/execution/__init__.py` (empty, no imports), `src/execution/contracts.py`, `tests/execution/test_contracts.py`, `tests/fixtures/execution/contracts.json`, plus normal LOOP/state completion. Only Record/ValidationError/validate_record/canonical_sha256/decode_record; strict 14 kinds/nested unions, deep copies, zero IO, raw duplicate-key rejection, bounded finite types, noncircular hashes.
@@ -1866,6 +1866,11 @@ Status: todo (registration proposed, codex-local). Human-directed C0 package; qu
 - Later P/T/L/A/S/E/V are not registered or authorized to start by this PR. No live/SDK/account/funds/runtime authority. config/risk.toml unchanged, live_enabled=false; runtime/real orders NOT_RUN, profitability UNKNOWN.
 
 ## Latest
+- 2026-10-30: EI/C0 claim proposed by the sole codex-local controller, from 2026-10-30T06:30:51Z until 2026-10-30T07:30:51Z; EG remains done and all other task objects are preserved.
+- Scope: normal LOOP/state claim plus the existing tests/test_loop_claim.py repository-state test and lifecycle fixture; no src/loop_claim.py or C0 product files changed.
+- Checks: clean baseline 40 passed; old assertions failed on the lawful claim and done fixture; revised actual/todo/doing/done coverage and focused queue/pin regression 43 passed, with no skip/xfail.
+- Authority: successful #360 actual-dev CI 41012871813; approved C0 packet under docs/superpowers/plans/2026-10-25-execution-s0 and bounded claim work order SHA256 c49aa018b1be06b859272d9241558ccc886dd0fbdeed89c760c8efe0921aad2b.
+- Handoff: branch claim is not a globally visible lock until this base=dev PR merges; source author does not self-merge, pauses after the PR, and waits for explicit unexpired actual-dev claim verification before C0; paper/live=false/human gate and risk pins unchanged.
 - 2026-10-25: Proposed EI registration for human-directed C0 only; effective enqueue requires this base=dev PR to merge.
 - Queue preserved: all 80 existing tasks unchanged, EG stays first todo and claim=null; EI appended after EG without claim/completion.
 - Inputs: seven exact-byte snapshots and SHA bindings under docs/superpowers/plans/2026-10-25-execution-s0; README routes historical paths.
