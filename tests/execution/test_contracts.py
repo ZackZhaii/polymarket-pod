@@ -76,6 +76,16 @@ _BAD_RAW = [
     b'[]', b'{} trailing', b'{"x":9223372036854775808}',
     b'{"x":-1}', b'{"x":"\\ud800"}', b' ' * (1048576 + 1),
 ]
+# Complete valid envelopes isolate ingress behavior from missing-field errors.
+_RAW_PROPOSAL=json.dumps(_sample('proposal','submit'),separators=(',',':')).encode()
+_RAW_BOOK=json.dumps(_sample('book_snapshot'),separators=(',',':')).encode()
+_VALID_INGRESS = [
+    ('proposal', b'{"schema_version":1,'+_RAW_PROPOSAL[1:]),
+    ('book_snapshot', _RAW_BOOK.replace(b'"verified":true', b'"verified":true,"verified":true',1)),
+    ('proposal', _RAW_PROPOSAL.replace(b'"schema_version":1', b'"schema_version":1.0',1)),
+    ('proposal', _RAW_PROPOSAL.replace(b'"schema_version":1', b'"schema_version":1e0',1)),
+    ('proposal', _RAW_PROPOSAL.replace(b'"schema_version":1', b'"schema_version":NaN',1)),
+]
 _BAD_FIELDS = [
     ('schema_version', True), ('schema_version', 1.0), ('schema_version', 2),
     ('limit_price', '1.0'), ('limit_price', '01'), ('limit_price', '+1'),
@@ -95,7 +105,7 @@ _BAD_FIELDS = [
 ]
 
 
-@pytest.mark.parametrize('case', list(range(len(_BAD_RAW) + len(_BAD_FIELDS) + 10)))
+@pytest.mark.parametrize('case', list(range(len(_BAD_RAW) + len(_BAD_FIELDS) + 10 + len(_VALID_INGRESS))))
 def test_contract_rejects_noncanonical_numeric_and_duplicate_json(case):
     if case < len(_BAD_RAW):
         with pytest.raises(ValidationError):
@@ -134,14 +144,28 @@ def test_contract_rejects_noncanonical_numeric_and_duplicate_json(case):
     elif case == 8:
         value=_sample('book_snapshot');value['minimum_unit']='UNKNOWN'
         with pytest.raises(ValidationError):validate_record('book_snapshot',value)
-    else:
+    elif case == 9:
         value=_sample('book_snapshot');value.update(complete=False,minimum_unit='UNKNOWN',tick_size='UNKNOWN')
         assert validate_record('book_snapshot',value)==value
+    else:
+        kind,raw=_VALID_INGRESS[case-10]
+        # Ordinary duplicate-last decoding restores a fully valid source record.
+        if case in (10,11):assert validate_record(kind,json.loads(raw))==_sample(kind,'submit' if kind=='proposal' else None)
+        with pytest.raises(ValidationError):decode_record(kind,raw)
 
 
-@pytest.mark.parametrize('target', ['command-price', 'command-account', 'permit-binding', 'permit-context', 'receipt', 'settlement', 'event-payload', 'baseline', 'unicode', 'empty-json'])
+_COPIED_METADATA = ['run_id','intent_id','decision_id','idempotency_key','intent_sha256','strategy_sha','model_sha','data_cutoff','created_at','mode']
+@pytest.mark.parametrize('target', ['command-price', 'command-account', 'permit-binding', 'permit-context', 'receipt', 'settlement', 'event-payload', 'baseline', 'unicode', 'empty-json'] + [place+':'+field for place in ('stored','reserved') for field in _COPIED_METADATA])
 def test_hash_preimages_are_non_circular_and_bound(target):
-    if target.startswith('command'):
+    if target.startswith(('stored:','reserved:')):
+        place,field=target.split(':');kind='store_snapshot' if place=='stored' else 'store_event'
+        v=_sample(kind,None if place=='stored' else 'RESERVE_ACCEPTED')
+        command=v['commands'][0]['record'] if place=='stored' else v['payload']['command']
+        command[field]=('b'*64 if field.endswith('sha256') or field.endswith('_sha') else '2026-10-29T00:00:00Z' if field in ('created_at','data_cutoff') else 'strategy_live' if field=='mode' else 'different-'+field)
+        assert validate_record('command',command)==command
+        if place=='reserved':v['payload_sha256']=_hash(v['payload'])
+        with pytest.raises(ValidationError):validate_record(kind,v)
+    elif target.startswith('command'):
         v = _sample('command'); keys = 'account_ref venue condition_id token_id side order_type limit_price shares fee_bound max_all_in_cost collateral_asset chain_id unit_scale price_unit shares_unit money_unit money_quantum expires_at protocol_evidence_sha'.split()
         assert v['canonical_payload_sha256'] == _hash({k:v[k] for k in keys})
         v['limit_price' if target.endswith('price') else 'account_ref'] = '0.4' if target.endswith('price') else 'another-account'
@@ -218,7 +242,7 @@ def test_contract_import_has_zero_io(monkeypatch, operation):
     assert attempts == []
 
 
-@pytest.mark.parametrize('case', ['total','reserved','available','additional','overlap','negative','duplicate-external','unknown-complete','hold-unknown','hold-negative','hold-negative-source','precision38','precision38-wrong','source-pair','coverage','positive'])
+@pytest.mark.parametrize('case', ['total','reserved','available','additional','overlap','negative','duplicate-external','unknown-complete','hold-unknown','hold-negative','hold-negative-source','precision38','precision38-wrong','source-pair','coverage','positive','overlap-external-total','overlap-external-total-hold','overlap-multiple-total'])
 def test_account_cash_identity_and_overlap_schema(case):
     v=_sample('account_snapshot'); valid=False
     key={'total':'cash_total','reserved':'cash_reserved','available':'cash_available','additional':'cash_local_additional_reserved'}.get(case)
@@ -231,11 +255,19 @@ def test_account_cash_identity_and_overlap_schema(case):
     elif case=='hold-negative':v.update(status='HOLD',cash_total='2',cash_external_available='0',cash_available='-1',problems=['CASH_DEFICIT'],reconcile_verdict='HOLD',stop_new_orders=True);valid=True
     elif case=='hold-negative-source':v.update(status='HOLD',cash_total='1',cash_external_available='-1',cash_available='-2',problems=['CASH_DEFICIT'],reconcile_verdict='HOLD',stop_new_orders=True)
     elif case in ('precision38','precision38-wrong'):
-        v.update(cash_total='12345678901234567890123456789012345678',cash_external_available='12345678901234567890123456789012345676',cash_available='12345678901234567890123456789012345675');valid=True
+        v.update(cash_total='99999999999999999999999999999999999999',cash_external_reserved='12345678901234567890123456789012345677',cash_external_available='87654321098765432109876543210987654322',cash_reserved='12345678901234567890123456789012345678',cash_available='87654321098765432109876543210987654321');valid=True
         # A default precision28 implementation silently loses these last digits.
         v['reserve_groups'][0]['local_amount']='12345678901234567890123456789012345678'
         v['reserve_groups'][0]['external_overlap_amount']='12345678901234567890123456789012345677'
-        if case=='precision38-wrong':v['cash_available']='12345678901234567890123456789012345674';valid=False
+        if case=='precision38-wrong':v['cash_available']='87654321098765432109876543210987654320';valid=False
+    elif case.startswith('overlap-external-total'):
+        v.update(cash_external_reserved='0',cash_local_additional_reserved='0',cash_reserved='0',cash_available='10',cash_external_available='10')
+        v['reserve_groups'][0].update(local_amount='0.51',external_overlap_amount='0.51')
+        if case.endswith('hold'):v.update(status='HOLD',problems=['OVERLAP_UNKNOWN'],stop_new_orders=True,reconcile_verdict='HOLD')
+    elif case=='overlap-multiple-total':
+        v.update(cash_external_reserved='1',cash_local_additional_reserved='0',cash_reserved='1',cash_available='9',cash_external_available='9')
+        v['reserve_groups'][0].update(local_amount='0.51',external_overlap_amount='0.51')
+        group=copy.deepcopy(v['reserve_groups'][0]);group.update(reservation_id='second-reservation',external_reservation_ids=['second-external']);v['reserve_groups'].append(group)
     elif case=='source-pair':v['projection']['source_version']=2
     elif case=='coverage':v['coverage']['cash_complete']=False
     else:valid=True
@@ -244,7 +276,7 @@ def test_account_cash_identity_and_overlap_schema(case):
         with pytest.raises(ValidationError):validate_record('account_snapshot',v)
 
 
-@pytest.mark.parametrize('case', ['extra','unknown-cost','unknown-fee','unknown-cash','hidden-summary','synthetic-full','missing-settlement','cancel-empty','unknown-settlement','reconciliation-unknown','valid-partial'])
+@pytest.mark.parametrize('case', ['extra','unknown-cost','unknown-fee','unknown-cash','hidden-summary','synthetic-full','missing-settlement','cancel-empty','unknown-settlement','reconciliation-unknown','valid-partial','unknown-child-cost-numeric-total','unknown-child-fee-numeric-total','unknown-child-cost-unknown-total','unknown-child-fee-unknown-total','complete-unknown-intent-limited','complete-unknown-intent-undisclosed','full-alternative-capability'])
 def test_receipt_subtypes_cannot_hide_unknowns(case):
     v=_sample('receipt','execution_closeout'); valid=False
     if case=='extra':v['net_profit']='1'
@@ -255,6 +287,15 @@ def test_receipt_subtypes_cannot_hide_unknowns(case):
     elif case=='cancel-empty':v.update(cancel_confirmed=True)
     elif case=='unknown-settlement':v=_sample('receipt','settlement_validation');v['verified_net_collateral_credit']='UNKNOWN'
     elif case=='reconciliation-unknown':v=_sample('receipt','reconciliation');v['checked_dimensions']['cash']='UNKNOWN'
+    elif case.startswith('complete-unknown-intent'):
+        v['command_summaries'][0]['intent_sha256']='UNKNOWN'
+        if case.endswith('limited'):v['limitations']=['INTENT_SOURCE_LINEAGE_UNKNOWN'];valid=True
+    elif case=='full-alternative-capability':
+        v.update(stage='S1',evidence_class='EXTERNAL',coverage='FULL',tested_capabilities=['independently_checked_final_cash_settlement'],unverified_capabilities=[]);valid=True
+    elif case.startswith('unknown-child'):
+        amount='actual_cost' if '-cost-' in case else 'actual_fee'
+        v['command_summaries'][0][amount]='UNKNOWN';v.update(verdict='UNRESOLVED',unknowns=['ACTUAL_EVIDENCE_UNKNOWN'],problems=['ACTUAL_EVIDENCE_UNKNOWN'])
+        if case.endswith('unknown-total'):v[amount]='UNKNOWN';valid=True
     else:v.update(verdict='UNRESOLVED',actual_fee='UNKNOWN',unknowns=['ACTUAL_FEE_UNKNOWN'],problems=['ACTUAL_FEE_UNKNOWN']);valid=True
     _rehash(v)
     if valid:assert validate_record('receipt',v)==v

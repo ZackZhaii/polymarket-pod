@@ -245,6 +245,15 @@ def _ordered(v,a,b,path):
 def _no_user_reserved(v,path):
     for key in ('command_id','target_command_id'):
         if key in v and type(v[key]) is str and v[key].startswith('__'):_fail(path,'reserved command namespace')
+def _command_permit(command,permit,path):
+    if permit['action']!='submit':_fail(path,'command requires submit permit')
+    _equal(command['permit_id'],permit['permit_id'],path,'command permit mismatch')
+    _equal(command['canonical_payload_sha256'],permit['canonical_payload_sha256'],path,'command payload mismatch')
+    proposal=permit['reserve_context']['proposal']
+    # The payload digest deliberately omits lineage and caller-created identity.
+    # Bind every copied member when both immutable objects are supplied.
+    for key in command.keys() & proposal.keys():
+        _equal(command[key],proposal[key],path,'command proposal '+key+' mismatch')
 def _contains_unknown(v):
     if type(v) is dict:return any(_contains_unknown(x) for x in v.values())
     if type(v) is list:return any(_contains_unknown(x) for x in v)
@@ -337,10 +346,7 @@ def _relations(name,v,path):
             if v[flag] and v[amount]==_UNKNOWN:_fail(path,'complete accounting cannot hide unknown')
         if any(v[k]==_UNKNOWN for k in ('actual_cost','actual_fee','cash_delta')) and not v['unknowns']:_fail(path,'unknown accounting needs reason')
     elif name=='CommandState':
-        if v['permit']['action']!='submit':_fail(path,'command state requires submit permit')
-        _equal(v['record']['permit_id'],v['permit']['permit_id'],path,'command permit mismatch')
-        _equal(v['record']['command_id'],v['permit']['command_id'],path,'command ID mismatch')
-        _equal(v['record']['canonical_payload_sha256'],v['permit']['canonical_payload_sha256'],path,'command payload mismatch')
+        _command_permit(v['record'],v['permit'],path)
         _equal(_dec(v['cumulative_fill_shares'])+_dec(v['remaining_shares']),_dec(v['record']['shares']),path,'state shares identity')
         if v['attempt_count']>1:_fail(path,'more than one attempt')
     elif name=='store_event':
@@ -350,7 +356,7 @@ def _relations(name,v,path):
         _equal(v['payload_sha256'],_digest(v['payload']),path,'payload hash mismatch')
         p=v['payload']
         if v['event_type']=='CANCEL_REQUESTED' and p['permit']['action']!='request_cancel':_fail(path,'cancel event requires cancel permit')
-        if v['event_type']=='RESERVE_ACCEPTED' and p['permit']['action']!='submit':_fail(path,'reserve requires submit permit')
+        if v['event_type']=='RESERVE_ACCEPTED':_command_permit(p['command'],p['permit'],path)
         if v['event_type']=='ACCOUNT_RECONCILED' and p['reconciliation']['receipt_type']!='reconciliation':_fail(path,'reconciliation receipt subtype mismatch')
         if v['event_type']=='CANCEL_OBSERVED' and p['observation']['operation']!='cancel':_fail(path,'cancel observation mismatch')
     elif name=='store_snapshot':
@@ -390,6 +396,9 @@ def _account_relations(v,path):
         if complete and (g['external_overlap_amount']==_UNKNOWN or (g['external_reservation_ids'] and g['mapping_evidence_ref']==_UNKNOWN)):_fail(path,'unknown reserve overlap requires HOLD')
     if len(external)!=len(set(external)):_fail(path,'external reserve used twice')
     _unique(groups,'reservation_id',path)
+    if v['cash_external_reserved']!=_UNKNOWN:
+        known_overlap=sum((_dec(g['external_overlap_amount']) for g in groups if g['external_overlap_amount']!=_UNKNOWN),_decimal.Decimal(0))
+        if known_overlap>_dec(v['cash_external_reserved']):_fail(path,'known overlap exceeds total external reserve')
     if v['cash_local_additional_reserved']!=_UNKNOWN and all(g['external_overlap_amount']!=_UNKNOWN for g in groups):
         _equal(_dec(v['cash_local_additional_reserved']),sum((_dec(g['local_amount'])-_dec(g['external_overlap_amount']) for g in groups),_decimal.Decimal(0)),path,'additional reserve identity')
     _equal(v['state_version'],v['projection']['source_version'],path,'projection source version mismatch')
@@ -414,11 +423,15 @@ def _receipt_relations(name,v,path):
         requested=[c for c in summaries if c['cancel_requested']]
         _equal(v['cancel_requested'],bool(requested),path,'cancel request aggregate mismatch')
         _equal(v['cancel_confirmed'],bool(requested) and all(c['cancel_confirmed'] for c in requested),path,'cancel confirmation aggregate mismatch')
-        unknown=any(v[k]==_UNKNOWN for k in ('actual_cost','actual_fee','cash_delta')) or any(_contains_unknown(c) for c in summaries)
+        unknown=any(v[k]==_UNKNOWN for k in ('actual_cost','actual_fee','cash_delta')) or any(c[k]==_UNKNOWN for c in summaries for k in ('actual_cost','actual_fee'))
+        if any(c['intent_sha256']==_UNKNOWN for c in summaries) and not v['limitations']:_fail(path,'unknown intent lineage needs explicit limitation')
         if unknown and not v['unknowns']:_fail(path,'unknown closeout must disclose unknowns')
         if v['verdict']=='COMPLETE' and (unknown or v['unknowns'] or v['problems'] or v['reconcile_verdict']!='MATCH' or not v['cash_reconciled']):_fail(path,'complete closeout hides uncertainty')
-        if v['coverage']=='FULL' and (v['stage']!='S1' or v['evidence_class']!='EXTERNAL' or v['unverified_capabilities'] or 'final_cash_settlement' not in v['tested_capabilities']):_fail(path,'FULL requires S1 external final settlement')
+        # Capability names are opaque list[S], not an evidence-authentication
+        # vocabulary. Trusted S/S1 verifies the factual settlement coverage.
+        if v['coverage']=='FULL' and (v['stage']!='S1' or v['evidence_class']!='EXTERNAL' or v['unverified_capabilities']):_fail(path,'FULL requires S1 external complete capability coverage')
         for key in ('actual_cost','actual_fee'):
+            if any(c[key]==_UNKNOWN for c in summaries) and v[key]!=_UNKNOWN:_fail(path,'unknown constituent requires UNKNOWN '+key+' total')
             if v[key]!=_UNKNOWN and all(c[key]!=_UNKNOWN for c in summaries):_equal(_dec(v[key]),sum((_dec(c[key]) for c in summaries),_decimal.Decimal(0)),path,'additive '+key+' mismatch')
 
 
