@@ -701,19 +701,6 @@ def evaluate(
             reasons.append("reduce_exceeds_position")
         elif shares > 0 and shares < min_order:
             reasons.append("size_below_min_order")
-        elif cap_shares is not None and shares > 0:
-            # Issue #265 (b): a sell (reduce / close) never leaves 0 < remainder < min_order_size; it vetoes
-            # fail-closed and is never resized. Selling everything reduce_cap lets us sell is a full close: what
-            # is left is below one INTENT_SHARE_STEP on the ledger's own grid and can never be booked. Otherwise
-            # the remainder is counted in integer hundredths of a share (dust = 0) and the next close's floored
-            # size must reach min_order strictly, the same test as the final size check above (no eps).
-            # (a) "full close exempt from the minimum" is suspended (no evidence).
-            # Only added when nothing else vetoed yet (the order is vetoed either way; goldens keep one reason).
-            if not reasons:
-                residual = reduce_residual_problem(shares, _finite_number(state.get("leg_net_shares")), cap_shares,
-                                                   min_order)
-                if residual is not None:
-                    reasons.append(residual)
     notional = shares * effective if shares > 0 else 0.0
     # Task AE: the booked fee comes from the same module; never below notional * fee_rate.
     booked = fees.ledger_fee(intent.fee_rate, intent.market_price, effective, notional, shares)
@@ -734,6 +721,19 @@ def evaluate(
                 reasons.append("max_daily_loss_projected")
         elif current[1] + worst > limit_usd:
             reasons.append("max_daily_loss_projected")
+    # Issue #265 (b): a sell (reduce / close) never leaves 0 < remainder < min_order_size; it vetoes
+    # fail-closed and is never resized. Selling everything reduce_cap lets us sell is a full close: what
+    # is left is below one INTENT_SHARE_STEP on the ledger's own grid and can never be booked. Otherwise
+    # the remainder is counted in integer hundredths of a share (dust = 0) and the next close's floored
+    # size must reach min_order strictly, the same test as the final size check above (no eps).
+    # (a) "full close exempt from the minimum" is suspended (no evidence).
+    # Codex P3 (6436708274): run AFTER fee / all-in clip / projected daily-loss so an earlier veto keeps a
+    # single reason; only added when nothing else vetoed yet (order vetoed either way; goldens keep one reason).
+    if min_order is not None and cap_shares is not None and shares > 0 and not reasons:
+        residual = reduce_residual_problem(shares, _finite_number(state.get("leg_net_shares")), cap_shares,
+                                           min_order)
+        if residual is not None:
+            reasons.append(residual)
     return Decision(
         allow=not reasons,
         reasons=reasons,
