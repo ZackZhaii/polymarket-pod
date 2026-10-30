@@ -1831,7 +1831,8 @@ Status: done (codex-local, 2026-10-16). Registered by Poly指挥 (Risk gaps back
 
 ## Task EG — Issue #349: three settlement-blocking prefixes actually written
 
-Status: todo. Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-KEY, non-HOLD. Baseline ab7739a.
+Status: done (PR to dev from task-eg/settlement-market-halts). Claimed by Poly桥接 as Task EG (issue #349).
+Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-KEY, non-HOLD: tighten only. Baseline ab7739a.
 
 - `settlement_result_changed`, `settlement_conflict`, `invalid_settlement_payout` are in the blocking prefix tuple
   but no `halt(` ever writes them. Write a scope=market, blocks_settlement halt (global halt kept). The three prefixes
@@ -1839,6 +1840,21 @@ Status: todo. Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-K
   家伟), not this task. Existing rejection tests (`tests/test_runner_settlement.py`) stay unchanged.
 - Tests and acceptance: issue #349 comment 6206470263 (4 strict xfails + control; correction comment below it). Boundary: src/settlement.py, new
   tests. Full pytest + guard 12/12. config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+- Done: `src/settlement.py` `plan` now also returns `Plan.market_halts` (market, reason): `settlement_conflict:*`
+  (two confirmed snapshots of one condition disagree, or a token in two conditions) for every ledger market on the
+  condition's tokens / settled from it; `settlement_result_changed:<market>|<token>` (new check: a booked settlement
+  row whose confirmed snapshot now names another condition, winner or payout; nothing is settled). `invalid_payout_halts`
+  flags a booked settlement row paid outside {0, 1} (`invalid_settlement_payout:<market>|<token>`; ledger verify
+  still refuses it: global invalid_risk_state as before). `record_market_halts` writes them with `sentinel.halt`
+  scope=market (no duplicate of an active one); it never lifts or replaces a halt.
+- Minimal hooks outside the boundary (needed to write the halts where the problems arise):
+  `paper_ledger.apply_settlements` records the planned market halts before returning the problems (the callers'
+  global invalid_risk_state is unchanged) and the invalid-payout halts when the ledger does not verify;
+  `m2_runner.preflight` records the invalid-payout halts after its global ledger halt. Prefix tuple unchanged.
+- Tests: `tests/test_349_settlement_blocking_prefixes.py` (#349 draft without xfail markers + per-prefix end to
+  end: global and market halt; a global resume alone leaves the market blocked while other markets settle; the
+  market settles after its own market halt is resumed; commit path; token in two conditions; clean control).
+  `tests/test_runner_settlement.py` unchanged.
 
 ## Task EI — C0: isolated strict execution record contracts, raw JSON decoder and canonical hashes
 
@@ -1855,6 +1871,12 @@ Status: todo (registration proposed, codex-local). Human-directed C0 package; qu
 - Inputs: seven exact-byte snapshots and SHA bindings under docs/superpowers/plans/2026-10-25-execution-s0; README routes historical paths.
 - Future C0: four files, five interfaces, seven strict tests, full pytest/guard and schema/fixture SHA freeze; no C0 implementation/result claimed now.
 - Gates: EG closes and EI first todo with legal 1h claim; later P/T/L/A/S/E/V unregistered; trading off, runtime NOT_RUN, profit UNKNOWN.
+- 2026-10-16: Task EG PR #360 review 6215585310 (Poly风控; Codex 6215527516): settlement.plan rewritten collect-first/decide-second (every pair of a condition's confirmed snapshots compared; token_in_two_conditions over all confirmed snapshots incl. conflicting ones; halts over the token union; result order-independent, permutation tests); commit_if_allowed's invalid_risk_state halt also writes the invalid-payout market halts (covers an empty resolutions history; apply_settlements itself still does not read the ledger without a snapshot). Tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-10-16: Task EG PR #360 review 6215179366 (Poly风控; Codex 6214998517): settlement_conflict market halts are planned after the snapshot loop over the union of every token any confirmed snapshot of the condition(s) names (condition conflict and token_in_two_conditions alike), so legacy(a)+[a,b]+[x,y] halts mA/mB/mX/mY in all 6 orders. Tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-10-16: Task EG PR #360 review 6214537139 (Poly风控; Codex 6214486218): settlement.plan also compares each snapshot with the condition's first explicit mapping, so legacy + [a,b] + [a,c] is upgrade_token_mapping_conflict in all 6 orders (fail closed); e2e commit_if_allowed veto on ledger_verify_failed. Tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-10-16: Task EG PR #360 review 6214147426 (Poly风控; Codex 6214035038, flash 6214128436): apply_settlements treats a raising verify (payout-only 10**400) as a veto problem plus the invalid_settlement_payout market halt; settlement.plan checks result changes before returning on any conflict (every market gets its halt); agreeing legacy/full snapshots merge order-independently, removal judged only from an explicit mapping (a moved winner still halts). Tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-10-16: Task EG PR #360 review (Codex 6213482409 / flash 6213576333 / Poly风控 6213662139): settlement._number treats 10**400 as invalid (invalid_settlement_payout market halt, no OverflowError; runner records it even when verify raises); a settled token dropped from its still-confirmed condition mapping is settlement_result_changed + market halt; sentinel.halt failures and record_market_halts problems reach the caller (apply_settlements problems, preflight reasons). Tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-10-16: Task EG (#349) done by Poly桥接: settlement_conflict / settlement_result_changed / invalid_settlement_payout are now also scope=market settlement-blocking halts (global invalid_risk_state kept, no prefix removed); minimal hooks in paper_ledger.apply_settlements and m2_runner.preflight. Non-KEY, tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 ## Task EH — Issue #265 (b): no sell leaves a residual below min_order_size (KEY, HOLD)
 
 Status: hold (in review, PR #363; done=false). Queue exception: KEY + HOLD, so the status is `hold`, which `src/loop_claim.py`
