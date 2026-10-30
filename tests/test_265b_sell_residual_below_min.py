@@ -285,6 +285,16 @@ def test_b12d_real_commit_path_10_02_sell_5_02_then_full_close(tmp_path, monkeyp
     assert abs(paper_ledger.load_state(MARKET, YES)["leg_net_shares"] or 0.0) < 0.01
 
 
+def test_b14_projected_daily_loss_alone_when_residual_also_applies(tmp_path, monkeypatch):
+    """Codex P3 (6436708274): residual check runs after fee / all-in clip / projected daily-loss; when another
+    reason already vetoes, do not append reduce_leaves_residual_below_min (or reduce_size_off_grid).
+    Held 8, sell 5, min 5 would residual-veto alone; with daily_loss_usd=28 only max_daily_loss_projected."""
+    state = dict(_long(tmp_path, monkeypatch, 8.0), daily_loss_usd=28.0)
+    d = evaluate(_sell(5.0), load_risk(), state)
+    assert d.allow is False and d.shares == pytest.approx(5.0), (d.shares, d.reasons)
+    assert d.reasons == ["max_daily_loss_projected"], d.reasons
+
+
 def test_b9b_off_grid_leg_is_judged_on_the_floored_remainder(tmp_path, monkeypatch):
     """Leg 10.015 (sub-step dust from before #265), min 5.000000000000001: selling 5.01 leaves 5.005, which the next
     close can only offer as 5.00 < min -> veto (the raw remainder 5.005 would wrongly pass)."""
