@@ -427,9 +427,14 @@ def _receipt_relations(name,v,path):
         if any(c['intent_sha256']==_UNKNOWN for c in summaries) and not v['limitations']:_fail(path,'unknown intent lineage needs explicit limitation')
         if unknown and not v['unknowns']:_fail(path,'unknown closeout must disclose unknowns')
         if v['verdict']=='COMPLETE' and (unknown or v['unknowns'] or v['problems'] or v['reconcile_verdict']!='MATCH' or not v['cash_reconciled']):_fail(path,'complete closeout hides uncertainty')
-        # Capability names are opaque list[S], not an evidence-authentication
-        # vocabulary. Trusted S/S1 verifies the factual settlement coverage.
-        if v['coverage']=='FULL' and (v['stage']!='S1' or v['evidence_class']!='EXTERNAL' or v['unverified_capabilities']):_fail(path,'FULL requires S1 external complete capability coverage')
+        # Require an exact final-cash declaration; it does not authenticate the
+        # factual coverage, finality or permission verified by trusted S/S1.
+        if v['coverage']=='FULL' and (
+            v['stage']!='S1' or v['evidence_class']!='EXTERNAL'
+            or v['unverified_capabilities']
+            or not any(capability in ('final_cash_settlement','final cash settlement')
+                       for capability in v['tested_capabilities'])
+        ):_fail(path,'FULL requires S1 external final settlement')
         for key in ('actual_cost','actual_fee'):
             if any(c[key]==_UNKNOWN for c in summaries) and v[key]!=_UNKNOWN:_fail(path,'unknown constituent requires UNKNOWN '+key+' total')
             if v[key]!=_UNKNOWN and all(c[key]!=_UNKNOWN for c in summaries):_equal(_dec(v[key]),sum((_dec(c[key]) for c in summaries),_decimal.Decimal(0)),path,'additive '+key+' mismatch')

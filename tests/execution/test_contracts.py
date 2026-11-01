@@ -276,14 +276,38 @@ def test_account_cash_identity_and_overlap_schema(case):
         with pytest.raises(ValidationError):validate_record('account_snapshot',v)
 
 
-@pytest.mark.parametrize('case', ['extra','unknown-cost','unknown-fee','unknown-cash','hidden-summary','synthetic-full','missing-settlement','cancel-empty','unknown-settlement','reconciliation-unknown','valid-partial','unknown-child-cost-numeric-total','unknown-child-fee-numeric-total','unknown-child-cost-unknown-total','unknown-child-fee-unknown-total','complete-unknown-intent-limited','complete-unknown-intent-undisclosed','full-alternative-capability'])
+_FULL_CAPABILITY_CASES = {
+    'full-underscore-alias': (['final_cash_settlement'], True),
+    'full-space-alias': (['final cash settlement'], True),
+    'full-mixed-capabilities': (['submit','final cash settlement','schema'], True),
+    'full-empty-capabilities': ([], False),
+    'full-submit-only': (['submit'], False),
+    'full-unrelated-capability': (['schema'], False),
+    'full-uppercase-alias': (['FINAL_CASH_SETTLEMENT'], False),
+    'full-titlecase-alias': (['Final cash settlement'], False),
+    'full-leading-space': ([' final_cash_settlement'], False),
+    'full-trailing-space': (['final_cash_settlement '], False),
+    'full-double-space': (['final  cash settlement'], False),
+    'full-nonbreaking-space': (['final\u00a0cash settlement'], False),
+    'full-stage-s0': (['final_cash_settlement'], False),
+    'full-unverified-capability': (['final_cash_settlement'], False),
+}
+
+
+@pytest.mark.parametrize('case', ['extra','unknown-cost','unknown-fee','unknown-cash','hidden-summary','synthetic-full','missing-settlement','cancel-empty','unknown-settlement','reconciliation-unknown','valid-partial','unknown-child-cost-numeric-total','unknown-child-fee-numeric-total','unknown-child-cost-unknown-total','unknown-child-fee-unknown-total','complete-unknown-intent-limited','complete-unknown-intent-undisclosed','full-alternative-capability'] + list(_FULL_CAPABILITY_CASES))
 def test_receipt_subtypes_cannot_hide_unknowns(case):
     v=_sample('receipt','execution_closeout'); valid=False
-    if case=='extra':v['net_profit']='1'
+    if case in _FULL_CAPABILITY_CASES:
+        tested,valid=_FULL_CAPABILITY_CASES[case]
+        # All capability cases start with the other FULL guards satisfied.
+        v.update(stage='S1',evidence_class='EXTERNAL',coverage='FULL',tested_capabilities=list(tested),unverified_capabilities=[])
+        if case=='full-stage-s0':v['stage']='S0'
+        elif case=='full-unverified-capability':v['unverified_capabilities']=['settlement']
+    elif case=='extra':v['net_profit']='1'
     elif case in ('unknown-cost','unknown-fee','unknown-cash'):v[{'unknown-cost':'actual_cost','unknown-fee':'actual_fee','unknown-cash':'cash_delta'}[case]]='UNKNOWN'
     elif case=='hidden-summary':v['command_summaries'][0]['actual_fee']='UNKNOWN'
-    elif case=='synthetic-full':v.update(stage='S1',coverage='FULL')
-    elif case=='missing-settlement':v.update(stage='S1',evidence_class='EXTERNAL',coverage='FULL')
+    elif case=='synthetic-full':v.update(stage='S1',coverage='FULL',tested_capabilities=['final_cash_settlement'],unverified_capabilities=[])
+    elif case=='missing-settlement':v.update(stage='S1',evidence_class='EXTERNAL',coverage='FULL',unverified_capabilities=[])
     elif case=='cancel-empty':v.update(cancel_confirmed=True)
     elif case=='unknown-settlement':v=_sample('receipt','settlement_validation');v['verified_net_collateral_credit']='UNKNOWN'
     elif case=='reconciliation-unknown':v=_sample('receipt','reconciliation');v['checked_dimensions']['cash']='UNKNOWN'
@@ -291,13 +315,15 @@ def test_receipt_subtypes_cannot_hide_unknowns(case):
         v['command_summaries'][0]['intent_sha256']='UNKNOWN'
         if case.endswith('limited'):v['limitations']=['INTENT_SOURCE_LINEAGE_UNKNOWN'];valid=True
     elif case=='full-alternative-capability':
-        v.update(stage='S1',evidence_class='EXTERNAL',coverage='FULL',tested_capabilities=['independently_checked_final_cash_settlement'],unverified_capabilities=[]);valid=True
+        v.update(stage='S1',evidence_class='EXTERNAL',coverage='FULL',tested_capabilities=['independently_checked_final_cash_settlement'],unverified_capabilities=[])
     elif case.startswith('unknown-child'):
         amount='actual_cost' if '-cost-' in case else 'actual_fee'
         v['command_summaries'][0][amount]='UNKNOWN';v.update(verdict='UNRESOLVED',unknowns=['ACTUAL_EVIDENCE_UNKNOWN'],problems=['ACTUAL_EVIDENCE_UNKNOWN'])
         if case.endswith('unknown-total'):v[amount]='UNKNOWN';valid=True
     else:v.update(verdict='UNRESOLVED',actual_fee='UNKNOWN',unknowns=['ACTUAL_FEE_UNKNOWN'],problems=['ACTUAL_FEE_UNKNOWN']);valid=True
     _rehash(v)
+    before=copy.deepcopy(v)
     if valid:assert validate_record('receipt',v)==v
     else:
         with pytest.raises(ValidationError):validate_record('receipt',v)
+    assert v==before  # Preserve exact capability spelling, list and receipt ID.
