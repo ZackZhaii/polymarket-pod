@@ -1858,7 +1858,7 @@ Registered by Poly指挥 (Risk gaps backlog #47, pure code). Non-KEY, non-HOLD: 
 
 ## Task EI — C0: isolated strict execution record contracts, raw JSON decoder and canonical hashes
 
-Status: doing (claim proposed, codex-local), 2026-10-30T06:30:51Z to 2026-10-30T07:30:51Z. EI registration merged via #367; EG closed via #360. This branch only proposes the one-hour EI claim and necessary queue-test maintenance. C0 product implementation remains unstarted until a non-author integrates the claim, the actual dev lease is verified unexpired, and the explicit implementation gate opens.
+Status: doing (one-hour continuation claim proposed, codex-local), 2026-11-01T17:44:41Z to 2026-11-01T18:44:41Z (2026-11-02 02:44:41 to 03:44:41 JST). EI registration merged via #367; EG closed via #360. Product candidate #369 is frozen at b6104a9c129fff2ceb82c02cb919f6ab9009423c and still NEEDS_FIXES for the FULL final-cash capability guard. This branch changes only normal LOOP/state claim metadata; it does not complete EI or implement the correction. Product writes stay paused until a non-author integrates this fresh claim, actual dev is read back with an unexpired lease, and the explicit implementation gate opens. The expired 2026-10-30 continuation draft remains preserved and unsubmitted.
 
 - Input authority and seven byte-bound GitHub-readable snapshots: [C0 packet](superpowers/plans/2026-10-25-execution-s0/README.md). README routes historical paths and records fresh approval; snapshot bytes stay unchanged.
 - Future exclusive files: `src/execution/__init__.py` (empty, no imports), `src/execution/contracts.py`, `tests/execution/test_contracts.py`, `tests/fixtures/execution/contracts.json`, plus normal LOOP/state completion. Only Record/ValidationError/validate_record/canonical_sha256/decode_record; strict 14 kinds/nested unions, deep copies, zero IO, raw duplicate-key rejection, bounded finite types, noncircular hashes.
@@ -1866,6 +1866,11 @@ Status: doing (claim proposed, codex-local), 2026-10-30T06:30:51Z to 2026-10-30T
 - Later P/T/L/A/S/E/V are not registered or authorized to start by this PR. No live/SDK/account/funds/runtime authority. config/risk.toml unchanged, live_enabled=false; runtime/real orders NOT_RUN, profitability UNKNOWN.
 
 ## Latest
+- 2026-11-02 JST: one bounded continuation of existing EI/codex-local proposed with the normal claim command (no --now), 2026-11-01T17:44:41Z to 2026-11-01T18:44:41Z; claim_hours stays 1, all 81 task objects and non-claim state fields are preserved.
+- Scope: docs/LOOP.md and docs/loop/state.json only, from actual dev df2095da15186b41f33768f08cdb1a525d4d87b6. No new task, completion/release, product, test, source snapshot, config, dependency or CI modification.
+- Checks: current clean queue/pin baseline 43 passed without skips/xfails; this proposed queue tree receives the same focused regression and guard --require-git before handoff; exact PR-head CI remains independently required.
+- Product: #369/b6104a9 remains draft/NEEDS_FIXES; the original sole implementer re-ACKed stopped/no pending writes or children. FULL requires final_cash_settlement or final cash settlement as an exact declared member per non-author ruling #369 comment6517237204; actual coverage/finality is not authenticated by that declaration.
+- Handoff: the branch claim is not a global lock before non-author integration/readback; no self-merge, no automatic second renewal, no product resume on this branch proposal, and no later lane/runtime/trading authority. paper/live=false/human gate and risk pins unchanged.
 - 2026-10-30: EI/C0 claim proposed by the sole codex-local controller, from 2026-10-30T06:30:51Z until 2026-10-30T07:30:51Z; EG remains done and all other task objects are preserved.
 - Scope: normal LOOP/state claim plus the existing tests/test_loop_claim.py repository-state test and lifecycle fixture; no src/loop_claim.py or C0 product files changed.
 - Checks: clean baseline 40 passed; old assertions failed on the lawful claim and done fixture; revised actual/todo/doing/done coverage and focused queue/pin regression 43 passed, with no skip/xfail.
