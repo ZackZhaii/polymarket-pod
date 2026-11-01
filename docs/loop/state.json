@@ -6,8 +6,8 @@
   "claim": {
     "surface": "codex-local",
     "task": "EI",
-    "since": "2026-10-30T06:30:51Z",
-    "until": "2026-10-30T07:30:51Z"
+    "since": "2026-11-01T17:44:41Z",
+    "until": "2026-11-01T18:44:41Z"
   },
   "assignment": {
     "grok-web": "first open todo when the claim is free",
