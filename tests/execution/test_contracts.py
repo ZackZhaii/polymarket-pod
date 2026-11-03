@@ -155,9 +155,78 @@ def test_contract_rejects_noncanonical_numeric_and_duplicate_json(case):
 
 
 _COPIED_METADATA = ['run_id','intent_id','decision_id','idempotency_key','intent_sha256','strategy_sha','model_sha','data_cutoff','created_at','mode']
-@pytest.mark.parametrize('target', ['command-price', 'command-account', 'permit-binding', 'permit-context', 'receipt', 'settlement', 'event-payload', 'baseline', 'unicode', 'empty-json'] + [place+':'+field for place in ('stored','reserved') for field in _COPIED_METADATA])
+# IDs trace the sealed postmerge-d4dc vectors. S01 was observe-only, never a
+# normative positive; its UNKNOWN transition is used in the S03 negatives.
+_BINDING_CASES = [
+    'C00-baseline',
+    *['C01-order-ref-'+field for field in ('command_id','exchange_order_id','account_ref','venue')],
+    'C02-event-command',
+    'C03-permit-target_command_id','C03-permit-target_exchange_order_id',
+    'C04-distinct-cancel-proposal-id',
+    'C05-permit-account_ref','C05-permit-venue',
+    'S00-known-baseline',
+    *[prefix+field for prefix in ('S02-known-account-mismatch-','S03-unknown-account-mismatch-')
+      for field in ('host_ref','canonical_store_path','store_id')],
+    'S04-legitimate-empty-unbaselined-unknown',
+    'S05-empty-opaque-binding-no-external-authentication',
+    'S06-hold-account-matching-opaque-binding',
+]
+
+
+def _binding_case(case):
+    """CI-self-contained equivalents of the complete synthetic QC vectors."""
+    if case.startswith('C'):
+        value=_sample('store_event','CANCEL_REQUESTED');payload=value['payload']
+        permit=payload['permit'];order_ref=payload['order_ref']
+        valid=case in ('C00-baseline','C04-distinct-cancel-proposal-id')
+        if case.startswith('C01-order-ref-'):
+            field=case.removeprefix('C01-order-ref-');order_ref[field]='different-'+field
+        elif case=='C02-event-command':value['command_id']='different-event-command'
+        elif case.startswith(('C03-permit-','C05-permit-')):
+            field=case.split('-permit-',1)[1];permit[field]='different-'+field
+        elif case=='C04-distinct-cancel-proposal-id':permit['command_id']='another-cancel-request'
+        permit['permit_id']=_hash({key:item for key,item in permit.items() if key!='permit_id'})
+        value['payload_sha256']=_hash(payload)
+        # These identify distinct preimages and distinct operations by design.
+        assert order_ref['canonical_payload_sha256']!=permit['target_proposal_sha']
+        assert permit['command_id']!=permit['target_command_id']
+        return 'store_event',value,valid
+    value=_sample('store_snapshot','store_snapshot')
+    valid=not case.startswith(('S02-','S03-'))
+    if case.startswith(('S02-','S03-')):
+        field=case.split('-mismatch-',1)[1]
+        value['store_binding'][field]={'host_ref':'different-host','canonical_store_path':'D:/different/execution.sqlite3','store_id':'f'*12+'4'+'f'*3+'8'+'f'*15}[field]
+        if field=='store_id':value['store_id']=value['store_binding']['store_id']
+        if case.startswith('S03-'):value['account']='UNKNOWN'
+    elif case.startswith(('S04-','S05-')):
+        value.update(account='UNKNOWN',commands=[],reservations=[],approval_usage=[],event_refs=[],version=0,new_orders_stopped=True,stop_reasons=['ACCOUNT_NOT_BASELINED'])
+        if case.startswith('S05-'):value['store_binding']['host_ref']='opaque-unverified-host'
+        value['state_sha256']=_hash(dict(schema='execution_store',schema_version=1,store_id=value['store_id'],store_binding=value['store_binding']))
+    elif case.startswith('S06-'):
+        value['account'].update(status='HOLD',problems=['RECONCILIATION_HOLD'],reconcile_verdict='HOLD',stop_new_orders=True)
+        value['store_binding']['host_ref']='opaque-unverified-host'
+        for command in value['commands']:
+            permit=command['permit'];context=permit['reserve_context']
+            context['store_binding']=copy.deepcopy(value['store_binding'])
+            context['approval']['store_binding']=copy.deepcopy(value['store_binding'])
+            permit['permit_id']=_hash({key:item for key,item in permit.items() if key!='permit_id'})
+            command['record']['permit_id']=permit['permit_id']
+    return 'store_snapshot',value,valid
+
+
+@pytest.mark.parametrize('target', ['command-price', 'command-account', 'permit-binding', 'permit-context', 'receipt', 'settlement', 'event-payload', 'baseline', 'unicode', 'empty-json'] + [place+':'+field for place in ('stored','reserved') for field in _COPIED_METADATA] + ['binding:'+channel+':'+case for case in _BINDING_CASES for channel in ('validate','decode')])
 def test_hash_preimages_are_non_circular_and_bound(target):
-    if target.startswith(('stored:','reserved:')):
+    if target.startswith('binding:'):
+        _,channel,case=target.split(':',2);kind,value,valid=_binding_case(case)
+        before=copy.deepcopy(value)
+        def call():
+            return validate_record(kind,value) if channel=='validate' else decode_record(kind,json.dumps(value,ensure_ascii=False).encode())
+        if valid:
+            result=call();assert result==before and result is not value
+        else:
+            with pytest.raises(ValidationError):call()
+        assert value==before
+    elif target.startswith(('stored:','reserved:')):
         place,field=target.split(':');kind='store_snapshot' if place=='stored' else 'store_event'
         v=_sample(kind,None if place=='stored' else 'RESERVE_ACCEPTED')
         command=v['commands'][0]['record'] if place=='stored' else v['payload']['command']
