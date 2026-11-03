@@ -579,3 +579,248 @@ def test_manifest_incomplete_capture_has_no_trusted_time_facts(tmp_path, monkeyp
     assert all(v is None for v in report["declaration"].values())
     assert report["started_at_utc"] is None and report["ended_at_utc"] is None
     assert report["declared_interval_us"] is None
+
+
+# EM: protocol declarations from one raw snapshot, never online/healthy status.
+def heartbeat_payload(**changes):
+    value = {"proc": "m2_runner", "pid": 7, "host": "owned-fixture",
+        "started_at": "2026-11-03T00:00:00Z", "ts": "2026-11-03T00:00:01Z", "seq": 0,
+        "git_sha": None, "risk_sha256": None, "live_enabled": None, "mode": None,
+        "state": "paused", "exit_code": None, "progress": {"status": "UNKNOWN"},
+        "extra": {"keep": True}}
+    value.update(changes)
+    return value
+
+
+def summarize_heartbeat(descriptor, expected_proc="m2_runner"):
+    module = importlib.import_module("src.m2_report")
+    fn = getattr(module, "summarize_heartbeat_snapshot", None)
+    assert callable(fn), "heartbeat declaration summary not implemented"
+    return fn(descriptor, expected_proc=expected_proc)
+
+
+def test_heartbeat_literal_raw_sha_nulls_and_extra_fields_are_preserved(tmp_path):
+    raw = b' {"proc":"m2_runner","pid":7,"host":"owned-fixture","started_at":"2026-11-03T00:00:00Z","ts":"2026-11-03T00:00:01Z","seq":0,"git_sha":null,"risk_sha256":null,"live_enabled":null,"mode":null,"state":"paused","exit_code":null,"progress":{"status":"UNKNOWN"},"extra":{"keep":true}}\n'
+    path = tmp_path / "owned.json"
+    path.write_bytes(raw)
+    before = raw, path.stat().st_mtime_ns
+    report = summarize_heartbeat(spec(path))
+    assert_summary_not_evaluated(report)
+    assert report["completeness"] == "INVENTORIED" and report["input"]["records"] == 1
+    assert report["input"]["sha256"] == "6fadc556d289e46500a5f4a2e7d8791a85d572dc38493b9bfc36646bffb69c55" and report["input"]["bytes"] == 279
+    assert report["declaration"] == heartbeat_payload()
+    assert report["declaration_problems"] == []
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+
+
+@pytest.mark.parametrize("state,code", [("starting", None), ("running", None), ("paused", None),
+    ("finished", 0), ("finished", 7), ("crashed", None)])
+def test_heartbeat_valid_states_are_not_health_or_success_verdicts(state, code, tmp_path):
+    payload = heartbeat_payload(state=state, exit_code=code, git_sha="UNKNOWN", mode="UNKNOWN",
+        ts="9999-12-31T23:59:59Z")
+    report = summarize_heartbeat(spec(write_manifest(tmp_path, payload)))
+    assert_summary_not_evaluated(report)
+    assert report["declaration"] == payload and report["declaration_problems"] == []
+
+
+@pytest.mark.parametrize("field,value", [("pid", True), ("pid", 0), ("seq", -1), ("seq", True),
+    ("host", 123), ("started_at", "2026-11-03T00:00:00"), ("ts", None), ("ts", "2026-11-03"),
+    ("git_sha", 3), ("risk_sha256", False), ("live_enabled", "false"), ("mode", False),
+    ("state", "UNKNOWN"), ("state", []), ("state", {}), ("exit_code", True), ("progress", []),
+    ("proc", "other_proc")])
+def test_heartbeat_protocol_failures_are_separate_from_readable_input(field, value, tmp_path):
+    payload = heartbeat_payload(**{field: value})
+    report = summarize_heartbeat(spec(write_manifest(tmp_path, payload)))
+    assert_summary_not_evaluated(report)
+    assert report["input"]["records"] == 1 and report["input"]["problems"] == []
+    assert report["completeness"] == "INVENTORIED" and report["declaration"] is None
+    assert report["declaration_problems"]
+
+
+@pytest.mark.parametrize("field", ["proc", "state", "progress"])
+def test_heartbeat_missing_required_fields_do_not_get_defaults(field, tmp_path):
+    payload = heartbeat_payload()
+    del payload[field]
+    report = summarize_heartbeat(spec(write_manifest(tmp_path, payload)))
+    assert report["declaration"] is None and report["declaration_problems"]
+    assert report["input"]["records"] == 1
+
+
+def test_heartbeat_finished_without_exit_code_is_invalid(tmp_path):
+    report = summarize_heartbeat(spec(write_manifest(tmp_path, heartbeat_payload(state="finished"))))
+    assert report["declaration"] is None and report["declaration_problems"]
+    assert report["input"]["records"] == 1
+
+
+@pytest.mark.parametrize("expected_proc", [None, "", 0, True, [], {}])
+def test_heartbeat_invalid_expected_proc_rejects_before_source_or_code_io(expected_proc, monkeypatch):
+    class ForbiddenSource:
+        def __fspath__(self):
+            raise AssertionError("invalid expected_proc touched source descriptor")
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid expected_proc touched filesystem")
+    with monkeypatch.context() as patch:
+        for attr in ("resolve", "stat", "open", "read_bytes", "read_text"):
+            patch.setattr(Path, attr, forbidden)
+        patch.setattr(os, "open", forbidden)
+        patch.setattr(builtins, "open", forbidden)
+        report = summarize_heartbeat({"source": ForbiddenSource(), "format": "json"}, expected_proc)
+    assert_summary_not_evaluated(report)
+    assert report["completeness"] == "INVALID" and report["declaration"] is None
+    assert report["input"]["sha256"] is None and "invalid_expected_proc" in report["declaration_problems"]
+
+
+@pytest.mark.parametrize("descriptor", [None, [], {}, {"source": "unused", "format": "jsonl"},
+    {"source": "unused", "format": "json", "sha256": "override"}])
+def test_heartbeat_requires_explicit_single_json_descriptor(descriptor, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid heartbeat descriptor reached filesystem")
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "resolve", forbidden)
+        patch.setattr(os, "open", forbidden)
+        patch.setattr(builtins, "open", forbidden)
+        report = summarize_heartbeat(descriptor)
+    assert report["completeness"] == "INVALID" and report["declaration"] is None
+    assert report["input"]["sha256"] is None
+
+
+@pytest.mark.parametrize("raw", [b"", b"\xff", b'{"proc":"m2_runner","proc":"other"}',
+    b'{"x":NaN}', b'{"x":Infinity}', b'{"x":1e999}', b'{"proc":', b"[]", b"null"])
+def test_heartbeat_bad_raw_or_root_cannot_publish_partial_declaration(raw, tmp_path):
+    path = tmp_path / "bad.json"
+    path.write_bytes(raw)
+    report = summarize_heartbeat(spec(path))
+    assert_summary_not_evaluated(report)
+    assert report["input"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert report["input"]["bytes"] == len(raw) and report["declaration"] is None
+    assert report["declaration_problems"]
+    assert report["input"]["records"] == (1 if raw in (b"[]", b"null") else None)
+
+
+def test_heartbeat_missing_source_is_not_first_run_or_missing_live_beat(tmp_path):
+    report = summarize_heartbeat(spec(tmp_path / "missing.json"))
+    assert_summary_not_evaluated(report)
+    assert report["completeness"] == "INCOMPLETE" and report["declaration"] is None
+    assert report["input"]["sha256"] is None and "missing_source" in report["input"]["problems"]
+    assert "heartbeat_missing" not in report["input"]["problems"] + report["declaration_problems"]
+
+
+@pytest.mark.parametrize("source", [r"\\server\share\beat.json", r"\\?\UNC\server\share\beat.json"])
+def test_heartbeat_unc_rejects_before_filesystem(source, monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("UNC heartbeat reached filesystem")
+    with monkeypatch.context() as patch:
+        for attr in ("resolve", "stat", "open", "read_bytes"):
+            patch.setattr(Path, attr, forbidden)
+        patch.setattr(os, "open", forbidden)
+        report = summarize_heartbeat({"source": source, "format": "json"})
+    assert report["completeness"] == "INVALID" and report["declaration"] is None
+    assert report["input"]["source"] == source and "nonlocal_source" in report["input"]["problems"]
+
+
+def test_heartbeat_env_source_is_rejected_without_reading(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    path.write_bytes(b"owned-test-fixture")
+    def forbidden(*args, **kwargs):
+        raise AssertionError("environment fixture opened")
+    monkeypatch.setattr(os, "open", forbidden)
+    report = summarize_heartbeat(spec(path))
+    assert report["declaration"] is None and "forbidden_source" in report["input"]["problems"]
+
+
+def test_heartbeat_incomplete_capture_keeps_sha_but_no_declaration(tmp_path, monkeypatch):
+    path = write_manifest(tmp_path, heartbeat_payload())
+    raw = path.read_bytes()
+    real_fstat = os.fstat
+    calls = 0
+    def fail_after_read(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("owned injected incomplete metadata")
+        return real_fstat(fd)
+    monkeypatch.setattr(os, "fstat", fail_after_read)
+    report = summarize_heartbeat(spec(path))
+    assert report["completeness"] == "INCOMPLETE" and report["declaration"] is None
+    assert report["input"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert report["input"]["records"] is None
+
+
+def test_heartbeat_cold_protocol_loading_avoids_runtime_and_reads_snapshot_once(tmp_path, monkeypatch):
+    # Real original protocol source executes; no validator stub or full heartbeat import.
+    import importlib.machinery
+    import ssl
+    import sys
+    import time
+    import tokenize  # Warm standard code-loader dependencies before IO boundary probe.
+    import urllib.request
+    path = write_manifest(tmp_path, heartbeat_payload())
+    raw, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    module = importlib.import_module("src.m2_report")
+    fn = getattr(module, "summarize_heartbeat_snapshot", None)
+    assert callable(fn), "heartbeat declaration summary not implemented"
+    code_path = str(Path(module.__file__).with_name("heartbeat.py"))
+    real_open, real_resolve = os.open, Path.resolve
+    real_data = importlib.machinery.SourceFileLoader.get_data
+    real_import = builtins.__import__
+    snapshot_opens, code_reads = [], []
+    def source_only_open(name, flags, *args, **kwargs):
+        assert not snapshot_opens, "snapshot reopened"
+        assert Path(name) == path
+        assert not flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
+        snapshot_opens.append(str(name))
+        return real_open(name, flags, *args, **kwargs)
+    def source_only_resolve(target, *args, **kwargs):
+        assert target == path, "runtime/module ROOT.resolve attempted"
+        return real_resolve(target, *args, **kwargs)
+    def actual_code_read(loader, name):
+        assert Path(name) == Path(code_path), "unexpected code loader input"
+        code_reads.append(str(name))
+        return real_data(loader, name)
+    def no_runtime_import(name, globals=None, locals=None, fromlist=(), level=0):
+        assert name not in ("src.heartbeat", "src.podlib", "src.secret_scan")
+        assert not (name == "src" and any(x in ("heartbeat", "podlib", "secret_scan") for x in fromlist))
+        return real_import(name, globals, locals, fromlist, level)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("runtime/marker/risk/write/network/scan/sleep attempted")
+    with monkeypatch.context() as patch:
+        for name in ("src.heartbeat", "src.podlib", "src.secret_scan"):
+            patch.delitem(sys.modules, name, raising=False)
+        patch.setattr(os, "open", source_only_open)
+        patch.setattr(Path, "resolve", source_only_resolve)
+        patch.setattr(importlib.machinery.SourceFileLoader, "get_data", actual_code_read)
+        patch.setattr(builtins, "__import__", no_runtime_import)
+        patch.setattr(builtins, "open", forbidden)
+        for attr in ("read_bytes", "read_text", "write_bytes", "write_text", "glob", "rglob"):
+            patch.setattr(Path, attr, forbidden)
+        patch.setattr(os, "scandir", forbidden)
+        patch.setattr(urllib.request, "build_opener", forbidden)
+        patch.setattr(ssl, "create_default_context", forbidden)
+        patch.setattr(socket, "socket", forbidden)
+        patch.setattr(subprocess, "Popen", forbidden)
+        patch.setattr(time, "sleep", forbidden)
+        report = fn(spec(path), expected_proc="m2_runner")
+        assert all(name not in sys.modules for name in ("src.heartbeat", "src.podlib", "src.secret_scan"))
+    assert len(snapshot_opens) == 1 and len(code_reads) == 1
+    assert report["input"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert report["declaration"] == heartbeat_payload() and report["declaration_problems"] == []
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == (raw, mtime)
+
+
+
+def test_heartbeat_unavailable_protocol_source_has_no_runtime_fallback(tmp_path, monkeypatch):
+    import importlib.machinery
+    path = write_manifest(tmp_path, heartbeat_payload())
+    raw = path.read_bytes()
+    original = importlib.machinery.SourceFileLoader.get_source
+    def missing_code(loader, fullname):
+        if fullname == "src.heartbeat":
+            raise OSError("owned injected protocol source unavailable")
+        return original(loader, fullname)
+    monkeypatch.setattr(importlib.machinery.SourceFileLoader, "get_source", missing_code)
+    report = summarize_heartbeat(spec(path))
+    assert_summary_not_evaluated(report)
+    assert report["completeness"] == "INVENTORIED" and report["input"]["records"] == 1
+    assert report["input"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert report["declaration"] is None
+    assert report["declaration_problems"] == ["validator_unavailable:OSError"]
