@@ -17,7 +17,8 @@ from tests import m2_runner_rig as rig
 
 TIME_URL = "https://clob.polymarket.com/time"
 NEW_KEYS = {"clock_anomaly", "clock_anomaly_since", "last_time_check",
-            "time_check_failures_total", "time_check_failures_by_class", "book_get_failures_total"}
+            "time_check_failures_total", "time_check_failures_by_class", "book_get_failures_total",
+            "settlement_get_failures_total"}
 OLD_KEYS = {"iteration", "last_scan_ts", "scan_age_s", "forecasts_sealed_total", "forecasts_rejected_total",
             "intents_built_total", "allows_total", "vetoes_total", "missing_fee_total", "scans_total",
             "scan_failures_total", "last_book_age_s_max", "resume_count", "paused_reason", "paused_since",
