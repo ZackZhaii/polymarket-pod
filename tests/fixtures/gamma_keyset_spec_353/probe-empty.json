@@ -1,0 +1,37 @@
+{
+ "endpoint": "/markets/keyset?id=",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json",
+  "cache-control": "public, max-age=300"
+ },
+ "top_keys": [
+  "$schema",
+  "markets",
+  "next_cursor"
+ ],
+ "next_cursor": "IAbiWreruE1qJ-otX2wKJVGyXq3QY1qfg8_Kdmv6qiV7InYiOjEsImsiOiJtYXJrZXRzIiwib2giOiI0ZjUzY2RhMThjMmJhYTBjMDM1NGJiNWY5YTNlY2JlNWVkMTJhYjRkOGUxMWJhODczYzJmMTExNjEyMDJiOTQ1Iiwia2V5cyI6W3sidCI6InN0cmluZyIsInYiOiI1NTk2NzAifV19",
+ "n": 20,
+ "ids": [
+  "559651",
+  "559652",
+  "559653",
+  "559654",
+  "559655",
+  "559656",
+  "559657",
+  "559658",
+  "559659",
+  "559660",
+  "559661",
+  "559662",
+  "559663",
+  "559664",
+  "559665",
+  "559666",
+  "559667",
+  "559668",
+  "559669",
+  "559670"
+ ]
+}

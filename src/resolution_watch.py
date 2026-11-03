@@ -2,8 +2,8 @@
 
 The M2 runner never wrote data/resolutions.jsonl (only the standalone ``resolutions`` CLI did), so
 ``paper_ledger.apply_settlements`` had nothing to settle from. Each runner tick now reads, for every market with
-an open leg only, Gamma ``/markets?id=<id>&closed=true`` and ``/markets?id=<id>`` (the default lists open markets
-only; both are the allowlisted Gamma ``/markets`` path, no new host). A closed market's row goes through the
+an open leg only, Gamma ``/markets/keyset?id=<id>&closed=true`` and ``/markets/keyset?id=<id>`` (#353; the default lists open
+markets only; both are the allowlisted Gamma ``/markets/keyset`` path, no new host). A closed market's row goes through the
 existing classifier (``resolutions.snapshot``: closedTime + RESOLUTION_HOLD_HOURS, UMA status, unique winner,
 token mapping, the history's first-write / one-upgrade rule) and new rows are appended to the history.
 
@@ -38,20 +38,45 @@ class Collected:
 
 def gamma_url(market_id: str, *, closed: bool) -> str:
     query = {"id": market_id, "closed": "true"} if closed else {"id": market_id}
-    return podlib.GAMMA_PREFIX + "?" + urlencode(query)
+    return podlib.GAMMA_PREFIX + "/keyset?" + urlencode(query)
+
+
+def valid_gamma_id(market_id: object) -> bool:
+    """Issue #353: a Gamma market id is a non-empty string of ASCII digits (checked before any request)."""
+    text = str(market_id).strip() if market_id is not None else ""
+    return bool(text) and text.isascii() and text.isdigit()
+
+
+def keyset_rows(data: object, market_id: str) -> list[dict[str, Any]] | None:
+    """Issue #353: the rows of a single-id /markets/keyset answer, or None for a bad response.
+
+    The answer must be a dict whose ``markets`` is a list of dicts that all carry this id; a ``next_cursor``
+    key (the id filter may have been ignored) or any row of another id is a bad response. ``$schema`` and other
+    top-level keys are ignored.
+    """
+    if not isinstance(data, dict) or "next_cursor" in data:
+        return None
+    markets = data.get("markets")
+    if not isinstance(markets, list):
+        return None
+    if not all(isinstance(row, dict) and str(row.get("id")) == str(market_id) for row in markets):
+        return None
+    return list(markets)
 
 
 def read_market(getter: Callable[[str], Any], market_id: str) -> tuple[dict[str, Any] | None, str | None]:
     """One held market's Gamma row (closed view first), or (None, failure)."""
+    if not valid_gamma_id(market_id):
+        return None, "gamma_bad_id"  # Issue #353: no request for an empty / non-numeric id
     found: list[dict[str, Any]] = []
     for closed in (True, False):
         try:
             data = getter(gamma_url(market_id, closed=closed))
         except Exception as exc:  # noqa: BLE001 - any failed read is a collection failure (no halt)
             return None, f"gamma_read_failed:{type(exc).__name__}"
-        if not isinstance(data, list):
+        rows = keyset_rows(data, market_id)
+        if rows is None:
             return None, "gamma_bad_response"
-        rows = [row for row in data if isinstance(row, dict) and str(row.get("id")) == str(market_id)]
         if len(rows) > 1:
             return None, "gamma_duplicate_market"
         found.extend(rows)

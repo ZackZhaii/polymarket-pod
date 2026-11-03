@@ -588,15 +588,21 @@ def book_url(token_id: str) -> str:
 
 
 def gamma_market_url(market_id: str) -> str:
-    return podlib.GAMMA_PREFIX + "?" + urlencode({"id": market_id})
+    return podlib.GAMMA_PREFIX + "/keyset?" + urlencode({"id": market_id})
 
 
 def _gamma_market(getter: Callable[[str], Any], market_id: str) -> object:
-    """Gamma's /markets?id=<id> row for the fee (src/fee_source reads feesEnabled / feeSchedule)."""
-    data = getter(gamma_market_url(market_id))
-    rows = data if isinstance(data, list) else []
-    matches = [row for row in rows if isinstance(row, dict) and str(row.get("id")) == str(market_id)]
-    return matches[0] if len(matches) == 1 else None
+    """Gamma's /markets/keyset?id=<id> row for the fee (src/fee_source reads feesEnabled / feeSchedule).
+
+    Issue #353: an empty or non-numeric id is no row and no request (an empty id= returns unrelated markets).
+    The keyset answer must be ``{"markets": [...]}`` holding exactly the one row of this id: any other shape
+    (a bare list, a missing or non-list ``markets``, any ``next_cursor``, or a row of another id) is no row.
+    No fallback to the deprecated legacy id endpoint.
+    """
+    if not resolution_watch.valid_gamma_id(market_id):
+        return None
+    rows = resolution_watch.keyset_rows(getter(gamma_market_url(market_id)), market_id)
+    return rows[0] if rows is not None and len(rows) == 1 else None
 
 
 # ---------------------------------------------------------------- one iteration

@@ -1,0 +1,20 @@
+{
+ "markets": [
+  {
+   "acceptingOrders": false,
+   "closed": true,
+   "closedTime": "2026-10-14 13:14:27+00",
+   "feeSchedule": {
+    "exponent": 1,
+    "rate": 0.05,
+    "rebateRate": 0.15,
+    "takerOnly": true
+   },
+   "feesEnabled": true,
+   "id": "5518151",
+   "takerBaseFee": 1000,
+   "umaResolutionStatus": "resolved",
+   "umaResolutionStatuses": "[\"proposed\", \"proposed\", \"disputed\", \"disputed\", \"proposed\", \"proposed\"]"
+  }
+ ]
+}
