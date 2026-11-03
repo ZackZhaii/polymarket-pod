@@ -1894,7 +1894,9 @@ Historical claim status retained: Status: doing (new explicitly dispatched norma
 
 ## Task EL — M2 second slice: single-manifest declared window
 
-Status: doing (normal codex-local/EL claim proposed 2026-11-03T13:57:13Z to 2026-11-03T14:57:13Z; safe freeze 2026-11-03T14:52:13+00:00. Product CLOSED until this claim is independently integrated and actualdev unexpired fullclaim/risk read back with explicit PRODUCT OPEN; no --now/renew/claim_hours change).
+Status: done (normal completion proposed at 2026-11-03T14:55:00Z; accepted product PR #387 merged into actual dev d92639711f1bd6191ff37627337852c247e2d1fc; global done/claimnull only after non-author integration/readback of this metadata PR).
+
+Historical claim status retained: Status: doing (normal codex-local/EL claim proposed 2026-11-03T13:57:13Z to 2026-11-03T14:57:13Z; safe freeze 2026-11-03T14:52:13+00:00. Product CLOSED until this claim is independently integrated and actualdev unexpired fullclaim/risk read back with explicit PRODUCT OPEN; no --now/renew/claim_hours change).
 
 Historical registration status retained: Status: todo (human-directed registration proposal only; no claim, product tree or implementation; global enqueue only after independent dev integration/readback).
 
@@ -1910,6 +1912,11 @@ Historical registration status retained: Status: todo (human-directed registrati
 - Human2026-11-03 continued ordinary offline M2 tools authorization; not bot-created out-of-backlog work. EK completed at actualdev10ff78bce821a44f70aca7c2c8c347e7ceeef951, no redo. risk original9keys/SHA0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04 and paper/livefalse/human gate remain. #122/runtime blockers/main/KEY/Windows/oncall/threshold/account/SDK/funds/trading gates not released; no certain T0/date/profit,168h/14d not compressed.
 
 ## Latest
+- 2026-11-03T14:55:00Z: EL normal done/release proposed from accepted actualdevd92639711f1bd6191ff37627337852c247e2d1fc; original complete codex-local/EL13:57:13Z-14:57:13Z claim fresh verified unchanged. Normal release --surface codex-local --done uses actual current time, no --now/newclaim/renew/backdate. Branch84done/claimnull not global until non-author dev integration/readback.
+- Product #387 exacthead2d36177732053718b72d7df01342a4a77703502a independently accepted and merged d92639711f1bd6191ff37627337852c247e2d1fc. Current-head fullCI41655362516/job125984090789 SUCCESS6239passed/2skipped/9xfailed/Guard12; Source118GREEN retained, no product/full rerun in this closure.
+- True non-author Astra functionality24calls/26inputs/349checksPASS plus freshWindows2node fixture deltaPASS; original4blobs identical and explicit reuse accepted. P2 real CRLF RED/fixture-local attrs repair/new-head proof remain preserved; all5accepted productblobs untouched here.
+- Product froze14:36:16.684124Z before14:52:13Z safe cutoff under original valid1hclaim. Raw declaration interval stays NOT_EVALUATED/nullmetrics/denominator, never healthy coverage/M2run/profit approval. Historical failures, source/fixture bytes and immutable manifests/publication receipts remain intact.
+- Source01a15d32authors only LOOP/state closure; root01a19d50is actual non-author final integrator. Other83tasks/settings/risk/CI unchanged; metadata59+Guard and exact nativefast only. Source cleanSTOPPED after PR, no next task/collector/main/KEY/runtime/Windows/account/trading authority; paper/livefalse/human gate unchanged.
 - 2026-11-03 JST: normal EL claim proposed from actualdev5d98c2489f4a76ec77b3c1ca3b886bec5323de1f after non-author #385 enqueue/readback; codex-local/EL 2026-11-03T13:57:13Z to 2026-11-03T14:57:13Z, safe freeze 2026-11-03T14:52:13+00:00. No --now/renew/claim_hours change; branchclaim is not yet globally visible.
 - Source fresh verified83done/ELsole todo/claimnull and risk originalSHA before normal status/claim; other83task objects/settings unchanged. Product candidate m2-manifest-window-next remains absent/uncreated, no product imports/tests or implementation.
 - Same shared SECOND_WORK_ORDER raw5652bytes/SHAcbc8a2e2db220146f184b34c990af65865ea70b5b80f472e7d20e8275e2dd54f published PR385comment6605610419; all5acceptance conditions and3exclusive absolute domains unchanged. Source01a15d32sole author/controller, root01a19d50genuine non-author final integrator; author cannot selfmerge.
