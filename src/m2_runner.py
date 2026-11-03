@@ -83,6 +83,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -124,6 +125,8 @@ from src.thresholds import (  # noqa: E402
 )
 
 PROC = "m2_runner"
+# #345: observation labels, never read by a clock or trading decision.
+TIME_FAILURE_CLASSES = ("425", "timeout", "5xx", "4xx_other", "other")
 EXECUTOR_ENABLED = False  # no switch, argument, environment variable or config key changes this (issue #119 F2)
 
 STRATEGY = forecaster.STRATEGY
@@ -288,7 +291,10 @@ class RunnerState:
     last_time_check: dict[str, Any] | None = None
     counters: dict[str, int] = field(default_factory=lambda: {
         "forecasts_sealed_total": 0, "forecasts_rejected_total": 0, "intents_built_total": 0, "allows_total": 0,
-        "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0})
+        "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0,
+        "time_check_failures_total": 0})
+    time_check_failures_by_class: dict[str, int] = field(default_factory=lambda: {
+        key: 0 for key in TIME_FAILURE_CLASSES})
     last_book_age_s_max: float | None = None
     disk_free_gb: float | None = None
     ledger_rows: int | None = None
@@ -519,18 +525,65 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
 CLOCK_PAUSE_REASONS = frozenset({"clock_unverified", "clock_skew"})
 
 
+def _time_failure_details(error: Exception) -> tuple[int | None, str, str]:
+    """#345: bounded known-wrapper inspection, observation only; never serialize error text or URLs.
+
+    exc_type names the effective exception, not its outer wrapper. PublicGetError prefers an explicit
+    cause, then last_error; URLError prefers an exception reason, then cause. No implicit context or
+    string guessing. Eight links and identity tracking bound malformed/cyclic wrapper chains.
+    """
+    current: BaseException = error
+    seen: set[int] = set()
+    for _ in range(8):
+        if isinstance(current, (HTTPError, TimeoutError)) or id(current) in seen:
+            break
+        seen.add(id(current))
+        if isinstance(current, podlib.PublicGetError):
+            cause = current.__cause__
+            next_error = cause if isinstance(cause, BaseException) else current.last_error
+        elif isinstance(current, URLError):
+            reason = current.reason
+            next_error = reason if isinstance(reason, BaseException) else current.__cause__
+        else:
+            break
+        if not isinstance(next_error, BaseException) or id(next_error) in seen:
+            break
+        current = next_error
+    exc_type = type(current).__name__
+    if isinstance(current, HTTPError):  # HTTPError is also URLError: status takes precedence.
+        status = current.code if isinstance(current.code, int) and not isinstance(current.code, bool) else None
+        if status == 425:
+            return status, exc_type, "425"
+        if status is not None and 500 <= status < 600:
+            return status, exc_type, "5xx"
+        if status is not None and 400 <= status < 500:
+            return status, exc_type, "4xx_other"
+        return status, exc_type, "other"
+    return None, exc_type, "timeout" if isinstance(current, TimeoutError) else "other"
+
+
 def _clock_check(state: "RunnerState", getter: GuardedGetter, now: datetime | None = None) -> str | None:
-    """#253 + Task DA: a clock_unverified / clock_skew result also marks ``state.clock_anomaly``, so later
-    ticks' daily-loss evaluation treats the day-start reference as late (fail closed)."""
+    """#253 + Task DA: preserve clock decisions; #345 records only logical getter exceptions.
+
+    Local clock/interval/returned-value failures are not failed reads. Counts are per RunnerState,
+    including calls without a heartbeat timestamp; last_time_check keeps its original now=None behavior.
+    """
     measured: dict[str, float | None] = {}
-    problem = _clock_problem(state.clock, getter, measured)
+    read_errors: list[Exception] = []
+    problem = _clock_problem(state.clock, getter, measured, read_errors=read_errors)
     if problem is not None:
         state.clock_anomaly = problem
     else:
         state.tick_time_ok = True  # #253: a clean CLOB /time check (the skew source) this tick
+    http_status, exc_type = None, None
+    if read_errors:  # observation after the original clock decision; never an extra GET or retry
+        http_status, exc_type, category = _time_failure_details(read_errors[0])
+        state.counters["time_check_failures_total"] += 1
+        state.time_check_failures_by_class[category] += 1
     if now is not None:  # issue #289: observation only (heartbeat), after the decision above
         state.last_time_check = {"ts": _stamp(now), "result": problem or "ok", **{
-            key: _rounded(measured.get(key)) for key in ("low_s", "high_s", "rtt_s")}}
+            key: _rounded(measured.get(key)) for key in ("low_s", "high_s", "rtt_s")},
+            "http_status": http_status, "exc_type": exc_type}
         _note_clock_anomaly(state, now)
     return problem
 
@@ -549,12 +602,19 @@ def _note_clock_anomaly(state: "RunnerState", now: datetime) -> None:
 
 
 def _clock_problem(clock: Callable[[], datetime], getter: GuardedGetter,
-                   measured: dict[str, float | None] | None = None) -> str | None:
+                   measured: dict[str, float | None] | None = None, *,
+                   read_errors: list[Exception] | None = None) -> str | None:
     """Certify the whole local-minus-server interval, including request time and ±1 s server quantization.
-    Issue #289: ``measured`` (optional, observation only) receives low_s / high_s / rtt_s once computed."""
+    Issue #289: ``measured`` receives low_s / high_s / rtt_s once computed.
+    #345: optional read_errors receives only the original getter exception; clocks and parsing are excluded."""
     try:
         sent = clock()
-        server = getter(podlib.TIME_URL)
+        try:
+            server = getter(podlib.TIME_URL)
+        except Exception as exc:  # #345: observe only this call, then retain the original outer handling
+            if read_errors is not None:
+                read_errors.append(exc)
+            raise
         received = clock()
         if not isinstance(sent, datetime) or not isinstance(received, datetime):
             return "clock_unverified"
@@ -1059,7 +1119,9 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
 def progress(state: RunnerState, now: datetime) -> dict[str, Any]:
     scan_age = None if state.scan_at is None else round((now - state.scan_at).total_seconds(), 3)
     return {"iteration": state.iteration, "last_scan_ts": None if state.scan_at is None else _stamp(state.scan_at),
-            "scan_age_s": scan_age, **state.counters, "last_book_age_s_max": state.last_book_age_s_max,
+            "scan_age_s": scan_age, **state.counters,
+            "time_check_failures_by_class": dict(state.time_check_failures_by_class),
+            "last_book_age_s_max": state.last_book_age_s_max,
             "resume_count": state.resume_count, "paused_reason": state.paused_reason, "paused_since": state.paused_since,
             "disk_free_gb": None if state.disk_free_gb is None else round(state.disk_free_gb, 3),
             "ledger_rows": state.ledger_rows, "pending_signals": len(state.pending),
