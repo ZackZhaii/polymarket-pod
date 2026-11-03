@@ -1942,7 +1942,35 @@ Status: todo (user acceleration registration proposal only; non-author current-t
 - De-duplicate365from361 if365 first merges; standalone365 is not blocked by342KEY adoption. Does not start361/364 scan or decide348, no A oldbranch changes/KEYmerge. CurrentEM truly85done/claimnull at 2e48ad2c0df6c08b69cffbb1d951840584c1de24; A writer-stop ACK requests are separate coordination and do not justify bypassing firsttodo.
 - Stages: nonauthorACK/enqueueactualdev -> normal valid visible1hclaim/fullclaim+risk readback -> explicitPRODUCT OPEN. ActualUTC each productwrite/test, freeze5min beforeexpiry/no --now/renew/claim_hours/backdate; estimate10-15minimplementation+5-10mintargeted/Guard not guarantee. Freeze exacthead/API/cleanSTOPPED/no pendingwriter, immutablemanifest/receipt separate; genuineacceptance/devmerge then actualtime release PR/nonauthor integration. Originalrisk9keys0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04/paper/livefalse/humangate, main/KEY/runtime/account/trading restrictions remain.
 
+## Task EO — #353 strict single-ID Gamma keyset migration
+
+Status: todo. Registration only; no product tree/claim/PRODUCT OPEN.
+
+- Human acceleration353; freshactualdeva6f1194060b6d4b77b4fca00ac1bdd29ca3ed874 verified86done/claimnull after EN365 close. Source01a15d32 actualACK solepersonal author/controller, no selfmerge. Root01a19d50 actualnewEO nonauthornativeACK independentofold353/newsrc/tests/queue and finalordinarydev role; public currenttaskACK to be readback onregistration.
+- Sameworkorder raw7885bytes/SHAae819f8dde69c9ad06cbbbb80cbd093ee28691b425b0389d0560d6b0abed336c; original353diff62337bytes/SHA8bebfe1afb06def78dcf6be0ef2214ec7dfa59a589b2af41fa9222eecf547e22, public353comments6341812409/6335159130/6341810909. Old5729green is historical, actualheadriskreview/CI/QC required.
+- Futureexclusive producttree D:/projects/polymarket-pod/.worktrees/issue353-keyset-next absent/uncreated. All authorized absolute domains:
+  - D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/src/m2_runner.py
+  - D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/src/resolution_watch.py
+  - D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/tests/m2_runner_rig.py
+  - D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/tests/test_353_keyset_spec_vectors.py
+  - D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/tests/test_gamma_keyset_353.py
+  - D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/tests/test_m2_runner_recovery.py
+  - D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/tests/test_resolution_watch_gaps.py
+  - D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/tests/test_runner_settlement.py
+  - D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/tests/fixtures/gamma_keyset_353/
+  - D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/tests/fixtures/gamma_keyset_spec_353/
+  - D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/tests/test_349_settlement_blocking_prefixes.py
+- Last349test domain is Root nativeacceptedcurrentbase delta353comment6611310081: only5linked m-other fixture/testIDs toconsistentlegalnumeric, retainallGLOBAL/market halt/resume/settlement assertions; no production349/ledger changes. No skip/xfail/weakening. Otheroldliteral in ledgeronlytest stays unchanged/outofscope.
+- Preserve strictanynext_cursor-key rejection/ASCII-IDguard/originalstrip semantics, nolegacyfallback/version/structural, resolutionclosedtrue/defaulttwo reads/realbool/duplicate/missing/views reasons; read/classifyfail no newsettlement. No newtransaction semantics forpartialappendfailure. Sharedrig must distinguish scan-vs-id keyset and retainfeeobject/365 unexpectedexceptionGLOBAL controls; fee_source/test365 unchanged.
+- Currentbase realRED/newtargeted+necessaryfee/runner/settlement/365compat+Guard thenfreeze exacthead/API/docstrings cleanSTOPPED; Root trueAstra/currentheadfull/riskdiffreview inparallel. Only historicalfixtures/mock-ownedtmp/zeronetwork, no claim ofcurrentAPI/online/profit. Generickeysetcursor docs do not prove per-IDkeyabsence; contract unchanged/actualavailabilityUNKNOWN.
+- Firstregistrationactualdev/EOtodo, thennewnormal1hclaim nonauthorvisibleactualdev/riskreadback andRootexplicitOPEN beforeengineering; no oldENlease/--now/renew/claim_hours/backdate, realUTC eachwrite/test/freezebefore5min, ~30mincode+targeted estimate only. InsufficientSTOPPED/HOLD; originalrisk/livefalse/humangate/main/KEY/runtime/realledger/.env/PolyPod boundaries retained.
+
 ## Latest
+- 2026-11-04 JST: proposeEO353registration atactualdeva6f1194060b6d4b77b4fca00ac1bdd29ca3ed874 after EN365actual86done/claimnull; dev/main/all4openPRs highestEN/nextEO. Branch86done/EOtodo/claimnull notglobal untilnonauthorintegration.
+- Source01a15d32 actualACK uniqueauthor/controller; Root01a19d50 actualnewEO nativeACK independentofold353/currentimplementation, pluslimited349testdomain accepted. No oldEN role/lease reuse, no selfmerge.
+- Sharedworkorder7885bytes/SHAae819f8dde69c9ad06cbbbb80cbd093ee28691b425b0389d0560d6b0abed336c; approvedoriginal353patch62337bytes/8bebfe1a...7e22 verified exactly. Strictkeyset contract and all11fullpaths are in TaskEO/sharedworkorder; no product tree/claim/OPEN/engineering/test.
+- Rootaccepted349test5IDadaptation preservesGLOBAL/market halt/resume/settlementpositiveassertions; retain justaccepted365 fee/GLOBAL behavior and all laterfixes. Newhead riskreview/targeted/full/trueQC later, old5729/fixtures notcurrentproof.
+- OnlyLOOP/state addsEO; original86tasks/settings/claimnull/products/risk/CI untouched. Metadata59+Guard/nativeexactfast thencleanSTOPPED/immutablehandoff; normalfirsttodo/newclaim/explicitOPEN stillmandatory, paper/livefalse/humangate retained.
 - 2026-11-03T17:29:43Z: EN/#365 normal done/release proposed from freshactualdevf4867f8c67751faa37e4c578bcf0c09cfbebea00 after genuinely accepted/merged product395. Verified originalclaim codex-local/EN16:51:44Z-17:51:44Z unchanged and both productblobs exacthead7f9edc2c852d934fabcbb1164ce96cb3fd317127; normal release --surface codex-local --done, no --now/renew/backdate.
 - Branch86done/claimnull is not global until Root nonauthor merges/readsactualdev. Source01a15d32 sole author/controller cannot selfmerge; actual EN Root01a19d50 remains nonauthor of source/tests/queue and final ordinarydevintegrator. No nexttask engineering in this stage.
 - Product395 exacthead fullCI41680842952/job126073740284 SUCCESS6369pass/2skip/9xfail762.01s+Guard12; trueAstra samepacket21observations/92checks zero fail/skip, acceptedcomment6610825076. Prior111 targeted/RED20/92/full are reused, no product or oldfull rerun for release.
