@@ -307,3 +307,51 @@ def test_native_directory_link_dotdot_uses_actual_file_identity(tmp_path):
     report = inventory([spec(first), spec(second)])
     assert_not_evaluated(report, "INVALID" if same else "INVENTORIED")
     assert report["inputs"][1]["duplicate_of"] == (0 if same else None)
+
+
+@pytest.mark.parametrize("source", [
+    r"\\server\share\input.json",
+    r"\\?\UNC\server\share\input.json",
+    "//server/share/input.json",
+    "//?/UNC/server/share/input.json",
+    r"\/server\share\input.json",
+    r"/\server/share/input.json",
+    r"\\?\unc\server\share\input.json",
+    r"\\.\UNC\server\share\input.json",
+])
+@pytest.mark.parametrize("fmt", ["json", "jsonl"])
+def test_unc_rejected_before_any_filesystem_access(source, fmt, monkeypatch):
+    # Removing the pre-resolution local-path gate would expose OS SMB access.
+    # Sentinels replace the FS boundary; no actual UNC path is ever touched.
+    module = importlib.import_module("src.m2_report")
+    def forbidden(*args, **kwargs):
+        raise AssertionError("nonlocal input reached a filesystem boundary")
+    with monkeypatch.context() as patch:
+        for attr in ("resolve", "stat", "lstat", "open", "read_bytes"):
+            patch.setattr(Path, attr, forbidden)
+        for attr in ("stat", "lstat", "open", "fstat"):
+            patch.setattr(os, attr, forbidden)
+        patch.setattr(builtins, "open", forbidden)
+        report = module.inventory_inputs([{"source": source, "format": fmt}])
+    assert_not_evaluated(report, "INVALID")
+    entry = report["inputs"][0]
+    assert entry["source"] == source and entry["format"] == fmt
+    assert entry["sha256"] is None and entry["bytes"] is None and entry["records"] is None
+    assert entry["duplicate_of"] is None and "nonlocal_source" in entry["problems"]
+    assert report["metrics"] is None and report["denominator"] is None
+
+
+@pytest.mark.parametrize("kind", ["absolute", "relative", "extended_local"])
+def test_local_paths_remain_readable_after_unc_rejection(kind, tmp_path):
+    path = tmp_path / "local.json"
+    path.write_bytes(b"{}")
+    source = str(path)
+    if kind == "relative":
+        source = os.path.relpath(path)
+    elif kind == "extended_local" and os.name == "nt":
+        source = "\\\\?\\" + str(path)
+    report = inventory([{"source": source, "format": "json"}])
+    assert_not_evaluated(report, "INVENTORIED")
+    entry = report["inputs"][0]
+    assert entry["source"] == source and entry["records"] == 1
+    assert entry["sha256"] == "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"

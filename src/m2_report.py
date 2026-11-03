@@ -4,7 +4,10 @@ inventory_inputs accepts a list/tuple of {"source": str-or-PathLike,
 "format": "json"|"jsonl"}. There are no implicit/default input paths.
 Each source must be an explicitly authorized local evidence file, never a real
 account/credential file. Environment-file paths are rejected, including resolved
-aliases. This function does not authenticate account, host or evidence provenance.
+aliases. Explicit Windows UNC/network namespace paths are rejected before any
+filesystem access. This is not an OS sandbox or proof that mapped drives or local
+reparse targets are offline. This function does not authenticate account, host or
+evidence provenance.
 
 JSON records counts whole documents (any JSON root), not business samples.
 JSONL records counts complete object lines, with LF or CRLF termination. A bad,
@@ -146,6 +149,17 @@ def _one(spec, index, paths, identities):
         return entry
     if entry["format"] not in {"json", "jsonl"}:
         _problem(entry, "invalid_format")
+        return entry
+    # Classify Windows network namespaces lexically: resolving them can perform
+    # OS file-sharing IO even when Python sockets are blocked. Only the explicit
+    # extended local drive namespace is exempt; preserve original source spelling.
+    windows_source = source.replace("\\", "/")
+    extended_local = (windows_source.startswith("//?/")
+                      and len(windows_source) >= 7
+                      and windows_source[4] in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                      and windows_source[5:7] == ":/")
+    if windows_source.startswith("//") and not extended_local:
+        _problem(entry, "nonlocal_source")
         return entry
     path = Path(source)
     if _forbidden(path):
