@@ -3,12 +3,7 @@
   "branch": "main",
   "claim_hours": 1,
   "cadence_minutes": 30,
-  "claim": {
-    "surface": "codex-local",
-    "task": "EN",
-    "since": "2026-11-03T16:51:44Z",
-    "until": "2026-11-03T17:51:44Z"
-  },
+  "claim": null,
   "assignment": {
     "grok-web": "first open todo when the claim is free",
     "grok-build-local": "same queue; stop if grok-web holds the claim",
@@ -771,10 +766,11 @@
     },
     {
       "id": "EN",
-      "status": "doing",
+      "status": "done",
       "title": "Issue #365: fee_source rejects overflowing integer conversion, non-KEY offline fix.",
       "finish": "After nonauthor current-task role ACK and registration actualdev readback, EN firsttodo/normal visible valid1hclaim/explicit PRODUCT OPEN, change only fee_source._finite_number float(value) boundary to catch OverflowError -> None. Preserve all other exception/type/finite/valid-fee/GLOBAL behavior, no broad except/clamp/threshold or risk changes. Use existing approved7253byte patch SHA655f3ecda22153cf27ad61810df3c93765f6b11725d2e2fdc4977b6e59a9513b as input, freshly rebase minimal hunk/new test module against currentdev. Six direct/parser/cache/validschedule/runner-skip/other-crash-GLOBAL groups; no new xfail, old72 baseline not new proof. Necessary targeted/feecompatibility/Guard then freeze exacthead cleanSTOPPED; currenthead nativefull and true nonauthor QC, ordinarydev expectedhead integration and normal truthfulrelease after acceptance. Only src/fee_source.py and tests/test_365_fee_source_overflow.py in exclusive futuretree, no actual runtime/network/ledger/schedule/client/secret/.env/main/live/config changes. De-duplicate this hunk from361 if365 lands first.",
-      "note": "Human2026-11-04JST acceleration list explicitly authorizes standalone365. EM actually complete at dev2e48ad2c0df6c08b69cffbb1d951840584c1de24:85done/claimnull; no second product engineering in this registration stage. Source01a15d32-5ffb-7373-8ca9-d94e8e1f04caactualACK sole personal author/controller; cannot selfmerge. Proposed nonauthor reviewer/integrator Root01a19d50-3e49-7bd1-9af3-c3d664c94c51 must actually ACK new-task independence/authorization before integration, not infer from old EJ/EM role. Shared ISSUE365_WORK_ORDER rawSHAacee691ca3950518f8da078689848fc51da01231480ba864013b66c7090770fc, approved input7253bytes655f3ecda22153cf27ad61810df3c93765f6b11725d2e2fdc4977b6e59a9513b published GitHub365comment6335158599/approval6341811287. Registration PR publishes exact packet+SHA. Full exclusive future paths: D:/projects/polymarket-pod/.worktrees/issue365-fee-source-overflow-next/src/fee_source.py; D:/projects/polymarket-pod/.worktrees/issue365-fee-source-overflow-next/tests/test_365_fee_source_overflow.py; tree absent/uncreated. Other85tasks/settings unchanged; letterEN checked dev/main/all4openPRs, highestEM. A363/342writer-stop requests still separate, do not block a ready independent365 or mergeKEY. Originalclaim1h includeswallclock/freeze5min/actualUTC eachwrite-test, no --now/renew/claim_hours/backdate; immutablehandoff and publicationreceipt separate. Risk0aea23af...bc04/paper/livefalse/humangate remain; no KEY/main/runtime/accounts/trading rights."
+      "note": "Human2026-11-04JST acceleration list explicitly authorizes standalone365. EM actually complete at dev2e48ad2c0df6c08b69cffbb1d951840584c1de24:85done/claimnull; no second product engineering in this registration stage. Source01a15d32-5ffb-7373-8ca9-d94e8e1f04caactualACK sole personal author/controller; cannot selfmerge. Proposed nonauthor reviewer/integrator Root01a19d50-3e49-7bd1-9af3-c3d664c94c51 must actually ACK new-task independence/authorization before integration, not infer from old EJ/EM role. Shared ISSUE365_WORK_ORDER rawSHAacee691ca3950518f8da078689848fc51da01231480ba864013b66c7090770fc, approved input7253bytes655f3ecda22153cf27ad61810df3c93765f6b11725d2e2fdc4977b6e59a9513b published GitHub365comment6335158599/approval6341811287. Registration PR publishes exact packet+SHA. Full exclusive future paths: D:/projects/polymarket-pod/.worktrees/issue365-fee-source-overflow-next/src/fee_source.py; D:/projects/polymarket-pod/.worktrees/issue365-fee-source-overflow-next/tests/test_365_fee_source_overflow.py; tree absent/uncreated. Other85tasks/settings unchanged; letterEN checked dev/main/all4openPRs, highestEM. A363/342writer-stop requests still separate, do not block a ready independent365 or mergeKEY. Originalclaim1h includeswallclock/freeze5min/actualUTC eachwrite-test, no --now/renew/claim_hours/backdate; immutablehandoff and publicationreceipt separate. Risk0aea23af...bc04/paper/livefalse/humangate remain; no KEY/main/runtime/accounts/trading rights.",
+      "done_at": "2026-11-03T17:29:43Z"
     }
   ]
 }
