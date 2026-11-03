@@ -355,3 +355,227 @@ def test_local_paths_remain_readable_after_unc_rejection(kind, tmp_path):
     entry = report["inputs"][0]
     assert entry["source"] == source and entry["records"] == 1
     assert entry["sha256"] == "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+
+
+# EL: a declared recording window is not continuous healthy coverage.
+MANIFEST_FIXTURES = FIXTURES / "manifest-window"
+
+
+def summarize_manifest(descriptor):
+    module = importlib.import_module("src.m2_report")
+    fn = getattr(module, "summarize_recording_manifest", None)
+    assert callable(fn), "single-manifest summary not implemented"
+    return fn(descriptor)
+
+
+def declaration_payload(**changes):
+    value = {"schema": "m1_run/1", "status": "completed",
+             "started_at": "2026-11-03T00:00:00Z", "ended_at": "2026-11-03T00:02:00Z",
+             "exit_code": 0}
+    value.update(changes)
+    return value
+
+
+def write_manifest(tmp_path, payload):
+    path = tmp_path / "manifest.json"
+    path.write_bytes(json.dumps(payload).encode("utf-8"))
+    return path
+
+
+def assert_summary_not_evaluated(report):
+    assert report["status"] == "NOT_EVALUATED"
+    assert report["metrics"] is None and report["denominator"] is None
+    assert report["healthy_online_us"] is None
+
+
+def test_manifest_literal_offset_window_and_raw_sha_are_only_declarations():
+    path = MANIFEST_FIXTURES / "valid.json"
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    report = summarize_manifest(spec(path))
+    assert_summary_not_evaluated(report)
+    assert report["completeness"] == "INVENTORIED"
+    assert report["input"]["sha256"] == "756723996aac4fb7071c47832a7b0035d46f06ead400e0a786416df5fcb784a9"
+    assert report["input"]["bytes"] == 132 and report["input"]["records"] == 1
+    assert report["input"]["source"] == str(path) and report["input"]["format"] == "json"
+    assert report["declaration"] == {"schema": "m1_run/1", "status": "completed",
+        "started_at": "2026-11-03T09:00:00+09:00", "ended_at": "2026-11-03T00:02:00Z"}
+    assert report["started_at_utc"] == "2026-11-03T00:00:00Z"
+    assert report["ended_at_utc"] == "2026-11-03T00:02:00Z"
+    assert report["declared_interval_us"] == 120000000
+    assert type(report["declared_interval_us"]) is int
+    assert report["declaration_problems"] == []
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+
+
+@pytest.mark.parametrize("start,end,want", [
+    ("2026-11-03T00:00:00Z", "2026-11-03T00:00:00Z", 0),
+    ("2026-11-03T00:00:00.000001Z", "2026-11-03T00:00:00.000002Z", 1),
+    ("0001-01-01T00:00:00Z", "9999-12-31T23:59:59.999999Z", 315537897599999999),
+])
+def test_manifest_interval_is_exact_integer_microseconds(start, end, want, tmp_path):
+    path = write_manifest(tmp_path, declaration_payload(started_at=start, ended_at=end))
+    report = summarize_manifest(spec(path))
+    assert_summary_not_evaluated(report)
+    assert report["declared_interval_us"] == want
+    assert type(report["declared_interval_us"]) is int
+
+
+def test_running_manifest_never_fills_missing_end_from_other_evidence():
+    path = MANIFEST_FIXTURES / "running.json"
+    report = summarize_manifest(spec(path))
+    assert_summary_not_evaluated(report)
+    assert report["input"]["records"] == 1 and report["input"]["problems"] == []
+    assert report["declaration"]["status"] == "running"
+    assert report["declaration"]["ended_at"] is None
+    assert report["ended_at_utc"] is None and report["declared_interval_us"] is None
+    assert "missing_ended_at" in report["declaration_problems"]
+
+
+@pytest.mark.parametrize("field", ["started_at", "ended_at"])
+@pytest.mark.parametrize("value", [None, "", "2026-11-03", "2026-11-03T00:00:00", 0, True, [], {},
+    "bad", "0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"])
+def test_manifest_invalid_endpoints_keep_raw_values_and_null_interval(field, value, tmp_path):
+    path = write_manifest(tmp_path, declaration_payload(**{field: value}))
+    report = summarize_manifest(spec(path))
+    assert_summary_not_evaluated(report)
+    assert report["declaration"][field] == value
+    assert report[field + "_utc"] is None and report["declared_interval_us"] is None
+    reason = ("missing_" if value is None else "invalid_") + field
+    assert reason in report["declaration_problems"]
+    assert report["completeness"] == "INVENTORIED" and report["input"]["records"] == 1
+
+
+def test_manifest_reversed_endpoints_remain_facts_but_have_no_interval(tmp_path):
+    path = write_manifest(tmp_path, declaration_payload(ended_at="2026-11-02T23:59:59Z"))
+    report = summarize_manifest(spec(path))
+    assert_summary_not_evaluated(report)
+    assert report["started_at_utc"] == "2026-11-03T00:00:00Z"
+    assert report["ended_at_utc"] == "2026-11-02T23:59:59Z"
+    assert report["declared_interval_us"] is None
+    assert "reversed_interval" in report["declaration_problems"]
+
+
+@pytest.mark.parametrize("payload,reason", [
+    ([], "manifest_not_object"), (None, "manifest_not_object"),
+    ({"started_at": "2026-11-03T00:00:00Z"}, "missing_schema"),
+    ({"schema": "other/1", "status": "completed", "started_at": "2026-11-03T00:00:00Z",
+      "ended_at": "2026-11-03T00:02:00Z"}, "invalid_schema"),
+])
+def test_other_json_cannot_impersonate_a_recording(payload, reason, tmp_path):
+    path = write_manifest(tmp_path, payload)
+    report = summarize_manifest(spec(path))
+    assert_summary_not_evaluated(report)
+    assert report["input"]["records"] == 1 and report["completeness"] == "INVENTORIED"
+    assert all(v is None for v in report["declaration"].values())
+    assert report["started_at_utc"] is None and report["ended_at_utc"] is None
+    assert report["declared_interval_us"] is None and reason in report["declaration_problems"]
+
+
+@pytest.mark.parametrize("key", ["status", "started_at", "ended_at"])
+def test_missing_declaration_fields_have_separate_diagnostics(key, tmp_path):
+    payload = declaration_payload()
+    del payload[key]
+    report = summarize_manifest(spec(write_manifest(tmp_path, payload)))
+    assert report["input"]["problems"] == []
+    assert "missing_" + key in report["declaration_problems"]
+    assert report["declaration"][key] is None
+    if key != "status":
+        assert report["declared_interval_us"] is None
+
+
+@pytest.mark.parametrize("raw", [b"", b"\xff", b'{"schema":"m1_run/1","schema":"m1_run/1"}',
+    b'{"schema":"m1_run/1","x":NaN}', b'{"schema":"m1_run/1","x":1e999}', b'{"schema":'])
+def test_bad_raw_manifest_keeps_fingerprint_but_no_time_facts(raw, tmp_path):
+    path = tmp_path / "bad.json"
+    path.write_bytes(raw)
+    report = summarize_manifest(spec(path))
+    assert_summary_not_evaluated(report)
+    assert report["input"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert report["input"]["bytes"] == len(raw) and report["input"]["records"] is None
+    assert report["started_at_utc"] is None and report["ended_at_utc"] is None
+    assert report["declared_interval_us"] is None
+    assert all(v is None for v in report["declaration"].values())
+
+
+def test_missing_manifest_cannot_publish_time_facts(tmp_path):
+    path = tmp_path / "missing.json"
+    report = summarize_manifest(spec(path))
+    assert_summary_not_evaluated(report)
+    assert report["completeness"] == "INCOMPLETE" and report["input"]["sha256"] is None
+    assert report["declared_interval_us"] is None and "missing_source" in report["input"]["problems"]
+
+
+@pytest.mark.parametrize("descriptor", [None, [], {}, {"source": "x", "format": "jsonl"}])
+def test_manifest_requires_one_explicit_json_descriptor(descriptor):
+    report = summarize_manifest(descriptor)
+    assert_summary_not_evaluated(report)
+    assert report["completeness"] == "INVALID" and report["input"]["sha256"] is None
+    assert report["declared_interval_us"] is None
+
+
+@pytest.mark.parametrize("source", [r"\\server\share\manifest.json", r"\\?\UNC\server\share\manifest.json"])
+def test_manifest_unc_is_rejected_before_any_filesystem_access(source, monkeypatch):
+    module = importlib.import_module("src.m2_report")
+    fn = getattr(module, "summarize_recording_manifest", None)
+    assert callable(fn), "single-manifest summary not implemented"
+    def forbidden(*args, **kwargs):
+        raise AssertionError("manifest UNC reached filesystem")
+    with monkeypatch.context() as patch:
+        for attr in ("resolve", "stat", "lstat", "open", "read_bytes"):
+            patch.setattr(Path, attr, forbidden)
+        for attr in ("stat", "lstat", "open", "fstat"):
+            patch.setattr(os, attr, forbidden)
+        patch.setattr(builtins, "open", forbidden)
+        report = fn({"source": source, "format": "json"})
+    assert report["completeness"] == "INVALID"
+    assert report["input"]["source"] == source and report["input"]["format"] == "json"
+    assert "nonlocal_source" in report["input"]["problems"] and report["input"]["sha256"] is None
+    assert report["declared_interval_us"] is None
+
+
+def test_manifest_hash_and_time_facts_use_one_read_and_leave_source_unchanged(tmp_path, monkeypatch):
+    path = write_manifest(tmp_path, declaration_payload())
+    raw, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    real_open = os.open
+    opens = []
+    def one_readonly_open(name, flags, *args, **kwargs):
+        assert not opens, "summary reopened a source instead of reusing captured bytes"
+        assert not flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
+        opens.append(str(name))
+        return real_open(name, flags, *args, **kwargs)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("summary attempted extra file read, write or runtime")
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", one_readonly_open)
+        for attr in ("read_bytes", "read_text", "write_bytes", "write_text", "glob", "rglob"):
+            patch.setattr(Path, attr, forbidden)
+        patch.setattr(builtins, "open", forbidden)
+        patch.setattr(os, "scandir", forbidden)
+        patch.setattr(socket, "socket", forbidden)
+        patch.setattr(subprocess, "Popen", forbidden)
+        report = summarize_manifest(spec(path))
+    assert len(opens) == 1
+    assert report["input"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert report["declared_interval_us"] == 120000000
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == (raw, mtime)
+
+
+def test_manifest_incomplete_capture_has_no_trusted_time_facts(tmp_path, monkeypatch):
+    path = write_manifest(tmp_path, declaration_payload())
+    raw = path.read_bytes()
+    real_fstat = os.fstat
+    calls = 0
+    def fail_after_read(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("owned injected metadata failure")
+        return real_fstat(fd)
+    monkeypatch.setattr(os, "fstat", fail_after_read)
+    report = summarize_manifest(spec(path))
+    assert report["completeness"] == "INCOMPLETE"
+    assert report["input"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert report["input"]["records"] is None
+    assert all(v is None for v in report["declaration"].values())
+    assert report["started_at_utc"] is None and report["ended_at_utc"] is None
+    assert report["declared_interval_us"] is None
