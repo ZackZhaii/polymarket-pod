@@ -151,7 +151,7 @@ def test_recover_patches_built_when_ledger_already_has_the_decision(env):
 def test_recover_leaves_built_alone_when_ledger_has_no_fill(env):
     paths = m2_runner.RunnerPaths.under(env["run"])
     paths.run_dir.mkdir(parents=True, exist_ok=True)
-    decision_id = make_decision_id("news-forecaster", "m2-alpha", rig.TOKENS[0], "fc_orphan")
+    decision_id = make_decision_id("news-forecaster", rig.MARKET_ID, rig.TOKENS[0], "fc_orphan")
     built = {"ts": "2026-10-11T12:00:00Z", "step": "built", "forecast_id": "fc_orphan",
              "intent_id": "in_x", "decision_id": decision_id, "idempotency_key": "ik_orphan"}
     paths.journal.write_text(json.dumps(built) + "\n", encoding="utf-8")

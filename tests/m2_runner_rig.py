@@ -14,7 +14,7 @@ import src.paper_ledger as paper_ledger
 import src.podlib as podlib
 from src import m2_runner
 
-MARKET_ID = "m2-alpha"
+MARKET_ID = "900001"  # #353: a Gamma market id is numeric
 TOKENS = ("81001", "81002")
 
 
@@ -59,10 +59,10 @@ class FakeGetters:
         if self.fail:
             raise AssertionError(f"gamma getter called: {url}")
         parts = urlsplit(url)
-        if parts.path.endswith("/keyset"):
+        ids = parse_qs(parts.query).get("id")
+        if parts.path.endswith("/keyset") and ids is None:
             return {"markets": [self.row], "next_cursor": ""}
-        ids = parse_qs(parts.query).get("id") or []
-        return [self.row] if ids == [MARKET_ID] else []
+        return {"markets": [self.row] if ids == [MARKET_ID] else []}
 
     def book(self, url: str):
         if url == "https://clob.polymarket.com/time":

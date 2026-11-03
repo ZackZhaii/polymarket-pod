@@ -24,7 +24,7 @@ from tests.test_runner_settlement import (NOW, LOSER, WINNER, Gamma, _book, _eve
 
 ROOT = Path(__file__).resolve().parents[1]
 DEAD = ["settlement_result_changed", "settlement_conflict", "invalid_settlement_payout"]
-OTHER_ROW = dict(id="m-other", conditionId="0xother", clobTokenIds='["o1", "o2"]')
+OTHER_ROW = dict(id="900004", conditionId="0xother", clobTokenIds='["o1", "o2"]')
 
 
 @pytest.mark.parametrize("prefix", DEAD)
@@ -46,8 +46,8 @@ def test_b_a_settlement_conflict_also_records_a_blocking_market_halt(env):
     other = dict(rows[0], winning_token_id=LOSER, outcome_prices_final=[0.0, 1.0])
     with env["res"].open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(other) + "\n")
-    _book(env, [fill("buy", 5.0, 0.5, NOW.strftime("%Y-%m-%dT%H:%M:%SZ"), market="m-other", token="o1")], prefix="o")
-    _tick(env, Gamma(resolved_row(id="m-other", conditionId="0xother", clobTokenIds='["o1", "o2"]')),
+    _book(env, [fill("buy", 5.0, 0.5, NOW.strftime("%Y-%m-%dT%H:%M:%SZ"), market="900004", token="o1")], prefix="o")
+    _tick(env, Gamma(resolved_row(id="900004", conditionId="0xother", clobTokenIds='["o1", "o2"]')),
           NOW + timedelta(seconds=60))
     assert _global_halt()  # the global halt is kept (control inside the repro)
     market_blocks = [h for h in halt_store.active_halts()
@@ -129,7 +129,7 @@ def test_d_each_problem_is_a_global_and_a_blocking_market_halt_a_global_resume_d
     _tick(env, Gamma(resolved_row()))  # stores the market's snapshot and settles its losing leg
     assert len(_settlements(env)) == 1
     settled = _history(env)[0]
-    _book(env, [fill("buy", 5.0, 0.5, _stamp(NOW), market="m-other", token="o1")], prefix="o")
+    _book(env, [fill("buy", 5.0, 0.5, _stamp(NOW), market="900004", token="o1")], prefix="o")
     SCENARIOS[prefix](env, settled)
 
     report = _tick(env, Gamma(resolved_row(**OTHER_ROW)), NOW + timedelta(seconds=60))
@@ -150,7 +150,7 @@ def test_d_each_problem_is_a_global_and_a_blocking_market_halt_a_global_resume_d
 
     _tick(env, Gamma(resolved_row(**OTHER_ROW)), NOW + timedelta(seconds=120))
     booked = _settlements(env)
-    assert sorted(s["market"] for s in booked) == sorted([rig.MARKET_ID, "m-other"])  # m-other settled now
+    assert sorted(s["market"] for s in booked) == sorted([rig.MARKET_ID, "900004"])  # m-other settled now
     assert not any(s["market"] == rig.MARKET_ID and s["token_id"] == WINNER for s in booked)  # still blocked
     assert _events(env, "settlement_blocked")[-1]["markets"] == [rig.MARKET_ID] and not _global_halt()
     assert paper_ledger.apply_settlements(_stamp(NOW + timedelta(seconds=130)))["skipped_markets"] == [rig.MARKET_ID]

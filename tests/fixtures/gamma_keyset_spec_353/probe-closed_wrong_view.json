@@ -1,0 +1,15 @@
+{
+ "endpoint": "/markets/keyset?id=6006152",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json",
+  "cache-control": "public, max-age=300"
+ },
+ "top_keys": [
+  "$schema",
+  "markets"
+ ],
+ "next_cursor": "<absent>",
+ "n": 0,
+ "ids": []
+}

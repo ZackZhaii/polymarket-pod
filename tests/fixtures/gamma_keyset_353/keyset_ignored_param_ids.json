@@ -1,0 +1,27 @@
+{
+ "_note": "trimmed to 3 of 20 unrelated rows",
+ "markets": [
+  {
+   "closed": true,
+   "closedTime": "2020-11-02 16:31:01+00",
+   "feesEnabled": false,
+   "id": "12",
+   "umaResolutionStatuses": "[]"
+  },
+  {
+   "closed": true,
+   "closedTime": "2020-12-11 20:53:24+00",
+   "feesEnabled": false,
+   "id": "17",
+   "umaResolutionStatuses": "[]"
+  },
+  {
+   "closed": true,
+   "closedTime": "2020-10-27 00:40:55+00",
+   "feesEnabled": false,
+   "id": "18",
+   "umaResolutionStatuses": "[]"
+  }
+ ],
+ "next_cursor": "3tT2pl3zRL9GirsaGysqFhY_SDjW-TBAKUiqrI2G3JR7InYiOjEsImsiOiJtYXJrZXRzIiwib2giOiI0ZjUzY2RhMThjMmJhYTBjMDM1NGJiNWY5YTNlY2JlNWVkMTJhYjRkOGUxMWJhODczYzJmMTExNjEyMDJiOTQ1Iiwia2V5cyI6W3sidCI6InN0cmluZyIsInYiOiI2NiJ9XX0"
+}
