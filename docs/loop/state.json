@@ -3,12 +3,7 @@
   "branch": "main",
   "claim_hours": 1,
   "cadence_minutes": 30,
-  "claim": {
-    "surface": "codex-local",
-    "task": "EO",
-    "since": "2026-11-03T17:58:33Z",
-    "until": "2026-11-03T18:58:33Z"
-  },
+  "claim": null,
   "assignment": {
     "grok-web": "first open todo when the claim is free",
     "grok-build-local": "same queue; stop if grok-web holds the claim",
@@ -779,10 +774,11 @@
     },
     {
       "id": "EO",
-      "status": "doing",
+      "status": "done",
       "title": "Issue #353: strict keyset for both single-id Gamma reads, non-KEY offline slice.",
       "finish": "After actualnonauthor registrationaccept/devreadback, only firsttodo EO normal new1hclaim visible on actualdev/fullclaim+risk readback/Rootexplicit PRODUCT OPEN permits sourceengineering. Minimal currentdev rebase of approved62337byte353inputSHA8bebfe1afb06def78dcf6be0ef2214ec7dfa59a589b2af41fa9222eecf547e22: only m2_runner/resolution_watch twoURL+strictouterparser+badIDzeroget, closedtrue/defaultdualread preserved, anynext_cursor/mixed/wrongshape failclosed, nofallback/version/structural/policy/fee_source/365 changes. Currentbase realRED/currentheadtargeted/fee+runner+settlement+365compat/Guard, freezebefore5minsafe exacthead/API/docstrings/cleanSTOPPED; nativefull and genuinenonauthorAstra plus actualheadriskreview/ordinarydev integration and normaltruthfulrelease. Exact11futureexclusive domains and acceptance in shared ISSUE353_WORK_ORDER SHAae819f8dde69c9ad06cbbbb80cbd093ee28691b425b0389d0560d6b0abed336c. Historical5729green/fixtures not currentAPI or candidateproof.",
-      "note": "Human2026-11-04JST accelerationlist authorizes353; EN365 actually86done/claimnull atdeva6f1194060b6d4b77b4fca00ac1bdd29ca3ed874, oldENlock not reused. Source01a15d32-5ffb-7373-8ca9-d94e8e1f04ca actualACK newEO personal soleauthor/controller, cannotselfmerge. Root01a19d50-3e49-7bd1-9af3-c3d664c94c51 actualnewtasknativeACK noold353 ornewsource/tests/queue participation; nonauthorQCorganization/finalordinarydevintegration, publicly reACK onregistration. Root separatelyaccepted additional domain D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/tests/test_349_settlement_blocking_prefixes.py: only5relatedm-other testIDs toconsistentlegalnumeric ID, preserveallGLOBAL/market halt/resume/settlementpositiveassertions, noproduction349change; scopeproposal353comment6611310081. Futureproducttree D:/projects/polymarket-pod/.worktrees/issue353-keyset-next absent/uncreated. Only registrationLOOP/state, no claim/producttest/OPEN; exactpacket7885bytes/SHAae819f8dde69c9ad06cbbbb80cbd093ee28691b425b0389d0560d6b0abed336c and originalinputpublic353comment6341812409/6335159130/6341810909. LetterEO checkeddev/main/all4openPRs highestEN. No --now/renew/claim_hours/backdate; actualUTC eachfuturewrite/test, newnormal1hlease inclwallclock/freezebefore5min, targetabout30mincode+targetedonlyestimate, insufficientSTOPPED/HOLD. Keeporiginal9keyrisk0aea23af...bc04/paper/livefalse/humangate; nootherengineer/KEY/main/runtime/API/realledger/.env/keys/PolyPodtasks. Officialgenericcursor examples are not proof singleidkeyabsence; strictcontract remains, livebehaviorUNKNOWN."
+      "note": "Human2026-11-04JST accelerationlist authorizes353; EN365 actually86done/claimnull atdeva6f1194060b6d4b77b4fca00ac1bdd29ca3ed874, oldENlock not reused. Source01a15d32-5ffb-7373-8ca9-d94e8e1f04ca actualACK newEO personal soleauthor/controller, cannotselfmerge. Root01a19d50-3e49-7bd1-9af3-c3d664c94c51 actualnewtasknativeACK noold353 ornewsource/tests/queue participation; nonauthorQCorganization/finalordinarydevintegration, publicly reACK onregistration. Root separatelyaccepted additional domain D:/projects/polymarket-pod/.worktrees/issue353-keyset-next/tests/test_349_settlement_blocking_prefixes.py: only5relatedm-other testIDs toconsistentlegalnumeric ID, preserveallGLOBAL/market halt/resume/settlementpositiveassertions, noproduction349change; scopeproposal353comment6611310081. Futureproducttree D:/projects/polymarket-pod/.worktrees/issue353-keyset-next absent/uncreated. Only registrationLOOP/state, no claim/producttest/OPEN; exactpacket7885bytes/SHAae819f8dde69c9ad06cbbbb80cbd093ee28691b425b0389d0560d6b0abed336c and originalinputpublic353comment6341812409/6335159130/6341810909. LetterEO checkeddev/main/all4openPRs highestEN. No --now/renew/claim_hours/backdate; actualUTC eachfuturewrite/test, newnormal1hlease inclwallclock/freezebefore5min, targetabout30mincode+targetedonlyestimate, insufficientSTOPPED/HOLD. Keeporiginal9keyrisk0aea23af...bc04/paper/livefalse/humangate; nootherengineer/KEY/main/runtime/API/realledger/.env/keys/PolyPodtasks. Officialgenericcursor examples are not proof singleidkeyabsence; strictcontract remains, livebehaviorUNKNOWN.",
+      "done_at": "2026-11-03T18:43:59Z"
     }
   ]
 }
