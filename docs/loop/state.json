@@ -3,7 +3,12 @@
   "branch": "main",
   "claim_hours": 1,
   "cadence_minutes": 30,
-  "claim": null,
+  "claim": {
+    "surface": "codex-local",
+    "task": "EK",
+    "since": "2026-11-03T10:41:50Z",
+    "until": "2026-11-03T11:41:50Z"
+  },
   "assignment": {
     "grok-web": "first open todo when the claim is free",
     "grok-build-local": "same queue; stop if grok-web holds the claim",
@@ -742,7 +747,7 @@
     },
     {
       "id": "EK",
-      "status": "todo",
+      "status": "doing",
       "title": "M2 first slice: strict offline input evidence inventory, always NOT_EVALUATED.",
       "finish": "After human-directed registration merges into dev and EK is first todo, take one normal visible 1h codex-local claim and explicit OPEN. Implement a real read-only inventory_inputs callable only in src/m2_report.py, tests/test_m2_report.py and tests/fixtures/m2_report/. Explicit local JSON/JSONL sources and formats; per-input source/format/raw sha256/bytes/records/problems from the same raw bytes. Overall always NOT_EVALUATED; completeness INVENTORIED/INCOMPLETE/INVALID, missing/empty/damaged evidence cannot PASS and unknown fields stay null. Strict UTF-8, nested duplicate-key and non-finite rejection including overflow; JSONL complete object lines, final newline, no blank/truncated lines or silent skipping. Same path/dot alias/samefile/hardlinks are not independent inputs; different files with same content are not automatically aliases. Bad readable inputs retain fingerprints/diagnostics, never partial-record denominators as complete evidence. Input bytes/mtime unchanged, import zero IO. Small owned fixtures, independent expected hashes, direct valid/invalid controls; targeted and Guard once, exact-head full product CI plus true non-author business QC in parallel. No CLI/output-writing/scoring/metrics/collector/backfill/supervisor/runtime. Preserve all existing readers/C0/runner/ledger/heartbeat/risk/thresholds/dependencies/CI. Normal LOOP/state lifecycle only.",
       "note": "Human-directed next M2 offline-tool slice under 2026-11-03 authorization to continue C0 independent acceptance then M2 tools/run-readiness; not runtime approval or bot-invented empty-queue work. Existing EI/C0 and EJ native PR+push fast lane accepted at actual dev855c2a3ec03359cdba9164e509a0930f7f29c010. New task author/controller and unique product owner is source Codex01a15d32-5ffb-7373-8ca9-d94e8e1f04ca (codex-local); it must not finally merge its own registration/claim/product/completion PRs. Non-author coordinating/QC/final integration seat01a19d50-3e49-7bd1-9af3-c3d664c94c51 writes none of this task source/tests/queue; separate non-author Astra QC uses the same packet. FIRST_WORK_ORDER SHA256 a787a87b127749331651d0cdc053a56d80926dc4afa4c28b063638587c463e83; PRE_M2_DISPATCH 68c2315b7cd9198515ffc57e342eb8bbb56504fa7a340e9c3cf0ac31325e3a02; READER_REUSE e4b45986d8b914b53f67bd1430b65145984e45f642df87b84117478bc69b3211. Registration PR publishes required criteria and exact shared-packet bytes; local paths are not remote delivery. Product worktree m2-input-inventory-20261103 and its three exclusive paths are absent and not created in registration. No claim/implementation before non-author enqueue/readback and normal visible valid lease; freeze 5min before expiry, no --now/automatic renewal. No .env/accounts/default runs scanning/network/subprocess/ledger or runtime access. Other KEY/HOLD, M1/M2 start, system/threshold/main/live/SDK/funds rights remain separate."
