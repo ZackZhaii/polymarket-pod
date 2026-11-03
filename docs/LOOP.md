@@ -1985,7 +1985,9 @@ Historical registration status (retained): todo. Registration only; no product t
 
 ## Task EQ — #345 logical /book getter failures only
 
-Status: todo. Registration only; no product tree/claim/PRODUCT OPEN.
+Status: doing in this proposed normal claim; product CLOSED until non-author dev integration, full valid claim/risk readback and explicit Root PRODUCT OPEN.
+
+Historical registration status (retained): todo. Registration only; no product tree/claim/PRODUCT OPEN.
 
 - New actual Source01a15d32 sole personal author/controller ACK, no selfmerge. Root01a19d50 actual new-task native ACK independent of old345/newbook source/tests/queue; genuine Codex QC organization and ordinary dev integration, public ACK/readback required. Original88tasks done/claimnull at dev 229dddb913e67b7b030ee56d3297945b3a7e9ab7; dev/main/all4openPR fixed heads highestEP/nextEQ. No competing source-owned open acceleration PR.
 - Same shared work order 10925rawbytes/SHA 681876affcc071c15d89a68e6aba3465ca74774c62bd1f7e9a8263d9c4be0d8b; issue345body2036bytes/SHA80b36a71abaabf4a56a5a9e7dc470da533ace878c4ce902a163e1069d797fafe, historical general comment6268472782/6176bytes/SHAefdb50698a32ab224950e5572127d18764ced1a2948bccf5638a17717852305e. No dedicated public book draft found; prior EP/time/Gamma passes not book proof. Exact bytes/URLs published on registration PR, not just D: paths.
@@ -2000,6 +2002,11 @@ Status: todo. Registration only; no product tree/claim/PRODUCT OPEN.
 - Original9keyrisk0aea23af...bc04/paper/livefalse/humangate unchanged. No book.py/heartbeatprotocol/sentinel/podlib/retry/threshold/risk/CI/dependency/API/real ledger/account/sdk/.env/keys/system/PolyPod/M1M2/runtime/trading/KEY/main changes. #361/#364 actualledger permission/readiness remainsUNKNOWN; only book slice, not entire #345 closure.
 
 ## Latest
+- 2026-11-03T20:29:59Z: EQ/#345 book-only normal new claim proposed from fresh actualdev244ae2e6c27a4026fd3a03413963d23530a86d31 after nonauthor registration405; verified88done/EQonlyfirsttodo/claimnull/originalrisk. Branch claim is not globally visible until nonauthor integration/readback.
+- Complete claim surface=codex-local/task=EQ/since=2026-11-03T20:29:59Z/until=2026-11-03T21:29:59Z/safe_freeze_utc=2026-11-03T21:24:59Z. Normal currenttime1h, no --now/renew/backdate/claim_hours or oldEPlease reuse.
+- Same10925byte shared work order SHA681876affcc071c15d89a68e6aba3465ca74774c62bd1f7e9a8263d9c4be0d8b public405comment6614634665; Root actual newEQ publicACK/registrationaccept405comment6614668646 and independent existingCodex newtaskACK/prepared0calls recorded there. Source01a15d32 personalsolewriter cannotselfmerge; Root01a19d50 actualnonauthorintegrator.
+- Only LOOP/state lifecycle metadata; original88 tasks/settings/products/risk/CI unchanged. Futureissue345-book-observation-next absent/uncreated, no productcode/test/implementationchild; productCLOSED until Rootactualdev complete validclaim/risk readback andexplicitOPEN. CurrentEQStatus reflects proposeddoing, originalregistrationhistory retained.
+- Metadata59+Guard/currentheadnativeexactfast then immutable cleanSTOPPED/no pendingimplementation handoff. No product/QC/full/intake repeat, secondtask or leaseexpansion. Originalrisk0aea23af...bc04/paper/livefalse/humangate/KEY/main/runtime/API/realledger/.env/keys/PolyPod/system/account/trading retained.
 - 2026-11-03T20:24:28Z: propose EQ/#345 book-only observation registration from fresh actualdev229dddb913e67b7b030ee56d3297945b3a7e9ab7, verified88done/no todo/doing/claimnull/originalrisk. Branch89tasks (88done/EQonlytodo), no claim; not globally enqueued until nonauthor merge.
 - New actual Source01a15d32 personal sole author/controller ACK; Root01a19d50 actual new-task native nonauthor ACK, public readback on this PR. Source cannot selfmerge. dev/main/all4openPR heads checked highestEP/nextEQ; source0open accelerationPR beforethis one.
 - Shared10925byte book work order SHA681876affcc071c15d89a68e6aba3465ca74774c62bd1f7e9a8263d9c4be0d8b freezes exact one-key schema, getter-boundary API/RefusedURL entrypoints/3 full domains/12 selected compatibility nodes/time budget and stops. Original issue345 input bytes fixed; no public dedicated book implementation draft found, old time/Gamma evidence not candidateproof.
