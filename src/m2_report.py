@@ -25,6 +25,11 @@ descriptor. It reuses the same raw read and strict parsed document as inventory.
 It reports only m1_run/1 declarations and a declared UTC window, never actual
 recording success, healthy coverage, scoring, or M2 acceptance. The imported
 book timestamp parser is a pure utility; no clock-dependent staleness check runs.
+
+EM summarize_heartbeat_snapshot reuses the original heartbeat protocol function
+through fixed-source code loading, without executing heartbeat/podlib module
+initializers. Code-source IO is distinct from the one explicit input capture;
+no healthy/online assertion or historical sampling follows from a declaration.
 """
 from __future__ import annotations
 
@@ -358,4 +363,104 @@ def summarize_recording_manifest(spec):
             delta = end - start
             report["declared_interval_us"] = (delta.days * 86400000000
                                               + delta.seconds * 1000000 + delta.microseconds)
+    return report
+
+
+
+def _heartbeat_protocol_validator():
+    """Load the original pure protocol closure, not heartbeat's runtime module.
+
+    This reads fixed sibling heartbeat.py SOURCE via Python's source loader.
+    That code-loading IO is explicit; no zero-total-IO claim is made for the API.
+    Executing the full heartbeat module would resolve runtime paths and initialize
+    podlib's network opener/SSL context. Only the unchanged original function ASTs
+    and their seven pure constants are compiled here, in source order. Caller
+    data/path never supplies code. No sys.modules stubs or validator substitutes.
+    """
+    import __future__
+    import ast
+    from datetime import datetime
+    from importlib.machinery import SourceFileLoader
+
+    code_path = os.path.join(os.path.dirname(__file__), "heartbeat.py")
+    source = SourceFileLoader("src.heartbeat", code_path).get_source("src.heartbeat")
+    if source is None:
+        raise ImportError("heartbeat protocol source unavailable")
+    functions = {"parse_stamp", "_int", "validate_record"}
+    constants = {"STATE_STARTING", "STATE_RUNNING", "STATE_PAUSED", "STATE_FINISHED",
+                 "STATE_CRASHED", "STATES", "FIELDS"}
+    selected, names = [], []
+    for node in ast.parse(source, filename=code_path).body:
+        if isinstance(node, ast.FunctionDef) and node.name in functions:
+            if node.decorator_list:
+                raise ValueError("unexpected protocol decorator")
+            selected.append(node)
+            names.append(node.name)
+        elif (isinstance(node, ast.Assign) and len(node.targets) == 1
+              and isinstance(node.targets[0], ast.Name) and node.targets[0].id in constants):
+            selected.append(node)
+            names.append(node.targets[0].id)
+    if len(names) != 10 or set(names) != functions | constants:
+        raise ValueError("heartbeat protocol closure changed")
+    namespace = {"__name__": "src.heartbeat_protocol", "datetime": datetime}
+    module = ast.Module(body=selected, type_ignores=[])
+    exec(compile(module, code_path, "exec", flags=__future__.annotations.compiler_flag), namespace)
+    return namespace["validate_record"]
+
+
+def summarize_heartbeat_snapshot(spec, *, expected_proc):
+    """Return protocol declarations from one explicit local heartbeat JSON file.
+
+    spec is exactly {"source": str-or-PathLike, "format": "json"}. expected_proc
+    is a required keyword, explicitly a nonempty string (no proc whitelist or
+    identity authentication). Invalid expected_proc rejects before even coercing
+    a path or loading protocol source; only literal source/format strings can be
+    retained in that unread input diagnostic. Other descriptors use _one's entry.
+
+    input/completeness describe raw integrity separately from declaration and
+    declaration_problems. SHA, strict parse and declaration share one captured
+    input byte string, never a reopen or reserialized hash. Complete protocol-
+    valid objects retain ALL original values/extras, including legal nullable,
+    UNKNOWN, paused, finished and exit_code values. Protocol validation proves no
+    host/process identity, freshness, health or execution success. Bad/incomplete
+    raw, malformed protocol or unavailable validator yields declaration=None.
+
+    The original validate_record pure closure is loaded from fixed sibling source
+    without importing heartbeat/podlib runtime bodies; this distinct code-source
+    IO may occur at call time. No marker/risk/account read, runtime class/read_beat,
+    git/network/subprocess/sleep, output/lock/heartbeat write or directory scan.
+    Module import retains its existing no-application-IO contract. No raw archive,
+    sampling/history or default paths are created. NOT_EVALUATED is unconditional;
+    metrics/denominator/healthy_online_us remain None. Existing APIs are unchanged.
+    """
+    invalid_proc = not isinstance(expected_proc, str) or not expected_proc
+    if invalid_proc:
+        entry = {"source": None, "format": None, "sha256": None, "bytes": None,
+                 "records": None, "problems": ["invalid_expected_proc"],
+                 "duplicate_of": None, "completeness": "INVALID"}
+        if isinstance(spec, dict):
+            for field in ("source", "format"):
+                if isinstance(spec.get(field), str):
+                    entry[field] = spec[field]
+        document = None
+    else:
+        entry, document = _one(spec, 0, {}, {}, formats=("json",))
+    report = {"status": "NOT_EVALUATED", "completeness": entry["completeness"],
+              "input": entry, "declaration": None, "declaration_problems": [],
+              "metrics": None, "denominator": None, "healthy_online_us": None}
+    if invalid_proc:
+        report["declaration_problems"].append("invalid_expected_proc")
+        return report
+    if entry["completeness"] != "INVENTORIED":
+        report["declaration_problems"].append("input_unavailable")
+        return report
+    try:
+        validator = _heartbeat_protocol_validator()
+    except (OSError, ImportError, SyntaxError, UnicodeError, ValueError, TypeError, NameError) as exc:
+        report["declaration_problems"].append("validator_unavailable:" + type(exc).__name__)
+        return report
+    try:
+        report["declaration"] = validator(document, expected_proc)
+    except (ValueError, TypeError, OverflowError) as exc:
+        report["declaration_problems"].append("invalid_heartbeat:" + str(exc))
     return report
