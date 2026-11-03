@@ -19,6 +19,12 @@ not. Unavailable physical identity is incomplete evidence, not independence.
 status is always NOT_EVALUATED; completeness only describes supplied inputs.
 metrics and denominator stay None. No output files, scans, runtime imports,
 network, subprocesses, ledger access or module-body filesystem operations.
+
+EL summarize_recording_manifest accepts exactly one {source, format="json"}
+descriptor. It reuses the same raw read and strict parsed document as inventory.
+It reports only m1_run/1 declarations and a declared UTC window, never actual
+recording success, healthy coverage, scoring, or M2 acceptance. The imported
+book timestamp parser is a pure utility; no clock-dependent staleness check runs.
 """
 from __future__ import annotations
 
@@ -28,6 +34,8 @@ import math
 import os
 from pathlib import Path
 import stat
+
+from src.book_staleness import parse_book_ts
 
 
 _RANK = {"INVENTORIED": 0, "INCOMPLETE": 1, "INVALID": 2}
@@ -68,16 +76,16 @@ def _parse(raw, fmt):
     try:
         text = raw.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
-        return None, ["invalid_utf8"]
+        return None, ["invalid_utf8"], None
 
     if fmt == "json":
         try:
-            _strict_json(text)
+            document = _strict_json(text)
         except _BadJSON as exc:
-            return None, [str(exc)]
+            return None, [str(exc)], None
         except (ValueError, RecursionError):
-            return None, ["invalid_json"]
-        return 1, []
+            return None, ["invalid_json"], None
+        return 1, [], document
 
     problems = []
     if not text.endswith("\n"):
@@ -104,7 +112,7 @@ def _parse(raw, fmt):
                 reason = "invalid_json"
         if reason:
             problems.append(f"line_{number}:{reason}")
-    return (None, problems) if problems else (len(lines), [])
+    return (None, problems, None) if problems else (len(lines), [], None)
 
 
 def _problem(entry, reason, completeness="INVALID"):
@@ -129,13 +137,13 @@ def _duplicate(entry, index):
     _problem(entry, "duplicate_source")
 
 
-def _one(spec, index, paths, identities):
+def _one(spec, index, paths, identities, formats=("json", "jsonl")):
     entry = {"source": None, "format": None, "sha256": None, "bytes": None,
              "records": None, "problems": [], "duplicate_of": None,
              "completeness": "INVENTORIED"}
     if not isinstance(spec, dict) or set(spec) != {"source", "format"}:
         _problem(entry, "invalid_input_spec")
-        return entry
+        return entry, None
     if isinstance(spec["format"], str):
         entry["format"] = spec["format"]
     try:
@@ -146,10 +154,10 @@ def _one(spec, index, paths, identities):
         entry["source"] = source
     if not isinstance(source, str) or not source or "\x00" in source:
         _problem(entry, "invalid_source")
-        return entry
-    if entry["format"] not in {"json", "jsonl"}:
+        return entry, None
+    if entry["format"] not in formats:
         _problem(entry, "invalid_format")
-        return entry
+        return entry, None
     # Classify Windows network namespaces lexically: resolving them can perform
     # OS file-sharing IO even when Python sockets are blocked. Only the explicit
     # extended local drive namespace is exempt; preserve original source spelling.
@@ -160,11 +168,11 @@ def _one(spec, index, paths, identities):
                       and windows_source[5:7] == ":/")
     if windows_source.startswith("//") and not extended_local:
         _problem(entry, "nonlocal_source")
-        return entry
+        return entry, None
     path = Path(source)
     if _forbidden(path):
         _problem(entry, "forbidden_source")
-        return entry
+        return entry, None
 
     # The request key also makes repeated missing requests traceable. It is a
     # comparison of exact request spelling, never physical-identity proof. Do not
@@ -178,7 +186,7 @@ def _one(spec, index, paths, identities):
         resolved = path.resolve(strict=True)
         if _forbidden(resolved):
             _problem(entry, "forbidden_source")
-            return entry
+            return entry, None
         canonical_key = ("resolved", str(resolved))
         if canonical_key in paths and paths[canonical_key] != index:
             _duplicate(entry, paths[canonical_key])
@@ -186,7 +194,7 @@ def _one(spec, index, paths, identities):
         before_path = resolved.stat()
         if not stat.S_ISREG(before_path.st_mode):
             _problem(entry, "not_regular_file")
-            return entry
+            return entry, None
         # Nonblocking where supported prevents a file->FIFO race from hanging a
         # reader; both pre-open and descriptor checks still require a regular file.
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
@@ -197,7 +205,7 @@ def _one(spec, index, paths, identities):
                 before = os.fstat(handle.fileno())
                 if not stat.S_ISREG(before.st_mode):
                     _problem(entry, "not_regular_file")
-                    return entry
+                    return entry, None
                 raw = handle.read()
                 after = os.fstat(handle.fileno())
         finally:
@@ -206,12 +214,12 @@ def _one(spec, index, paths, identities):
     except FileNotFoundError:
         if raw is None:
             _problem(entry, "missing_source", "INCOMPLETE")
-            return entry
+            return entry, None
         _problem(entry, "metadata_unavailable", "INCOMPLETE")
     except (OSError, ValueError, RuntimeError):
         if raw is None:
             _problem(entry, "unreadable_source", "INCOMPLETE")
-            return entry
+            return entry, None
         _problem(entry, "metadata_unavailable", "INCOMPLETE")
 
     # Hash and parser consume this single captured byte string, never reopen it.
@@ -237,13 +245,13 @@ def _one(spec, index, paths, identities):
         _problem(entry, "identity_unavailable", "INCOMPLETE")
     if not raw:
         _problem(entry, "empty_input", "INCOMPLETE")
-        return entry
-    records, problems = _parse(raw, entry["format"])
+        return entry, None
+    records, problems, document = _parse(raw, entry["format"])
     for problem in problems:
         _problem(entry, problem)
     if not entry["problems"]:
         entry["records"] = records
-    return entry
+    return entry, document if not entry["problems"] else None
 
 
 def inventory_inputs(inputs):
@@ -264,8 +272,90 @@ def inventory_inputs(inputs):
         return report
     paths, identities = {}, {}
     for index, spec in enumerate(inputs):
-        entry = _one(spec, index, paths, identities)
+        entry, _ = _one(spec, index, paths, identities)
         report["inputs"].append(entry)
         if _RANK[entry["completeness"]] > _RANK[report["completeness"]]:
             report["completeness"] = entry["completeness"]
+    return report
+
+
+
+def _declared_endpoint(value, field, problems):
+    if value is None:
+        problems.append("missing_" + field)
+        return None
+    if not isinstance(value, str):
+        problems.append("invalid_" + field)
+        return None
+    try:
+        stamp = parse_book_ts(value)
+    except (ValueError, OverflowError, OSError):
+        stamp = None
+    if stamp is None:
+        problems.append("invalid_" + field)
+    return stamp
+
+
+def summarize_recording_manifest(spec):
+    """Summarize one explicit local m1_run/1 JSON declaration, never a run verdict.
+
+    spec is exactly {"source": str-or-PathLike, "format": "json"}; no defaults,
+    list of runs, directories, outputs or CLI. input preserves inventory's entry
+    contract. completeness describes raw input integrity, separately from
+    declaration_problems. A JSON document can be INVENTORIED while its schema or
+    declaration is unusable. Wrong schema/root or incomplete raw evidence leaves
+    all declaration/time facts null; it never impersonates a valid recording.
+
+    declaration retains original schema/status/started_at/ended_at values only
+    for the correct schema object. status (including completed) and any exit_code
+    do not authenticate execution success. Endpoints must be timezone-aware
+    strings; *_utc is canonical ISO UTC with Z, microseconds retained where set.
+    declared_interval_us is an exact int only when both endpoints are valid and
+    end >= start; zero is legal. Reversed endpoints retain individually valid UTC
+    declarations but have a null interval and a problem. No other field, mtime or
+    current time supplies a missing endpoint. Healthy coverage is never inferred.
+
+    SHA, strict parse and all declaration facts share one captured byte string.
+    The source is not reopened after inventory. Existing local-only/UNC/env and
+    read-only boundaries apply; this is not an OS sandbox/provenance guarantee.
+    status is always NOT_EVALUATED; metrics/denominator/healthy_online_us are None.
+    """
+    entry, document = _one(spec, 0, {}, {}, formats=("json",))
+    report = {"status": "NOT_EVALUATED", "completeness": entry["completeness"],
+              "input": entry,
+              "declaration": {"schema": None, "status": None,
+                              "started_at": None, "ended_at": None},
+              "declaration_problems": [], "started_at_utc": None,
+              "ended_at_utc": None, "declared_interval_us": None,
+              "metrics": None, "denominator": None, "healthy_online_us": None}
+    problems = report["declaration_problems"]
+    if entry["completeness"] != "INVENTORIED":
+        problems.append("input_unavailable")
+        return report
+    if not isinstance(document, dict):
+        problems.append("manifest_not_object")
+        return report
+    if document.get("schema") != "m1_run/1":
+        problems.append("missing_schema" if document.get("schema") is None else "invalid_schema")
+        return report
+    declaration = {field: document.get(field) for field in report["declaration"]}
+    report["declaration"] = declaration
+    status = declaration["status"]
+    if status is None:
+        problems.append("missing_status")
+    elif not isinstance(status, str) or not status.strip():
+        problems.append("invalid_status")
+    start = _declared_endpoint(declaration["started_at"], "started_at", problems)
+    end = _declared_endpoint(declaration["ended_at"], "ended_at", problems)
+    if start is not None:
+        report["started_at_utc"] = start.isoformat().replace("+00:00", "Z")
+    if end is not None:
+        report["ended_at_utc"] = end.isoformat().replace("+00:00", "Z")
+    if start is not None and end is not None:
+        if end < start:
+            problems.append("reversed_interval")
+        else:
+            delta = end - start
+            report["declared_interval_us"] = (delta.days * 86400000000
+                                              + delta.seconds * 1000000 + delta.microseconds)
     return report
