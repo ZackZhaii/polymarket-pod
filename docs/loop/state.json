@@ -3,7 +3,12 @@
   "branch": "main",
   "claim_hours": 1,
   "cadence_minutes": 30,
-  "claim": null,
+  "claim": {
+    "surface": "codex-local",
+    "task": "EP",
+    "since": "2026-11-03T19:25:48Z",
+    "until": "2026-11-03T20:25:48Z"
+  },
   "assignment": {
     "grok-web": "first open todo when the claim is free",
     "grok-build-local": "same queue; stop if grok-web holds the claim",
@@ -782,7 +787,7 @@
     },
     {
       "id": "EP",
-      "status": "todo",
+      "status": "doing",
       "title": "Issue #345 slice: observe /time getter exceptions only, non-KEY offline.",
       "finish": "Registration then actualdevEPfirsttodo/newnormal1hclaim visible+nonauthor fullclaim/riskreadback+RootexplicitPRODUCT OPEN before product. Only original /time getterException observations: progress adds time_check_failures_total and time_check_failures_by_class with exact425/timeout/5xx/4xx_other/other keys (2topkeys/6numericvalues), last_time_check adds onlyhttp_status/exc_type. exc_type effectiveknownwrapper-unwrappedtype not extraouter/rootfield; PublicGetError cause thenlast_error, URLError exceptionreason thencause, noimplicitcontext/stringparsing, bounded8links/identitycycles. Only logicalgetter raises increments once, notnetworkattempts/localclock/RTT/badreturnedtime; no decisions/retries/halt/pause/veto/resume orother345paths. Preserve directGuardedGetter RefusedURL raise and existing_clock_problem clock_unverified conversion separately. Currentbase realRED/newno-skip-xfail tests/necessarytime-heartbeat-guard-publicget compatibility/Guard thenfreeze exacthead/API/docstring cleanSTOPPED before5minsafe; nativecurrentfull andtrueindependentCodex QC/riskdiff ordinarydev accept thennormaltruthfuldone/release. Full contract/shared10837bytes SHA5e6a0be5636c843eab8c6af441f7c835bc321745613607af98edf692b2cb09b7.",
       "note": "Humanready345 after accepted353/365, nohostledgerpermission or361/364scan assumed; thisslice notwhole345closure. Source01a15d32-5ffb-7373-8ca9-d94e8e1f04ca actualnewEPpersonalsoleauthor/controller no selfmerge; Root01a19d50-3e49-7bd1-9af3-c3d664c94c51 actualnewtasknativeACK independentofold345/newsource-test-queue and ordinarydevintegration, publicreadbackonPR. Only3futureexclusivefullpaths: D:/projects/polymarket-pod/.worktrees/issue345-time-observation-next/src/m2_runner.py; D:/projects/polymarket-pod/.worktrees/issue345-time-observation-next/tests/test_m2_runner_time_failures.py; D:/projects/polymarket-pod/.worktrees/issue345-time-observation-next/tests/test_m2_runner_heartbeat_clock.py (compatibilityonly/original5keys+controlsretained). Producttreeabsent/uncreated; no claim/OPEN/producttests. Rawpublic345comments6234368807/6244213873/6268472782/6268473999 preserved/hashesinINPUT_RECEIPT; Pythonfence9322bytes/SHAa907a224415606a670fa4fae5233340c79b97753578b8f70b52ea21a3e04d577. Old25cases/17strictxfail historical; removemarkers/obsoleteabsencebaseline, oldheartbeatmissingUNKNOWNnot0/newcountsperprocessnotcrossrestart. letterEP verifieddev/main/all4openPRs highestEO; original87tasks/settings/products/risk/CI/claimnull unchanged. CommonworkorderrawSHA5e6a0be5636c843eab8c6af441f7c835bc321745613607af98edf692b2cb09b7 publicbytehandoff. No oldEOlease/--now/renew/claimhours/backdate, actualUTC perproductwrite-test/safefreeze5min/~30mincode-targetedestimate/HOLDifinsufficient. Noheartbeatprotocol/sentinel/podlib/retry/threshold/CI/risk/dependency changes, noAPI/realledger/.env/keys/PolyPod/M1M2/main/KEY/account/trading. Astraoldcapacitynotautoretried; trueCodexnewtaskroleACK required, old353one-shotnotroutepermission."
