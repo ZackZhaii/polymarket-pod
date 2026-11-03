@@ -1985,7 +1985,9 @@ Historical registration status (retained): todo. Registration only; no product t
 
 ## Task EQ — #345 logical /book getter failures only
 
-Status: doing in this proposed normal claim; product CLOSED until non-author dev integration, full valid claim/risk readback and explicit Root PRODUCT OPEN.
+Status: done. Only the EQ /book getter-observation slice was accepted by actual non-author Root at 2026-11-03T20:58:04Z and merged via #407 (dev f357e43d2b6f3319124828977fe9ab875e9d243a); not whole #345. Normal truthful release done_at: 2026-11-03T21:00:33Z.
+
+Historical claim status (retained): doing in this proposed normal claim; product CLOSED until non-author dev integration, full valid claim/risk readback and explicit Root PRODUCT OPEN.
 
 Historical registration status (retained): todo. Registration only; no product tree/claim/PRODUCT OPEN.
 
@@ -2002,6 +2004,11 @@ Historical registration status (retained): todo. Registration only; no product t
 - Original9keyrisk0aea23af...bc04/paper/livefalse/humangate unchanged. No book.py/heartbeatprotocol/sentinel/podlib/retry/threshold/risk/CI/dependency/API/real ledger/account/sdk/.env/keys/system/PolyPod/M1M2/runtime/trading/KEY/main changes. #361/#364 actualledger permission/readiness remainsUNKNOWN; only book slice, not entire #345 closure.
 
 ## Latest
+- 2026-11-03T21:00:33Z: EQ/#345 book-only slice accepted and merged via product407; normal --done release proposed from fresh actualdevf357e43d2b6f3319124828977fe9ab875e9d243a. EQ doing->done with actual automatic done_at; originalclaim cleared, no newclaim/renewal/--now/backdate/claim_hours.
+- Product head b67bb7f601e0a789f922d4d7e429160430cb7f83, nonauthor final accept [407comment6615261748](https://github.com/ZackZhaii/polymarket-pod/pull/407#issuecomment-6615261748), merge f357e43d2b6f3319124828977fe9ab875e9d243a. Native exacthead full [41715157205/job126193113877](https://github.com/ZackZhaii/polymarket-pod/actions/runs/41715157205/job/126193113877): 6578passed/2skip/9xfail,775.68s,Guard12.
+- Genuine independent existingCodex first-pass6groups/57explicitcalls/14observations/77checks passed,0productdefects/harnessfailures/blockedoperations. Source49new+27necessarycompat/Guard12; initial21testexpectation failures/3rootcauses retained and corrected, productlogic rework0. Frozen6270bytehandoff/65ee4021...75c98 and10925byteworkorder/681876af...e0d8b remain immutable; helperdocstring/rawprecision supplement preserved at407comment6614978250.
+- Release onlyLOOP/state, original88tasks/settings/allproducts/risk/CI unchanged; branch89done/claimnull, global release waits nonauthor devmerge/freshreadback. EQ currentStatus is actualdone/book-only; originalregistration/claimhistory retained. Source01a15d32 sole lifecyclewriter/controller STOPPED afterPR/no pendingimplementation, no selfmerge; actualnonauthorRoot01a19d50 integration. Required existingmetadata59+Guard/nativefast only, no product/full/QC rerun.
+- Original risk0aea23af...bc04/paper/live_enabled=false/humangate unchanged. Not entire345 closure; Ownerthresholds/otherpaths and361-364 realledger readiness remain separate/UNKNOWN. NoKEY/main/runtime/realAPI/ledger/accounts/system/.env/keys/PolyPodtasks/trading changes.
 - 2026-11-03T20:29:59Z: EQ/#345 book-only normal new claim proposed from fresh actualdev244ae2e6c27a4026fd3a03413963d23530a86d31 after nonauthor registration405; verified88done/EQonlyfirsttodo/claimnull/originalrisk. Branch claim is not globally visible until nonauthor integration/readback.
 - Complete claim surface=codex-local/task=EQ/since=2026-11-03T20:29:59Z/until=2026-11-03T21:29:59Z/safe_freeze_utc=2026-11-03T21:24:59Z. Normal currenttime1h, no --now/renew/backdate/claim_hours or oldEPlease reuse.
 - Same10925byte shared work order SHA681876affcc071c15d89a68e6aba3465ca74774c62bd1f7e9a8263d9c4be0d8b public405comment6614634665; Root actual newEQ publicACK/registrationaccept405comment6614668646 and independent existingCodex newtaskACK/prepared0calls recorded there. Source01a15d32 personalsolewriter cannotselfmerge; Root01a19d50 actualnonauthorintegrator.
