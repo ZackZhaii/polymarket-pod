@@ -2005,7 +2005,9 @@ Historical registration status (retained): todo. Registration only; no product t
 
 ## Task ER — #345 settlement logical getter exceptions only
 
-Status: todo. Registration only; no claim/product tree/product tests/PRODUCT OPEN.
+Status: doing in this proposed normal claim; product CLOSED until non-author dev integration, full valid claim/risk readback and explicit Root PRODUCT OPEN.
+
+Historical registration status (retained): todo. Registration only; no claim/product tree/product tests/PRODUCT OPEN.
 
 - Actual new Source01a15d32 sole personal author/controller/implementation-lifecycle writer ACK; cannot selfmerge. Root01a19d50 actual newtask native nonauthor ACK, no settlement source/tests/queue participation; public exactpacket readback ACK required, genuine existingCodex QC newtask role separately. OldEQ/EP/EJ rights not reused. Actualdev427a5f0ce6f802f7830ab94c799556366ab974b3 has89done/claimnull; dev/main/all4openPR highestEQ/nextunusedER; Source0openaccelerationPR beforethis one.
 - Shared12421rawbyte work order SHA 7b3dc61b85287c046429a7dda31365aa9f88bab5532b8e421cd892c0879e9742; issue345body2036bytes/SHA80b36a71abaabf4a56a5a9e7dc470da533ace878c4ce902a163e1069d797fafe. Root candidate4441bytes/SHAa85002867436524de2bf4dcbef69b79fe4e3045e950b77a0aace17d2b24330fa staticPREPARED_ONLY, imports/tests/runtime0, notimplementation/QCPASS/queue authority. Exact new packet/prep bytes published on registration PR; local paths alone not delivery.
@@ -2021,6 +2023,11 @@ Status: todo. Registration only; no claim/product tree/product tests/PRODUCT OPE
 - Original9keyrisk0aea23af...bc04/paper/livefalse/humangate retained. No resolution_watch/book/podlib/heartbeat-Sentinel/ledger/threshold/risk/CI/dependencies/actualAPI/realledger/.env/keys/SDK/account/system/PolyPod/M1M2/runtime/trading/KEY/main changes. #361/#364 ledger readiness remainsUNKNOWN/noactualpermission ordirty0assumption. Onlysettlementlogicalgetter slice, notwhole345/collect-failure/fee/writeoff/threshold closure.
 
 ## Latest
+- 2026-11-03T21:30:50Z: ER/#345 settlement-getter-only normal new claim proposed from freshactualdev32fbea975cd165f7733ef49bcafa2aa85da36c69 after nonauthor registration409; verified89done/ERonlyfirsttodo/claimnull/originalrisk. Branchclaim notglobal before nonauthorintegration/readback.
+- Complete normalclaim surface=codex-local/task=ER/since=2026-11-03T21:30:50Z/until=2026-11-03T22:30:50Z/safe_freeze_utc=2026-11-03T22:25:50Z. New1h actualcurrenttime, no --now/renew/backdate/claim_hours oroldEQlease.
+- Same12421byte commonworkorder SHA7b3dc61b85287c046429a7dda31365aa9f88bab5532b8e421cd892c0879e9742 public409comment6615801667; Root actualnewER publicACK/registrationaccept409comment6615867864 with existingindependentCodexnewtaskACK/6groupPREPARED0productcalls. Source01a15d32 solepersonalwriter/controller cannotselfmerge; actualnonauthorRoot01a19d50integration.
+- OnlyLOOP/state lifecyclemetadata; original89tasks/settings/products/risk/CI unchanged. Futureissue345-settlement-observation-next absent/uncreated, no productcode/test/implementationchild. CurrentERStatus proposeddoing/historyretained; productCLOSED untilRootactualdev fullvalidclaim/riskreadback andexplicitOPEN.
+- Required newclaim metadata59+Guard/currentheadnativeexactfast then immutable cleanSTOPPED/no pendingimplementation handoff. No repeatregistrationmetadata/product/full/QC/oldEQ-EP/intake orsecondtask. Originalrisk0aea23af...bc04/paper/livefalse/humangate/KEY/main/runtime/API/ledger/accounts/system/.env/keys/PolyPod/trading boundaries retained.
 - 2026-11-03T21:22:02Z: propose ER/#345 settlement-getter-only registration from freshactualdev427a5f0ce6f802f7830ab94c799556366ab974b3, verified89done/no todo-doing/claimnull/originalrisk. Branch90tasks (old89done/ERonlytodo), no claim; not globally enqueued until nonauthor merge.
 - Source01a15d32 actual newER personalsoleauthor/controller/lifecyclewriter ACK; Root01a19d50 actual newtask native nonauthor ACK, public exactpacket readback on registration. Source0openbefore this1; dev/main/all4openheads checked highestEQ/nextER. Prior EQ405-408 complete, no oldlease or oldrights reuse.
 - Shared12421byte work order SHA7b3dc61b85287c046429a7dda31365aa9f88bab5532b8e421cd892c0879e9742 freezes exact one-counter/helper/collect-firstarg adapter/3full domains/12compat nodes and counter/control/partialappend boundaries. Root4441byte staticprep SHAa8500286...330fa and issue345body originalbytes pinned; new packets published remotely, notlocalpath-only.
