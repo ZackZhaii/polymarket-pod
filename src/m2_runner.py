@@ -292,7 +292,7 @@ class RunnerState:
     counters: dict[str, int] = field(default_factory=lambda: {
         "forecasts_sealed_total": 0, "forecasts_rejected_total": 0, "intents_built_total": 0, "allows_total": 0,
         "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0,
-        "time_check_failures_total": 0})
+        "time_check_failures_total": 0, "book_get_failures_total": 0})
     time_check_failures_by_class: dict[str, int] = field(default_factory=lambda: {
         key: 0 for key in TIME_FAILURE_CLASSES})
     last_book_age_s_max: float | None = None
@@ -744,6 +744,22 @@ def _ingest(state: RunnerState, now: datetime, report: IterationReport) -> None:
             journal(state, "duplicate", now, file=path.name, sha256=result.sha256)
 
 
+def _book_get_observed(state: RunnerState, getter: Callable[[str], Any], url: str) -> Any:
+    """Observe one logical /book getter failure, retaining its exact return or exception.
+
+    fetch_depth still owns its original missing-book conversion. RefusedURL and BaseException are not counted;
+    the original getter still owns retries, and GuardedGetter owns URL checks and its after hook. No result body
+    or exception details are inspected.
+    """
+    try:
+        return getter(url)
+    except RefusedURL:
+        raise
+    except Exception:  # noqa: BLE001 - observation only; the original exception still reaches fetch_depth
+        state.counters["book_get_failures_total"] += 1
+        raise
+
+
 def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: GuardedGetter, book_get: GuardedGetter,
             report: IterationReport) -> None:
     if state.fee_cache is None:
@@ -772,7 +788,7 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
         for token in [str(t) for t in row.get("token_ids") or []]:
             try:
                 # Issue #120: full-depth REST /book via book.fetch_depth (getter injected / guarded).
-                raw = book.fetch_depth(token, getter=book_get)
+                raw = book.fetch_depth(token, getter=lambda url: _book_get_observed(state, book_get, url))
             except RefusedURL:
                 raise
             except Exception:  # noqa: BLE001 - an unreadable book is a missing book
