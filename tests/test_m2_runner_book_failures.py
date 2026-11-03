@@ -23,6 +23,7 @@ BASE_PROGRESS_KEYS = {
     "scan_failures_total", "last_book_age_s_max", "resume_count", "paused_reason", "paused_since",
     "disk_free_gb", "ledger_rows", "pending_signals", "executor_enabled", "clock_anomaly",
     "clock_anomaly_since", "last_time_check", "time_check_failures_total", "time_check_failures_by_class",
+    "settlement_get_failures_total",
 }
 
 

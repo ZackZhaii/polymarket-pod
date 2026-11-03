@@ -292,7 +292,7 @@ class RunnerState:
     counters: dict[str, int] = field(default_factory=lambda: {
         "forecasts_sealed_total": 0, "forecasts_rejected_total": 0, "intents_built_total": 0, "allows_total": 0,
         "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0,
-        "time_check_failures_total": 0, "book_get_failures_total": 0})
+        "time_check_failures_total": 0, "book_get_failures_total": 0, "settlement_get_failures_total": 0})
     time_check_failures_by_class: dict[str, int] = field(default_factory=lambda: {
         key: 0 for key in TIME_FAILURE_CLASSES})
     last_book_age_s_max: float | None = None
@@ -994,6 +994,22 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter) -> l
     return []
 
 
+def _settlement_get_observed(state: RunnerState, getter: Callable[[str], Any], url: str) -> Any:
+    """Observe a logical settlement getter exception, preserving its exact outcome.
+
+    Only the collector receives this adapter; scan, fee and writeoff keep the original Gamma getter.
+    The original getter owns retries and GuardedGetter owns URL checks/after. Reader failure conversion,
+    RefusedURL and BaseException behavior stay original; no response body or exception details are inspected.
+    """
+    try:
+        return getter(url)
+    except RefusedURL:
+        raise
+    except Exception:  # noqa: BLE001 - observation only; the original reader still receives the exception
+        state.counters["settlement_get_failures_total"] += 1
+        raise
+
+
 def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> list[str]:
     """Issue #206 (Task CO): this tick's settlement step (called by ``preflight``, see its docstring).
 
@@ -1017,7 +1033,8 @@ def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> lis
         event(state, "settlement_blocked", now, markets=sorted(blocked))
     held = [market for market in held if market not in blocked]
     if held:
-        collected = resolution_watch.collect(gamma, held, now, _stamp(now),
+        collected = resolution_watch.collect(lambda url: _settlement_get_observed(state, gamma, url),
+                                             held, now, _stamp(now),
                                              Path(paper_ledger.SETTLEMENT_RESOLUTIONS_PATH))
         if not collected.ok:
             event(state, "settlement_skipped", now, reasons=collected.failures[:10])
