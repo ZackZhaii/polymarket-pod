@@ -1894,7 +1894,9 @@ Historical claim status retained: Status: doing (new explicitly dispatched norma
 
 ## Task EL — M2 second slice: single-manifest declared window
 
-Status: todo (human-directed registration proposal only; no claim, product tree or implementation; global enqueue only after independent dev integration/readback).
+Status: doing (normal codex-local/EL claim proposed 2026-11-03T13:57:13Z to 2026-11-03T14:57:13Z; safe freeze 2026-11-03T14:52:13+00:00. Product CLOSED until this claim is independently integrated and actualdev unexpired fullclaim/risk read back with explicit PRODUCT OPEN; no --now/renew/claim_hours change).
+
+Historical registration status retained: Status: todo (human-directed registration proposal only; no claim, product tree or implementation; global enqueue only after independent dev integration/readback).
 
 - Actual author/controller/sole implementation owner: Source Codex01a15d32-5ffb-7373-8ca9-d94e8e1f04ca, codex-local; role ACK published PR384comment6605507753. Source owns this registration/claim/product/release and cannot selfmerge. Root01a19d50-3e49-7bd1-9af3-c3d664c94c51 writes none of this task source/tests/queue, coordinates true non-author Astra using identical acceptance and performs final expected-head dev integration/readback.
 - Shared SECOND_WORK_ORDER.md raw5652bytes SHA256cbc8a2e2db220146f184b34c990af65865ea70b5b80f472e7d20e8275e2dd54f; registration PR publishes necessary criteria and original byte packet/base64/SHA for every seat. SECOND_SLICE_PREP.md SHA9d12871e066e7b54753a607f42424d7555925c95152d4b9998bc8b99a6b5adfd is historical preparation only, not current queue/authority.
@@ -1908,6 +1910,11 @@ Status: todo (human-directed registration proposal only; no claim, product tree 
 - Human2026-11-03 continued ordinary offline M2 tools authorization; not bot-created out-of-backlog work. EK completed at actualdev10ff78bce821a44f70aca7c2c8c347e7ceeef951, no redo. risk original9keys/SHA0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04 and paper/livefalse/human gate remain. #122/runtime blockers/main/KEY/Windows/oncall/threshold/account/SDK/funds/trading gates not released; no certain T0/date/profit,168h/14d not compressed.
 
 ## Latest
+- 2026-11-03 JST: normal EL claim proposed from actualdev5d98c2489f4a76ec77b3c1ca3b886bec5323de1f after non-author #385 enqueue/readback; codex-local/EL 2026-11-03T13:57:13Z to 2026-11-03T14:57:13Z, safe freeze 2026-11-03T14:52:13+00:00. No --now/renew/claim_hours change; branchclaim is not yet globally visible.
+- Source fresh verified83done/ELsole todo/claimnull and risk originalSHA before normal status/claim; other83task objects/settings unchanged. Product candidate m2-manifest-window-next remains absent/uncreated, no product imports/tests or implementation.
+- Same shared SECOND_WORK_ORDER raw5652bytes/SHAcbc8a2e2db220146f184b34c990af65865ea70b5b80f472e7d20e8275e2dd54f published PR385comment6605610419; all5acceptance conditions and3exclusive absolute domains unchanged. Source01a15d32sole author/controller, root01a19d50genuine non-author final integrator; author cannot selfmerge.
+- Product remains CLOSED until currentclaimPR non-author actualdev integration and fresh complete validclaim/risk readback plus explicit OPEN. Then author freezes API/minimal reuse, checks actualUTC at every write/test entry, freeze5min before expiry; insufficient budget means STOPPED/HOLD.
+- This PR only normal LOOP/state claim lifecycle; metadata59/Guard then cleanSTOPPED/currenthead native fastCI. No repeat registration/EK/C0/full, no main/KEY/threshold/runtime/Windows/accounts/SDK/funds/trading authority; paper/livefalse/human gate unchanged.
 - 2026-11-03 JST: propose human-directed EL registration after completed EK at actualdev10ff78bce821a44f70aca7c2c8c347e7ceeef951; verified83done/claimnull/no todo and dev/main/all4openPR letters. Registration branch83done/ELtodo/claimnull is not yet global enqueue.
 - Source01a15d32 actually ACKed sole author/controller; root01a19d50 is this task non-author QC organizer/final integrator, no implementation/queue writes. Shared SECOND_WORK_ORDER raw5652bytes/SHAcbc8a2e2db220146f184b34c990af65865ea70b5b80f472e7d20e8275e2dd54f will be mirrored publicly as exact original bytes.
 - Scope only one explicit local m1_run/1 manifest declaration summary tied to same captured bytes/SHA: original fields, UTC endpoints, integer microsecond interval when valid end>=start. Always NOT_EVALUATED/nullmetrics/denominator, no healthy-uptime inference or fallback.
