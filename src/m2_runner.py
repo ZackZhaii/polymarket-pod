@@ -762,6 +762,11 @@ def _book_get_observed(state: RunnerState, getter: Callable[[str], Any], url: st
 
 def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: GuardedGetter, book_get: GuardedGetter,
             report: IterationReport) -> None:
+    """Attach each retained book's original fetch time to its existing built journal row.
+
+    Preserve microseconds and the captured offset; no extra clock or GET is taken. Evidence follows the
+    accepted snapshot for partial or repeated tokens. Historical records are never backfilled here.
+    """
     if state.fee_cache is None:
         state.fee_cache = fee_source.FeeCache(lambda market_id: _gamma_market(state.fee_getter, market_id),
                                               clock=state.monotonic)
@@ -784,6 +789,7 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
             _skip(state, now, report, item, forecast_id, ["missing_fee_data", str(quote.problem)])
             continue
         books: dict[str, intent_builder.BookSnapshot] = {}
+        book_fetch_times: dict[str, datetime] = {}
         book_refused: list[str] | None = None
         for token in [str(t) for t in row.get("token_ids") or []]:
             try:
@@ -810,6 +816,7 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
                 book_refused = [problem]
                 break
             books[token] = snap
+            book_fetch_times[token] = fetched_at
             # Task DC + #253: verified only by a clean /time check plus at least one fresh, valid book this tick
             # (an empty tick proves nothing and never clears the anomaly)
             if state.tick_time_ok:
@@ -830,7 +837,10 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
             _skip(state, now, report, item, forecast_id, list(result.reasons))
             continue
         journal(state, "built", now, forecast_id=forecast_id, intent_id=oi.intent_id, decision_id=oi.decision_id,
-                idempotency_key=oi.idempotency_key)
+                idempotency_key=oi.idempotency_key,
+                book_fetch_evidence={token: {"fetched_at": fetched.isoformat(timespec="microseconds"),
+                                             "source": "clob_public_book"}
+                                     for token, fetched in book_fetch_times.items()})
         state.counters["intents_built_total"] += 1
         report.built += 1
         risk_intent = dataclasses.replace(intent_builder.to_risk_intent(oi), fee_source=quote.fee_source,
