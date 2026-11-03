@@ -355,7 +355,13 @@ def _relations(name,v,path):
         if not global_event:_no_user_reserved(v,path)
         _equal(v['payload_sha256'],_digest(v['payload']),path,'payload hash mismatch')
         p=v['payload']
-        if v['event_type']=='CANCEL_REQUESTED' and p['permit']['action']!='request_cancel':_fail(path,'cancel event requires cancel permit')
+        if v['event_type']=='CANCEL_REQUESTED':
+            permit=p['permit'];order_ref=p['order_ref']
+            if permit['action']!='request_cancel':_fail(path,'cancel event requires cancel permit')
+            _equal(v['command_id'],order_ref['command_id'],path,'cancel event target command mismatch')
+            _equal(order_ref['command_id'],permit['target_command_id'],path,'cancel permit target command mismatch')
+            _equal(order_ref['exchange_order_id'],permit['target_exchange_order_id'],path,'cancel target order mismatch')
+            for field in ('account_ref','venue'):_equal(order_ref[field],permit[field],path,'cancel target '+field+' mismatch')
         if v['event_type']=='RESERVE_ACCEPTED':_command_permit(p['command'],p['permit'],path)
         if v['event_type']=='ACCOUNT_RECONCILED' and p['reconciliation']['receipt_type']!='reconciliation':_fail(path,'reconciliation receipt subtype mismatch')
         if v['event_type']=='CANCEL_OBSERVED' and p['observation']['operation']!='cancel':_fail(path,'cancel observation mismatch')
@@ -364,10 +370,10 @@ def _relations(name,v,path):
         ids=[c['record']['command_id'] for c in v['commands']]
         if len(ids)!=len(set(ids)):_fail(path,'duplicate stored command')
         _unique(v['reservations'],'reservation_id',path);_unique(v['event_refs'],'event_id',path)
-        if v['account']!=_UNKNOWN:
-            for c in v['commands']:
+        for c in v['commands']:
+            _equal(c['permit']['reserve_context']['store_binding'],v['store_binding'],path,'stored command binding mismatch')
+            if v['account']!=_UNKNOWN:
                 for field in ('account_ref','mode'):_equal(c['record'][field],v['account'][field],path,'cross-account/mode command')
-                _equal(c['permit']['reserve_context']['store_binding'],v['store_binding'],path,'stored command binding mismatch')
         for ref in v['event_refs']:
             if ref['version']>v['version']:_fail(path,'event beyond snapshot head')
     elif name=='controller_result':
