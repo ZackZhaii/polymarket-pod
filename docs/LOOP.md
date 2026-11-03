@@ -1913,7 +1913,9 @@ Historical registration status retained: Status: todo (human-directed registrati
 
 ## Task EM — M2 forward first slice: explicit heartbeat snapshot declarations
 
-Status: doing (normal codex-local/EM claim proposed 2026-11-03T15:23:46Z to 2026-11-03T16:23:46Z; safe freeze 2026-11-03T16:18:46+00:00. Product remains CLOSED until non-author integration plus actualdev complete validclaim/risk readback and explicit PRODUCT OPEN; no --now/renew/claim_hours change).
+Status: done (normal completion proposed at 2026-11-03T16:12:45Z; accepted product PR #391 merged into actualdev 9b606ffa6c122031f3fda6da0eb07397daca37fe; global85done/claimnull requires this metadata PR non-author integration/readback).
+
+Historical claim status retained: Status: doing (normal codex-local/EM claim proposed 2026-11-03T15:23:46Z to 2026-11-03T16:23:46Z; safe freeze 2026-11-03T16:18:46+00:00. Product remains CLOSED until non-author integration plus actualdev complete validclaim/risk readback and explicit PRODUCT OPEN; no --now/renew/claim_hours change).
 
 Historical registration status retained: Status: todo (human-directed registration proposal only; not a global queue entry until non-author dev merge/readback; no claim/product tree/implementation).
 
@@ -1929,6 +1931,11 @@ Historical registration status retained: Status: todo (human-directed registrati
 - Current actualdev928009976741e0e15e1325b9dc4087f848bf3a24 confirmed84done/claimnull/no todo before registration. EK/EL not reopened; no old C0/EK/EL/Windowsfull/349/92issue rerun. No sampling/30s history/archive/slots/missing-samples/denominator/fetch/collector/supervisor/health-age/hostauth/threshold work in this slice, no claim of completed forward observation. risk original9keys/SHA0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04/paper/livefalse/human gate unchanged. main/KEY/runtime/system/Windows/oncall/threshold/account/SDK/funds/trading remain their separate gates.
 
 ## Latest
+- 2026-11-03T16:12:45Z: EM normal done/release proposed from freshactualdev9b606ffa6c122031f3fda6da0eb07397daca37fe; original fullclaim codex-local/EM15:23:46Z-16:23:46Z verified unchanged before release. Actual current time via release --surface codex-local --done, no --now/newclaim/renew/backdate; branch85done/claimnull not global until non-author integration/readback.
+- Product #391 head1fa7a7ac584e51de1ed7c5e2ba8214ecb4898414 accepted by actual non-author root01a19d50 and merged9b606ffa6c122031f3fda6da0eb07397daca37fe. Current-head full41668126756/job126028877066 SUCCESS6295passed/2skip/9xfail/Guard12; original174GREEN retained, no product/full rerun.
+- True non-author sameSPEC Astra30calls/488checks0fail/skip PASS_WITH_LIMITS offline,12originalAST/actualvalidator executions and snapshot/code-source IO separately proven. Code remains NOT_EVALUATED/nullmetrics/denominator/healthy_online_us, no health/history/runtime/identity authentication.
+- Product froze15:48:52.867374Z before16:18:46Z safe point in original validclaim; failedtest-path assertion and all old evidence/manifests preserved. Accepted2productblobs/heartbeat/risk/CI untouched here; other84tasks/settings exactly unchanged.
+- Source01a15d32sole EM lifecycle author, root01a19d50genuine non-author integrator; metadata59+Guard/exact nativefast only, then cleanSTOPPED with no EM implementation child. New user acceleration intake is separate read-only analysis, no other writer/claim/task engineering; no main/KEY/runtime/system/account/trading rights.
 - 2026-11-04 JST: normal same-EM claim proposed from actualdev5130b593aa0f9aa7521246ec03432ca6e3aac558 after #389 non-author enqueue/readback; codex-local/EM 2026-11-03T15:23:46Z to 2026-11-03T16:23:46Z, safe freeze 2026-11-03T16:18:46+00:00. Branchclaim is not globally visible until nonauthor integration, no --now/renew/claim_hours change.
 - Source fresh verified84done/EMsole todo/claimnull and original risk before status/claim only in this independent metadata tree; other84task objects/settings unchanged. Product candidate m2-heartbeat-declaration-next remains absent/uncreated, no product probing/implementation/tests.
 - Same5groups/two exclusive absolute product files and author avoidance remain from shared FORWARD_FIRST_SLICE_BOUND raw9354bytes/SHA901bb30aba825d7e21f757b0c97a0ffa026bc4407f3c994beb2e8a35d848bc60, public PR389comment6607656914 independently decoded. Source01a15d32sole author/controller; root01a19d50genuine nonauthor integrator, source cannot selfmerge.
