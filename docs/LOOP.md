@@ -2005,7 +2005,9 @@ Historical registration status (retained): todo. Registration only; no product t
 
 ## Task ER — #345 settlement logical getter exceptions only
 
-Status: doing in this proposed normal claim; product CLOSED until non-author dev integration, full valid claim/risk readback and explicit Root PRODUCT OPEN.
+Status: done. Only the ER settlement-getter observation slice was accepted by actual non-author Root at 2026-11-03T22:17:48Z and merged via #411 head f53a850d7eef5660dc45fd8961446e97985dcfad (dev 6e377bb266b6e3df93ae8a861398cf60e7ed60c7); not whole #345. Normal truthful release done_at: 2026-11-03T22:20:22Z.
+
+Historical claim status (retained): doing in this proposed normal claim; product CLOSED until non-author dev integration, full valid claim/risk readback and explicit Root PRODUCT OPEN.
 
 Historical registration status (retained): todo. Registration only; no claim/product tree/product tests/PRODUCT OPEN.
 
@@ -2023,6 +2025,11 @@ Historical registration status (retained): todo. Registration only; no claim/pro
 - Original9keyrisk0aea23af...bc04/paper/livefalse/humangate retained. No resolution_watch/book/podlib/heartbeat-Sentinel/ledger/threshold/risk/CI/dependencies/actualAPI/realledger/.env/keys/SDK/account/system/PolyPod/M1M2/runtime/trading/KEY/main changes. #361/#364 ledger readiness remainsUNKNOWN/noactualpermission ordirty0assumption. Onlysettlementlogicalgetter slice, notwhole345/collect-failure/fee/writeoff/threshold closure.
 
 ## Latest
+- 2026-11-03T22:20:22Z: ER/#345 logical settlement-getter slice accepted and merged via product411/currentheadf53a850d7eef5660dc45fd8961446e97985dcfad; normal --done release proposed from freshactualdev6e377bb266b6e3df93ae8a861398cf60e7ed60c7. ERdoing->done with actual automatic done_at and originalclaim cleared; no newclaim/renew/--now/backdate/claim_hours.
+- ActualnonauthorRoot final accept [411comment6616812153](https://github.com/ZackZhaii/polymarket-pod/pull/411#issuecomment-6616812153), merge 6e377bb266b6e3df93ae8a861398cf60e7ed60c7. Currenthead native [41727358995/job126235537298](https://github.com/ZackZhaii/polymarket-pod/actions/runs/41727358995/job/126235537298) SUCCESS6636passed/2skip/9xfail675.46s/Guard12; oldhead1fail-6635pass native preserved, not first-passfull success.
+- Source original58new+16compat/Guard12; root-approved fourth strict-key literal compat fixed oldEQ baseline, only failednode1GREEN/Guard12 thennewheadfull. TrueCodex6group business controls closed/0productdefects, originalHOLDfixtureexpectation andscanintervalharness failures retained/correctedtail; independentdelta checked1literal andoriginal3blobs equal, explicitly reusedbusinessproof. Old12421byteorder/6521bytehandoff/new3825compat-handoff andallrawfailure/QChistory immutable.
+- Release onlyLOOP/state; old89tasks/settings/all4productfiles/risk/CI unchanged, branch90done/claimnull, globalrelease waits nonauthor devmerge/freshreadback. ERcurrentStatusactualdone/settlement-getter-only; registration/claimhistory preserved. Source01a15d32 sole lifecyclewriter STOPPED afterPR/no pendingimplementation, no selfmerge; actualnonauthorRoot01a19d50integration. Onlynewrelease metadata59+Guard/nativeexactfast, no product/oldmatrix/full/QCrerun.
+- Originalrisk0aea23af...bc04/paper/live_enabled=false/humangate retained. Notentire345closure; remainingfee/writeoff/Ownerthresholds and #361/#364 actualledger readiness stay separate/UNKNOWN. NoKEY/main/runtime/API/real ledger/accounts/SDK/system/.env/keys/PolyPodtasks/trading changes.
 - 2026-11-03T21:30:50Z: ER/#345 settlement-getter-only normal new claim proposed from freshactualdev32fbea975cd165f7733ef49bcafa2aa85da36c69 after nonauthor registration409; verified89done/ERonlyfirsttodo/claimnull/originalrisk. Branchclaim notglobal before nonauthorintegration/readback.
 - Complete normalclaim surface=codex-local/task=ER/since=2026-11-03T21:30:50Z/until=2026-11-03T22:30:50Z/safe_freeze_utc=2026-11-03T22:25:50Z. New1h actualcurrenttime, no --now/renew/backdate/claim_hours oroldEQlease.
 - Same12421byte commonworkorder SHA7b3dc61b85287c046429a7dda31365aa9f88bab5532b8e421cd892c0879e9742 public409comment6615801667; Root actualnewER publicACK/registrationaccept409comment6615867864 with existingindependentCodexnewtaskACK/6groupPREPARED0productcalls. Source01a15d32 solepersonalwriter/controller cannotselfmerge; actualnonauthorRoot01a19d50integration.
