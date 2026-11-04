@@ -86,9 +86,12 @@ def independent_binding(planned, ident):
 
 def test_real_single_capture_archive_persists_independently_verifiable_slot_reference(monkeypatch, tmp_path):
     mod = module(); values = fixture_args(tmp_path); planned = plan(); before = copy.deepcopy((planned, values))
-    import src.m2_report as ev
     real_cap, real_archive = mod.capture_heartbeat_once, mod.archive_capture_once
-    real_clock, real_fdopen = ev._capture_stamp, ev.os.fdopen
+    # Patch the globals actually retained by this called function, not a package
+    # attribute which another cold-import test may have left on a fresh module.
+    capture_globals = real_cap.__globals__
+    capture_os = capture_globals["os"]
+    real_clock, real_fdopen = capture_globals["_capture_stamp"], capture_os.fdopen
     calls = {"capture": 0, "archive": 0, "clock": 0, "source_body": 0}; captured = []; receipts = []
     def capture(*a, **k):
         calls["capture"] += 1; rep = real_cap(*a, **k); captured.append(rep); return rep
@@ -107,8 +110,8 @@ def test_real_single_capture_archive_persists_independently_verifiable_slot_refe
     def fdopen(*a, **k): return SourceReader(real_fdopen(*a, **k))
     monkeypatch.setattr(mod, "capture_heartbeat_once", capture)
     monkeypatch.setattr(mod, "archive_capture_once", archive)
-    monkeypatch.setattr(ev, "_capture_stamp", clock)
-    monkeypatch.setattr(ev.os, "fdopen", fdopen)
+    monkeypatch.setitem(capture_globals, "_capture_stamp", clock)
+    monkeypatch.setattr(capture_os, "fdopen", fdopen)
     result = mod.observe_slot_once(planned, **values)
     assert calls == {"capture": 1, "archive": 1, "clock": 2, "source_body": 1}
     assert result["attempt"]["report"] is captured[0] and result["archive_receipt"] is receipts[0]
@@ -169,15 +172,16 @@ def test_missing_source_keeps_attempt_and_original_refused_receipt(tmp_path):
 
 @pytest.mark.parametrize("failed_clock", [1, 2])
 def test_first_or_second_old_clock_exception_has_no_fabricated_report_or_archive(monkeypatch, tmp_path, failed_clock):
-    mod = module(); values = fixture_args(tmp_path); import src.m2_report as ev
+    mod = module(); values = fixture_args(tmp_path)
     count = [0]; capcount = [0]; actual_capture = mod.capture_heartbeat_once
+    capture_globals = actual_capture.__globals__
     def stamp():
         count[0] += 1
         if count[0] == failed_clock: raise OSError("synthetic clock")
         return "2026-11-04T18:00:00Z"
     def capture(*a, **k): capcount[0] += 1; return actual_capture(*a, **k)
     def forbidden(*a, **k): raise AssertionError("no archive without EV report")
-    monkeypatch.setattr(ev, "_capture_stamp", stamp)
+    monkeypatch.setitem(capture_globals, "_capture_stamp", stamp)
     monkeypatch.setattr(mod, "capture_heartbeat_once", capture)
     monkeypatch.setattr(mod, "archive_capture_once", forbidden)
     result = mod.observe_slot_once(plan(), **values)
@@ -200,8 +204,9 @@ def test_existing_target_refused_preserves_existing_bytes_without_retry(tmp_path
 
 @pytest.mark.parametrize("postcreate", [False, True])
 def test_representative_create_and_postcreate_unknown_keep_receipt_and_partial(monkeypatch, tmp_path, postcreate):
-    mod = module(); values = fixture_args(tmp_path); import src.m2_archive as ew
-    real = ew._open_file; opens = []; closes = []
+    mod = module(); values = fixture_args(tmp_path)
+    archive_globals = mod.archive_capture_once.__globals__
+    real = archive_globals["_open_file"]; opens = []; closes = []
     class Partial:
         def __init__(self, handle): self.handle = handle
         def write(self, data): self.handle.write(data[:7]); self.handle.flush(); raise OSError("synthetic partial")
@@ -210,7 +215,7 @@ def test_representative_create_and_postcreate_unknown_keep_receipt_and_partial(m
         opens.append(mode)
         if not postcreate: raise OSError("synthetic create")
         return Partial(real(path, mode))
-    monkeypatch.setattr(ew, "_open_file", failed)
+    monkeypatch.setitem(archive_globals, "_open_file", failed)
     result = mod.observe_slot_once(plan(), **values); receipt = result["archive_receipt"]
     assert opens == ["xb"] and result["attempt"]["report"] is not None
     assert receipt["write_state"] == "UNKNOWN" and receipt["created"] is (True if postcreate else None)
@@ -356,3 +361,34 @@ def test_cold_new_module_import_no_application_io_or_runtime_start(monkeypatch):
     assert not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in
                    {"open", "read", "read_bytes", "read_text", "resolve", "stat", "lstat", "mkdir", "sleep", "now"}
                    for n in ast.walk(tree))
+
+
+def test_fault_injection_follows_called_function_namespace_after_module_reimport(monkeypatch, tmp_path):
+    import sys
+    import src
+    mod = module()
+    # Record parent attrs for final restoration, then reproduce the old cold-test
+    # sys.modules restoration with parent package attrs left on fresh modules.
+    monkeypatch.setattr(src, "m2_report", src.m2_report)
+    monkeypatch.setattr(src, "m2_archive", src.m2_archive)
+    with monkeypatch.context() as reload_scope:
+        reload_scope.delitem(sys.modules, "src.m2_report", raising=False)
+        reload_scope.delitem(sys.modules, "src.m2_archive", raising=False)
+        fresh_report = importlib.import_module("src.m2_report")
+        fresh_archive = importlib.import_module("src.m2_archive")
+    assert mod.capture_heartbeat_once.__globals__ is not fresh_report.__dict__
+    assert mod.archive_capture_once.__globals__ is not fresh_archive.__dict__
+    assert src.m2_report is fresh_report and src.m2_archive is fresh_archive
+    print({"capture_actual_globals": id(mod.capture_heartbeat_once.__globals__),
+           "package_report_globals": id(src.m2_report.__dict__),
+           "archive_actual_globals": id(mod.archive_capture_once.__globals__),
+           "package_archive_globals": id(src.m2_archive.__dict__)})
+    probes = [("success", test_real_single_capture_archive_persists_independently_verifiable_slot_reference, ()),
+              ("clock1", test_first_or_second_old_clock_exception_has_no_fabricated_report_or_archive, (1,)),
+              ("clock2", test_first_or_second_old_clock_exception_has_no_fabricated_report_or_archive, (2,)),
+              ("create", test_representative_create_and_postcreate_unknown_keep_receipt_and_partial, (False,)),
+              ("postcreate", test_representative_create_and_postcreate_unknown_keep_receipt_and_partial, (True,))]
+    for name, probe, extra in probes:
+        root = tmp_path / name; root.mkdir()
+        with monkeypatch.context() as scoped:
+            probe(scoped, root, *extra)
