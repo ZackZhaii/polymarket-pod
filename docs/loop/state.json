@@ -3,7 +3,12 @@
   "branch": "main",
   "claim_hours": 1,
   "cadence_minutes": 30,
-  "claim": null,
+  "claim": {
+    "surface": "codex-local",
+    "task": "EZ",
+    "since": "2026-11-04T20:29:26Z",
+    "until": "2026-11-04T21:29:26Z"
+  },
   "assignment": {
     "grok-web": "first open todo when the claim is free",
     "grok-build-local": "same queue; stop if grok-web holds the claim",
@@ -859,7 +864,7 @@
     },
     {
       "id": "EZ",
-      "status": "todo",
+      "status": "doing",
       "title": "M2 independent receipt file for an already returned observation, preserving failure and UNKNOWN.",
       "finish": "Registration proposal only until fresh actual Root+genuineQC FULLREAD/newrole samepacket ACK and nonauthor acceptance. Contract13593/SHA0be006c8b5b0c9961f605371c693d765d5a052fcb0354cd7bc6f9ac7d37d1c4f + Root3173/7ab25933e873ef04b5ee24011723b58329177c562844e3b5376aaeb6f0e52f1e govern one independent stdlib persist_observation_receipt(observation,*,owned_root,file_name). Strict plain finiteUTF8 EY13 snapshot -> owncanonical7key file/18key write receipt; preserve plan-binding-attempt-report/archive_receipt-phase-error including null/unclassified/REFUSED/UNKNOWN, authenticate no oldraw-source-execution. Newowned root/name lexicalvalidation, actualarchive_receipt.archive_path labelonly/samename-or-address refuse/no oldFS; one xb/singlewrite-length/flush-fsync/closeonce/ownreadback exactbytes, precreate/EEXIST REFUSED, othercreate-postcreate UNKNOWN/residue retained/primary-cleanup separate/Basecleanup limit. No retry-repair-delete-append-rename-secondlock, oldmodule import-call-clock-source-network-process-runtime-hook0. Four sharedgroups: preservefailure-no promotion, preIO+oldpartial untouched, minimalnewwriter fault/Base examples, coldimport0appIO/ownedclosure. Newfile success only selectedbytes syncreadback, not oldarchive/health-M2/durability or allfailuresaudit. Two newfiles only after newfirsttodo/NEW1h globallyvalidclaim and RootexplicitOPEN. NecessaryRED-GREEN/API-docspreGREEN-freeze/targetedGuard once/currentheadnativefull+trueQCparallel/oldblobreuse. T24candidate checkpoint, everywrite-test realUTC and originaluntilminus5 hardstop; no renew-now-backdate-claim_hours/oldEYlock. Normalrelease only after nonauthoraccepted product; modelusagecost/M2T0UNKNOWN.",
       "note": "Human continuing ordinaryofflineM2 + actualRoot dispatch turn01a1a824-847c-78f0-8df0-0519d2eb66b7, priorhuman-scope transcript PR437comment6639078836 nothumanGitHubsignature/oldrole reuse. Freshc6b3a6e5e3a73d6a81371eb63a6c0e86369f9a91/97done/free/dev-main-all4open nextEZ/Source0open. Source01a15d32-5ffb-7373-8ca9-d94e8e1f04ca personalsoleauthor/controller/implementation+lifecyclewriter actualNEWroleACK440comment6640883224/no selfmerge. Root01a19d50-3e49-7bd1-9af3-c3d664c94c51 proposeduninvolved ordinarydev finalintegrator; genuineexistingCodex01a1a074-f9b7-7311-8cc1-2d202ba7e3e7 proposednonimplementationQC/nomergeauthority; BOTH actualnewfullsamepacket ACK PENDING before registrationaccept, no EY/EJinheritance. Public exactorder+3173parent+Source receipt on this registrationPR URL/SHA; remote paths not delivery. Future exclusive currentlyabsent D:/projects/polymarket-pod/.worktrees/m2-observation-receipt-next/src/m2_receipt.py and sameWT/tests/test_m2_receipt.py. NEWSource SYNTHETIC IO C:/Users/Noise/.codex/visualizations/2026/10/21/01a15d32-5ffb-7373-8ca9-d94e8e1f04ca/project-advance-20261103/m2-observation-receipt-source-owned-20261105/; NEWQC C:/Users/Noise/.codex/visualizations/2026/11/02/01a19d50-3e49-7bd1-9af3-c3d664c94c51/accelerated-20261103/m2-observation-receipt/qc/execution-owned/; nativeCI pytestownedtemp. Respectiveowner fixtures/stableroots/oldtargetpartialcontrols onlyafterOPEN; args not arbitraryIOauthority. Currentmetadata onlyLOOP-state/EZtodo+5Latest/59Guard-nativeexactfast-fullskip; original97tasks/settings/assignmentroutingmap/claim/history/productsriskCI unchanged. Producttree-fixture-import-call-probe-test/claim/OPEN0. Functional-targetedGuard20-25min/fullQC10-14/whole40-55estimateonly/normal1h safe budget, shrinkSTOP ifinsufficient. Risk0aea23af...bc04/paperlivefalse/humangate/KEY-main-realruntime-data-accountSDK-funds-orders-NoisePCPolyPod-.envkeys-threshold/otherbusiness boundaries unchanged; 244/362 unreserved."
