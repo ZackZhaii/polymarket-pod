@@ -762,8 +762,10 @@ def _book_get_observed(state: RunnerState, getter: Callable[[str], Any], url: st
 
 def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: GuardedGetter, book_get: GuardedGetter,
             report: IterationReport) -> None:
-    """Attach each retained book's original fetch time to its existing built journal row.
+    """Journal returned fee evaluations and each retained book's original fetch time.
 
+    Fee observations precede the fee branch; WriteFailed stops before this forecast's counters, books,
+    build or commit. Cache/source timestamps are not new GET evidence, and no failure is swallowed.
     Preserve microseconds and the captured offset; no extra clock or GET is taken. Evidence follows the
     accepted snapshot for partial or repeated tokens. Historical records are never backfilled here.
     """
@@ -784,6 +786,12 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
             _skip(state, now, report, item, forecast_id, ["halted_market", *market_halts])
             continue
         quote = state.fee_cache.get(market_id)
+        journal(state, "fee_quote_evaluated", now, forecast_id=forecast_id, market_id=market_id,
+                iteration=state.iteration, iteration_now=now.isoformat(timespec="microseconds"),
+                fee_available=quote.fee_rate is not None, cache_hit="UNKNOWN",
+                quote={"market_id": quote.market_id, "fee_rate": quote.fee_rate, "problem": quote.problem,
+                       "fee_source": quote.fee_source, "fee_gamma_fetched_at": quote.fee_gamma_fetched_at,
+                       "fee_schedule_sha": quote.fee_schedule_sha, "cross_checked": quote.cross_checked})
         if quote.fee_rate is None:
             state.counters["missing_fee_total"] += 1
             _skip(state, now, report, item, forecast_id, ["missing_fee_data", str(quote.problem)])

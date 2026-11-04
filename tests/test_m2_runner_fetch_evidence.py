@@ -136,11 +136,24 @@ def test_built_preserves_each_original_fetch_time_and_parent_linkage(case, monke
     assert intent.fee_rate == 0.0 and intent.fee_source == "gamma" and intent.fee_schedule_sha
     assert r.builds[0][1]["now"] is decided
     assert [value for kind, *value in r.trace if kind == "clock"] == [[a], [b], [decided]]
-    assert r.trace == [("get", "gamma"), ("after",), ("get", rig.TOKENS[0]), ("after",),
+    raw_rows = rig.read_jsonl(case.state.paths.journal)
+    fee_rows = [row for row in raw_rows if row["step"] == "fee_quote_evaluated"]
+    assert len(fee_rows) == 1 and raw_rows[1] is fee_rows[0]
+    assert set(fee_rows[0]) == {"ts", "step", "forecast_id", "market_id", "iteration", "iteration_now", "fee_available", "cache_hit", "quote"}
+    assert set(fee_rows[0]["quote"]) == {"market_id", "fee_rate", "problem", "fee_source", "fee_gamma_fetched_at", "fee_schedule_sha", "cross_checked"}
+    assert fee_rows[0]["fee_available"] is True and fee_rows[0]["cache_hit"] == "UNKNOWN"
+    assert (fee_rows[0]["market_id"], fee_rows[0]["quote"]["fee_rate"],
+            fee_rows[0]["quote"]["fee_source"]) == (rig.MARKET_ID, 0.0, "gamma")
+    old_rows = [row for row in raw_rows if row["step"] != "fee_quote_evaluated"]
+    assert fee_rows[0]["forecast_id"] == row["forecast_id"]
+    assert r.trace.count(("journal", "fee_quote_evaluated")) == 1
+    assert r.trace[2] == ("journal", "fee_quote_evaluated")
+    old_trace = [event for event in r.trace if event != ("journal", "fee_quote_evaluated")]
+    assert old_trace == [("get", "gamma"), ("after",), ("get", rig.TOKENS[0]), ("after",),
                        ("clock", a), ("get", rig.TOKENS[1]), ("after",), ("clock", b),
                        ("clock", decided), ("build",), ("journal", "built"), ("commit",),
                        ("journal", "vetoed")]
-    assert [row["step"] for row in rig.read_jsonl(case.state.paths.journal)] == ["sealed", "built", "vetoed"]
+    assert [row["step"] for row in old_rows] == ["sealed", "built", "vetoed"]
     assert set(case.state.counters) == set(r.counters_before)
     expected = dict(r.counters_before, intents_built_total=1, vetoes_total=1)
     assert case.state.counters == expected
@@ -149,7 +162,16 @@ def test_built_preserves_each_original_fetch_time_and_parent_linkage(case, monke
 @pytest.mark.parametrize("allow", [False, True])
 def test_original_commit_outcome_and_journal_order_are_retained(case, monkeypatch, allow):
     r = decide(case, monkeypatch, [case.now] * 3, allow=allow)
-    rows = rig.read_jsonl(case.state.paths.journal)
+    raw_rows = rig.read_jsonl(case.state.paths.journal)
+    fee_rows = [row for row in raw_rows if row["step"] == "fee_quote_evaluated"]
+    assert len(fee_rows) == 1 and raw_rows[1] is fee_rows[0]
+    assert set(fee_rows[0]) == {"ts", "step", "forecast_id", "market_id", "iteration", "iteration_now", "fee_available", "cache_hit", "quote"}
+    assert set(fee_rows[0]["quote"]) == {"market_id", "fee_rate", "problem", "fee_source", "fee_gamma_fetched_at", "fee_schedule_sha", "cross_checked"}
+    assert fee_rows[0]["fee_available"] is True and fee_rows[0]["cache_hit"] == "UNKNOWN"
+    assert (fee_rows[0]["market_id"], fee_rows[0]["quote"]["fee_rate"],
+            fee_rows[0]["quote"]["fee_source"]) == (rig.MARKET_ID, 0.0, "gamma")
+    rows = [row for row in raw_rows if row["step"] != "fee_quote_evaluated"]
+
     assert [row["step"] for row in rows] == ["sealed", "built", "committed" if allow else "vetoed"]
     assert "book_fetch_evidence" in rows[1]
     assert all("book_fetch_evidence" not in row for row in (rows[0], rows[2]))
@@ -206,7 +228,16 @@ def test_rejected_book_keeps_original_skip_without_built_or_evidence(case, monke
     else:
         case.state.last_resume_at = case.now + timedelta(seconds=2)
     r = decide(case, monkeypatch, [case.now + timedelta(seconds=1)], responses=[first])
-    rows = rig.read_jsonl(case.state.paths.journal)
+    raw_rows = rig.read_jsonl(case.state.paths.journal)
+    fee_rows = [row for row in raw_rows if row["step"] == "fee_quote_evaluated"]
+    assert len(fee_rows) == 1 and raw_rows[1] is fee_rows[0]
+    assert set(fee_rows[0]) == {"ts", "step", "forecast_id", "market_id", "iteration", "iteration_now", "fee_available", "cache_hit", "quote"}
+    assert set(fee_rows[0]["quote"]) == {"market_id", "fee_rate", "problem", "fee_source", "fee_gamma_fetched_at", "fee_schedule_sha", "cross_checked"}
+    assert fee_rows[0]["fee_available"] is True and fee_rows[0]["cache_hit"] == "UNKNOWN"
+    assert (fee_rows[0]["market_id"], fee_rows[0]["quote"]["fee_rate"],
+            fee_rows[0]["quote"]["fee_source"]) == (rig.MARKET_ID, 0.0, "gamma")
+    rows = [row for row in raw_rows if row["step"] != "fee_quote_evaluated"]
+
     assert [row["step"] for row in rows] == ["sealed", "skipped"]
     assert all("book_fetch_evidence" not in row for row in rows)
     assert (r.report.built, r.report.skipped) == (0, 1) and not r.builds and not r.intents
@@ -218,7 +249,16 @@ def test_rejected_book_keeps_original_skip_without_built_or_evidence(case, monke
 def test_original_nonbuilt_decision_emits_no_fetch_evidence(case, monkeypatch):
     case.state.markets[rig.MARKET_ID]["liquidity_usd"] = 0
     r = decide(case, monkeypatch, [case.now] * 3)
-    rows = rig.read_jsonl(case.state.paths.journal)
+    raw_rows = rig.read_jsonl(case.state.paths.journal)
+    fee_rows = [row for row in raw_rows if row["step"] == "fee_quote_evaluated"]
+    assert len(fee_rows) == 1 and raw_rows[1] is fee_rows[0]
+    assert set(fee_rows[0]) == {"ts", "step", "forecast_id", "market_id", "iteration", "iteration_now", "fee_available", "cache_hit", "quote"}
+    assert set(fee_rows[0]["quote"]) == {"market_id", "fee_rate", "problem", "fee_source", "fee_gamma_fetched_at", "fee_schedule_sha", "cross_checked"}
+    assert fee_rows[0]["fee_available"] is True and fee_rows[0]["cache_hit"] == "UNKNOWN"
+    assert (fee_rows[0]["market_id"], fee_rows[0]["quote"]["fee_rate"],
+            fee_rows[0]["quote"]["fee_source"]) == (rig.MARKET_ID, 0.0, "gamma")
+    rows = [row for row in raw_rows if row["step"] != "fee_quote_evaluated"]
+
     assert [row["step"] for row in rows] == ["sealed", "skipped"]
     assert "liquidity_below_min" in rows[-1]["reasons"]
     assert all("book_fetch_evidence" not in row for row in rows)
@@ -239,7 +279,17 @@ def test_original_built_write_failure_propagates_before_commit(case, monkeypatch
     assert caught.value is failure
     assert case.result.intents == [] and case.result.report.built == 0
     assert case.state.counters["intents_built_total"] == 0
-    assert [row["step"] for row in rig.read_jsonl(case.state.paths.journal)] == ["sealed"]
+    raw_rows = rig.read_jsonl(case.state.paths.journal)
+    fee_rows = [row for row in raw_rows if row["step"] == "fee_quote_evaluated"]
+    assert len(fee_rows) == 1 and raw_rows[1] is fee_rows[0]
+    assert set(fee_rows[0]) == {"ts", "step", "forecast_id", "market_id", "iteration", "iteration_now", "fee_available", "cache_hit", "quote"}
+    assert set(fee_rows[0]["quote"]) == {"market_id", "fee_rate", "problem", "fee_source", "fee_gamma_fetched_at", "fee_schedule_sha", "cross_checked"}
+    assert fee_rows[0]["fee_available"] is True and fee_rows[0]["cache_hit"] == "UNKNOWN"
+    assert (fee_rows[0]["market_id"], fee_rows[0]["quote"]["fee_rate"],
+            fee_rows[0]["quote"]["fee_source"]) == (rig.MARKET_ID, 0.0, "gamma")
+    old_rows = [row for row in raw_rows if row["step"] != "fee_quote_evaluated"]
+    assert fee_rows[0]["forecast_id"] == next(iter(case.state.pending))
+    assert [row["step"] for row in old_rows] == ["sealed"]
 
 
 def test_actual_iteration_books_one_allowed_fill_with_original_ids_and_fee(tmp_path, monkeypatch):
@@ -256,7 +306,18 @@ def test_actual_iteration_books_one_allowed_fill_with_original_ids_and_fee(tmp_p
     fills = rig.read_jsonl(paths["paper"])
     assert len(fills) == 1
     fill = fills[0]
-    rows = rig.read_jsonl(state.paths.journal)
+    raw_rows = rig.read_jsonl(state.paths.journal)
+    fee_rows = [row for row in raw_rows if row["step"] == "fee_quote_evaluated"]
+    assert len(fee_rows) == 1 and raw_rows[1] is fee_rows[0]
+    assert set(fee_rows[0]) == {"ts", "step", "forecast_id", "market_id", "iteration", "iteration_now", "fee_available", "cache_hit", "quote"}
+    assert set(fee_rows[0]["quote"]) == {"market_id", "fee_rate", "problem", "fee_source", "fee_gamma_fetched_at", "fee_schedule_sha", "cross_checked"}
+    assert fee_rows[0]["fee_available"] is True and fee_rows[0]["cache_hit"] == "UNKNOWN"
+    assert (fee_rows[0]["market_id"], fee_rows[0]["quote"]["fee_rate"],
+            fee_rows[0]["quote"]["fee_source"]) == (rig.MARKET_ID, 0.0, "gamma")
+    rows = [row for row in raw_rows if row["step"] != "fee_quote_evaluated"]
+    assert fee_rows[0]["forecast_id"] == fill["forecast_id"]
+    assert fee_rows[0]["iteration"] == 1
+    assert fee_rows[0]["iteration_now"] == now.isoformat(timespec="microseconds")
     assert [row["step"] for row in rows] == ["sealed", "built", "committed"]
     assert rows[1]["book_fetch_evidence"] == {
         token: {"fetched_at": now.isoformat(timespec="microseconds"), "source": "clob_public_book"}
