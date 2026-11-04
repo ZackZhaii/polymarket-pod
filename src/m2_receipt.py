@@ -83,7 +83,7 @@ def _observation_snapshot(value):
 
 
 def _lexical_root(value):
-    if type(value) is not str or not value or not value.isascii() or "\x00" in value:
+    if type(value) is not str or not value or not value.isascii() or any(ord(char) < 32 for char in value):
         raise ValueError("root_spelling")
     spelling = value.replace("\\", "/")
     if spelling.startswith("//") or "://" in spelling or (os.name != "nt" and "\\" in value):

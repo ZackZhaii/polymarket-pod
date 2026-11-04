@@ -181,6 +181,13 @@ def test_bad_roots_rejected_before_io(tmp_path, monkeypatch, root):
     _preio_refused(_api(), monkeypatch, _observation(), root, "receipt-root.json")
 
 
+@pytest.mark.parametrize("code", range(32))
+def test_control_character_root_refused_before_any_metadata(tmp_path, monkeypatch, code):
+    # A sentinel rejects before any actual illegal-path filesystem operation.
+    root = str(tmp_path) + "/bad" + chr(code) + "root"
+    _preio_refused(_api(), monkeypatch, _observation(), root, "receipt-control.json")
+
+
 @pytest.mark.parametrize("style", ["same", "basename", "backslash"])
 def test_old_target_lexical_address_or_basename_refused_preio(tmp_path, monkeypatch, style):
     observation = _observation()
