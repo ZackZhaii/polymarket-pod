@@ -33,6 +33,8 @@ no healthy/online assertion or historical sampling follows from a declaration.
 """
 from __future__ import annotations
 
+import base64
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
@@ -142,13 +144,15 @@ def _duplicate(entry, index):
     _problem(entry, "duplicate_source")
 
 
-def _one(spec, index, paths, identities, formats=("json", "jsonl")):
+def _capture_one(spec, index, paths, identities, formats=("json", "jsonl")):
+    """Return original evidence, trusted document and the same captured bytes."""
+    raw = None
     entry = {"source": None, "format": None, "sha256": None, "bytes": None,
              "records": None, "problems": [], "duplicate_of": None,
              "completeness": "INVENTORIED"}
     if not isinstance(spec, dict) or set(spec) != {"source", "format"}:
         _problem(entry, "invalid_input_spec")
-        return entry, None
+        return entry, None, raw
     if isinstance(spec["format"], str):
         entry["format"] = spec["format"]
     try:
@@ -159,10 +163,10 @@ def _one(spec, index, paths, identities, formats=("json", "jsonl")):
         entry["source"] = source
     if not isinstance(source, str) or not source or "\x00" in source:
         _problem(entry, "invalid_source")
-        return entry, None
+        return entry, None, raw
     if entry["format"] not in formats:
         _problem(entry, "invalid_format")
-        return entry, None
+        return entry, None, raw
     # Classify Windows network namespaces lexically: resolving them can perform
     # OS file-sharing IO even when Python sockets are blocked. Only the explicit
     # extended local drive namespace is exempt; preserve original source spelling.
@@ -173,11 +177,11 @@ def _one(spec, index, paths, identities, formats=("json", "jsonl")):
                       and windows_source[5:7] == ":/")
     if windows_source.startswith("//") and not extended_local:
         _problem(entry, "nonlocal_source")
-        return entry, None
+        return entry, None, raw
     path = Path(source)
     if _forbidden(path):
         _problem(entry, "forbidden_source")
-        return entry, None
+        return entry, None, raw
 
     # The request key also makes repeated missing requests traceable. It is a
     # comparison of exact request spelling, never physical-identity proof. Do not
@@ -191,7 +195,7 @@ def _one(spec, index, paths, identities, formats=("json", "jsonl")):
         resolved = path.resolve(strict=True)
         if _forbidden(resolved):
             _problem(entry, "forbidden_source")
-            return entry, None
+            return entry, None, raw
         canonical_key = ("resolved", str(resolved))
         if canonical_key in paths and paths[canonical_key] != index:
             _duplicate(entry, paths[canonical_key])
@@ -199,7 +203,7 @@ def _one(spec, index, paths, identities, formats=("json", "jsonl")):
         before_path = resolved.stat()
         if not stat.S_ISREG(before_path.st_mode):
             _problem(entry, "not_regular_file")
-            return entry, None
+            return entry, None, raw
         # Nonblocking where supported prevents a file->FIFO race from hanging a
         # reader; both pre-open and descriptor checks still require a regular file.
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
@@ -210,7 +214,7 @@ def _one(spec, index, paths, identities, formats=("json", "jsonl")):
                 before = os.fstat(handle.fileno())
                 if not stat.S_ISREG(before.st_mode):
                     _problem(entry, "not_regular_file")
-                    return entry, None
+                    return entry, None, raw
                 raw = handle.read()
                 after = os.fstat(handle.fileno())
         finally:
@@ -219,12 +223,12 @@ def _one(spec, index, paths, identities, formats=("json", "jsonl")):
     except FileNotFoundError:
         if raw is None:
             _problem(entry, "missing_source", "INCOMPLETE")
-            return entry, None
+            return entry, None, raw
         _problem(entry, "metadata_unavailable", "INCOMPLETE")
     except (OSError, ValueError, RuntimeError):
         if raw is None:
             _problem(entry, "unreadable_source", "INCOMPLETE")
-            return entry, None
+            return entry, None, raw
         _problem(entry, "metadata_unavailable", "INCOMPLETE")
 
     # Hash and parser consume this single captured byte string, never reopen it.
@@ -250,13 +254,18 @@ def _one(spec, index, paths, identities, formats=("json", "jsonl")):
         _problem(entry, "identity_unavailable", "INCOMPLETE")
     if not raw:
         _problem(entry, "empty_input", "INCOMPLETE")
-        return entry, None
+        return entry, None, raw
     records, problems, document = _parse(raw, entry["format"])
     for problem in problems:
         _problem(entry, problem)
     if not entry["problems"]:
         entry["records"] = records
-    return entry, document if not entry["problems"] else None
+    return entry, document if not entry["problems"] else None, raw
+
+def _one(spec, index, paths, identities, formats=("json", "jsonl")):
+    """Preserve the original two-result reader API while sharing one raw capture."""
+    entry, document, _ = _capture_one(spec, index, paths, identities, formats=formats)
+    return entry, document
 
 
 def inventory_inputs(inputs):
@@ -408,6 +417,42 @@ def _heartbeat_protocol_validator():
     return namespace["validate_record"]
 
 
+def _heartbeat_snapshot_capture(spec, *, expected_proc):
+    """Capture once and build the original protocol report, without clocks or outputs."""
+    raw = None
+    invalid_proc = not isinstance(expected_proc, str) or not expected_proc
+    if invalid_proc:
+        entry = {"source": None, "format": None, "sha256": None, "bytes": None,
+                 "records": None, "problems": ["invalid_expected_proc"],
+                 "duplicate_of": None, "completeness": "INVALID"}
+        if isinstance(spec, dict):
+            for field in ("source", "format"):
+                if isinstance(spec.get(field), str):
+                    entry[field] = spec[field]
+        document = None
+    else:
+        entry, document, raw = _capture_one(spec, 0, {}, {}, formats=("json",))
+    report = {"status": "NOT_EVALUATED", "completeness": entry["completeness"],
+              "input": entry, "declaration": None, "declaration_problems": [],
+              "metrics": None, "denominator": None, "healthy_online_us": None}
+    if invalid_proc:
+        report["declaration_problems"].append("invalid_expected_proc")
+        return report, raw
+    if entry["completeness"] != "INVENTORIED":
+        report["declaration_problems"].append("input_unavailable")
+        return report, raw
+    try:
+        validator = _heartbeat_protocol_validator()
+    except (OSError, ImportError, SyntaxError, UnicodeError, ValueError, TypeError, NameError) as exc:
+        report["declaration_problems"].append("validator_unavailable:" + type(exc).__name__)
+        return report, raw
+    try:
+        report["declaration"] = validator(document, expected_proc)
+    except (ValueError, TypeError, OverflowError) as exc:
+        report["declaration_problems"].append("invalid_heartbeat:" + str(exc))
+    return report, raw
+
+
 def summarize_heartbeat_snapshot(spec, *, expected_proc):
     """Return protocol declarations from one explicit local heartbeat JSON file.
 
@@ -433,34 +478,65 @@ def summarize_heartbeat_snapshot(spec, *, expected_proc):
     sampling/history or default paths are created. NOT_EVALUATED is unconditional;
     metrics/denominator/healthy_online_us remain None. Existing APIs are unchanged.
     """
-    invalid_proc = not isinstance(expected_proc, str) or not expected_proc
-    if invalid_proc:
-        entry = {"source": None, "format": None, "sha256": None, "bytes": None,
-                 "records": None, "problems": ["invalid_expected_proc"],
-                 "duplicate_of": None, "completeness": "INVALID"}
-        if isinstance(spec, dict):
-            for field in ("source", "format"):
-                if isinstance(spec.get(field), str):
-                    entry[field] = spec[field]
-        document = None
+    report, _ = _heartbeat_snapshot_capture(spec, expected_proc=expected_proc)
+    return report
+
+
+def _capture_stamp():
+    """Return a local UTC attempt endpoint, never heartbeat health or duration."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _invalid_capture_id_report(spec):
+    """Reject an invalid label without coercing or accessing the input."""
+    entry = {"source": None, "format": None, "sha256": None, "bytes": None,
+             "records": None, "problems": ["invalid_capture_id"], "duplicate_of": None,
+             "completeness": "INVALID"}
+    if isinstance(spec, dict):
+        for field in ("source", "format"):
+            if isinstance(spec.get(field), str):
+                entry[field] = spec[field]
+    return {"status": "NOT_EVALUATED", "completeness": "INVALID", "input": entry,
+            "declaration": None, "declaration_problems": ["invalid_capture_id"],
+            "metrics": None, "denominator": None, "healthy_online_us": None}
+
+
+def capture_heartbeat_once(spec, *, expected_proc, capture_id):
+    """Return one same-read heartbeat raw capture in memory; never write an archive.
+
+    spec and expected_proc follow summarize_heartbeat_snapshot. capture_id is an
+    explicit nonempty string label, not an authenticated or unique file identity.
+    Existing report fields are unchanged; capture adds only literal argument
+    strings or None, two local UTC attempt endpoints, and exact raw base64.
+    Missing raw is None, captured empty raw is "". Raw/SHA/strict parse/declaration
+    share one read, and incomplete evidence cannot supply a trusted declaration.
+
+    Invalid expected_proc takes precedence over invalid capture_id. Invalid
+    required arguments reject before path coercion, protocol source IO or clocks;
+    diagnostic metadata retains literal strings only. Valid whitespace strings
+    are not tightened. Only this new API calls the clock twice around capture and
+    protocol summary, even for rejected/unavailable sources. Endpoints can reverse;
+    no duration, freshness, health or successful read is inferred. Clock errors
+    propagate. Old APIs acquire no clocks and their original report stays intact.
+
+    Original local-only/env/UNC, integrity and fixed protocol-code loading limits
+    apply. NOT_EVALUATED/null metrics, denominator and healthy_online_us remain.
+    No file output, archive, sidecar, lock, runtime imports, fallback, retry,
+    network, process or directory scan is added.
+    """
+    started = finished = None
+    if not isinstance(expected_proc, str) or not expected_proc:
+        report, raw = _heartbeat_snapshot_capture(spec, expected_proc=expected_proc)
+    elif not isinstance(capture_id, str) or not capture_id:
+        report, raw = _invalid_capture_id_report(spec), None
     else:
-        entry, document = _one(spec, 0, {}, {}, formats=("json",))
-    report = {"status": "NOT_EVALUATED", "completeness": entry["completeness"],
-              "input": entry, "declaration": None, "declaration_problems": [],
-              "metrics": None, "denominator": None, "healthy_online_us": None}
-    if invalid_proc:
-        report["declaration_problems"].append("invalid_expected_proc")
-        return report
-    if entry["completeness"] != "INVENTORIED":
-        report["declaration_problems"].append("input_unavailable")
-        return report
-    try:
-        validator = _heartbeat_protocol_validator()
-    except (OSError, ImportError, SyntaxError, UnicodeError, ValueError, TypeError, NameError) as exc:
-        report["declaration_problems"].append("validator_unavailable:" + type(exc).__name__)
-        return report
-    try:
-        report["declaration"] = validator(document, expected_proc)
-    except (ValueError, TypeError, OverflowError) as exc:
-        report["declaration_problems"].append("invalid_heartbeat:" + str(exc))
+        started = _capture_stamp()
+        report, raw = _heartbeat_snapshot_capture(spec, expected_proc=expected_proc)
+        finished = _capture_stamp()
+    report["capture"] = {
+        "capture_id": capture_id if isinstance(capture_id, str) else None,
+        "expected_proc": expected_proc if isinstance(expected_proc, str) else None,
+        "started_at_utc": started, "finished_at_utc": finished,
+        "raw_base64": None if raw is None else base64.b64encode(raw).decode("ascii"),
+    }
     return report
