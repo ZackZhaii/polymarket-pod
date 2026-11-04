@@ -824,3 +824,272 @@ def test_heartbeat_unavailable_protocol_source_has_no_runtime_fallback(tmp_path,
     assert report["input"]["sha256"] == hashlib.sha256(raw).hexdigest()
     assert report["declaration"] is None
     assert report["declaration_problems"] == ["validator_unavailable:OSError"]
+
+
+# EV: same-read memory capture. These cases never create an archive.
+def _ev_capture_api():
+    module = importlib.import_module("src.m2_report")
+    fn = getattr(module, "capture_heartbeat_once", None)
+    assert callable(fn), "same-read raw heartbeat capture not implemented"
+    return module, fn
+
+
+def test_ev_capture_same_raw_binding_and_attempt_times(tmp_path, monkeypatch):
+    import base64
+    module, fn = _ev_capture_api()
+    payload = heartbeat_payload(extra={"keep": True, "label": "雪"})
+    raw = (" \r\n" + json.dumps(payload, ensure_ascii=False, indent=1) + "\r\n").encode()
+    path = tmp_path / "capture.json"
+    path.write_bytes(raw)
+    before = path.stat().st_mtime_ns
+    stamps = iter(["2026-11-04T02:00:02.000001Z", "2026-11-04T02:00:01.000002Z"])
+    monkeypatch.setattr(module, "_capture_stamp", lambda: next(stamps))
+    real_open = os.open
+    opens = []
+    def single_open(name, flags, *args, **kwargs):
+        assert not opens
+        assert Path(name) == path
+        assert not flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
+        opens.append(name)
+        return real_open(name, flags, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", single_open)
+        result = fn(spec(path), expected_proc="m2_runner", capture_id="explicit-id")
+    assert_summary_not_evaluated(result)
+    assert result["declaration"] == payload and result["declaration_problems"] == []
+    assert result["capture"] == {"capture_id": "explicit-id", "expected_proc": "m2_runner",
+        "started_at_utc": "2026-11-04T02:00:02.000001Z", "finished_at_utc": "2026-11-04T02:00:01.000002Z",
+        "raw_base64": base64.b64encode(raw).decode("ascii")}
+    assert len(opens) == 1
+    assert result["input"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert result["input"]["bytes"] == len(raw)
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == (raw, before)
+
+
+def test_ev_capture_bad_id_rejects_without_coercion_or_clock(monkeypatch):
+    module, fn = _ev_capture_api()
+    class Explosive:
+        def __str__(self):
+            raise AssertionError("invalid object coerced")
+        def __fspath__(self):
+            raise AssertionError("invalid object path coerced")
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid id performed IO or clock")
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_capture_stamp", forbidden)
+        patch.setattr(module, "_heartbeat_protocol_validator", forbidden)
+        patch.setattr(os, "open", forbidden)
+        patch.setattr(Path, "resolve", forbidden)
+        result = fn({"source": Explosive(), "format": "json"}, expected_proc="m2_runner", capture_id=Explosive())
+    assert_summary_not_evaluated(result)
+    assert result["completeness"] == "INVALID" and result["declaration"] is None
+    assert result["input"]["problems"] == ["invalid_capture_id"]
+    assert result["declaration_problems"] == ["invalid_capture_id"]
+    assert result["capture"] == {"capture_id": None, "expected_proc": "m2_runner",
+        "started_at_utc": None, "finished_at_utc": None, "raw_base64": None}
+
+
+@pytest.mark.parametrize("field,bad", [(f, v) for f in ("expected_proc", "capture_id")
+    for v in (None, "", 0, True, [], {})])
+def test_ev_capture_invalid_required_args_are_literal_only(field, bad, monkeypatch):
+    module, fn = _ev_capture_api()
+    class Source:
+        def __str__(self):
+            raise AssertionError("coerced")
+        def __fspath__(self):
+            raise AssertionError("path coerced")
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid arguments touched IO/clock")
+    args = {"expected_proc": "m2_runner", "capture_id": "id"}
+    args[field] = bad
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_capture_stamp", forbidden)
+        patch.setattr(module, "_heartbeat_protocol_validator", forbidden)
+        patch.setattr(Path, "resolve", forbidden)
+        patch.setattr(os, "open", forbidden)
+        result = fn({"source": Source(), "format": "json"}, **args)
+    reason = "invalid_" + field
+    assert_summary_not_evaluated(result)
+    assert result["completeness"] == result["input"]["completeness"] == "INVALID"
+    assert result["declaration_problems"] == result["input"]["problems"] == [reason]
+    assert result["input"]["source"] is None
+    assert result["capture"][field] == (bad if isinstance(bad, str) else None)
+    assert result["capture"]["raw_base64"] is None
+    assert result["capture"]["started_at_utc"] is result["capture"]["finished_at_utc"] is None
+
+
+def test_ev_capture_expected_proc_error_has_priority(monkeypatch):
+    module, fn = _ev_capture_api()
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid arguments touched capture")
+    monkeypatch.setattr(module, "_capture_stamp", forbidden)
+    result = fn({"source": "literal.json", "format": "json"}, expected_proc="", capture_id="")
+    assert result["status"] == "NOT_EVALUATED" and result["completeness"] == "INVALID"
+    assert result["input"]["source"] == "literal.json"
+    assert result["input"]["problems"] == ["invalid_expected_proc"]
+    assert result["capture"]["expected_proc"] == result["capture"]["capture_id"] == ""
+
+
+@pytest.mark.parametrize("raw", [b"", b"\xff", b'{"proc":"a","proc":"b"}', b'{"x":NaN}',
+    b'{"x":1e999}', b"[]", b"null", b'{"proc":'])
+def test_ev_capture_readable_bad_raw_retains_exact_bytes(raw, tmp_path):
+    import base64
+    _, fn = _ev_capture_api()
+    path = tmp_path / "bad.json"
+    path.write_bytes(raw)
+    result = fn(spec(path), expected_proc="m2_runner", capture_id="bad")
+    assert_summary_not_evaluated(result)
+    assert base64.b64decode(result["capture"]["raw_base64"], validate=True) == raw
+    assert result["input"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert result["input"]["bytes"] == len(raw) and result["declaration"] is None
+    assert result["input"]["records"] == (1 if raw in (b"[]", b"null") else None)
+    assert result["declaration_problems"]
+    if not raw:
+        assert result["capture"]["raw_base64"] == "" and result["completeness"] == "INCOMPLETE"
+
+
+def test_ev_capture_unreadable_is_not_empty_and_records_attempt_only(tmp_path, monkeypatch):
+    module, fn = _ev_capture_api()
+    calls = []
+    def stamp():
+        calls.append(1)
+        return "2026-11-04T02:00:00.000001Z"
+    monkeypatch.setattr(module, "_capture_stamp", stamp)
+    result = fn(spec(tmp_path / "missing.json"), expected_proc="m2_runner", capture_id="missing")
+    assert_summary_not_evaluated(result)
+    assert len(calls) == 2 and result["capture"]["raw_base64"] is None
+    assert result["input"]["sha256"] is None and result["input"]["bytes"] is None
+    assert result["input"]["problems"] == ["missing_source"]
+    assert result["declaration"] is None and result["completeness"] == "INCOMPLETE"
+
+
+@pytest.mark.parametrize("failure,reason", [("fstat-after", "metadata_unavailable"),
+    ("source-change", "source_changed_during_read"), ("last-stat", "source_changed_during_read"),
+    ("identity", "identity_unavailable")])
+def test_ev_capture_integrity_failure_retains_raw_not_declaration(failure, reason, tmp_path, monkeypatch):
+    import base64
+    from types import SimpleNamespace
+    module, fn = _ev_capture_api()
+    path = write_manifest(tmp_path, heartbeat_payload())
+    raw, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    real_fstat, real_stat = os.fstat, Path.stat
+    calls = 0
+    read_done = False
+    def changed(info, **changes):
+        fields = {k: getattr(info, k) for k in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_mode")}
+        return SimpleNamespace(**{**fields, **changes})
+    def fstat(fd):
+        nonlocal calls, read_done
+        calls += 1
+        info = real_fstat(fd)
+        if calls == 2:
+            read_done = True
+            if failure == "fstat-after":
+                raise OSError("owned metadata failure")
+            if failure == "source-change":
+                return changed(info, st_mtime_ns=info.st_mtime_ns + 1)
+        return changed(info, st_ino=0) if failure == "identity" else info
+    def path_stat(target, *args, **kwargs):
+        if target == path and read_done and failure == "last-stat":
+            raise OSError("owned path disappeared after read")
+        info = real_stat(target, *args, **kwargs)
+        return changed(info, st_ino=0) if target == path and failure == "identity" else info
+    def no_validator():
+        raise AssertionError("incomplete input reached protocol")
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "fstat", fstat)
+        patch.setattr(Path, "stat", path_stat)
+        patch.setattr(module, "_heartbeat_protocol_validator", no_validator)
+        result = fn(spec(path), expected_proc="m2_runner", capture_id="integrity")
+    assert_summary_not_evaluated(result)
+    assert reason in result["input"]["problems"]
+    assert result["input"]["records"] is None and result["declaration"] is None
+    assert result["input"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert base64.b64decode(result["capture"]["raw_base64"], validate=True) == raw
+    assert result["declaration_problems"] == ["input_unavailable"]
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == (raw, mtime)
+
+
+@pytest.mark.parametrize("kind", ["unc", "extended-unc", "env", "resolved-env"])
+def test_ev_capture_forbidden_paths_before_source_or_protocol_io(kind, tmp_path, monkeypatch):
+    module, fn = _ev_capture_api()
+    source = {"unc": r"\\server\share\beat.json", "extended-unc": r"\\?\UNC\server\beat.json",
+        "env": str(tmp_path / ".env.fixture"), "resolved-env": str(tmp_path / "alias.json")}[kind]
+    def forbidden(*args, **kwargs):
+        raise AssertionError("forbidden source reached IO/protocol")
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", forbidden)
+        patch.setattr(Path, "stat", forbidden)
+        patch.setattr(module, "_heartbeat_protocol_validator", forbidden)
+        patch.setattr(Path, "resolve", (lambda *a, **k: tmp_path / ".env.fixture") if kind == "resolved-env" else forbidden)
+        result = fn({"source": source, "format": "json"}, expected_proc="m2_runner", capture_id="path")
+    assert result["status"] == "NOT_EVALUATED" and result["completeness"] == "INVALID"
+    assert result["input"]["problems"] == ["nonlocal_source" if "unc" in kind else "forbidden_source"]
+    assert result["capture"]["raw_base64"] is None and result["declaration"] is None
+
+
+def test_ev_capture_unavailable_original_protocol_has_no_fallback(tmp_path, monkeypatch):
+    import base64
+    import importlib.machinery
+    _, fn = _ev_capture_api()
+    path = write_manifest(tmp_path, heartbeat_payload())
+    raw = path.read_bytes()
+    def unavailable(*args, **kwargs):
+        raise OSError("owned unavailable code")
+    monkeypatch.setattr(importlib.machinery.SourceFileLoader, "get_source", unavailable)
+    result = fn(spec(path), expected_proc="m2_runner", capture_id="protocol")
+    assert result["declaration_problems"] == ["validator_unavailable:OSError"]
+    assert result["declaration"] is None and result["input"]["records"] == 1
+    assert base64.b64decode(result["capture"]["raw_base64"], validate=True) == raw
+
+
+def test_ev_capture_old_api_projection_and_no_new_clock(tmp_path, monkeypatch):
+    module, fn = _ev_capture_api()
+    path = write_manifest(tmp_path, heartbeat_payload())
+    result = fn(spec(path), expected_proc="m2_runner", capture_id="projection")
+    def forbidden():
+        raise AssertionError("old API acquired a clock")
+    monkeypatch.setattr(module, "_capture_stamp", forbidden)
+    summary = module.summarize_heartbeat_snapshot(spec(path), expected_proc="m2_runner")
+    assert {k: v for k, v in result.items() if k != "capture"} == summary
+    assert module.inventory_inputs([spec(path)])["inputs"][0] == summary["input"]
+    assert module.summarize_recording_manifest(spec(path))["input"] == summary["input"]
+    assert set(result["capture"]) == {"capture_id", "expected_proc", "started_at_utc", "finished_at_utc", "raw_base64"}
+
+
+def test_ev_capture_valid_whitespace_and_real_utc_attempts_are_not_tightened(tmp_path):
+    from datetime import datetime, timezone
+    _, fn = _ev_capture_api()
+    payload = heartbeat_payload(proc=" ")
+    result = fn(spec(write_manifest(tmp_path, payload)), expected_proc=" ", capture_id=" ")
+    assert result["declaration"] == payload and result["declaration_problems"] == []
+    assert result["capture"]["expected_proc"] == result["capture"]["capture_id"] == " "
+    for key in ("started_at_utc", "finished_at_utc"):
+        value = result["capture"][key]
+        assert value.endswith("Z") and datetime.fromisoformat(value.replace("Z", "+00:00")).utcoffset() == timezone.utc.utcoffset(None)
+
+
+@pytest.mark.parametrize("fail_on", [1, 2])
+def test_ev_capture_clock_failure_propagates_without_retry_or_write(fail_on, tmp_path, monkeypatch):
+    module, fn = _ev_capture_api()
+    path = write_manifest(tmp_path, heartbeat_payload())
+    raw, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    calls, opens = [], []
+    real_open = os.open
+    def stamp():
+        calls.append(1)
+        if len(calls) == fail_on:
+            raise OSError("owned clock failure")
+        return "2026-11-04T02:00:00Z"
+    def read_open(name, flags, *args, **kwargs):
+        assert Path(name) == path and not flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
+        opens.append(name)
+        return real_open(name, flags, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_capture_stamp", stamp)
+        patch.setattr(os, "open", read_open)
+        with pytest.raises(OSError, match="owned clock failure"):
+            fn(spec(path), expected_proc="m2_runner", capture_id="clock")
+    assert len(calls) == fail_on and len(opens) == fail_on - 1
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == (raw, mtime)
+    assert list(tmp_path.iterdir()) == [path]
