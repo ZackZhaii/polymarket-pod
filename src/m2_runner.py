@@ -689,7 +689,20 @@ def _pending_files(inbox: Path) -> list[Path]:
     return sorted(p for p in inbox.glob("*/*.json") if p.is_file())
 
 
+def _scan_fetch_facts(meta: object) -> dict[str, Any] | None:
+    """Copy present fetch facts for observation, never for scan control or coverage certification.
+
+    Missing keys stay missing and raw values stay unchanged. Non-dicts have no observable subset here;
+    the caller retains its original .get, truthiness and malformed-input error boundaries.
+    """
+    if not isinstance(meta, dict):
+        return None
+    return {key: meta[key] for key in ("pages", "fetched", "stop_reason", "complete", "cap_hit", "max_markets",
+                                      "server_min_liquidity", "base_url") if key in meta}
+
+
 def _scan(state: RunnerState, now: datetime, gamma: GuardedGetter) -> None:
+    """Keep original scan control and I/O positions while observing same-return fetch facts."""
     try:
         result = scanner.scan(getter=gamma, risk_path=Path(state.risk_path or podlib.RISK_PATH), now=now)
     except Exception as exc:  # noqa: BLE001 - a failed scan keeps the last one (until it is too old)
@@ -698,7 +711,8 @@ def _scan(state: RunnerState, now: datetime, gamma: GuardedGetter) -> None:
         return
     if not result.get("fetch", {}).get("complete"):
         state.counters["scan_failures_total"] += 1
-        event(state, "scan_incomplete", now, stop_reason=result.get("fetch", {}).get("stop_reason"))
+        event(state, "scan_incomplete", now, stop_reason=result.get("fetch", {}).get("stop_reason"),
+              fetch=_scan_fetch_facts(result.get("fetch", {})))
         return
     rows = result["rows"]
     state.markets = {str(row["id"]): row for row in rows if row.get("id")}
@@ -708,7 +722,8 @@ def _scan(state: RunnerState, now: datetime, gamma: GuardedGetter) -> None:
         forecast_inbox.write_candidates(rows, state.paths.candidates)
     except OSError as exc:
         raise WriteFailed(f"candidates: {type(exc).__name__}") from exc
-    event(state, "scanned", now, scanned=result.get("scanned"), passed=result.get("passed"))
+    event(state, "scanned", now, scanned=result.get("scanned"), passed=result.get("passed"),
+          fetch=_scan_fetch_facts(result.get("fetch", {})))
 
 
 def _ingest(state: RunnerState, now: datetime, report: IterationReport) -> None:
