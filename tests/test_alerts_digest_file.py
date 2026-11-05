@@ -429,3 +429,22 @@ def test_missing_windows_reparse_metadata_is_not_assumed_safe(owned, monkeypatch
     with pytest.raises(mod.DigestFileError, match="^metadata$"):
         mod.digest_file_once(str(path))
     assert events == ["lstat1"]
+
+
+@pytest.mark.parametrize("primary", [None, OSError("primary file error"), MemoryError("primary resource")])
+def test_any_nonresource_cleanup_exception_cannot_hide_primary(owned, monkeypatch, primary):
+    mod = _core()
+    path = owned / "a.jsonl"
+    path.write_bytes(_line())
+    faults = {"close": RuntimeError("private ordinary cleanup")}
+    if primary is not None:
+        faults["read"] = primary
+    events = _install(monkeypatch, mod, path, faults)
+    with pytest.raises(BaseException) as caught:
+        mod.digest_file_once(str(path))
+    if isinstance(primary, MemoryError):
+        assert caught.value is primary
+    else:
+        assert isinstance(caught.value, mod.DigestFileError)
+        assert caught.value.args == ("read" if primary is not None else "close",)
+    assert events.count("close") == 1 and "kernel" not in events

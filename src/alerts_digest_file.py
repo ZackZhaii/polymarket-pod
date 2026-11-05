@@ -131,7 +131,9 @@ def digest_file_once(alerts_path: str, *,
             close_attempted = True
             try:
                 handle.close()
-            except _ORDINARY:
+            except (MemoryError, RecursionError):
+                raise
+            except Exception:
                 if not failed:
                     raise DigestFileError("close") from None
     return digest_snapshot(payload, cursor=cursor)
