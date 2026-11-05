@@ -2200,7 +2200,7 @@ Status: done. FE/#362-R1 only accepted and integrated via PR470; same-read parse
 
 ## Task FF - #362-R2 staged same-read canonical boot declaration
 
-Status: todo. Registration only; whole R2 is not complete. No claim or engineering OPEN.
+Status: doing. FF normal claim metadata only; TESTS_ONLY engineering is not OPEN.
 
 - Full semantic contract: https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6655763127 ; WORK_ORDER12508/SHAab2b677127be3a5d01e55abac317597df2a952ba02c271dd1dfaed0d6cd84f14.
 - Staged supplement: https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6656039449 ; PLAN14189/SHA21429885d9fc34298c43310e4391fda13991e06b066443d331d79438f3f273c5 and INPUTS5639/SHA1b931faeccee69bd87c9208a762e518724084704226d59e855af74da383be196.
@@ -2211,6 +2211,13 @@ Status: todo. Registration only; whole R2 is not complete. No claim or engineeri
 - Registration appends only FF to original103done/free state, settings/routingmap/oldtasks/claim and all product/risk/CI exact. No claim/test/runner/fixture/runtime now; livefalse/ninepins unchanged, KEY/HOLD/main/NoisePC/keys/ledger/account/provider limits retained.
 
 ## Latest
+
+
+- 2026-11-05 UTC: FF/#362-R2 normal claim metadata only; one real python -B src/loop_claim.py claim --surface codex-local --task FF returned complete tuple {"surface":"codex-local","task":"FF","since":"2026-11-05T11:13:35Z","until":"2026-11-05T12:13:35Z"}; claim_hours1/no now-renew-backdate-hourchange.
+- Original safeuntilminus5=2026-11-05T12:08:35Z; engineering/static hardstop=2026-11-05T11:48:35Z or earlier 2026-11-05T11:43:35Z if release20. UnfinishedE22/static7/release15/P5 unchanged, nominal54 vs55safe; actual visible tuple/roles/budget plus separate Root OPEN required.
+- Same full contract3626655763127/WORK_ORDER12508-SHAab2b677127be3a5d01e55abac317597df2a952ba02c271dd1dfaed0d6cd84f14 and stage3626656039449/PLAN14189-SHA21429885d9fc34298c43310e4391fda13991e06b066443d331d79438f3f273c5; actual Root-CodeQC ACK6656244047 and Source personalACK6656303757, both oracle-version/R09 and bounded7min precision retained.
+- Only FFtodo->doing/new4fieldclaim and FFStatus/these5Latest; original103done/tasks/settings-routingmap/history/product/riskCI exact by inverse proof. CLI writes state only; wrapper expected bothfiles and failed after successful CLI, original failure preserved; this documented LOOP update corrects proof, no CLI retry. Metadata native59+Guard/fullskip currenthead required.
+- Source01a15d32 soleauthor/controller/lifecyclewriter CLEAN_STOPPED/no pending implementation-test tools-child/no selfmerge afterPR. Root01a19d50 genuine nonauthor/src-test-queue0 to expectedhead integrate and read actual valid tuple before separate TESTS_ONLY OPEN. No test/runner/fixture/product/runtime; paper/livefalse/ninepins/mainKEYHOLD/NoisePC/keys/ledger/provider bounds unchanged; stage normal--todo later/no automatic secondclaim.
 
 
 - 2026-11-05 UTC: Register FF/#362-R2 only, from fresh devb379f9caa4b8577471d8b15341d1cc68ef89ed18; original103done/free/no todo, next unusedFF acrossdev/main/all4openPR heads; Source0open before/limit2. Registration merge alone does not authorize claim or engineering.

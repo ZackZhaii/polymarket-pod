@@ -3,7 +3,12 @@
   "branch": "main",
   "claim_hours": 1,
   "cadence_minutes": 30,
-  "claim": null,
+  "claim": {
+    "surface": "codex-local",
+    "task": "FF",
+    "since": "2026-11-05T11:13:35Z",
+    "until": "2026-11-05T12:13:35Z"
+  },
   "assignment": {
     "grok-web": "first open todo when the claim is free",
     "grok-build-local": "same queue; stop if grok-web holds the claim",
@@ -907,7 +912,7 @@
     },
     {
       "id": "FF",
-      "status": "todo",
+      "status": "doing",
       "title": "Issue362-R2: same-read full parsed boot batch canonical declaration; staged tests-only RED first.",
       "finish": "Whole #362-R2 remains incomplete until separately accepted implementation persists same-read complete parsed latest-batch canonical SHA256 with explicit normal nondeclarability, preserving original selection/error/writer behavior. Original WORK_ORDER12508/SHAab2b677127be3a5d01e55abac317597df2a952ba02c271dd1dfaed0d6cd84f14 and MANIFEST12990/SHA9069b07f1bd09be36295b0c53e6f53f18ae7e716033b4af2b764468a9b8ae21c at https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6655763127 govern full R2. Stage PLAN14189/SHA21429885d9fc34298c43310e4391fda13991e06b066443d331d79438f3f273c5 and INPUTS5639/SHA1b931faeccee69bd87c9208a762e518724084704226d59e855af74da383be196 at https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6656039449 only conditionally stage first normal lease as TESTS_ONLY baseline RED/local fixed WIP, unchanged production and old R1, then original nonauthor static review and normal --todo release globally. No product push/PR/nativefull/DONE/done_at/count growth for stage1; actual RED evidence and new unfinished buckets/three actual ACKs required before any separately authorized later normal dispatch; no automatic second claim or preset remainingE.",
       "note": "Root new actual same-packet ACK and full original CodeQC4672/SHA3a7bdbe5c559d73bb56854b6a2ada7787c61daac0f99c2bbf8e7d80b09256483 plus summary7392/SHA c9f0547e19ae7ca250a81826a64eb7abe465446ff2d9927b7655f767145f5f97: https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6656244047 . Source personally fullread/hash/two-precision actualACK5281/SHAb42e69aa1eb22a57a0b4cc3edbe3eb036687a3e053e4f4ba2a4a5faf0224798e: https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6656303757 . Source01a15d32 sole author/controller/test+lifecycle writer/no implementationchild/no-selfmerge; originalCodeQC01a1a074 nonimplementation static QC/no merge power; Root01a19d50 this task src-test-queue0 genuine nonauthor ordinarydev integrator. Original oracle A/B missing version: preserve literal/SHA and genuine old assets/why; R09 separate valid start fixture. 7min static stop threshold is no completion/uptime guarantee. Conditional49+P5=54 versus55safe; actual unfinished bucket gates, since+35 hard stop or earlierT30 if release20; normal --todo and original103done unchanged. Exact future test D:/projects/polymarket-pod/.worktrees/m2-boot-batch-r2-red1-next/tests/test_m2_start_boot_batch_r2.py; ownedrunner C:/Users/Noise/.codex/visualizations/2026/10/21/01a15d32-5ffb-7373-8ca9-d94e8e1f04ca/project-advance-20261103/m2-boot-batch-r2-red1-evidence-next/runner/owned_red.py; owned synthetic D:/projects/polymarket-pod/.worktrees/m2-r2-red1-owned-next/{i,c,t}; currently all uncreated/unreserved. Registration only, no claim/engineering OPEN. FullR2 NO_READY original retained; paper/livefalse/risk ninepins/mainKEYHOLD/threshold/NoisePC/tasks/real ledger/.envkeys/accounts/runtime/provider boundaries unchanged; no profit claim; modelusagecost UNKNOWN."
