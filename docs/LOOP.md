@@ -2200,7 +2200,7 @@ Status: done. FE/#362-R1 only accepted and integrated via PR470; same-read parse
 
 ## Task FF - #362-R2 staged same-read canonical boot declaration
 
-Status: todo. FF TESTS_ONLY entry budget HOLD; no engineering was opened; normal --todo release proposed. Whole R2 remains incomplete.
+Status: doing. FF stage1 recovery claim metadata only; TESTS_ONLY engineering is not OPEN.
 
 - Full semantic contract: https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6655763127 ; WORK_ORDER12508/SHAab2b677127be3a5d01e55abac317597df2a952ba02c271dd1dfaed0d6cd84f14.
 - Staged supplement: https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6656039449 ; PLAN14189/SHA21429885d9fc34298c43310e4391fda13991e06b066443d331d79438f3f273c5 and INPUTS5639/SHA1b931faeccee69bd87c9208a762e518724084704226d59e855af74da383be196.
@@ -2213,6 +2213,13 @@ Status: todo. FF TESTS_ONLY entry budget HOLD; no engineering was opened; normal
 - Recovery V2 adoption (metadata only): append exact single-use zero-engineering-HOLD stage1 dispatch exception to FF.finish/note while preserving all original text and this originalStatus/todo history. Actual V2 https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6657266947, ADDENDUM9268/SHA201ee47d066f0cd0cb22b24f2d06739da402e5ca172019d385f9790553a446b4 and INPUTS6049/SHA932c9f1c9abe25548762ce4f39431099385f078ec568337a4920588d45dff53f; actual Root-CodeQC ACK6657390325/SourceadoptionACK6657446929. Future originalQC static only outputs C:/Users/Noise/.codex/visualizations/2026/11/02/01a19d50-3e49-7bd1-9af3-c3d664c94c51/accelerated-20261103/next-ordinary-20261105T1020/qc-red1-recovery-fixed/RED_READINESS_REVIEW.json and C:/Users/Noise/.codex/visualizations/2026/11/02/01a19d50-3e49-7bd1-9af3-c3d664c94c51/accelerated-20261103/next-ordinary-20261105T1020/qc-red1-recovery-fixed/SUMMARY.zh-CN.md after separate Root EXECUTE_STATIC. Root actual adopted fields/FFfirsttodo/free readback and separate normalclaim dispatch remain required; no current claim/OPEN,one exception not productionstage2/no automatic third. Original103done/claimnull,all oldtasks/settings/routing/history/product/riskCI exact.
 
 ## Latest
+
+
+- 2026-11-05 UTC: FF separately explicit normal1h stage1 RECOVERY claim metadata only after V2 adoption475/actualdeve8757380. One real python -B loop_claim claim codex-local FF returned {"surface":"codex-local","task":"FF","since":"2026-11-05T12:15:30Z","until":"2026-11-05T13:15:30Z"}; no now-renew-backdate-hourchange-force-takeover.
+- Original Root visible+OPEN dispatch cutoffS+5=2026-11-05T12:20:30Z; safeS+55=2026-11-05T13:10:30Z; hard engineering-staticS+35=2026-11-05T12:50:30Z orC20 earlierS+30=2026-11-05T12:45:30Z. UnfinishedE22/static7/globalexit15/P5 unchanged; Source actual fractional UTC entry and precreate recheck required, no elapsedEcredit.
+- Same V2ADD9268/SHA201ee47d066f0cd0cb22b24f2d06739da402e5ca172019d385f9790553a446b4 and INPUTS6049/SHA932c9f1c9abe25548762ce4f39431099385f078ec568337a4920588d45dff53f/public3626657266947; actualRoot-originalQC ACK6657390325/SourceadoptionACK6657446929. OriginalRecovery-stage-WO/HOLD/lateQC histories retained; one stage1 exception not productionstage2/no automatic third if repeat block.
+- Only FFtodo->doing/new4fieldclaim and currentFFStatus/these5Latest. Originaladopted FF.finish-note/103done/tasks/settings-routingmap/history/product-risk-CI exact by full inverse proof. NormalCLI receipts/rawUTC saved before postassert; CLI onlystate then documentedLOOP, no retry. Nativecurrenthead59/Guard12/fullskip PENDING Rootparallel; no test/product/full reruns.
+- Source01a15d32 solewriter/controller/lifecycle CLEAN_STOPPED/no pending implementation-test tools-child/no selfmerge afterPR; Root01a19d50 true nonauthor FFsrc-test-queue0 expectedhead integrate/actualvalidtuple before separate TESTS_ONLY OPEN. Original01a1a074 nonimplementationstatic/no mergepower, futureavailability notguaranteed. No test/runner/fixture/runtime/cleanup/newroute/KEY-main/riskthreshold/NoisePC/keys/ledger actions.
 
 
 - 2026-11-05 UTC: FF RecoveryV2 metadata adoption proposed, only FF.finish/note suffix appends plus one TaskFF explanation and these5Latest; old complete prefixes/Status/history preserved,103done/FFfirsttodo/free/claimnull/no done_at/no new letter.
