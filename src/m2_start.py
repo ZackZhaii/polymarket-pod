@@ -21,6 +21,9 @@ Start order (issue #129, Poly指挥: the Sentinel first, nothing else before its
    boot start, the number of latest-batch markets whose boot classification raised (counted and dropped,
    Task DN); ``null`` on every later start, which reuses the chain's assets and classifies nothing. It
    changes no selection, adds no halt, and older chain rows without it are still read.
+   ``boot`` (#362-R1) describes the same parsed latest batch: its UTC instant and row count, including
+   duplicates and rows later dropped. It is null on chain reuse or when no instant exists. This is
+   not raw-file integrity, content identity or scan completeness; it adds no write or startup check.
 3. ``python -m src.m1_run --out runs/m2/m1-<UTC stamp> --max-runtime <seconds left> --assets <frozen ids>``.
    The run dir is new on every start (m1_run never reuses a non-empty one) and lives under #119's
    fixed ``runs/m2/``. Ready = a fresh m1_run heartbeat from this launch, a valid manifest and at least
@@ -201,14 +204,28 @@ def boot_eligible(row: dict[str, Any], m2_end: datetime | None) -> bool:
 
 
 def boot_selection_detail(root: Path, now: datetime, m2_end: datetime | None = None) -> dict[str, Any]:
-    """boot_selection plus counters: ``assets``, ``why`` and ``classifier_errors`` (Task DN: a market whose
-    classification raises is counted and dropped; startup never crashes on it). The boot start records
-    ``classifier_errors`` in its chain row and runs/m2/current.json (#329); later starts record null."""
+    """Choose boot assets once and describe the same parsed latest batch.
+
+    Preserve assets, why and classifier_errors. Add boot: either None when
+    no parseable latest instant exists or the existing handled read-error return is used, or a fresh
+    plain dict with scan_ts and batch_rows. scan_ts is the latest parsed UTC
+    instant in ISO 8601 with six fractional digits and Z; batch_rows counts
+    every dict row at that instant in this one read_jsonl result, including
+    duplicates and rows later rejected by classification or asset selection.
+
+    Reuse the existing parsed stamps and original single selector call.
+    No extra read, timestamp parse, sorting, canonical hash, loader, clock,
+    launch, writer, or changed refusal is introduced. An absent latest instant
+    does not skip the existing classification/selection path. This declaration
+    proves neither raw-file integrity nor batch/scan completeness or content
+    identity. Existing error handlers retain their original behavior.
+    """
     path = root / MARKETS_NAME
     try:
         rows = read_jsonl(path) if path.exists() else []
     except (OSError, ValueError) as exc:
-        return {"assets": [], "why": f"{MARKETS_NAME} unreadable ({type(exc).__name__})", "classifier_errors": 0}
+        return {"assets": [], "why": f"{MARKETS_NAME} unreadable ({type(exc).__name__})",
+                "classifier_errors": 0, "boot": None}
     stamps = [parse_book_ts(row.get("ts")) for row in rows if isinstance(row, dict)]
     latest = max((stamp for stamp in stamps if stamp is not None), default=None)
     # Pin the latest batch first: filtering must never make an older scan the "latest" one.
@@ -227,10 +244,14 @@ def boot_selection_detail(root: Path, now: datetime, m2_end: datetime | None = N
     if errors:
         print(f"WARN boot_selection: {errors} market(s) dropped on classifier error", file=sys.stderr)
     assets = select_assets(kept, M1_TOP_MARKETS)["assets"]
+    boot = None if latest is None else {
+        "scan_ts": latest.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        "batch_rows": sum(stamp == latest for stamp in stamps),
+    }
     if assets_problem(assets) is not None:
         return {"assets": [], "why": f"no usable assets in {MARKETS_NAME}; run python -m src.scanner first",
-                "classifier_errors": errors}
-    return {"assets": list(assets), "why": None, "classifier_errors": errors}
+                "classifier_errors": errors, "boot": boot}
+    return {"assets": list(assets), "why": None, "classifier_errors": errors, "boot": boot}
 
 
 def boot_selection(root: Path, now: datetime, m2_end: datetime | None = None) -> tuple[list[str], str | None]:
@@ -370,7 +391,9 @@ class Current:
     torn one. Fields: schema, status (starting / started / failed), updated_ts, run_dir (null until
     the chain line is written), m2_end, reason, git_sha, host, failure, assets, assets_source,
     classifier_errors (#329: the boot selection's classifier error count on the boot start, null on a
-    later start that reuses the chain's assets), and processes[]: name, pid
+    later start that reuses the chain's assets), boot (#362-R1: the same-read parsed latest UTC
+    instant and batch row count on the first selection; null on chain reuse; not a completeness or
+    integrity proof), and processes[]: name, pid
     (the launched or kept process), started_ts, state (starting / ready / not_ready / kept) and
     heartbeat_pid (the pid in its heartbeat once ready; on Windows a venv launcher's child may
     differ). A failed write is reported and stops the start order (fail closed), never skipped.
@@ -478,11 +501,13 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
     # #329: classifier_errors is observability only (chain row + current.json); it never changes the
     # selection or halts. Null on a later start: the chain's assets are reused and nothing is classified.
     classifier_errors: int | None = None
+    boot: dict[str, Any] | None = None
     if rows:
         assets, assets_source = list(rows[0]["assets"]), "chain"
     else:
         detail = boot_selection_detail(root, moment, end)
         assets, why, classifier_errors = detail["assets"], detail["why"], detail["classifier_errors"]
+        boot = detail["boot"]
         if why is not None:
             return refuse(EXIT_REFUSED, why)
         assets_source = "boot selection"
@@ -503,6 +528,7 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
     current = Current(m2_dir / CURRENT_NAME, m2_end=heartbeat.utc_stamp(end), reason=reason.strip(), now=now)
     current.data["assets"], current.data["assets_source"] = list(assets), assets_source
     current.data["classifier_errors"] = classifier_errors
+    current.data["boot"] = boot
     current_rel = rel(current.path, root)
 
     def publish(failing: str | None = None) -> bool:
@@ -554,7 +580,7 @@ def start(*, reason: str, m2_end: str | None, dry_run: bool, root: Path = ROOT,
                  "reason": reason.strip(), "m2_end": heartbeat.utc_stamp(end), "max_runtime_s": max_runtime_s,
                  "host": socket.gethostname(),
                  "sentinel_pid": sentinel_record["pid"] if sentinel_record is not None else None,
-                 "assets": list(assets), "classifier_errors": classifier_errors}
+                 "assets": list(assets), "classifier_errors": classifier_errors, "boot": boot}
     line = json.dumps(chain_row, ensure_ascii=False, sort_keys=True)
     if dry_run:
         say(f"step 2 chain: would append to {rel(chain_path, root)}: {line}")
