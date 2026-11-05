@@ -2200,7 +2200,7 @@ Status: done. FE/#362-R1 only accepted and integrated via PR470; same-read parse
 
 ## Task FF - #362-R2 staged same-read canonical boot declaration
 
-Status: todo. FF pure-kernel local-WIP claim was not OPEN because Root missed S4; normal --todo release proposed. Zero kernel engineering; full R2 unfinished, no automatic further claim.
+Status: doing. FF pure-kernel local-WIP normal claim metadata only; engineering NOT_OPEN.
 
 - Full semantic contract: https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6655763127 ; WORK_ORDER12508/SHAab2b677127be3a5d01e55abac317597df2a952ba02c271dd1dfaed0d6cd84f14.
 - Staged supplement: https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6656039449 ; PLAN14189/SHA21429885d9fc34298c43310e4391fda13991e06b066443d331d79438f3f273c5 and INPUTS5639/SHA1b931faeccee69bd87c9208a762e518724084704226d59e855af74da383be196.
@@ -2215,6 +2215,12 @@ Status: todo. FF pure-kernel local-WIP claim was not OPEN because Root missed S4
 
 - Kernel local-WIP V1 candidate adoption: Packet FF_R2_KERNEL_LOCAL_WIP_20261105T1323_V1 proposes only a real pure canonical/declarability kernel plus direct tests, original boot two-key schema and all existing wiring unchanged. Append only the exact FF.finish/note suffixes; preserve all original prefixes/status/history/103done/FFtodo/claimnull and product/risk/CI. Actual same-packet Source/CodeQC/Root ACKs and a separate independently integrated metadata adoption with actual-dev field/free readback are required before any separately dispatched normal FF claim and explicit OPEN. No implementation/claim/product adoption permission is created now; full R2 remains NO_READY, original HOLD and clock corrections preserved.
 ## Latest
+
+- FF pure-kernel local-WIP explicit NEW normal1h claim metadata only; freshbase=e65d1e14c7733b91137a0dd5fcef2cddeb5a44c5; actual codex-local/FF since=2026-11-05T15:59:17Z until=2026-11-05T16:59:17Z; engineering NOT_OPEN, no automatic renewal.
+- One real normalCLI claim start=2026-11-05T15:59:17.227327+00:00 end=2026-11-05T15:59:17.583759+00:00 exit=0; exact original tuple and claim_hours1; no now-renew-backdate-force-takeover/hourchange. Original103done/adopted finish-note/settings-routingmap/history/riskCI preserved by actual inverse.
+- Root actualtuple-risk-visible and explicitOPEN by=2026-11-05T16:03:17Z; SourcefractionalENTRY/precreate by=2026-11-05T16:04:17Z AND actual unfinished budget P5; E20 buckets3/4/7/2/1/3/static7/exit15/P5/handoff2 unchanged, protected54/55/sensitive72/upperboundUNKNOWN.
+- FullfixedWIP/publicstrict/STOP by=2026-11-05T16:24:17Z; staticdispatch=2026-11-05T16:25:17Z through allwait-finalreadbackstop=2026-11-05T16:32:17Z; normal--todoENTRY=2026-11-05T16:33:17Z AND safe-now20min; globalfree=2026-11-05T16:48:17Z/protected=2026-11-05T16:53:17Z/safe=2026-11-05T16:54:17Z/until=2026-11-05T16:59:17Z; earlier actualbudget stop wins.
+- Source01a15d32 soleauthor-controller/no implementationchild/no-selfmerge fixedhead cleanSTOPPED plus completepublic package is Root readonly intake trigger; Root01a19d50 true nonauthor actual currentheadCI/review/expectedhead merge+target tuple/risk gates unchanged. Same V1+D3 and new actual handoffdelta ACKs required; no current productOPEN/runtime/cleanup/automatic furtherclaim.
 
 - 2026-11-05 UTC: FF pure-kernel local-WIP normal --todo release proposed after genuine PRODUCT HOLD: Root finalreview/publication/merge/targetreadback missed original S4=14:45:17Z despite earlier metadata gate. No explicit OPEN, zero Source kernel engineering, no retrospective S5/remaining-time exception; Root closure overrun is not Source product failure.
 - Exactly one real normalCLI release --surface codex-local --todo from2026-11-05T14:49:09.381726+00:00 to2026-11-05T14:49:09.816458+00:00, exit0/stdoutnull/stderr0. Original full codex-local/FF since14:41:17Z-until15:41:17Z/claim_hours1 unchanged, no now-renew-backdate-hourchange-force-takeover. FFdoing->todo/claimnull/no done_at, original103done retained.
