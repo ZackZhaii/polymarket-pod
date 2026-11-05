@@ -2200,7 +2200,7 @@ Status: done. FE/#362-R1 only accepted and integrated via PR470; same-read parse
 
 ## Task FF - #362-R2 staged same-read canonical boot declaration
 
-Status: doing. FF normal claim metadata only; TESTS_ONLY engineering is not OPEN.
+Status: todo. FF TESTS_ONLY entry budget HOLD; no engineering was opened; normal --todo release proposed. Whole R2 remains incomplete.
 
 - Full semantic contract: https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6655763127 ; WORK_ORDER12508/SHAab2b677127be3a5d01e55abac317597df2a952ba02c271dd1dfaed0d6cd84f14.
 - Staged supplement: https://github.com/ZackZhaii/polymarket-pod/issues/362#issuecomment-6656039449 ; PLAN14189/SHA21429885d9fc34298c43310e4391fda13991e06b066443d331d79438f3f273c5 and INPUTS5639/SHA1b931faeccee69bd87c9208a762e518724084704226d59e855af74da383be196.
@@ -2211,6 +2211,13 @@ Status: doing. FF normal claim metadata only; TESTS_ONLY engineering is not OPEN
 - Registration appends only FF to original103done/free state, settings/routingmap/oldtasks/claim and all product/risk/CI exact. No claim/test/runner/fixture/runtime now; livefalse/ninepins unchanged, KEY/HOLD/main/NoisePC/keys/ledger/account/provider limits retained.
 
 ## Latest
+
+
+- 2026-11-05 UTC: FF/#362-R2 unopened TESTS_ONLY normal --todo release proposed after actual entry budget HOLD. First clock11:19:37Z, safe12:08:35Z remaining48m58s minus E22/static7/release15 leavesP298s<300; no E compression/rounding/retrospective OPEN or engineering.
+- One real python -B src/loop_claim.py release --surface codex-local --todo 2026-11-05T11:24:52.865068Z to 2026-11-05T11:24:53.227806Z, exit0; original complete codex-local/FF since11:13:35Z/until12:13:35Z/claim_hours1 unchanged, no now-renew-backdate-force-hourchange-takeover.
+- Original ENTRY_HOLD2572/SHA1b0e2f7c1e8fba6c9e2e59d94f7b75f8e7b5d7c2017f7bc31f078d23c507ed04/public4736656689773 retained; no test worktree/newtest/runner/fixture/project test/runtime, only administrative HOLD receipt. Full contract3626655763127 and staged PLAN14189/SHA21429885d9fc34298c43310e4391fda13991e06b066443d331d79438f3f273c5/public3626656039449 unchanged.
+- Only FFdoing->todo/claimnull and FFStatus/these5Latest; original103done/tasks/settings-assignmentroutingmap/finish/history/product/riskCI exact by inverse proof, no FFdone_at/count growth. Native currenthead metadata59+Guard12/fullskip required; Source no local product/QC/matrix rerun.
+- Source01a15d32 soleauthor/controller/lifecyclewriter CLEAN_STOPPED/no pending implementation-test tools-child/no selfmerge afterPR; Root01a19d50 true nonauthor/src-test-queue0 expectedhead integrate and freshactualdev FFfirsttodo/free/claimnull before global exit. No newclaim/automatic secondstage/cleanup/mainKEYHOLD/threshold/live/NoisePC/.envkeys/realledger/accounts/provider actions; fullR2 unfinished.
 
 
 - 2026-11-05 UTC: FF/#362-R2 normal claim metadata only; one real python -B src/loop_claim.py claim --surface codex-local --task FF returned complete tuple {"surface":"codex-local","task":"FF","since":"2026-11-05T11:13:35Z","until":"2026-11-05T12:13:35Z"}; claim_hours1/no now-renew-backdate-hourchange.
