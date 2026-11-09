@@ -376,25 +376,31 @@ class Gamma:
         if self.error:
             raise self.error
         is_closed = parse_qs(urlsplit(url).query).get("closed") == ["true"]
-        return (self.closed if is_closed else self.default) or []
+        value = (self.closed if is_closed else self.default) or []
+        return {"markets": value} if isinstance(value, list) else value  # issue #353: the strict keyset answer
+
+
+M = "900001"  # a Gamma market id is ASCII digits (#353): src/market_close.gamma_read sends no request otherwise
 
 
 def test_gamma_read_sees_a_close_only_through_closed_true_and_an_empty_answer_is_unknown():
-    getter = Gamma(closed=[gamma()])
-    obs = market_close.gamma_read(getter, "m", T0)
+    getter = Gamma(closed=[gamma(M)])
+    obs = market_close.gamma_read(getter, M, T0)
     assert market_close.qualifies(obs, T0)
     assert sorted(parse_qs(urlsplit(u).query).get("closed", [""])[0] for u in getter.urls) == ["", "true"]
     assert all(m2_runner.url_allowed(u) for u in getter.urls)
-    assert all(u != m2_runner.gamma_market_url("m") for u in getter.urls if "closed=true" in u)
-    assert market_close.gamma_read(Gamma(), "m", T0).problem == "gamma_market_missing"
-    assert market_close.gamma_read(Gamma(error=TimeoutError()), "m", T0).problem == "gamma_read_failed:TimeoutError"
-    assert market_close.gamma_read(Gamma(default={"x": 1}), "m", T0).problem == "gamma_bad_response"
+    assert all(u != m2_runner.gamma_market_url(M) for u in getter.urls if "closed=true" in u)
+    assert all(urlsplit(u).path.endswith("/markets/keyset") for u in getter.urls)  # #353, never /markets?id=
+    assert market_close.gamma_read(Gamma(), M, T0).problem == "gamma_market_missing"
+    assert market_close.gamma_read(Gamma(error=TimeoutError()), M, T0).problem == "gamma_read_failed:TimeoutError"
+    assert market_close.gamma_read(Gamma(default={"x": 1}), M, T0).problem == "gamma_bad_response"
+    assert market_close.gamma_read(Gamma(default=[gamma(M)]), "m", T0).problem == "gamma_bad_id"  # #353: no request
     # Gamma's two views split around a close: unknown, not open and not closed
-    split = market_close.gamma_read(Gamma(default=[gamma(closed=False, accepting=True)], closed=[gamma()]), "m", T0)
+    split = market_close.gamma_read(Gamma(default=[gamma(M, closed=False, accepting=True)], closed=[gamma(M)]), M, T0)
     assert split.problem == "gamma_views_disagree"
     # the default view alone never shows a close
-    assert market_close.gamma_read(Gamma(default=[gamma()]), "m", T0).problem == "gamma_default_view_closed"
-    open_now = market_close.gamma_read(Gamma(default=[gamma(closed=False, accepting=True)]), "m", T0)
+    assert market_close.gamma_read(Gamma(default=[gamma(M)]), M, T0).problem == "gamma_default_view_closed"
+    open_now = market_close.gamma_read(Gamma(default=[gamma(M, closed=False, accepting=True)]), M, T0)
     assert open_now.problem is None and open_now.closed is False
 
 
@@ -404,7 +410,7 @@ RUN_NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
 
 class RunnerGamma:
-    """Gamma for the runner: the keyset page (no candidates) and /markets?id= reads of the held market."""
+    """Gamma for the runner: the keyset page (no candidates) and /markets/keyset?id= reads of the held market (#353)."""
 
     def __init__(self, row):
         self.row, self.urls, self.error = row, [], None
@@ -412,13 +418,13 @@ class RunnerGamma:
     def __call__(self, url):
         self.urls.append(url)
         parts = urlsplit(url)
-        if parts.path.endswith("/keyset"):
+        query = parse_qs(parts.query)
+        if parts.path.endswith("/keyset") and "id" not in query:  # the scan page; an id read is also a /keyset URL (#353)
             return {"markets": [], "next_cursor": ""}
         if self.error:
             raise self.error
-        query = parse_qs(parts.query)
         want_closed = query.get("closed") == ["true"]
-        return [self.row] if (self.row.get("closed") is True) == want_closed else []
+        return {"markets": [self.row] if (self.row.get("closed") is True) == want_closed else []}
 
 
 @pytest.fixture
@@ -431,7 +437,7 @@ def runner(tmp_path, monkeypatch):
     paths["paper"].parent.mkdir(parents=True, exist_ok=True)
     paths["run"].mkdir(parents=True, exist_ok=True)
     stamp = (RUN_NOW - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _book(paths["paper"], [fill("buy", 20.0, 0.5, ts=stamp, market="held", token="t1")])
+    _book(paths["paper"], [fill("buy", 20.0, 0.5, ts=stamp, market="900001", token="t1")])
     state = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(paths["run"]))
     closed_at = (RUN_NOW - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S+00")
     return {**paths, "state": state, "closed_at": closed_at}
@@ -452,10 +458,10 @@ def _writeoffs(path):
 
 
 def test_the_runner_reads_held_markets_and_writes_off_on_the_confirming_reread_once(runner):
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     first = _iterate(runner, getter, RUN_NOW)
     assert "market_close_halt" not in first.reasons and _writeoffs(runner["paper"]) == []
-    assert any("id=held" in url and "closed=true" in url for url in getter.urls)
+    assert any("id=900001" in url and "closed=true" in url for url in getter.urls)
     second = _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
     assert "market_close_halt" not in second.reasons
     booked = _writeoffs(runner["paper"])
@@ -471,7 +477,7 @@ def test_the_runner_reads_held_markets_and_writes_off_on_the_confirming_reread_o
 
 
 def test_the_runner_does_not_write_off_an_open_market(runner):
-    getter = RunnerGamma(gamma("held", closed=False, accepting=True, closed_time=None))
+    getter = RunnerGamma(gamma("900001", closed=False, accepting=True, closed_time=None))
     for seconds in (0, 60, 120):
         assert "market_close_halt" not in _iterate(runner, getter, RUN_NOW + timedelta(seconds=seconds)).reasons
     assert _writeoffs(runner["paper"]) == []
@@ -482,7 +488,7 @@ def _halted():
 
 
 def test_a_failed_close_read_of_a_held_market_is_not_a_halt_and_writes_nothing_off(runner):
-    getter = RunnerGamma(gamma("held"))
+    getter = RunnerGamma(gamma("900001"))
     getter.error = TimeoutError()
     for seconds in (0, 60):
         _iterate(runner, getter, RUN_NOW + timedelta(seconds=seconds))
@@ -491,30 +497,30 @@ def test_a_failed_close_read_of_a_held_market_is_not_a_halt_and_writes_nothing_o
     assert any(e.get("event") == "close_read_skipped" for e in events)
 
 
-def test_an_empty_answer_for_a_held_market_is_unknown_not_a_close(runner):
-    getter = RunnerGamma({"id": "someone-else", "closed": True})
+def test_an_empty_or_foreign_answer_for_a_held_market_is_unknown_not_a_close(runner):
+    getter = RunnerGamma({"id": "someone-else", "closed": True})  # a row of another id: a bad keyset answer (#353)
     for seconds in (0, 60):
         _iterate(runner, getter, RUN_NOW + timedelta(seconds=seconds))
     assert not _halted() and _writeoffs(runner["paper"]) == []
 
 
 def test_a_written_off_market_that_reads_open_again_after_the_grace_is_a_contradiction_halt(runner):
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _iterate(runner, getter, RUN_NOW)
     _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
     assert len(_writeoffs(runner["paper"])) == 1
-    getter.row = gamma("held", closed=False, accepting=True, closed_time=None)
+    getter.row = gamma("900001", closed=False, accepting=True, closed_time=None)
     _iterate(runner, getter, RUN_NOW + timedelta(seconds=120))  # Gamma lag: not a contradiction yet
     assert not _halted()
     report = _iterate(runner, getter, RUN_NOW + timedelta(seconds=600))
-    assert "closed_flag_contradiction_after_writeoff:held" in report.reasons and _halted()
+    assert "closed_flag_contradiction_after_writeoff:900001" in report.reasons and _halted()
     assert len(_writeoffs(runner["paper"])) == 1  # no rollback
-    assert halt_store.has_active_halt(scope=halt_store.SCOPE_MARKET, market="held",
+    assert halt_store.has_active_halt(scope=halt_store.SCOPE_MARKET, market="900001",
                                       reason_prefix="closed_flag_contradiction_after_writeoff") is True
 
 
 def test_writeoff_events_follow_the_ledger_and_are_sent_again_after_a_restart(runner):
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _iterate(runner, getter, RUN_NOW)
     _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
     _iterate(runner, getter, RUN_NOW + timedelta(seconds=120))
@@ -640,10 +646,10 @@ def test_a_damaged_writeoff_breakdown_is_refused(env, change):
 # --- RiskGate ruling OQ-N7 (#197, issuecomment-6109526792): a reopen after the write-off is a GLOBAL halt ----
 
 def test_a_reopen_after_writeoff_halts_every_market_and_its_settlement_stays_blocked_after_the_global_resume(runner):
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _iterate(runner, getter, RUN_NOW)
     _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
-    getter.row = gamma("held", closed=False, accepting=True, closed_time=None)
+    getter.row = gamma("900001", closed=False, accepting=True, closed_time=None)
     _iterate(runner, getter, RUN_NOW + timedelta(seconds=600))
     # global, not market-only: every market's new intent is vetoed (src/risk_gate halts first)
     assert _halted()
@@ -658,7 +664,7 @@ def test_a_reopen_after_writeoff_halts_every_market_and_its_settlement_stays_blo
                               approved_by="test", root_cause="test", postmortem="test",
                               bus_path=runner["run"] / "resume_bus.jsonl")
     assert not _halted()
-    assert "held" in paper_ledger.settlement_blocked_markets()
+    assert "900001" in paper_ledger.settlement_blocked_markets()
     assert len(_writeoffs(runner["paper"])) == 1
 
 
@@ -666,7 +672,7 @@ def test_e2e_real_settle_hook_with_a_paused_clock_writes_off_and_the_daily_loss_
     """#197 option A (PR #342 review, non-blocking): through the real _settle_tick/_writeoff_hook. The runner's
     clock is never verified here (no /time answer), so runner_clock_ok is False on every tick: the write-off is
     still booked, at the late reference, and the daily loss counts it."""
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _iterate(runner, getter, RUN_NOW)
     assert m2_runner.runner_clock_ok(runner["state"]) is False
     report = _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
@@ -688,8 +694,8 @@ def test_a_writeoff_interrupted_between_two_legs_writes_off_the_remaining_leg_af
     """PR #342 review (Codex 6183035627): completion is per leg. The market's YES leg is written off, the process
     dies before the NO leg's row; after a restart the NO leg is written off exactly once."""
     stamp = (RUN_NOW - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _book(runner["paper"], [fill("buy", 10.0, 0.4, ts=stamp, market="held", token="t2")], prefix="ck2")
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _book(runner["paper"], [fill("buy", 10.0, 0.4, ts=stamp, market="900001", token="t2")], prefix="ck2")
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _iterate(runner, getter, RUN_NOW)
     real_book = ledger_store.book
 
@@ -719,7 +725,7 @@ def test_a_writeoff_interrupted_between_two_legs_writes_off_the_remaining_leg_af
 # --- PR #342 review 6183672536 (Codex 6183403293 P1): clock rollback after a write-off fails closed ----------
 
 def _rb_obs(closed, accepting, at, problem=None):
-    return market_close.Observation("held", at, closed=closed, accepting_orders=accepting, problem=problem)
+    return market_close.Observation("900001", at, closed=closed, accepting_orders=accepting, problem=problem)
 
 
 @pytest.mark.parametrize("seconds_after_first_seen, expected", [
@@ -744,27 +750,27 @@ def test_a_first_seen_in_the_future_halts_on_every_read(obs_kwargs):
 
 
 def test_a_clock_rollback_after_a_writeoff_halts_the_runner_even_when_the_market_reads_open(runner):
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _iterate(runner, getter, RUN_NOW)
     _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
     assert len(_writeoffs(runner["paper"])) == 1
-    getter.row = gamma("held", closed=False, accepting=True, closed_time=None)  # reopened
+    getter.row = gamma("900001", closed=False, accepting=True, closed_time=None)  # reopened
     runner["state"] = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(runner["run"]))  # restart
     report = _iterate(runner, getter, RUN_NOW - timedelta(minutes=10))  # wall clock rolled back
-    assert f"{market_close.HALT_CLOCK_ROLLBACK}:held" in report.reasons and _halted()
+    assert f"{market_close.HALT_CLOCK_ROLLBACK}:900001" in report.reasons and _halted()
     assert len(_writeoffs(runner["paper"])) == 1  # no rollback of the write-off
 
 
 def test_an_unparseable_close_record_with_a_remaining_leg_is_a_halt_not_a_silent_skip():
-    rows = [fill("buy", 20.0, 0.5, market="held", token="t1"), fill("buy", 10.0, 0.4, market="held", token="t2")]
+    rows = [fill("buy", 20.0, 0.5, market="900001", token="t1"), fill("buy", 10.0, 0.4, market="900001", token="t2")]
     rows = [{"fill_id": f"r{i}", **row} for i, row in enumerate(rows)]
-    written = {"fill_id": "writeoff-x", "kind": ledger_store.WRITEOFF_KIND, "market": "held", "token_id": "t1",
+    written = {"fill_id": "writeoff-x", "kind": ledger_store.WRITEOFF_KIND, "market": "900001", "token_id": "t1",
                "counts_toward_risk": True, "hypothetical": False, "closed_ts": "not-a-time",
                "close_first_seen_ts": RUN_NOW.isoformat(), "close_confirmed_ts": RUN_NOW.isoformat(),
                "close_confirmed_by": market_close.BY_REREAD}
-    reads = {"held": _rb_obs(True, False, RUN_NOW + timedelta(minutes=1))}
+    reads = {"900001": _rb_obs(True, False, RUN_NOW + timedelta(minutes=1))}
     step = market_close.detect(market_close.CloseTracker(), rows + [written], reads, RUN_NOW + timedelta(minutes=1))
-    assert step.closes == [] and step.halts == [f"{market_close.HALT_CLOSE_UNPARSEABLE}:held"]
+    assert step.closes == [] and step.halts == [f"{market_close.HALT_CLOSE_UNPARSEABLE}:900001"]
 
 
 # --- PR #342 review 6184198731 (Codex 6184078075) -----------------------------------------------------------
@@ -772,7 +778,7 @@ def test_an_unparseable_close_record_with_a_remaining_leg_is_a_halt_not_a_silent
 def test_clearing_only_the_global_halt_still_blocks_settlement_of_a_rolled_back_market(runner):
     """P1: a clock-rollback halt after a write-off is market-level and settlement-blocking; resuming the global
     invalid_risk_state halt alone does not let that market settle (src/settlement.SETTLEMENT_BLOCKING_HALT_PREFIXES)."""
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _iterate(runner, getter, RUN_NOW)
     _iterate(runner, getter, RUN_NOW + timedelta(seconds=60))
     runner["state"] = m2_runner.RunnerState(paths=m2_runner.RunnerPaths.under(runner["run"]))
@@ -782,21 +788,21 @@ def test_clearing_only_the_global_halt_still_blocks_settlement_of_a_rolled_back_
             halt_store.resume(from_role="Operator", scope="global", halt_id=record["id"], approved_by="op",
                               root_cause="test", postmortem="PR #342", bus_path=runner["paper"].parent / "bus.jsonl")
     assert halt_store.global_halt_active() == []
-    assert "held" in paper_ledger.settlement_blocked_markets()
+    assert "900001" in paper_ledger.settlement_blocked_markets()
 
 
 @pytest.mark.parametrize("reason", [market_close.HALT_CLOCK_ROLLBACK, market_close.HALT_CLOSE_UNPARSEABLE])
 def test_the_new_writeoff_halts_block_settlement(reason):
     from src import settlement
-    assert settlement.blocks_settlement(f"{reason}:held")
+    assert settlement.blocks_settlement(f"{reason}:900001")
 
 
 def test_a_partial_writeoff_failure_resends_the_booked_events_in_the_same_process(runner, monkeypatch):
     """P2: leg t1 booked, leg t2's write fails (a problem, not a crash). The runner keeps running; once the
     global halt is resumed, the next settle step re-sends t1's write-off event before settling."""
     stamp = (RUN_NOW - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _book(runner["paper"], [fill("buy", 10.0, 0.4, ts=stamp, market="held", token="t2")], prefix="ck2")
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    _book(runner["paper"], [fill("buy", 10.0, 0.4, ts=stamp, market="900001", token="t2")], prefix="ck2")
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _iterate(runner, getter, RUN_NOW)
     assert runner["state"].writeoff_events_resent is True  # the first tick's re-send already ran
     real_book = ledger_store.book
@@ -848,7 +854,7 @@ def _timed_gamma(row, clock):
     inner = RunnerGamma(row)
 
     def getter(url):
-        if clock.slow and "id=held" in url:
+        if clock.slow and "id=900001" in url:
             clock.advance(clock.slow)
             clock.slow = 0.0
         return inner(url)
@@ -864,7 +870,7 @@ def test_a_slow_first_read_does_not_shorten_the_confirmation_interval(runner):
     tick's start. Real interval between the two reads: 6 s < 30 s: no write-off (the old tick-start stamp: 31 s)."""
     clock = _Time(RUN_NOW)
     _timed_runner(runner, clock)
-    getter = _timed_gamma(gamma("held", closed_time=runner["closed_at"]), clock)
+    getter = _timed_gamma(gamma("900001", closed_time=runner["closed_at"]), clock)
     clock.slow = 25.0
     _tick_at(runner, getter, clock)  # read finishes at +25 s
     clock.advance(6.0)  # the next tick starts at +31 s
@@ -880,7 +886,7 @@ def test_a_wall_clock_jump_between_the_two_reads_confirms_nothing(runner, jump):
     """Monotonic +10 s, wall +130 s (or -110 s): the clocks disagree; the pending read is dropped, no write-off."""
     clock = _Time(RUN_NOW)
     _timed_runner(runner, clock)
-    getter = _timed_gamma(gamma("held", closed_time=runner["closed_at"]), clock)
+    getter = _timed_gamma(gamma("900001", closed_time=runner["closed_at"]), clock)
     _tick_at(runner, getter, clock)
     clock.advance(10.0, wall_jump=jump)
     _tick_at(runner, getter, clock)
@@ -913,17 +919,17 @@ def test_a_slow_default_view_does_not_pad_the_confirmation_interval(runner):
     market twice (src/resolution_watch first, then src/market_close): only the second, the write-off read, is slow."""
     clock = _Time(RUN_NOW)
     _timed_runner(runner, clock)
-    inner = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    inner = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     seen = {"slow_tick": False, "closed_reads": 0, "slow_next_default": False}
 
     def getter(url):
         out = inner(url)
         if not seen["slow_tick"]:
             return out
-        if url == market_close.gamma_url("held", closed=True):
+        if url == market_close.gamma_url("900001", closed=True):
             seen["closed_reads"] += 1
             seen["slow_next_default"] = seen["closed_reads"] == 2
-        elif url == market_close.gamma_url("held", closed=False) and seen["slow_next_default"]:
+        elif url == market_close.gamma_url("900001", closed=False) and seen["slow_next_default"]:
             clock.advance(25.0)
             seen["slow_next_default"] = False
         return out
@@ -938,8 +944,8 @@ def test_a_slow_default_view_does_not_pad_the_confirmation_interval(runner):
 
 def _legacy_ledger(tmp_path, writeoff_fill_id=None):
     """A legacy prefix (rows without fill_id): a buy, then a write-off row of that leg."""
-    buy = fill("buy", 20.0, 0.5, market="held", token="t1")
-    row = {"ts": buy["ts"], "kind": "writeoff", "strategy": "writeoff", "market": "held", "token_id": "t1",
+    buy = fill("buy", 20.0, 0.5, market="900001", token="t1")
+    row = {"ts": buy["ts"], "kind": "writeoff", "strategy": "writeoff", "market": "900001", "token_id": "t1",
            "side": "sell", "shares": 0.0, "market_price": 0.0, "effective_price": 0.0, "notional_usd": 0.0,
            "fee_rate": 0.0, "fee_usd": 0.0, "hypothetical": False, "counts_toward_risk": True,
            "risk_decision": "writeoff", "writeoff_shares": 20.0, "writeoff_usd": 10.0, "closed_ts": CLOSED_TS}
@@ -960,10 +966,10 @@ def test_a_writeoff_row_without_a_fill_id_in_the_legacy_prefix_is_rejected(tmp_p
 
 def test_a_writeoff_row_with_a_non_writeoff_fill_id_is_rejected(tmp_path):
     path = tmp_path / "paper.jsonl"
-    buy = dict(fill("buy", 20.0, 0.5, market="held", token="t1"), fill_id="f-1")
+    buy = dict(fill("buy", 20.0, 0.5, market="900001", token="t1"), fill_id="f-1")
     path.write_text(json.dumps(buy) + "\n", encoding="utf-8")
     read = ledger_store.read_ledger(path)[1]
-    row = market_close.plan_writeoffs(read.rows, list(read.ids), [close("held")], buy["ts"]).rows[0]
+    row = market_close.plan_writeoffs(read.rows, list(read.ids), [close("900001")], buy["ts"]).rows[0]
     row["fill_id"] = "f-2"
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row) + "\n")
@@ -1077,7 +1083,7 @@ def _slow_default_gamma(row, clock):
         out = inner(url)
         from_close_step = any(frame.f_globals.get("__name__") == "src.market_close"
                               for frame, _ in traceback.walk_stack(None))
-        if clock.slow and from_close_step and "id=held" in url and "closed=true" not in url:
+        if clock.slow and from_close_step and "id=900001" in url and "closed=true" not in url:
             clock.advance(clock.slow)  # the trailing default-view read is slow
             clock.slow = 0.0
         return out
@@ -1089,7 +1095,7 @@ def test_a_slow_default_view_read_does_not_pad_the_confirmation_interval(runner)
     (after both reads) measured 40 s and wrote off; the close responses are only 10 s apart: no write-off."""
     clock = _Time(RUN_NOW)
     _timed_runner(runner, clock)
-    getter = _slow_default_gamma(gamma("held", closed_time=runner["closed_at"]), clock)
+    getter = _slow_default_gamma(gamma("900001", closed_time=runner["closed_at"]), clock)
     _tick_at(runner, getter, clock)  # close response at +0 s
     clock.advance(10.0)
     clock.slow = 30.0
@@ -1108,12 +1114,12 @@ def test_gamma_read_stamps_the_close_response_not_the_trailing_default_view():
         if not is_closed:  # the default view runs after the close response and takes 30 s
             stamps["wall"] += timedelta(seconds=30)
             stamps["mono"] += 30.0
-            return []
+            return {"markets": []}
         stamps["wall"] += timedelta(seconds=2)
         stamps["mono"] += 2.0
-        return [gamma()]
+        return {"markets": [gamma(M)]}
 
-    obs = market_close.gamma_read(getter, "m", T0, clock=lambda: stamps["wall"], monotonic=lambda: stamps["mono"])
+    obs = market_close.gamma_read(getter, M, T0, clock=lambda: stamps["wall"], monotonic=lambda: stamps["mono"])
     assert obs.problem is None and obs.observed_at == T0 + timedelta(seconds=2) and obs.observed_mono == 2.0
 
 
@@ -1129,7 +1135,7 @@ def test_an_overflowing_closed_time_is_unparseable_not_an_exception(raw):
     assert expiry_rule.expiry_problem(raw, T0) == expiry_rule.INVALID_END_DATE
     obs = market_close.observation_from_row("m", gamma(closed_time=raw), T0)
     assert obs.closed_time is None and market_close.predicate(obs, T0) == "closed_time_invalid"
-    assert market_close.gamma_read(Gamma(closed=[gamma(closed_time=raw)]), "m", T0).closed_time is None
+    assert market_close.gamma_read(Gamma(closed=[gamma(M, closed_time=raw)]), M, T0).closed_time is None
     tracker = market_close.CloseTracker()
     tracker.step(_obs(gamma()), T0)
     assert tracker.step(obs, T0 + timedelta(seconds=31)) == (None, "confirmation_failed:closed_time_invalid")
@@ -1138,10 +1144,10 @@ def test_an_overflowing_closed_time_is_unparseable_not_an_exception(raw):
 
 @pytest.mark.parametrize("raw", OVERFLOW_TIMES)
 def test_an_overflowing_closed_time_drops_the_pending_read_in_the_runner(runner, raw):
-    good = gamma("held", closed_time=runner["closed_at"])
+    good = gamma("900001", closed_time=runner["closed_at"])
     getter = RunnerGamma(good)
     _iterate(runner, getter, RUN_NOW)  # pending
-    getter.row = gamma("held", closed_time=raw)
+    getter.row = gamma("900001", closed_time=raw)
     report = _iterate(runner, getter, RUN_NOW + timedelta(seconds=31))  # no exception escapes the runner
     assert "market_close_halt" not in report.reasons and _writeoffs(runner["paper"]) == []
     getter.row = good
@@ -1168,7 +1174,7 @@ def _slow_writeoff_read(inner, clock, seconds):
     seen = {"armed": False, "closed_reads": 0}
 
     def getter(url):
-        if seen["armed"] and url == market_close.gamma_url("held", closed=True):
+        if seen["armed"] and url == market_close.gamma_url("900001", closed=True):
             seen["closed_reads"] += 1
             if seen["closed_reads"] == 2:
                 clock.advance(seconds)
@@ -1188,7 +1194,7 @@ def test_a_writeoff_read_that_crosses_utc_midnight_is_deferred_to_the_new_days_t
     midnight = (RUN_NOW + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     clock = _Time(midnight - timedelta(seconds=50))
     _timed_runner(runner, clock)
-    inner = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    inner = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     getter = _slow_writeoff_read(inner, clock, 20.0)
     _tick_at(runner, getter, clock)  # first closed read at 23:59:10
     clock.advance(40.0)  # the next tick starts at 23:59:50
@@ -1196,7 +1202,7 @@ def test_a_writeoff_read_that_crosses_utc_midnight_is_deferred_to_the_new_days_t
     report = _tick_at(runner, getter, clock)
     assert "market_close_halt" not in report.reasons and LEDGER_HALT not in report.reasons and not _halted()
     assert _writeoffs(runner["paper"]) == []  # deferred: the write time is on the new UTC day
-    assert "held" in runner["state"].close_tracker.first  # the pending read is kept (no new 30 s wait)
+    assert "900001" in runner["state"].close_tracker.first  # the pending read is kept (no new 30 s wait)
     clock.advance(1.0)  # 00:00:11: the new day's tick
     report = _tick_at(runner, getter, clock)
     assert "market_close_halt" not in report.reasons and LEDGER_HALT not in report.reasons and not _halted()
@@ -1221,11 +1227,11 @@ def test_e2e_cross_midnight_writeoff_with_two_different_day_snapshots_never_halt
     midnight = (RUN_NOW + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
     old_day, new_day = (midnight - timedelta(days=1)).strftime("%Y-%m-%d"), midnight.strftime("%Y-%m-%d")
     daily_marks.create_snapshot(paper_ledger.DAILY_MARKS_DIR, old_day, f"{old_day}T00:00:05.000Z", False, [{
-        "book_ts": f"{old_day}T00:00:04.000Z", "cost_basis_usd": 10.0, "leg_key": "held|t1", "mark_invalid": False,
+        "book_ts": f"{old_day}T00:00:04.000Z", "cost_basis_usd": 10.0, "leg_key": "900001|t1", "mark_invalid": False,
         "mark_source": "bid", "mark_usd": 14.0, "shares": 20.0}])
     clock = _Time(midnight - timedelta(seconds=50))
     _timed_runner(runner, clock)
-    inner = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    inner = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     getter = _slow_writeoff_read(inner, clock, 20.0)
     first = _tick_at(runner, getter, clock)
     assert LEDGER_HALT not in first.reasons and not _halted()
@@ -1237,7 +1243,7 @@ def test_e2e_cross_midnight_writeoff_with_two_different_day_snapshots_never_halt
     read = ledger_store.read_ledger(runner["paper"])[1]
     old = daily_loss.daily_loss(read.rows, old_day, list(read.ids))
     assert old.problems == [] and old.writeoff_usd == 0.0 and old.writeoffs_today == 0
-    assert old.legs[("held", "t1")]["written_off"] == 0.0  # the old day's leg is open: marked, not hidden
+    assert old.legs[("900001", "t1")]["written_off"] == 0.0  # the old day's leg is open: marked, not hidden
     clock.advance(1.0)
     report = _tick_at(runner, getter, clock)
     assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
@@ -1257,17 +1263,17 @@ def test_a_reopen_read_that_completes_after_the_grace_halts_even_if_the_tick_sta
     reopen read completes at t=310 s: a contradiction halt (measured from the tick start it was ignored)."""
     clock = _Time(RUN_NOW)
     _timed_runner(runner, clock)
-    inner = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    inner = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     getter = _slow_writeoff_read(inner, clock, 20.0)
     _tick_at(runner, getter, clock)
     clock.advance(40.0)
     _tick_at(runner, getter, clock)
     assert len(_writeoffs(runner["paper"])) == 1
-    inner.row = gamma("held", closed=False, accepting=True, closed_time=None)
+    inner.row = gamma("900001", closed=False, accepting=True, closed_time=None)
     clock.advance(250.0)  # tick start t=290 s
     getter.arm()
     report = _tick_at(runner, getter, clock)
-    assert "closed_flag_contradiction_after_writeoff:held" in report.reasons and _halted()
+    assert "closed_flag_contradiction_after_writeoff:900001" in report.reasons and _halted()
 
 
 def test_the_reopen_grace_takes_the_larger_of_the_wall_and_monotonic_intervals():
@@ -1286,7 +1292,7 @@ def _slow_first_held_read(inner, clock, seconds):
     seen = {"armed": False}
 
     def getter(url):
-        if seen["armed"] and "id=held" in url:
+        if seen["armed"] and "id=900001" in url:
             clock.advance(seconds)
             seen["armed"] = False
         return inner(url)
@@ -1307,7 +1313,7 @@ def test_a_writeoff_written_after_the_day_start_lag_books_at_the_late_reference(
     midnight = (RUN_NOW + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
     clock = _Time(midnight - timedelta(seconds=10))
     _timed_runner(runner, clock)
-    inner = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    inner = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     getter = _slow_first_held_read(inner, clock, 20.0)
     _tick_at(runner, getter, clock)  # 23:59:50 the previous day: the pending read
     clock.advance(125.0)  # the confirming tick starts at 00:01:55
@@ -1327,7 +1333,7 @@ def test_preflights_day_snapshot_decides_lateness_at_the_evaluation_time(runner,
     midnight = (RUN_NOW + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
     clock = _Time(midnight + timedelta(seconds=115))
     _timed_runner(runner, clock)
-    getter = _slow_first_held_read(RunnerGamma(gamma("held", closed=False, accepting=True, closed_time=None)),
+    getter = _slow_first_held_read(RunnerGamma(gamma("900001", closed=False, accepting=True, closed_time=None)),
                                    clock, 20.0)
     getter.arm()
     report = _tick_at(runner, getter, clock)
@@ -1341,22 +1347,22 @@ def test_an_observation_from_the_default_view_is_stamped_when_that_response_comp
     """P2: the market reads open (only the default view lists it): the observation is stamped after the default
     view's response, so a slow default view never shortens the reopen grace."""
     clock = _Time(RUN_NOW)
-    inner = RunnerGamma(gamma("held", closed=False, accepting=True, closed_time=None))
+    inner = RunnerGamma(gamma("900001", closed=False, accepting=True, closed_time=None))
 
     def getter(url):
-        if url == market_close.gamma_url("held", closed=False):
+        if url == market_close.gamma_url("900001", closed=False):
             clock.advance(20.0)
         return inner(url)
-    obs = market_close.gamma_read(getter, "held", RUN_NOW, clock=lambda: clock.wall, monotonic=lambda: clock.mono)
+    obs = market_close.gamma_read(getter, "900001", RUN_NOW, clock=lambda: clock.wall, monotonic=lambda: clock.mono)
     assert obs.closed is False and obs.observed_at == RUN_NOW + timedelta(seconds=20) and obs.observed_mono == 1020.0
-    closed = RunnerGamma(gamma("held", closed_time=CLOSED_TS))
+    closed = RunnerGamma(gamma("900001", closed_time=CLOSED_TS))
 
     def slow_default(url):
-        if url == market_close.gamma_url("held", closed=False):
+        if url == market_close.gamma_url("900001", closed=False):
             clock.advance(20.0)
         return closed(url)
     start = clock.wall
-    obs = market_close.gamma_read(slow_default, "held", start, clock=lambda: clock.wall, monotonic=lambda: clock.mono)
+    obs = market_close.gamma_read(slow_default, "900001", start, clock=lambda: clock.wall, monotonic=lambda: clock.mono)
     assert obs.closed is True and obs.observed_at == start  # a closed read keeps the closed=true stamp
 
 
@@ -1368,9 +1374,9 @@ def test_a_non_bool_reread_of_a_written_off_market_is_invalid_not_a_reopen(close
     """P2: a non-bool closed / acceptingOrders after the grace is an invalid read: no reopen halt."""
     first = RUN_NOW
     at = first + timedelta(seconds=market_close.MARKET_CLOSE_REOPEN_GRACE_S + 60)
-    obs = market_close.Observation("held", at, closed=closed, accepting_orders=accepting)
+    obs = market_close.Observation("900001", at, closed=closed, accepting_orders=accepting)
     assert market_close.reopen_contradiction(obs, first, at) is None
-    valid = market_close.Observation("held", at, closed=False, accepting_orders=True)
+    valid = market_close.Observation("900001", at, closed=False, accepting_orders=True)
     assert market_close.reopen_contradiction(valid, first, at) == market_close.HALT_REOPENED
 
 
@@ -1391,7 +1397,7 @@ def test_a_writeoff_waits_for_the_commit_lock_and_never_books_inside_a_commit(ru
     monkeypatch.setattr(paper_ledger, "COMMIT_LOCK_TIMEOUT_S", 0.3)
     lock = _commit_lock_held()
     try:
-        out = paper_ledger.apply_writeoffs([close("held", runner["closed_at"])], _stamp_s(RUN_NOW))
+        out = paper_ledger.apply_writeoffs([close("900001", runner["closed_at"])], _stamp_s(RUN_NOW))
         assert out["booked"] == [] and _writeoffs(runner["paper"]) == []
         assert out.get("deferred") == "writeoff_commit_lock_unavailable" and out["problems"] == []
     finally:
@@ -1400,7 +1406,7 @@ def test_a_writeoff_waits_for_the_commit_lock_and_never_books_inside_a_commit(ru
     monkeypatch.setattr(paper_ledger, "COMMIT_LOCK_TIMEOUT_S", 5.0)
     order, lock = [], _commit_lock_held()
     worker = threading.Thread(target=lambda: order.append(
-        ("writeoff", len(paper_ledger.apply_writeoffs([close("held", runner["closed_at"])], _stamp_s(RUN_NOW))["booked"]))))
+        ("writeoff", len(paper_ledger.apply_writeoffs([close("900001", runner["closed_at"])], _stamp_s(RUN_NOW))["booked"]))))
     worker.start()
     _time.sleep(0.3)
     order.append(("commit_book_done", len(_writeoffs(runner["paper"]))))  # nothing written off inside the window
@@ -1411,7 +1417,7 @@ def test_a_writeoff_waits_for_the_commit_lock_and_never_books_inside_a_commit(ru
 
 def test_a_busy_commit_lock_defers_the_runners_writeoff_without_a_halt(runner, monkeypatch):
     monkeypatch.setattr(paper_ledger, "COMMIT_LOCK_TIMEOUT_S", 0.2)
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _iterate(runner, getter, RUN_NOW)
     lock = _commit_lock_held()
     try:
@@ -1419,7 +1425,7 @@ def test_a_busy_commit_lock_defers_the_runners_writeoff_without_a_halt(runner, m
     finally:
         lock.release()
     assert LEDGER_HALT not in report.reasons and not _halted() and _writeoffs(runner["paper"]) == []
-    assert "held" in runner["state"].close_tracker.first  # the pending read is kept
+    assert "900001" in runner["state"].close_tracker.first  # the pending read is kept
     _iterate(runner, getter, RUN_NOW + timedelta(seconds=61))
     assert len(_writeoffs(runner["paper"])) == 1
 
@@ -1455,7 +1461,7 @@ def test_a_lock_wait_past_the_day_start_lag_stamps_and_decides_late_inside_the_l
     commit lock: written at 00:02:15, past the 120 s lag: snapshot and row late (old code: stamped 00:01:30, on time)."""
     midnight = (RUN_NOW + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
     clock, lock_that_waits = _lock_wait_runner(runner, monkeypatch, midnight - timedelta(seconds=10), 45.0)
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _tick_at(runner, getter, clock)  # 23:59:50 the previous day: the pending read
     clock.advance(100.0)  # 00:01:30
     monkeypatch.setattr(paper_ledger, "_commit_lock", lock_that_waits)
@@ -1474,14 +1480,14 @@ def test_a_lock_wait_across_utc_midnight_defers_to_the_new_days_tick(runner, mon
     midnight = (RUN_NOW + timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
     real_lock = paper_ledger._commit_lock
     clock, lock_that_waits = _lock_wait_runner(runner, monkeypatch, midnight - timedelta(seconds=50), 30.0)
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _tick_at(runner, getter, clock)  # 23:59:10: the pending read
     clock.advance(40.0)  # 23:59:50
     monkeypatch.setattr(paper_ledger, "_commit_lock", lock_that_waits)
     report = _tick_at(runner, getter, clock)
     assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
     assert _writeoffs(runner["paper"]) == []
-    assert "held" in runner["state"].close_tracker.first
+    assert "900001" in runner["state"].close_tracker.first
     monkeypatch.setattr(paper_ledger, "_commit_lock", real_lock)  # the commit lock is free again
     clock.advance(1.0)
     report = _tick_at(runner, getter, clock)
@@ -1582,7 +1588,7 @@ def test_matrix_writeoff_row_an_unusable_clock_inside_the_lock_books_nothing_and
     clock, _ = _lock_wait_runner(runner, monkeypatch, midnight - timedelta(seconds=10), 0.0)
     broken = {"on": False}
     runner["state"].clock = lambda: BAD_CLOCKS[kind]() if broken["on"] else clock.wall
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _tick_at(runner, getter, clock)  # 23:59:50 the previous day: the pending read
     clock.advance(129.0)  # 00:01:59
 
@@ -1600,7 +1606,7 @@ def test_matrix_writeoff_row_an_unusable_clock_inside_the_lock_books_nothing_and
     report = _tick_at(runner, getter, clock)
     assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
     assert _writeoffs(runner["paper"]) == []
-    assert "held" in runner["state"].close_tracker.first
+    assert "900001" in runner["state"].close_tracker.first
     monkeypatch.setattr(paper_ledger, "_commit_lock", real_lock)
     broken["on"] = False
     clock.advance(1.0)
@@ -1613,7 +1619,7 @@ def test_matrix_writeoff_row_an_unusable_clock_inside_the_lock_books_nothing_and
 def test_matrix_writeoff_row_an_unusable_clock_before_the_lock_defers(runner, monkeypatch, kind):
     """The hook's own write time (before the lock): an unusable clock books nothing and defers, no halt."""
     _verified(monkeypatch)
-    getter = RunnerGamma(gamma("held", closed_time=runner["closed_at"]))
+    getter = RunnerGamma(gamma("900001", closed_time=runner["closed_at"]))
     _iterate(runner, getter, RUN_NOW)
     now = RUN_NOW + timedelta(seconds=60)
     runner["state"].monotonic = lambda: now.timestamp()
@@ -1629,7 +1635,7 @@ def test_matrix_writeoff_row_an_unusable_clock_before_the_lock_defers(runner, mo
     runner["state"].clock = lambda: now
     report = m2_runner.iteration(runner["state"], now=now, getters=m2_runner.Getters(gamma=getter, book=_no_book))
     assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
-    assert _writeoffs(runner["paper"]) == [] and "held" in runner["state"].close_tracker.first
+    assert _writeoffs(runner["paper"]) == [] and "900001" in runner["state"].close_tracker.first
 
 
 @pytest.mark.parametrize("kind", sorted(BAD_CLOCKS))
@@ -1641,7 +1647,7 @@ def test_matrix_snapshot_an_unusable_clock_writes_the_days_first_snapshot_late(r
     now = midnight + timedelta(seconds=119)
     runner["state"].monotonic = lambda: now.timestamp()
     runner["state"].clock = BAD_CLOCKS[kind]
-    getter = RunnerGamma(gamma("held", closed=False, accepting=True, closed_time=None))
+    getter = RunnerGamma(gamma("900001", closed=False, accepting=True, closed_time=None))
     report = m2_runner.iteration(runner["state"], now=now, getters=m2_runner.Getters(gamma=getter, book=_no_book))
     assert LEDGER_HALT not in report.reasons and not _halted(), report.reasons
     snap = daily_marks.read_snapshot(paper_ledger.DAILY_MARKS_DIR, midnight.strftime("%Y-%m-%d"))[0]
@@ -1650,7 +1656,7 @@ def test_matrix_snapshot_an_unusable_clock_writes_the_days_first_snapshot_late(r
 
 @pytest.mark.parametrize("kind", sorted(BAD_CLOCKS))
 def test_matrix_a_close_read_with_an_unusable_clock_is_a_read_failure(kind):
-    obs = market_close.gamma_read(RunnerGamma(gamma("held", closed_time=CLOSED_TS)), "held", RUN_NOW,
+    obs = market_close.gamma_read(RunnerGamma(gamma("900001", closed_time=CLOSED_TS)), "900001", RUN_NOW,
                                   clock=BAD_CLOCKS[kind], monotonic=lambda: 1.0)
     assert obs.problem == "clock_unavailable" and obs.observed_at == RUN_NOW
 

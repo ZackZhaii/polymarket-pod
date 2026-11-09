@@ -200,7 +200,14 @@ def is_settlement(row: dict[str, Any]) -> bool:
 def settlement_field_problems(row: dict[str, Any], fill_id: str) -> list[str]:
     """Issue #126: a settlement row's own fields, exactly (see (e) in the module docstring)."""
     def number(name: str) -> float | None:
-        return _finite(row.get(name))
+        # #349 / PR #360: an int too large for a float in a SETTLEMENT row raises OverflowError here, as on dev. The
+        # callers (src/paper_ledger.load_state / apply_settlements / apply_writeoffs) catch it and fail closed as
+        # ``ledger_verify_failed:OverflowError`` (veto, global halt, the market's settlement halt); it is never an empty
+        # problem list. (A write-off row's huge int is plain ``invalid_writeoff``: PR #342, ``_finite`` returns None.)
+        raw = row.get(name)
+        if isinstance(raw, int) and not isinstance(raw, bool):
+            float(raw)
+        return _finite(raw)
 
     shares, payout = number("shares"), number("market_price")
     ok = (row.get("hypothetical") is False and row.get("counts_toward_risk") is True

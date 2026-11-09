@@ -485,8 +485,12 @@ def _apply_writeoffs_locked(closes: list[Any], now: str | None = None,
     except OSError as exc:
         out["problems"] = [f"writeoff_ledger_unreadable:{type(exc).__name__}"]
         return out
-    problems = ledger_store.verify(ledger)
-    if problems or non_finite_ledger_rows(ledger.rows):
+    try:  # PR #342 r2 / #349: a settlement row's 10**400 makes verify raise: fail closed under the #349 name
+        problems = ledger_store.verify(ledger)
+        bad_rows = non_finite_ledger_rows(ledger.rows)
+    except Exception as exc:  # noqa: BLE001 - never raised into the runner
+        problems, bad_rows = [f"ledger_verify_failed:{type(exc).__name__}"], []
+    if problems or bad_rows:
         out["problems"] = [f"writeoff_ledger_invalid:{problem}" for problem in problems] or ["writeoff_ledger_invalid"]
         return out
     now = now or utc_now()

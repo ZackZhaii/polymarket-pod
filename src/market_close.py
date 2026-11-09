@@ -4,10 +4,13 @@
 (/workspace/pod-bots/poly-research-closed-flag.md). Poly风控's rulings issuecomment-6106669720 and -6106700917 decide
 the failure handling below. Paper only; no risk.toml change.
 
-Read (``gamma_read``). Each held market is read from Gamma with an explicit ``/markets?id=<id>&closed=true`` (the
-default query without ``closed`` filters a closed market out, so it is never used to see a close; it is read only
-to see that a market is open). The market in neither list is **unknown** (``gamma_market_missing``), never "open"
-or "closed". The URL path is the allowlisted Gamma ``/markets``; no new host.
+Read (``gamma_read``). Each held market is read from Gamma with an explicit ``/markets/keyset?id=<id>&closed=true``
+(issue #353: the strict keyset contract, same as src/resolution_watch; the default query without ``closed`` filters a
+closed market out, so it is never used to see a close; it is read only to see that a market is open). The answer
+must be ``{"markets": [...]}`` holding only rows of that id (``resolution_watch.keyset_rows``): any other shape, a
+``next_cursor`` key or a row of another id is ``gamma_bad_response``; a market id that is not ASCII digits is
+``gamma_bad_id`` (no request). The market in neither view is **unknown** (``gamma_market_missing``), never "open"
+or "closed". The URL path is the allowlisted Gamma ``/markets/keyset``; no new host.
 
 Trigger (``predicate``), on one read, all of: ``closed is True``; ``acceptingOrders is False``; ``closedTime`` a
 zoned timestamp (Gamma's ``2025-03-25 00:21:27+00`` too) not in the future. ``closed`` that is not a JSON boolean,
@@ -52,7 +55,7 @@ from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlencode
 
-from src import leg_marks, podlib
+from src import leg_marks, podlib, resolution_watch
 from src.daily_loss import daily_loss, writeoff_amount
 from src.book_staleness import parse_book_ts
 from src.expiry_rule import parse_end_date
@@ -143,13 +146,14 @@ def qualifies(obs: Observation, now: datetime) -> bool:
 
 def gamma_url(market_id: str, *, closed: bool) -> str:
     query = {"id": market_id, "closed": "true"} if closed else {"id": market_id}
-    return podlib.GAMMA_PREFIX + "?" + urlencode(query)
+    return podlib.GAMMA_PREFIX + "/keyset?" + urlencode(query)
 
 
 def _match(data: object, market_id: str) -> tuple[dict[str, Any] | None, str | None]:
-    if not isinstance(data, list):
+    """Issue #353: the one row of a single-id /markets/keyset answer (None: not listed in this view)."""
+    found = resolution_watch.keyset_rows(data, market_id)
+    if found is None:
         return None, "gamma_bad_response"
-    found = [row for row in data if isinstance(row, dict) and str(row.get("id")) == str(market_id)]
     if len(found) > 1:
         return None, "gamma_duplicate_market"
     return (found[0] if found else None), None
@@ -215,6 +219,8 @@ def _gamma_read(getter: Callable[[str], Any], market_id: str, now: datetime,
     """Read one held market: ``closed=true`` first (the only read that can show a close), then the default query
     (it can only show the market open). In neither list: unknown (a read failure). In both: unknown too (Gamma's
     views split for a few minutes around a close)."""
+    if not resolution_watch.valid_gamma_id(market_id):
+        return failed(market_id, now, "gamma_bad_id")  # Issue #353: no request for an empty / non-numeric id
     rows: dict[bool, dict[str, Any]] = {}
     default_done: Callable[[], None] | None = None
     for closed in (True, False):
