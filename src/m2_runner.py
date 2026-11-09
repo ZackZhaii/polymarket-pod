@@ -1226,6 +1226,8 @@ def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter,
                                                    "token_id": row.get("token_id"),
                                                    "settlement_payout": row.get("settlement_payout")}
                                                   for row in out["booked"]])
+    if clock is None:  # the dev hook signature (state, now, gamma) stays callable as #345's route test calls it
+        return _writeoff_hook(state, now, gamma)
     return _writeoff_hook(state, now, gamma, clock)
 
 
