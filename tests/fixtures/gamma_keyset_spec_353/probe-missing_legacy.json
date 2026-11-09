@@ -1,0 +1,15 @@
+{
+ "endpoint": "/markets?id=999999999",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json",
+  "deprecation": "true",
+  "sunset": "Fri, 01 May 2026 00:00:00 GMT",
+  "warning": "299 - \"use /markets/keyset\"",
+  "cache-control": "public, max-age=300"
+ },
+ "top_keys": "list",
+ "next_cursor": null,
+ "n": 0,
+ "ids": []
+}

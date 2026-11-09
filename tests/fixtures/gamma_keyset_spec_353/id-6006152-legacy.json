@@ -1,0 +1,34 @@
+{
+ "endpoint": "/markets?id",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json",
+  "deprecation": "true",
+  "sunset": "Fri, 01 May 2026 00:00:00 GMT",
+  "warning": "299 - \"use /markets/keyset\"",
+  "cache-control": "public, max-age=300"
+ },
+ "body_type": "list",
+ "rows": [
+  {
+   "id": "6006152",
+   "closed": true,
+   "active": true,
+   "acceptingOrders": false,
+   "closedTime": "2026-10-21 13:26:03.985646+00",
+   "endDate": "2026-10-21T10:00:00Z",
+   "conditionId": "0x3b7a3169480436a6d1d4687e13731ad5d29c3b73d88aa5893b5d8948de4b405c",
+   "umaResolutionStatus": "resolved",
+   "resolutionStatus": "<absent>",
+   "version": "v1",
+   "outcomePrices": "[\"0\", \"1\"]",
+   "feesEnabled": true,
+   "feeSchedule": {
+    "exponent": 1,
+    "rate": 0.05,
+    "takerOnly": true,
+    "rebateRate": 0.15
+   }
+  }
+ ]
+}

@@ -59,10 +59,20 @@ def test_once_scans_seals_reads_books_builds_and_books_one_allowed_fill(env):
     assert (fill["fee_source"], fill["fee_rate"]) == ("gamma", 0.0) and fill["fee_schedule_sha"]
     assert fill["token_id"] == rig.TOKENS[0] and fill["strategy"] == m2_runner.STRATEGY
     assert fill["calibration_problems"] == []
-    steps = [row["step"] for row in _journal(env)]
+    raw_rows = _journal(env)
+    fee_rows = [row for row in raw_rows if row["step"] == "fee_quote_evaluated"]
+    assert len(fee_rows) == 1 and raw_rows[1] is fee_rows[0]
+    assert set(fee_rows[0]) == {"ts", "step", "forecast_id", "market_id", "iteration", "iteration_now", "fee_available", "cache_hit", "quote"}
+    assert set(fee_rows[0]["quote"]) == {"market_id", "fee_rate", "problem", "fee_source", "fee_gamma_fetched_at", "fee_schedule_sha", "cross_checked"}
+    assert fee_rows[0]["fee_available"] is True and fee_rows[0]["cache_hit"] == "UNKNOWN"
+    assert (fee_rows[0]["market_id"], fee_rows[0]["quote"]["fee_rate"],
+            fee_rows[0]["quote"]["fee_source"]) == (rig.MARKET_ID, 0.0, "gamma")
+    old_rows = [row for row in raw_rows if row["step"] != "fee_quote_evaluated"]
+    assert fee_rows[0]["forecast_id"] == raw_rows[2]["forecast_id"]
+    steps = [row["step"] for row in old_rows]
     assert steps == ["sealed", "built", "committed"]
-    built = _journal(env)[1]
-    assert built["decision_id"] == fill["decision_id"] and _journal(env)[2]["fill_id"] == fill["fill_id"]
+    built = old_rows[1]
+    assert built["decision_id"] == fill["decision_id"] and old_rows[2]["fill_id"] == fill["fill_id"]
     # the seal came first: the archived file and its sha are in the sealed forecast row
     assert not pending.exists()
     sealed = rig.read_jsonl(Path(m2_runner.forecaster.FORECASTS_PATH))
