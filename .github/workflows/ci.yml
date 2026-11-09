@@ -23,13 +23,78 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Install pytest
         run: python -m pip install -r requirements-dev.txt
+      - name: Classify exact queue metadata
+        id: scope
+        continue-on-error: true
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          
+          def git(*args):
+              return subprocess.run(["git", *args], check=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, timeout=10).stdout
+          
+          def sha(value):
+              if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+                  raise ValueError("missing_or_invalid_sha")
+              if value == "0" * 40:
+                  raise ValueError("zero_sha")
+              return value
+          
+          metadata_only = False
+          reason = "full_default"
+          try:
+              event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+              current = git("rev-parse", "HEAD").decode().strip()
+              if current != sha(os.environ.get("GITHUB_SHA")):
+                  raise ValueError("checkout_event_mismatch")
+              kind = os.environ.get("GITHUB_EVENT_NAME")
+              if kind == "pull_request":
+                  pr = event["pull_request"]
+                  base, head = sha(pr["base"]["sha"]), sha(pr["head"]["sha"])
+                  parents = git("rev-list", "--parents", "-n", "1", current).decode().split()
+                  if parents != [current, base, head]:
+                      raise ValueError("pr_merge_parents_changed")
+              elif kind == "push":
+                  base, head = sha(event["before"]), sha(event["after"])
+                  if current != head:
+                      raise ValueError("push_checkout_mismatch")
+                  git("merge-base", "--is-ancestor", base, head)
+              else:
+                  raise ValueError("unsupported_event")
+              # Compare the whole PR merge result / whole push, never HEAD^ alone.
+              raw = git("diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", base, current)
+              paths = raw.split(b"\0")
+              if paths[-1:] != [b""]:
+                  raise ValueError("invalid_nul_diff")
+              paths = paths[:-1]
+              allowed = {b"docs/LOOP.md", b"docs/loop/state.json"}
+              metadata_only = bool(paths) and all(path in allowed for path in paths)
+              reason = "exact_queue_metadata" if metadata_only else "empty_or_other_path"
+          except Exception as exc:
+              # Uncertain ancestry, shallow/missing objects, bad event or git failure runs full.
+              reason = "full_on_" + type(exc).__name__
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("metadata_only=" + str(metadata_only).lower() + "\n")
+          print("CI scope:", reason, "; metadata_only=", metadata_only)
+          PY
       - name: Guard
         run: python scripts/guard.py --require-git
+      - name: Queue metadata tests
+        if: steps.scope.outcome == 'success' && steps.scope.outputs.metadata_only == 'true'
+        run: >-
+          python -m pytest tests/test_loop_claim.py tests/test_pins.py
+          tests/test_unique_tmp_claim_lock.py tests/test_ci_workflow.py
+          tests/test_book_ts_followups.py::test_historical_forecaster_mentions_are_kept
       - name: Pytest
+        if: steps.scope.outcome != 'success' || steps.scope.outputs.metadata_only != 'true'
         run: python -m pytest

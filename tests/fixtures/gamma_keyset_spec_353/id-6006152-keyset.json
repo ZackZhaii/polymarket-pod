@@ -1,0 +1,35 @@
+{
+ "endpoint": "/markets/keyset?id",
+ "status": 200,
+ "headers": {
+  "content-type": "application/json",
+  "cache-control": "public, max-age=300"
+ },
+ "top_keys": [
+  "$schema",
+  "markets"
+ ],
+ "next_cursor": "<absent>",
+ "rows": [
+  {
+   "id": "6006152",
+   "closed": true,
+   "active": true,
+   "acceptingOrders": false,
+   "closedTime": "2026-10-21 13:26:03.985646+00",
+   "endDate": "2026-10-21T10:00:00Z",
+   "conditionId": "0x3b7a3169480436a6d1d4687e13731ad5d29c3b73d88aa5893b5d8948de4b405c",
+   "umaResolutionStatus": "resolved",
+   "resolutionStatus": "<absent>",
+   "version": "v1",
+   "outcomePrices": "[\"0\", \"1\"]",
+   "feesEnabled": true,
+   "feeSchedule": {
+    "exponent": 1,
+    "rate": 0.05,
+    "takerOnly": true,
+    "rebateRate": 0.15
+   }
+  }
+ ]
+}

@@ -60,7 +60,10 @@ class FeeQuote:
 def _finite_number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:  # #365: an int too large for a float (e.g. 10**400) is invalid, not a crash
+        return None
     return number if math.isfinite(number) else None
 
 

@@ -1,0 +1,70 @@
+{
+  "schema": "execution_s0_source_bindings/1",
+  "scope": "REG-EI registration only; C0 implementation NOT_EXECUTED",
+  "registration_base_commit": "0cb71883af8d94f92795ba4791020d5b91252562",
+  "source_root_historical_provenance": "C:/Users/Noise/.codex/visualizations/2026/10/21/01a15d32-5ffb-7373-8ca9-d94e8e1f04ca",
+  "approved_delivery_zip_sha256": "d454f4f517f06706ff9c4bd941208cceb616ccbc525ecca59ad80a2e5a9cbda5",
+  "input_freeze_v2_sha256": "02b258a7f1fed951e025ae2a836491cc44b87b08b29355d909775cb52bf4d18f",
+  "literal_user_approval": "同意这份正式实施计划，按项目门禁合法入队，先完成C0，再按依赖分工并行实施。启用最大量Agents协助，尽快完成上线准备，本轮保持交易关闭。",
+  "authority_boundary": "Lawful registration only; implementation requires registration merge into dev, EG closure, EI first todo and a legal 1h claim. Later P/T/L/A/S/E/V not registered or authorized to start by this PR. No live/runtime/SDK/account/funds authority.",
+  "entries": [
+    {
+      "original_relative_source_path": "implementation-plan-20261025/00-control/C0_CONTRACT_TASK.md",
+      "copied_relative_snapshot_path": "snapshots/C0_CONTRACT_TASK.md",
+      "sha256": "fb5a450fb8ec903e9f65362f717f12aad133ad211502eeb7858df0428deec979",
+      "bytes": 30813,
+      "verification": "INPUT_FREEZE_V2"
+    },
+    {
+      "original_relative_source_path": "implementation-plan-20261025/05-accounting/ACCOUNTING_PLAN.md",
+      "copied_relative_snapshot_path": "snapshots/ACCOUNTING_PLAN.md",
+      "sha256": "29cd315bbf53d3361cb038b4ef20b7487240e4ec49481bb6bdba934f3d563160",
+      "bytes": 38302,
+      "verification": "INPUT_FREEZE_V2"
+    },
+    {
+      "original_relative_source_path": "implementation-plan-20261025/IMPLEMENTATION_PLAN.md",
+      "copied_relative_snapshot_path": "snapshots/IMPLEMENTATION_PLAN.md",
+      "sha256": "59765c345e7cc9bc68a9be4ca2b120f9697416930a2afa32ee72fbca5d003665",
+      "bytes": 22125,
+      "verification": "INPUT_FREEZE_V2"
+    },
+    {
+      "original_relative_source_path": "implementation-plan-20261025/00-control/INTERFACE_LOCK.md",
+      "copied_relative_snapshot_path": "snapshots/INTERFACE_LOCK.md",
+      "sha256": "c53e6a7abe99efbecc0853d3101e0d29b1a605c8312d22fbcab137860df09cd5",
+      "bytes": 6463,
+      "verification": "INPUT_FREEZE_V2"
+    },
+    {
+      "original_relative_source_path": "implementation-plan-20261025/00-control/C0_SCHEMA_DECISIONS.md",
+      "copied_relative_snapshot_path": "snapshots/C0_SCHEMA_DECISIONS.md",
+      "sha256": "faa0c73594dbdbf023ef6a78bc3c4d63b7b4372f9fa86edb5865cc1870a10a92",
+      "bytes": 8830,
+      "verification": "INPUT_FREEZE_V2"
+    },
+    {
+      "original_relative_source_path": "implementation-plan-20261025/00-control/COVERAGE_FINAL.json",
+      "copied_relative_snapshot_path": "snapshots/COVERAGE_FINAL.json",
+      "sha256": "4bb47aee9f8774db5595a00a2fd568f3147b4e27863ec790a16e7358fbe3dad5",
+      "bytes": 11263,
+      "verification": "INPUT_FREEZE_V2"
+    },
+    {
+      "original_relative_source_path": "launch-profit-prep-20261025/02-execution-design/SPEC.md",
+      "copied_relative_snapshot_path": "snapshots/SPEC.md",
+      "sha256": "e95f0351d85dc53901f84ff889114e60c3e00462809fe8c348b73e66d63775f0",
+      "bytes": 17940,
+      "verification": "approved original delivery ZIP exact byte match",
+      "approved_original_delivery_zip_sha256": "078b152de683738a14d686e437ebdb769945d334b15293471188db30998fffdd"
+    }
+  ],
+  "controller_explanatory_notes": {
+    "original_relative_source_path": "c0-enqueue-20261025/C0_IMPLEMENTATION_NOTES.md",
+    "copied_relative_path": "IMPLEMENTATION_NOTES.md",
+    "sha256": "1fe5eb87732127e4aa70153321b0aa789439d29b5b3ae1d9224656e0241a2b6c",
+    "bytes": 8925,
+    "authority": "Current controller implementation interpretations for independent review; not an original approved snapshot, not a new user approval, not implementation/test results. Original seven snapshot bindings remain unchanged.",
+    "source_kind": "current root explanatory handoff"
+  }
+}

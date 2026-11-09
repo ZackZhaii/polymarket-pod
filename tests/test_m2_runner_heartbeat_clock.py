@@ -16,7 +16,9 @@ from src import heartbeat, m2_runner, paper_ledger
 from tests import m2_runner_rig as rig
 
 TIME_URL = "https://clob.polymarket.com/time"
-NEW_KEYS = {"clock_anomaly", "clock_anomaly_since", "last_time_check"}
+NEW_KEYS = {"clock_anomaly", "clock_anomaly_since", "last_time_check",
+            "time_check_failures_total", "time_check_failures_by_class", "book_get_failures_total",
+            "settlement_get_failures_total"}
 OLD_KEYS = {"iteration", "last_scan_ts", "scan_age_s", "forecasts_sealed_total", "forecasts_rejected_total",
             "intents_built_total", "allows_total", "vetoes_total", "missing_fee_total", "scans_total",
             "scan_failures_total", "last_book_age_s_max", "resume_count", "paused_reason", "paused_since",
@@ -144,16 +146,16 @@ def test_since_survives_a_reason_switch_and_restamps_after_clearing(env):
 def test_last_time_check_records_each_check(env):
     _, beat = tick(env)
     assert beat["last_time_check"] == {"ts": stamp(env["start"]), "result": "ok", "low_s": -1.0, "high_s": 1.0,
-                                       "rtt_s": 0.0}
+                                       "rtt_s": 0.0, "http_status": None, "exc_type": None}
     _, beat = tick(env, at_s=60.0, offset=7.0)
     assert beat["last_time_check"] == {"ts": stamp(env["start"] + timedelta(seconds=60)), "result": "clock_skew",
-                                       "low_s": 6.0, "high_s": 8.0, "rtt_s": 0.0}
+                                       "low_s": 6.0, "high_s": 8.0, "rtt_s": 0.0, "http_status": None, "exc_type": None}
     _, beat = tick(env, at_s=120.0, offset=-5.0)
     assert beat["last_time_check"] == {"ts": stamp(env["start"] + timedelta(seconds=120)),
-                                       "result": "clock_unverified", "low_s": -6.0, "high_s": -4.0, "rtt_s": 0.0}
+                                       "result": "clock_unverified", "low_s": -6.0, "high_s": -4.0, "rtt_s": 0.0, "http_status": None, "exc_type": None}
     _, beat = tick(env, at_s=180.0, error=TimeoutError("offline"))
     assert beat["last_time_check"] == {"ts": stamp(env["start"] + timedelta(seconds=180)),
-                                       "result": "clock_unverified", "low_s": None, "high_s": None, "rtt_s": None}
+                                       "result": "clock_unverified", "low_s": None, "high_s": None, "rtt_s": None, "http_status": None, "exc_type": "TimeoutError"}
 
 
 def test_request_time_shows_as_rtt(env):
@@ -162,7 +164,7 @@ def test_request_time_shows_as_rtt(env):
     fake = TimeGetters(env["start"], offset=-1.0)  # server = start + 1 s, mid-request
     m2_runner.iteration(env["state"], now=env["start"], getters=fake.getters())
     check = m2_runner.progress(env["state"], env["start"])["last_time_check"]
-    assert check == {"ts": stamp(env["start"]), "result": "ok", "low_s": -2.0, "high_s": 2.0, "rtt_s": 2.0}
+    assert check == {"ts": stamp(env["start"]), "result": "ok", "low_s": -2.0, "high_s": 2.0, "rtt_s": 2.0, "http_status": None, "exc_type": None}
 
 
 def test_a_tick_that_stops_before_the_clock_check_keeps_the_last_check(env):

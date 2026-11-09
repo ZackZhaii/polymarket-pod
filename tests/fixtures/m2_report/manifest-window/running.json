@@ -1,0 +1,1 @@
+{"schema":"m1_run/1","status":"running","started_at":"2026-11-03T00:00:00Z","ended_at":null,"elapsed_s":9999,"progress":{"last_flush_at":"2028-01-01T00:00:00Z"},"m2_end":"2028-01-02T00:00:00Z","current":{"updated_ts":"2028-01-03T00:00:00Z"},"journal":[{"ts":"2028-01-04T00:00:00Z"}]}

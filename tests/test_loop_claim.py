@@ -5,6 +5,8 @@ import copy
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 import src.loop_claim as loop_claim
 from src.podlib import RISK_PATH
 
@@ -88,12 +90,39 @@ def test_pin_guard_rejects_live_without_editing_the_file():
     assert RISK_PATH.read_bytes() == before
 
 
-def test_repo_queue_has_ef_done_and_eg_next():
-    """The released queue has EF done, EG next and no claim; reading it changes no bytes."""
-    path = loop_claim.STATE_PATH
+@pytest.fixture(params=[None, "todo", "doing", "done"], ids=["actual", "todo", "doing", "done"])
+def ei_queue_path(request, tmp_path, monkeypatch):
+    if request.param is None:
+        return loop_claim.STATE_PATH
+    state = json.loads(loop_claim.STATE_PATH.read_text(encoding="utf-8"))
+    # Simulated EI phases cover its historical queue, not later tasks' active claims.
+    ei_index = next(i for i, task in enumerate(state["tasks"]) if task["id"] == "EI")
+    state["tasks"] = state["tasks"][:ei_index + 1]
+    task = state["tasks"][ei_index]
+    task["status"] = "todo"
+    task.pop("done_at", None)
+    state["claim"] = None
+    if request.param in {"doing", "done"}:
+        loop_claim.claim_state(state, "codex-local", "EI", NOW)
+        with pytest.raises(RuntimeError, match="busy"):
+            loop_claim.claim_state(state, "grok-bot", "EI", NOW + timedelta(minutes=59))
+    if request.param == "done":
+        loop_claim.release_state(state, "codex-local", True, NOW + timedelta(minutes=30))
+        with pytest.raises(PermissionError, match="closed"):
+            loop_claim.claim_state(state, "codex-local", "EI", NOW + timedelta(minutes=31))
+    path = tmp_path / "ei-state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(loop_claim, "STATE_PATH", path)
+    return path
+
+
+def test_repo_queue_keeps_completed_tasks_closed_through_ei_lifecycle(ei_queue_path):
+    """Completed tasks stay closed while EI is waiting, claimed or done; reads change no bytes."""
+    path = ei_queue_path
     before = path.read_bytes()
     state = json.loads(before.decode("utf-8"))
-    assert state.get("claim") is None
+    ei_index = next(i for i, task in enumerate(state["tasks"]) if task["id"] == "EI")
+    assert all(task["status"] == "done" for task in state["tasks"][:ei_index]), "historical tasks before EI must stay done"
     task_i = next(task for task in state["tasks"] if task["id"] == "I")
     assert task_i["status"] == "done"
     task_j = next(task for task in state["tasks"] if task["id"] == "J")
@@ -190,8 +219,72 @@ def test_repo_queue_has_ef_done_and_eg_next():
     assert task_bj["status"] == "done" and task_bj["surface"] == "grok-bot"
     task_bl = next(task for task in state["tasks"] if task["id"] == "BL")
     assert task_bl["status"] == "done" and task_bl["surface"] == "grok-bot"
-    # EF (#350) is complete; EG (#349) stays the next todo.
+    # EF (#350) and EG (#349) stay complete throughout EI's claim/release lifecycle.
     task_ef = next(task for task in state["tasks"] if task["id"] == "EF")
     assert task_ef["status"] == "done" and task_ef["surface"] == "codex-local"
-    assert loop_claim.next_todo(state)["id"] == "EG"
+    task_eg = next(task for task in state["tasks"] if task["id"] == "EG")
+    assert task_eg["status"] == "done" and task_eg["surface"] == "grok-bot"
+    task_ei = next(task for task in state["tasks"] if task["id"] == "EI")
+    assert task_ei["status"] in {"todo", "doing", "done"}
+    assert state["claim_hours"] == 1
+    doing = [task["id"] for task in state["tasks"] if task["status"] == "doing"]
+    claim = state.get("claim")
+    if doing:
+        assert len(doing) == 1
+        if task_ei["status"] == "doing":
+            assert doing == ["EI"]
+        assert isinstance(claim, dict) and set(claim) == {"surface", "task", "since", "until"}
+        assert claim["task"] == doing[0] and claim["surface"] in loop_claim.SURFACES
+        if claim["task"] == "EI":
+            assert claim["surface"] == "codex-local"
+        since = loop_claim.parse_stamp(claim["since"])
+        until = loop_claim.parse_stamp(claim["until"])
+        assert claim["since"] == loop_claim.utc_stamp(since)
+        assert claim["until"] == loop_claim.utc_stamp(until)
+        assert until - since == timedelta(hours=1)
+    else:
+        assert doing == [] and claim is None
+    waiting = loop_claim.next_todo(state)
+    if task_ei["status"] == "todo":
+        assert waiting is not None and waiting["id"] == "EI"
+    else:
+        # A completed EI stays closed while the next registered task progresses.
+        pending_ids = [task["id"] for task in state["tasks"] if task["status"] == "todo"]
+        assert (waiting["id"] if waiting is not None else None) == (pending_ids[0] if pending_ids else None)
+        assert waiting is None or waiting["id"] != "EI"
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("phase", ["todo", "doing", "done"])
+def test_completed_ei_queue_accepts_later_task_lifecycle(phase, tmp_path, monkeypatch):
+    state = json.loads(loop_claim.STATE_PATH.read_text(encoding="utf-8"))
+    ei_index = next(i for i, task in enumerate(state["tasks"]) if task["id"] == "EI")
+    state["tasks"] = state["tasks"][:ei_index + 1]
+    state["tasks"][ei_index]["status"] = "done"
+    state["claim"] = None
+    state["tasks"].append({"id": "ZZ", "status": "todo", "title": "synthetic later task"})
+    if phase in {"doing", "done"}:
+        loop_claim.claim_state(state, "codex-local", "ZZ", NOW)
+    if phase == "done":
+        loop_claim.release_state(state, "codex-local", True, NOW + timedelta(minutes=30))
+    with pytest.raises(PermissionError, match="closed"):
+        loop_claim.claim_state(state, "codex-local", "EI", NOW)
+    path = tmp_path / "later-task-state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(loop_claim, "STATE_PATH", path)
+    test_repo_queue_keeps_completed_tasks_closed_through_ei_lifecycle(path)
+
+
+@pytest.mark.parametrize("status", ["todo", "doing"])
+def test_historical_pre_ei_reopening_is_rejected(status, tmp_path, monkeypatch):
+    state = json.loads(loop_claim.STATE_PATH.read_text(encoding="utf-8"))
+    task_f = next(task for task in state["tasks"] if task["id"] == "F")
+    task_f["status"] = status
+    state["claim"] = None
+    if status == "doing":
+        loop_claim.claim_state(state, "codex-local", "F", NOW)
+    path = tmp_path / "reopened-predecessor.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(loop_claim, "STATE_PATH", path)
+    with pytest.raises(AssertionError, match="historical tasks before EI must stay done"):
+        test_repo_queue_keeps_completed_tasks_closed_through_ei_lifecycle(path)

@@ -38,7 +38,7 @@ def resolved_row(closed_hours_ago=72.0, **changes):
 
 
 class Gamma:
-    """Gamma for the tick: the keyset page (no candidates) and the /markets?id= reads of held markets."""
+    """Gamma for the tick: the keyset page (no candidates) and the /markets/keyset?id= reads of held markets."""
 
     def __init__(self, row=None, *, error=None, empty=False):
         self.row, self.error, self.empty, self.urls = row, error, empty, []
@@ -46,17 +46,17 @@ class Gamma:
     def __call__(self, url):
         self.urls.append(url)
         parts = urlsplit(url)
-        if parts.path.endswith("/keyset"):
+        query = parse_qs(parts.query)
+        if parts.path.endswith("/keyset") and "id" not in query:
             return {"markets": [], "next_cursor": ""}
         if self.error is not None:
             raise self.error
         if self.empty or self.row is None:
-            return []
-        query = parse_qs(parts.query)
+            return {"markets": []}
         if query.get("id") != [str(self.row.get("id"))]:
-            return []
+            return {"markets": []}
         want_closed = query.get("closed") == ["true"]
-        return [self.row] if (self.row.get("closed") is True) == want_closed else []
+        return {"markets": [self.row] if (self.row.get("closed") is True) == want_closed else []}
 
     @property
     def id_reads(self):
@@ -134,7 +134,7 @@ def test_without_a_pause_the_tick_settles_before_scanning(env):
     getter = Gamma(resolved_row())
     report = _tick(env, getter)
     assert report.action == m2_runner.ACT_RUN and len(_settlements(env)) == 1
-    first_scan = next(i for i, u in enumerate(getter.urls) if "/keyset" in u)
+    first_scan = next(i for i, u in enumerate(getter.urls) if "/keyset" in u and "id=" not in u)
     assert all(i < first_scan for i, u in enumerate(getter.urls) if "id=" in u)  # settle reads come first
     assert all(m2_runner.url_allowed(u) for u in getter.urls)
 
@@ -218,8 +218,8 @@ def test_a_contradiction_in_the_resolutions_is_a_global_halt(env):
     other = dict(rows[0], winning_token_id=LOSER, outcome_prices_final=[0.0, 1.0])
     with env["res"].open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(other) + "\n")
-    _book(env, [fill("buy", 5.0, 0.5, NOW.strftime("%Y-%m-%dT%H:%M:%SZ"), market="m-other", token="o1")], prefix="o")
-    report = _tick(env, Gamma(resolved_row(id="m-other", conditionId="0xother", clobTokenIds='["o1", "o2"]')),
+    _book(env, [fill("buy", 5.0, 0.5, NOW.strftime("%Y-%m-%dT%H:%M:%SZ"), market="900004", token="o1")], prefix="o")
+    report = _tick(env, Gamma(resolved_row(id="900004", conditionId="0xother", clobTokenIds='["o1", "o2"]')),
                    NOW + timedelta(seconds=60))
     assert report.reasons[0] == m2_runner.LEDGER_HALT_REASON
     assert any("settlement_conflict" in r for r in report.reasons) and _global_halt()
@@ -298,10 +298,10 @@ def test_the_runner_loop_calls_apply_settlements_without_any_intent(env, monkeyp
     def gamma(url):  # the rig's Gamma, with the closed=true view of the held market
         fake.gamma_urls.append(url)
         parts = urlsplit(url)
-        if parts.path.endswith("/keyset"):
+        if parts.path.endswith("/keyset") and "id" not in parse_qs(parts.query):
             return {"markets": [], "next_cursor": ""}
         want_closed = parse_qs(parts.query).get("closed") == ["true"]
-        return [fake.row] if want_closed else []
+        return {"markets": [fake.row] if want_closed else []}
 
     fake.gamma = gamma
     assert rig.run_once(env["run"], fake, clock=lambda: NOW) == m2_runner.EXIT_OK
@@ -339,24 +339,24 @@ def test_a_market_halt_for_its_own_settlement_data_blocks_that_market_only(env, 
     """The market's own close / settlement data contradicts itself: that market does not settle; others do."""
     _hold_loser(env)
     _book(env, [fill("buy", 5.0, 0.5, (NOW - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                     market="m-other", token="o2")], prefix="o")
+                     market="900004", token="o2")], prefix="o")
     halt_store.record_halt(scope=halt_store.SCOPE_MARKET, market=rig.MARKET_ID, reason=f"{reason}:detail",
                            source="RiskGate")
     rows = {rig.MARKET_ID: resolved_row(),
-            "m-other": resolved_row(id="m-other", conditionId="0xother", clobTokenIds='["o1", "o2"]')}
+            "900004": resolved_row(id="900004", conditionId="0xother", clobTokenIds='["o1", "o2"]')}
 
     def getter(url):
         parts = urlsplit(url)
-        if parts.path.endswith("/keyset"):
-            return {"markets": [], "next_cursor": ""}
         query = parse_qs(parts.query)
+        if parts.path.endswith("/keyset") and "id" not in query:
+            return {"markets": [], "next_cursor": ""}
         assert query.get("id") != [rig.MARKET_ID], "a blocked market is not even collected"
         row = rows.get((query.get("id") or [""])[0])
-        return [row] if row is not None and query.get("closed") == ["true"] else []
+        return {"markets": [row] if row is not None and query.get("closed") == ["true"] else []}
 
     _tick(env, getter)
     booked = _settlements(env)
-    assert [row["market"] for row in booked] == ["m-other"] and not _global_halt()
+    assert [row["market"] for row in booked] == ["900004"] and not _global_halt()
     assert _events(env, "settlement_blocked")[0]["markets"] == [rig.MARKET_ID]
 
 

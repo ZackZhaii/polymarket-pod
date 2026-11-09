@@ -83,6 +83,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,6 +126,8 @@ from src.thresholds import (  # noqa: E402
 )
 
 PROC = "m2_runner"
+# #345: observation labels, never read by a clock or trading decision.
+TIME_FAILURE_CLASSES = ("425", "timeout", "5xx", "4xx_other", "other")
 EXECUTOR_ENABLED = False  # no switch, argument, environment variable or config key changes this (issue #119 F2)
 
 STRATEGY = forecaster.STRATEGY
@@ -289,7 +292,10 @@ class RunnerState:
     last_time_check: dict[str, Any] | None = None
     counters: dict[str, int] = field(default_factory=lambda: {
         "forecasts_sealed_total": 0, "forecasts_rejected_total": 0, "intents_built_total": 0, "allows_total": 0,
-        "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0})
+        "vetoes_total": 0, "missing_fee_total": 0, "scans_total": 0, "scan_failures_total": 0,
+        "time_check_failures_total": 0, "book_get_failures_total": 0, "settlement_get_failures_total": 0})
+    time_check_failures_by_class: dict[str, int] = field(default_factory=lambda: {
+        key: 0 for key in TIME_FAILURE_CLASSES})
     last_book_age_s_max: float | None = None
     disk_free_gb: float | None = None
     ledger_rows: int | None = None
@@ -484,8 +490,10 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
     if halts:
         return Preflight(ACT_PAUSE, ["global_halt", *halts])
     ledger = Path(ledger_path) if ledger_path is not None else Path(paper_ledger.PAPER_PATH)
+    read = halt_rows = None
     try:
         _, read = ledger_store.read_ledger(ledger)
+        halt_rows = read  # PR #360 review (P1): a read ledger whose verify raises still gets its market halts
         problems = ledger_store.verify(read)
     except Exception as exc:  # noqa: BLE001 - an unreadable ledger is invalid (fail closed)
         read, problems = None, [f"ledger_unreadable:{type(exc).__name__}"]
@@ -494,7 +502,17 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
         problems = list(day.problems)
     if problems or read is None:
         _record_global_halt(LEDGER_HALT_REASON, {"ledger_problems": [str(p) for p in problems[:10]]})
-        return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]]])
+        halt_failed: list[str] = []
+        if halt_rows is not None:  # issue #349 (Task EG): a settlement row paid outside {0, 1} also halts its market
+            try:
+                from src import settlement
+
+                halt_failed = settlement.record_market_halts(settlement.invalid_payout_halts(halt_rows.rows))
+            except Exception as exc:  # noqa: BLE001 - the global halt above is recorded; fail closed, never raise
+                halt_failed = [f"settlement_market_halt_failed:-:{type(exc).__name__}"]
+            if halt_failed:  # PR #360 review (P2): reported, not swallowed
+                halt_store.write_fallback(f"{PROC} settlement_market_halt record_failed {','.join(halt_failed)}")
+        return Preflight(ACT_PAUSE, [LEDGER_HALT_REASON, *[str(p) for p in problems[:10]], *halt_failed])
     if settle is not None:  # issue #206: settlement before the daily-loss breaker (see the docstring)
         problems = [str(p) for p in settle()]
         if not problems:
@@ -546,18 +564,65 @@ def preflight(paths: RunnerPaths, *, now: datetime, risk_path: Path | None = Non
 CLOCK_PAUSE_REASONS = frozenset({"clock_unverified", "clock_skew"})
 
 
+def _time_failure_details(error: Exception) -> tuple[int | None, str, str]:
+    """#345: bounded known-wrapper inspection, observation only; never serialize error text or URLs.
+
+    exc_type names the effective exception, not its outer wrapper. PublicGetError prefers an explicit
+    cause, then last_error; URLError prefers an exception reason, then cause. No implicit context or
+    string guessing. Eight links and identity tracking bound malformed/cyclic wrapper chains.
+    """
+    current: BaseException = error
+    seen: set[int] = set()
+    for _ in range(8):
+        if isinstance(current, (HTTPError, TimeoutError)) or id(current) in seen:
+            break
+        seen.add(id(current))
+        if isinstance(current, podlib.PublicGetError):
+            cause = current.__cause__
+            next_error = cause if isinstance(cause, BaseException) else current.last_error
+        elif isinstance(current, URLError):
+            reason = current.reason
+            next_error = reason if isinstance(reason, BaseException) else current.__cause__
+        else:
+            break
+        if not isinstance(next_error, BaseException) or id(next_error) in seen:
+            break
+        current = next_error
+    exc_type = type(current).__name__
+    if isinstance(current, HTTPError):  # HTTPError is also URLError: status takes precedence.
+        status = current.code if isinstance(current.code, int) and not isinstance(current.code, bool) else None
+        if status == 425:
+            return status, exc_type, "425"
+        if status is not None and 500 <= status < 600:
+            return status, exc_type, "5xx"
+        if status is not None and 400 <= status < 500:
+            return status, exc_type, "4xx_other"
+        return status, exc_type, "other"
+    return None, exc_type, "timeout" if isinstance(current, TimeoutError) else "other"
+
+
 def _clock_check(state: "RunnerState", getter: GuardedGetter, now: datetime | None = None) -> str | None:
-    """#253 + Task DA: a clock_unverified / clock_skew result also marks ``state.clock_anomaly``, so later
-    ticks' daily-loss evaluation treats the day-start reference as late (fail closed)."""
+    """#253 + Task DA: preserve clock decisions; #345 records only logical getter exceptions.
+
+    Local clock/interval/returned-value failures are not failed reads. Counts are per RunnerState,
+    including calls without a heartbeat timestamp; last_time_check keeps its original now=None behavior.
+    """
     measured: dict[str, float | None] = {}
-    problem = _clock_problem(state.clock, getter, measured)
+    read_errors: list[Exception] = []
+    problem = _clock_problem(state.clock, getter, measured, read_errors=read_errors)
     if problem is not None:
         state.clock_anomaly = problem
     else:
         state.tick_time_ok = True  # #253: a clean CLOB /time check (the skew source) this tick
+    http_status, exc_type = None, None
+    if read_errors:  # observation after the original clock decision; never an extra GET or retry
+        http_status, exc_type, category = _time_failure_details(read_errors[0])
+        state.counters["time_check_failures_total"] += 1
+        state.time_check_failures_by_class[category] += 1
     if now is not None:  # issue #289: observation only (heartbeat), after the decision above
         state.last_time_check = {"ts": _stamp(now), "result": problem or "ok", **{
-            key: _rounded(measured.get(key)) for key in ("low_s", "high_s", "rtt_s")}}
+            key: _rounded(measured.get(key)) for key in ("low_s", "high_s", "rtt_s")},
+            "http_status": http_status, "exc_type": exc_type}
         _note_clock_anomaly(state, now)
     return problem
 
@@ -576,12 +641,19 @@ def _note_clock_anomaly(state: "RunnerState", now: datetime) -> None:
 
 
 def _clock_problem(clock: Callable[[], datetime], getter: GuardedGetter,
-                   measured: dict[str, float | None] | None = None) -> str | None:
+                   measured: dict[str, float | None] | None = None, *,
+                   read_errors: list[Exception] | None = None) -> str | None:
     """Certify the whole local-minus-server interval, including request time and ±1 s server quantization.
-    Issue #289: ``measured`` (optional, observation only) receives low_s / high_s / rtt_s once computed."""
+    Issue #289: ``measured`` receives low_s / high_s / rtt_s once computed.
+    #345: optional read_errors receives only the original getter exception; clocks and parsing are excluded."""
     try:
         sent = clock()
-        server = getter(podlib.TIME_URL)
+        try:
+            server = getter(podlib.TIME_URL)
+        except Exception as exc:  # #345: observe only this call, then retain the original outer handling
+            if read_errors is not None:
+                read_errors.append(exc)
+            raise
         received = clock()
         if not isinstance(sent, datetime) or not isinstance(received, datetime):
             return "clock_unverified"
@@ -615,15 +687,21 @@ def book_url(token_id: str) -> str:
 
 
 def gamma_market_url(market_id: str) -> str:
-    return podlib.GAMMA_PREFIX + "?" + urlencode({"id": market_id})
+    return podlib.GAMMA_PREFIX + "/keyset?" + urlencode({"id": market_id})
 
 
 def _gamma_market(getter: Callable[[str], Any], market_id: str) -> object:
-    """Gamma's /markets?id=<id> row for the fee (src/fee_source reads feesEnabled / feeSchedule)."""
-    data = getter(gamma_market_url(market_id))
-    rows = data if isinstance(data, list) else []
-    matches = [row for row in rows if isinstance(row, dict) and str(row.get("id")) == str(market_id)]
-    return matches[0] if len(matches) == 1 else None
+    """Gamma's /markets/keyset?id=<id> row for the fee (src/fee_source reads feesEnabled / feeSchedule).
+
+    Issue #353: an empty or non-numeric id is no row and no request (an empty id= returns unrelated markets).
+    The keyset answer must be ``{"markets": [...]}`` holding exactly the one row of this id: any other shape
+    (a bare list, a missing or non-list ``markets``, any ``next_cursor``, or a row of another id) is no row.
+    No fallback to the deprecated legacy id endpoint.
+    """
+    if not resolution_watch.valid_gamma_id(market_id):
+        return None
+    rows = resolution_watch.keyset_rows(getter(gamma_market_url(market_id)), market_id)
+    return rows[0] if rows is not None and len(rows) == 1 else None
 
 
 # ---------------------------------------------------------------- one iteration
@@ -650,7 +728,20 @@ def _pending_files(inbox: Path) -> list[Path]:
     return sorted(p for p in inbox.glob("*/*.json") if p.is_file())
 
 
+def _scan_fetch_facts(meta: object) -> dict[str, Any] | None:
+    """Copy present fetch facts for observation, never for scan control or coverage certification.
+
+    Missing keys stay missing and raw values stay unchanged. Non-dicts have no observable subset here;
+    the caller retains its original .get, truthiness and malformed-input error boundaries.
+    """
+    if not isinstance(meta, dict):
+        return None
+    return {key: meta[key] for key in ("pages", "fetched", "stop_reason", "complete", "cap_hit", "max_markets",
+                                      "server_min_liquidity", "base_url") if key in meta}
+
+
 def _scan(state: RunnerState, now: datetime, gamma: GuardedGetter) -> None:
+    """Keep original scan control and I/O positions while observing same-return fetch facts."""
     try:
         result = scanner.scan(getter=gamma, risk_path=Path(state.risk_path or podlib.RISK_PATH), now=now)
     except Exception as exc:  # noqa: BLE001 - a failed scan keeps the last one (until it is too old)
@@ -659,7 +750,8 @@ def _scan(state: RunnerState, now: datetime, gamma: GuardedGetter) -> None:
         return
     if not result.get("fetch", {}).get("complete"):
         state.counters["scan_failures_total"] += 1
-        event(state, "scan_incomplete", now, stop_reason=result.get("fetch", {}).get("stop_reason"))
+        event(state, "scan_incomplete", now, stop_reason=result.get("fetch", {}).get("stop_reason"),
+              fetch=_scan_fetch_facts(result.get("fetch", {})))
         return
     rows = result["rows"]
     state.markets = {str(row["id"]): row for row in rows if row.get("id")}
@@ -669,7 +761,8 @@ def _scan(state: RunnerState, now: datetime, gamma: GuardedGetter) -> None:
         forecast_inbox.write_candidates(rows, state.paths.candidates)
     except OSError as exc:
         raise WriteFailed(f"candidates: {type(exc).__name__}") from exc
-    event(state, "scanned", now, scanned=result.get("scanned"), passed=result.get("passed"))
+    event(state, "scanned", now, scanned=result.get("scanned"), passed=result.get("passed"),
+          fetch=_scan_fetch_facts(result.get("fetch", {})))
 
 
 def _ingest(state: RunnerState, now: datetime, report: IterationReport) -> None:
@@ -705,8 +798,31 @@ def _ingest(state: RunnerState, now: datetime, report: IterationReport) -> None:
             journal(state, "duplicate", now, file=path.name, sha256=result.sha256)
 
 
+def _book_get_observed(state: RunnerState, getter: Callable[[str], Any], url: str) -> Any:
+    """Observe one logical /book getter failure, retaining its exact return or exception.
+
+    fetch_depth still owns its original missing-book conversion. RefusedURL and BaseException are not counted;
+    the original getter still owns retries, and GuardedGetter owns URL checks and its after hook. No result body
+    or exception details are inspected.
+    """
+    try:
+        return getter(url)
+    except RefusedURL:
+        raise
+    except Exception:  # noqa: BLE001 - observation only; the original exception still reaches fetch_depth
+        state.counters["book_get_failures_total"] += 1
+        raise
+
+
 def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: GuardedGetter, book_get: GuardedGetter,
             report: IterationReport) -> None:
+    """Journal returned fee evaluations and each retained book's original fetch time.
+
+    Fee observations precede the fee branch; WriteFailed stops before this forecast's counters, books,
+    build or commit. Cache/source timestamps are not new GET evidence, and no failure is swallowed.
+    Preserve microseconds and the captured offset; no extra clock or GET is taken. Evidence follows the
+    accepted snapshot for partial or repeated tokens. Historical records are never backfilled here.
+    """
     if state.fee_cache is None:
         state.fee_cache = fee_source.FeeCache(lambda market_id: _gamma_market(state.fee_getter, market_id),
                                               clock=state.monotonic)
@@ -724,16 +840,23 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
             _skip(state, now, report, item, forecast_id, ["halted_market", *market_halts])
             continue
         quote = state.fee_cache.get(market_id)
+        journal(state, "fee_quote_evaluated", now, forecast_id=forecast_id, market_id=market_id,
+                iteration=state.iteration, iteration_now=now.isoformat(timespec="microseconds"),
+                fee_available=quote.fee_rate is not None, cache_hit="UNKNOWN",
+                quote={"market_id": quote.market_id, "fee_rate": quote.fee_rate, "problem": quote.problem,
+                       "fee_source": quote.fee_source, "fee_gamma_fetched_at": quote.fee_gamma_fetched_at,
+                       "fee_schedule_sha": quote.fee_schedule_sha, "cross_checked": quote.cross_checked})
         if quote.fee_rate is None:
             state.counters["missing_fee_total"] += 1
             _skip(state, now, report, item, forecast_id, ["missing_fee_data", str(quote.problem)])
             continue
         books: dict[str, intent_builder.BookSnapshot] = {}
+        book_fetch_times: dict[str, datetime] = {}
         book_refused: list[str] | None = None
         for token in [str(t) for t in row.get("token_ids") or []]:
             try:
                 # Issue #120: full-depth REST /book via book.fetch_depth (getter injected / guarded).
-                raw = book.fetch_depth(token, getter=book_get)
+                raw = book.fetch_depth(token, getter=lambda url: _book_get_observed(state, book_get, url))
             except RefusedURL:
                 raise
             except Exception:  # noqa: BLE001 - an unreadable book is a missing book
@@ -755,6 +878,7 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
                 book_refused = [problem]
                 break
             books[token] = snap
+            book_fetch_times[token] = fetched_at
             # Task DC + #253: verified only by a clean /time check plus at least one fresh, valid book this tick
             # (an empty tick proves nothing and never clears the anomaly)
             if state.tick_time_ok:
@@ -775,7 +899,10 @@ def _decide(state: RunnerState, now: datetime, cfg: dict[str, Any], gamma: Guard
             _skip(state, now, report, item, forecast_id, list(result.reasons))
             continue
         journal(state, "built", now, forecast_id=forecast_id, intent_id=oi.intent_id, decision_id=oi.decision_id,
-                idempotency_key=oi.idempotency_key)
+                idempotency_key=oi.idempotency_key,
+                book_fetch_evidence={token: {"fetched_at": fetched.isoformat(timespec="microseconds"),
+                                             "source": "clob_public_book"}
+                                     for token, fetched in book_fetch_times.items()})
         state.counters["intents_built_total"] += 1
         report.built += 1
         risk_intent = dataclasses.replace(intent_builder.to_risk_intent(oi), fee_source=quote.fee_source,
@@ -1039,6 +1166,22 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter,
     return []
 
 
+def _settlement_get_observed(state: RunnerState, getter: Callable[[str], Any], url: str) -> Any:
+    """Observe a logical settlement getter exception, preserving its exact outcome.
+
+    Only the collector receives this adapter; scan, fee and writeoff keep the original Gamma getter.
+    The original getter owns retries and GuardedGetter owns URL checks/after. Reader failure conversion,
+    RefusedURL and BaseException behavior stay original; no response body or exception details are inspected.
+    """
+    try:
+        return getter(url)
+    except RefusedURL:
+        raise
+    except Exception:  # noqa: BLE001 - observation only; the original reader still receives the exception
+        state.counters["settlement_get_failures_total"] += 1
+        raise
+
+
 def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter,
                  clock: Callable[[], str | None] | None = None) -> list[str]:
     """Issue #206 (Task CO): this tick's settlement step (called by ``preflight``, see its docstring).
@@ -1066,7 +1209,8 @@ def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter,
         event(state, "settlement_blocked", now, markets=sorted(blocked))
     held = [market for market in held if market not in blocked]
     if held:
-        collected = resolution_watch.collect(gamma, held, now, _stamp(now),
+        collected = resolution_watch.collect(lambda url: _settlement_get_observed(state, gamma, url),
+                                             held, now, _stamp(now),
                                              Path(paper_ledger.SETTLEMENT_RESOLUTIONS_PATH))
         if not collected.ok:
             event(state, "settlement_skipped", now, reasons=collected.failures[:10])
@@ -1185,7 +1329,9 @@ def iteration(state: RunnerState, *, now: datetime, getters: Getters) -> Iterati
 def progress(state: RunnerState, now: datetime) -> dict[str, Any]:
     scan_age = None if state.scan_at is None else round((now - state.scan_at).total_seconds(), 3)
     return {"iteration": state.iteration, "last_scan_ts": None if state.scan_at is None else _stamp(state.scan_at),
-            "scan_age_s": scan_age, **state.counters, "last_book_age_s_max": state.last_book_age_s_max,
+            "scan_age_s": scan_age, **state.counters,
+            "time_check_failures_by_class": dict(state.time_check_failures_by_class),
+            "last_book_age_s_max": state.last_book_age_s_max,
             "resume_count": state.resume_count, "paused_reason": state.paused_reason, "paused_since": state.paused_since,
             "disk_free_gb": None if state.disk_free_gb is None else round(state.disk_free_gb, 3),
             "ledger_rows": state.ledger_rows, "pending_signals": len(state.pending),
