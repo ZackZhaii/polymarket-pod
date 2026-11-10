@@ -2214,7 +2214,23 @@ Status: todo. FF pure-kernel local-WIP claim was not OPEN because Root missed S4
 
 
 - Kernel local-WIP V1 candidate adoption: Packet FF_R2_KERNEL_LOCAL_WIP_20261105T1323_V1 proposes only a real pure canonical/declarability kernel plus direct tests, original boot two-key schema and all existing wiring unchanged. Append only the exact FF.finish/note suffixes; preserve all original prefixes/status/history/103done/FFtodo/claimnull and product/risk/CI. Actual same-packet Source/CodeQC/Root ACKs and a separate independently integrated metadata adoption with actual-dev field/free readback are required before any separately dispatched normal FF claim and explicit OPEN. No implementation/claim/product adoption permission is created now; full R2 remains NO_READY, original HOLD and clock corrections preserved.
+## Task FG — M2 #122 NoisePC readonly preflight (docs only)
+
+Status: todo. Readonly preflight of NoisePC for issue #122, recorded in `docs/M2_NOISEPC_PREFLIGHT.md`. No runner started, no host clock change, no install, `config/risk.toml` untouched.
+
+- Taken 2026-11-10 12:13–12:17 JST on NoisePC (`8b6b6865-1830-4ef9-bc33-885cfc51dd5a`).
+- Clock: NTP phase offset 0.0287 s vs `ntp.aliyun.com`; stripchart +0.007 to +0.021 s; one public CLOB `/book` `lead_s=-4.591` (not behind `M1_MAX_CLOCK_BEHIND_S=0.1`). Root dispersion 7.80 s is noted, clock was not resynced.
+- Disk: C: 423.7 GB free, D: 293.1 GB free. `C:\poly\pod` and `D:\projects\polymarket-pod\data` / `runs\m2` are missing.
+- Python: PATH default 3.14.3 (`websockets` 15.0.1, not the 17.2.0 pin). M1 `venv312` is 3.12.10 / `websockets` 17.2 / `pytest` 8.3.5.
+- Accepted M1 PASS data is at `D:\AI_Workspace\pod-m1-20261011T0313Z\polymarket-pod\data\m1-runs\m1-20261011T0313Z` (completed 21600.422 s, all 11 criteria pass, risk pin 0aea23af…bc04, `live_enabled=false`). The current project tree has no `data/m1-runs`.
+- Finish when this docs PR is merged to dev. Do not treat this note as approval of the #122 7-day run. risk.toml unchanged, `live_enabled=false`.
+
 ## Latest
+
+- 2026-11-10 JST: Task FG (M2 #122 NoisePC readonly preflight) registered. Docs only: `docs/M2_NOISEPC_PREFLIGHT.md`. No runner, no clock change, no install, no GitHub issue/PR comments, risk.toml pin unchanged, `live_enabled=false`.
+- Preflight window 2026-11-10 12:13–12:17 JST on NoisePC. NTP phase 0.0287 s; C: 423.7 GB / D: 293.1 GB free; accepted M1 PASS remains under `D:\AI_Workspace\pod-m1-20261011T0313Z\...\m1-20261011T0313Z`. `C:\poly\pod` and current-checkout `data/m1-runs` are missing. Python PATH is 3.14.3 (`websockets` 15.0.1); M1 venv is 3.12.10 / 17.2.
+- Items for 家伟 (not decided here): M2 checkout/data path, which Python to use, whether to tighten NTP given 7.8 s root dispersion, and the still-KEY #122 7-day start. FF stays `todo`. Claim left null. No merge.
+
 
 - 2026-11-05 UTC: FF pure-kernel local-WIP normal --todo release proposed after genuine PRODUCT HOLD: Root finalreview/publication/merge/targetreadback missed original S4=14:45:17Z despite earlier metadata gate. No explicit OPEN, zero Source kernel engineering, no retrospective S5/remaining-time exception; Root closure overrun is not Source product failure.
 - Exactly one real normalCLI release --surface codex-local --todo from2026-11-05T14:49:09.381726+00:00 to2026-11-05T14:49:09.816458+00:00, exit0/stdoutnull/stderr0. Original full codex-local/FF since14:41:17Z-until15:41:17Z/claim_hours1 unchanged, no now-renew-backdate-hourchange-force-takeover. FFdoing->todo/claimnull/no done_at, original103done retained.
