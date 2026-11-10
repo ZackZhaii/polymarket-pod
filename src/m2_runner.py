@@ -1048,7 +1048,9 @@ def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> lis
 
     1. Collect settlement snapshots from Gamma for the markets with an open leg only (src/resolution_watch).
        A collection failure books nothing this tick and is not a halt (#197 ruling ②): an event, retry next tick.
-    2. ``paper_ledger.apply_settlements``: one settlement row per resolved open leg, keyed by leg + condition
+    2. ``paper_ledger.apply_settlements`` (issue #347: under ``<PAPER_PATH>.commit.lock``; a lock not taken or a
+       clock past UTC midnight is a ``settlement_deferred`` event, not a problem, and the next tick retries):
+       one settlement row per resolved open leg, keyed by leg + condition
        (src/settlement.settlement_fill_id), written to the ledger and fsynced before any event. Booking the same
        key again is a no-op; the same key with other content is refused (conflicting_fill_id): a problem.
     3. ``_writeoff_hook`` (CK).
@@ -1075,9 +1077,13 @@ def _settle_tick(state: RunnerState, now: datetime, gamma: GuardedGetter) -> lis
             if collected.written:
                 event(state, "resolutions_collected", now,
                       condition_ids=[row["condition_id"] for row in collected.written])
-            out = paper_ledger.apply_settlements(_stamp(now), skip_markets=blocked)
+            # Issue #347 (Task FH): under the commit lock, re-planned there, the clock re-read there. A lock not
+            # taken in COMMIT_LOCK_TIMEOUT_S or a clock past UTC midnight defers: an event, no problem, no halt.
+            out = paper_ledger.apply_settlements(_stamp(now), skip_markets=blocked, clock=state.clock)
             if out["problems"]:
                 return [str(p) for p in out["problems"]]
+            if out.get("deferred"):
+                event(state, "settlement_deferred", now, reason=out["deferred"])
             if out["booked"]:  # the rows are on disk (ledger_store.book fsyncs) before this event
                 event(state, "settled", now, rows=[{"fill_id": row.get("fill_id"), "market": row.get("market"),
                                                    "token_id": row.get("token_id"),
