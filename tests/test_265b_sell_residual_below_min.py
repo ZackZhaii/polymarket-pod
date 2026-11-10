@@ -93,16 +93,26 @@ def test_b6_short_buyback_leaving_residual_below_min_is_vetoed(tmp_path, monkeyp
     assert d.allow is allow and d.reasons == ([] if allow else [CODE]), (d.shares, d.reasons)
 
 
-@pytest.mark.parametrize("held,sell", [(10.03, 5.03), (5.0 + 5.03, 5.03)])
-def test_b7_residual_the_next_close_would_floor_below_min_is_vetoed(tmp_path, monkeypatch, held, sell):
-    """Codex P2 (140d158): 10.03 - 5.03 = 4.999999999999999, which reduce_cap floors to 4.99 (< min, stuck leg)."""
-    rest = held - sell
-    d = evaluate(_sell(sell), load_risk(), _long(tmp_path, monkeypatch, held))
+def test_b7_residual_the_next_close_would_floor_below_min_is_vetoed(tmp_path, monkeypatch):
+    """Codex P2 (140d158): 10.03 - 5.03 = 4.999999999999999, which reduce_cap floors to 4.99 (< min, stuck leg).
+    Unconditional: the precondition is asserted, then the sell is vetoed (allow is False), never resized."""
     from src.risk_gate import reduce_cap
-    if reduce_cap("sell", {"leg_already_open": True, "leg_net_shares": rest}) < 5.0:
-        assert d.allow is False and d.reasons == [CODE], (rest, d.reasons)
-    else:
-        assert d.allow is True, (rest, d.reasons)
+    held, sell = 10.03, 5.03
+    rest = held - sell
+    assert reduce_cap("sell", {"leg_already_open": True, "leg_net_shares": rest}) < 5.0
+    d = evaluate(_sell(sell), load_risk(), _long(tmp_path, monkeypatch, held))
+    assert d.allow is False and d.reasons == [CODE], (rest, d.reasons)
+
+
+def test_b7c_the_same_arithmetic_leaving_exactly_the_min_is_allowed(tmp_path, monkeypatch):
+    """The other float-noise side of b7 (it used to share b7's if/else): (5.0 + 5.03) - 5.03 = 5.000000000000001,
+    which reduce_cap keeps at 5.0 (>= min): closable in one order, so the sell is allowed."""
+    from src.risk_gate import reduce_cap
+    held, sell = 5.0 + 5.03, 5.03
+    rest = held - sell
+    assert reduce_cap("sell", {"leg_already_open": True, "leg_net_shares": rest}) >= 5.0
+    d = evaluate(_sell(sell), load_risk(), _long(tmp_path, monkeypatch, held))
+    assert d.allow is True, (rest, d.reasons)
 
 
 def test_b7b_the_left_leg_closes_in_one_order(tmp_path, monkeypatch):

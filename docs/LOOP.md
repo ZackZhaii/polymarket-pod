@@ -1867,12 +1867,18 @@ Status: done (normal completion/release proposed at 2026-11-03T07:32:43Z). Produ
 
 ## Task EH — Issue #265 (b): no sell leaves a residual below min_order_size (KEY, HOLD)
 
-Status: hold (in review, PR #363; done=false). Queue exception: KEY + HOLD, so the status is `hold`, which `src/loop_claim.py`
-never claims (only `todo` / `doing`). Set to done when #363 merges after Poly风控 review and 家伟's 「批准 #363」.
+Status: hold (in review, PR #482; done=false). PR #482 (`task-265b/min-size-remainder-r2`) supersedes PR #363 (its old branch stays untouched).
+Queue exception: KEY + HOLD, so the status is `hold`, which `src/loop_claim.py` never claims (only `todo` / `doing`).
+Finish condition: #482 merged (after Poly风控 review and 家伟's own approval of the exact final head); then set done.
 
 - `src/risk_gate.py`: a reduce/close leaving 0 < remainder < min_order_size (remainder rounded down as the next close rounds)
   vetoes `reduce_leaves_residual_below_min`; never resized. Sub-step dust counts as a full close. (a) 全平仓豁免最小单量
   suspended (no official evidence). No new threshold; config/risk.toml unchanged (0aea23af…bc04), `live_enabled=false`.
+- Known residuals, documented only (no gate or ledger semantics change here); follow-ups belong to #265:
+  - An off-grid position (e.g. 5.005 shares) cannot be fully closed in one order: a full close leaves dust. That dust has
+    `reduce_cap` 0, so it can never be closed and keeps occupying `max_open_positions`.
+  - `reduce_residual_problem` is unchanged for a NaN remainder (its NaN handling is not touched here).
+  - `min_order_size = 0` is unchanged (its handling is not touched here).
 - Tests: `tests/test_265b_sell_residual_below_min.py`. Full pytest 0 failed.
 
 ## Task EJ — CI: exact queue metadata fast lane with unconditional Guard
@@ -2712,6 +2718,7 @@ Status: todo. FF pure-kernel local-WIP claim was not OPEN because Root missed S4
 - 2026-10-16: Task EG PR #360 review (Codex 6213482409 / flash 6213576333 / Poly风控 6213662139): settlement._number treats 10**400 as invalid (invalid_settlement_payout market halt, no OverflowError; runner records it even when verify raises); a settled token dropped from its still-confirmed condition mapping is settlement_result_changed + market halt; sentinel.halt failures and record_market_halts problems reach the caller (apply_settlements problems, preflight reasons). Tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-16: Task EG (#349) done by Poly桥接: settlement_conflict / settlement_result_changed / invalid_settlement_payout are now also scope=market settlement-blocking halts (global invalid_risk_state kept, no prefix removed); minimal hooks in paper_ledger.apply_settlements and m2_runner.preflight. Non-KEY, tighten only. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-20: Registered Task EH (#265 (b), PR #363) as hold (KEY + HOLD, in review); not claimable by the loop. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
+- 2026-11-10: Task EH now tracks PR #482 (`task-265b/min-size-remainder-r2`), which supersedes #363; still hold (KEY + HOLD), finish condition "#482 merged". Docs only: the off-grid dust residual (dust has reduce_cap=0 and keeps occupying max_open_positions), the reduce_residual_problem NaN handling and min_order_size=0 are recorded as #265 follow-ups. risk.toml unchanged (0aea23af…bc04), live_enabled=false.
 - 2026-10-16: Task EF (#350), codex-local: oversized fee_rate/market_price/effective_price fail closed; ledger reports invalid_fee, load_state loss=None.
 - Validation: TDD 20 expected failures + 1 control; focused 347 passed; released-state full pytest 5638 passed, 8 skipped, 9 existing xfailed, 0 failed. First full queue-state failure retained.
 - Non-author QC: internal capability_audit checked frozen code/tests, 12 oversized-integer cases, 12 existing-price-fallback cases and 14 finite/type controls; actual receipts accompany the PR.
