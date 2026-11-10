@@ -1,6 +1,6 @@
 # M2 #122 前置：NoisePC 只读预检（2026-11-10）
 
-Readonly preflight of NoisePC (machineId `8b6b6865-1830-4ef9-bc33-885cfc51dd5a`) for issue #122, taken 2026-11-10 12:13–12:17 JST (Asia/Tokyo, UTC+9). No runner was started, no scheduled task was changed, the host clock was not adjusted, nothing was installed, and `config/risk.toml` was not edited. This note is observations only; it does not approve the 7-day paper run (still pod-key).
+Readonly preflight of NoisePC (machineId `8b6b6865-1830-4ef9-bc33-885cfc51dd5a`) for issue #122, taken 2026-11-10 12:13–12:17 JST (Asia/Tokyo, UTC+9). No runner was started, no scheduled task was changed, the host clock was not adjusted, nothing was installed, and `config/risk.toml` was not edited. This note is observations only; it does not approve the 7-day paper run (still pod-key). The four open questions it raised were decided by 家伟 on 2026-11-10 12:23 JST: see 「家伟决定」 at the end.
 
 ## Clock
 
@@ -67,9 +67,13 @@ Shorter leftovers in the same old clone: `smoke-20261010T0655Z` and `launchtest1
 - Did not touch `D:\eta-python` or `D:\AI_Workspace\OpenClaw`.
 - Did not change PolyPod scheduled tasks, Windows power/update policy, or the M1/M2 venv.
 
-## Items for 家伟 (not decided here)
+## 家伟决定（2026-11-10 12:23 JST，经 Poly指挥 转达）
 
-1. M2 working tree: `C:\poly\pod` and `D:\projects\polymarket-pod\data` / `runs\m2` are missing. The accepted M1 data is only under `D:\AI_Workspace\pod-m1-20261011T0313Z\...`. Where should M2 read or copy that tree?
-2. Which Python to use for M2 on NoisePC: PATH default 3.14.3 (`websockets` 15.0.1) versus the existing M1 `venv312` (3.12.10, `websockets` 17.2, matching the PASS manifest and `requirements-ws.txt`)?
-3. Windows root dispersion is ~7.8 s while `M1_MAX_CLOCK_BEHIND_S` is 0.1 s. Measured NTP offset was ~7–29 ms and the one `/book` lead was not behind the limit. Whether to tighten NTP (shorter poll / resync) before a long run is a host-clock decision; this preflight did not change it.
-4. The 7-day paper run in #122 remains KEY: start time, scheduled tasks, power policy, and thresholds still need an explicit approval. This document is not that approval.
+下面四个原本「待家伟拍板」的事项已经由家伟决定（本节如实记录他转达的决定；预检本身没有改动 NoisePC 上的任何东西，也没有执行这些决定）：
+
+1. **工作目录**：在 `D:\projects\polymarket-pod` 新拉一份 dev 作为 M2 工作目录。M1 PASS 目录（`D:\AI_Workspace\pod-m1-20261011T0313Z\...`）只做存档，不复用。（原问题：M2 working tree 放哪、M1 数据怎么读或拷。）
+2. **Python**：用 `venv312`（Python 3.12.10，`websockets` 17.2，与 M1 PASS manifest 和 `requirements-ws.txt` 的 pin 一致），不用 PATH 默认的 3.14.3（`websockets` 15.0.1）。（原问题：用哪个 Python。）
+3. **NTP**：先不收紧。（原问题：Windows root dispersion 约 7.8 s 而 `M1_MAX_CLOCK_BEHIND_S = 0.1 s`，长跑前是否收紧 NTP。）
+4. **不变**：#122 的 7 天纸面长跑仍是 KEY，开始时间、计划任务、电源策略、阈值仍要家伟另行明确批准；本文档不是那个批准。不启动 runner，不开 live，`live_enabled = false`，`config/risk.toml` 不动。
+
+本 PR 只改文档：上述决定都没有在 NoisePC 上执行（没有拉 dev、没有建或改 venv、没有动 NTP）。
