@@ -2214,7 +2214,18 @@ Status: todo. FF pure-kernel local-WIP claim was not OPEN because Root missed S4
 
 
 - Kernel local-WIP V1 candidate adoption: Packet FF_R2_KERNEL_LOCAL_WIP_20261105T1323_V1 proposes only a real pure canonical/declarability kernel plus direct tests, original boot two-key schema and all existing wiring unchanged. Append only the exact FF.finish/note suffixes; preserve all original prefixes/status/history/103done/FFtodo/claimnull and product/risk/CI. Actual same-packet Source/CodeQC/Root ACKs and a separate independently integrated metadata adoption with actual-dev field/free readback are required before any separately dispatched normal FF claim and explicit OPEN. No implementation/claim/product adoption permission is created now; full R2 remains NO_READY, original HOLD and clock corrections preserved.
+## Task FI — BTC 5m/15m Up/Down time-window paper backtest (docs only)
+
+Status: todo. Offline research note `docs/research/btc-updown-window-backtest.md`: does entering BTC Up/Down 5m/15m markets only at minute k of the window (favourite or underdog, price bands 0.50–0.99) pay after the 0.07 crypto taker fee and 0/0.01/0.02 slip?
+
+- Data: public read-only Gamma `/events?slug=btc-updown-{5m,15m}-<ts>` and CLOB `/prices-history` (~1 min points), 1335 resolved 15m markets (14 days) and 1152 resolved 5m markets (4 days) to 2026-11-10 04:00 UTC. No auth, no orders, no install.
+- Result: claim not reproduced. Late-window favourite entries win 83–99 % but average PnL is about zero or negative after fee/slip; cells picked on the first half mostly turn negative on the second half (15m 5/39, 5m 2/9 stay positive).
+- Limits: price history is not an executable ask, no historical books, short sample; after-the-bell entry not testable with this data.
+- Docs only: the analysis script is embedded in the doc; no `src/`, `scripts/`, `tests/` or config change. risk.toml unchanged, `live_enabled=false`.
+
 ## Latest
+
+- 2026-11-10 JST: Task FI (BTC 5m/15m Up/Down time-window paper backtest) registered with its docs-only PR to dev ([HOLD], open only, not merged). Claim not reproduced on 1335 15m / 1152 5m markets. No threshold, risk.toml pin unchanged, `live_enabled=false`. FF unchanged, claim null.
 
 - 2026-11-05 UTC: FF pure-kernel local-WIP normal --todo release proposed after genuine PRODUCT HOLD: Root finalreview/publication/merge/targetreadback missed original S4=14:45:17Z despite earlier metadata gate. No explicit OPEN, zero Source kernel engineering, no retrospective S5/remaining-time exception; Root closure overrun is not Source product failure.
 - Exactly one real normalCLI release --surface codex-local --todo from2026-11-05T14:49:09.381726+00:00 to2026-11-05T14:49:09.816458+00:00, exit0/stdoutnull/stderr0. Original full codex-local/FF since14:41:17Z-until15:41:17Z/claim_hours1 unchanged, no now-renew-backdate-hourchange-force-takeover. FFdoing->todo/claimnull/no done_at, original103done retained.
