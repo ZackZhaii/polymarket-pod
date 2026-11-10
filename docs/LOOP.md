@@ -2214,7 +2214,19 @@ Status: todo. FF pure-kernel local-WIP claim was not OPEN because Root missed S4
 
 
 - Kernel local-WIP V1 candidate adoption: Packet FF_R2_KERNEL_LOCAL_WIP_20261105T1323_V1 proposes only a real pure canonical/declarability kernel plus direct tests, original boot two-key schema and all existing wiring unchanged. Append only the exact FF.finish/note suffixes; preserve all original prefixes/status/history/103done/FFtodo/claimnull and product/risk/CI. Actual same-packet Source/CodeQC/Root ACKs and a separate independently integrated metadata adoption with actual-dev field/free readback are required before any separately dispatched normal FF claim and explicit OPEN. No implementation/claim/product adoption permission is created now; full R2 remains NO_READY, original HOLD and clock corrections preserved.
+## Task FH — Issue #347: runner settlement under the commit lock
+
+Status: todo. `m2_runner._settle_tick` -> `paper_ledger.apply_settlements` now runs read -> plan -> book under `<PAPER_PATH>.commit.lock` (the same `_commit_lock()` as `commit_if_allowed`), so no settlement row lands between another process's RiskGate check and its book.
+
+- Inside the lock: the ledger, resolutions and settlement-blocking market halts are read again (the caller's `skip_markets` can only add markets); the runner's clock is read again (same UTC day restamps max(now, clock); a later UTC day defers with `settlement_deferred_day_boundary`).
+- Lock not taken within `COMMIT_LOCK_TIMEOUT_S` (unchanged, 5 s): `deferred: settlement_deferred_commit_lock`, nothing written, no problem, no halt; the runner records a `settlement_deferred` event and retries next tick.
+- `commit_if_allowed` calls the lock-free kernel `_apply_settlements_locked` (no self-lock). Existing halts unchanged. `settled` event stays at-most-once; the ledger is the truth.
+- Tests: `tests/test_347_settlement_commit_lock.py` (cross-process holder handshake, same-PID second fd, wait-then-replan, halt added while waiting, clock/day boundary, runner defer then settle, killed holder, two settler processes -> one row, invalid lock timeouts).
+- Not here: A6 write-off interleave (needs #342/#483 on dev), `SETTLEMENT_LOCK_DEFER_ALERT` (new threshold, needs 家伟). risk.toml unchanged, `live_enabled=false`.
+
 ## Latest
+
+- 2026-11-10 JST: Task FH (issue #347, settlement under the commit lock) registered with its implementation PR to dev ([HOLD], open only, not merged). No new threshold, risk.toml pin unchanged, `live_enabled=false`. A6 to be re-run once #483 is on dev; defer alert threshold left for 家伟. FF/FG unchanged, claim null.
 
 - 2026-11-05 UTC: FF pure-kernel local-WIP normal --todo release proposed after genuine PRODUCT HOLD: Root finalreview/publication/merge/targetreadback missed original S4=14:45:17Z despite earlier metadata gate. No explicit OPEN, zero Source kernel engineering, no retrospective S5/remaining-time exception; Root closure overrun is not Source product failure.
 - Exactly one real normalCLI release --surface codex-local --todo from2026-11-05T14:49:09.381726+00:00 to2026-11-05T14:49:09.816458+00:00, exit0/stdoutnull/stderr0. Original full codex-local/FF since14:41:17Z-until15:41:17Z/claim_hours1 unchanged, no now-renew-backdate-hourchange-force-takeover. FFdoing->todo/claimnull/no done_at, original103done retained.

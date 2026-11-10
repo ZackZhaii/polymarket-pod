@@ -28,6 +28,8 @@ import argparse
 import json
 import math
 import sys
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -333,8 +335,73 @@ def settlement_blocked_markets() -> frozenset[str]:
                      and settlement.blocks_settlement(record.get("reason")))
 
 
-def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | None = None) -> dict[str, Any]:
+SETTLEMENT_LOCK_UNAVAILABLE = "settlement_deferred_commit_lock"
+SETTLEMENT_DAY_BOUNDARY = "settlement_deferred_day_boundary"
+
+
+def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | None = None,
+                      clock: Callable[[], Any] | None = None) -> dict[str, Any]:
+    """Issue #347 (Task FH): the public settlement entry (the M2 runner's ``_settle_tick``). The whole read ->
+    plan -> book path runs under the same ``<PAPER_PATH>.commit.lock`` as commit_if_allowed (``_commit_lock``), so
+    no settlement row lands between another process's RiskGate check and its book. Inside the lock everything is
+    planned again from the current files: the ledger, the resolutions and the settlement-blocking market halts
+    (``skip_markets`` from the caller can only add markets to that set).
+
+    Deferred (nothing booked, no problem, no halt; the caller retries next tick), only in two cases:
+    - the lock cannot be taken within ``COMMIT_LOCK_TIMEOUT_S`` (unchanged, 5 s; an invalid value never locks):
+      ``{"booked": [], "unsettled_closed_legs": [], "problems": [], "deferred": SETTLEMENT_LOCK_UNAVAILABLE}``;
+    - ``clock`` (with ``now``) is read again inside the lock and is on a later UTC day than ``now``:
+      ``deferred: SETTLEMENT_DAY_BOUNDARY`` (a row stamped with yesterday would leave today's daily loss short).
+      The same UTC day stamps the rows max(now, clock); an unusable clock keeps ``now`` (never later).
+    The commit path (already inside the lock) calls ``_apply_settlements_locked`` directly: no self-lock (A2).
+    The runner's ``settled`` event is at-most-once (written after the rows are fsynced); the ledger is the truth.
+    """
+    lock = _commit_lock()
+    try:
+        acquired = lock.acquire(timeout_s=COMMIT_LOCK_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 - a lock that cannot be taken defers (books nothing)
+        acquired = False
+    if not acquired:
+        return {"booked": [], "unsettled_closed_legs": [], "problems": [], "deferred": SETTLEMENT_LOCK_UNAVAILABLE}
+    try:
+        if clock is not None and now is not None:
+            now, deferred = _settlement_write_time(now, clock)
+            if deferred:
+                return {"booked": [], "unsettled_closed_legs": [], "problems": [], "deferred": deferred}
+        if skip_markets is not None:
+            try:
+                skip_markets = frozenset(skip_markets) | settlement_blocked_markets()
+            except Exception as exc:  # noqa: BLE001 - an unreadable halt state: settle nothing (the caller halts)
+                return {"booked": [], "unsettled_closed_legs": [],
+                        "problems": [f"settlement_halt_state_unreadable:{type(exc).__name__}"]}
+        return _apply_settlements_locked(now, skip_markets=skip_markets)
+    finally:
+        lock.release()
+
+
+def _settlement_write_time(now: str, clock: Callable[[], Any]) -> tuple[str, str | None]:
+    """Issue #347 spec A4: (the row stamp, None) = max(now, the clock) on now's UTC day; (now,
+    SETTLEMENT_DAY_BOUNDARY) when the clock is on a later UTC day. A clock that raises, is not an aware datetime,
+    or is behind ``now`` keeps ``now`` (spec A4/A11: never later than the caller, not a deferral reason)."""
+    base = parse_book_ts(now)
+    try:
+        later = clock()
+    except Exception:  # noqa: BLE001 - an unusable clock keeps the caller's time
+        return now, None
+    later = parse_book_ts(later) if isinstance(later, datetime) else None
+    if base is None or later is None or later <= base:
+        return now, None
+    stamp = later.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    if stamp[:10] != base.strftime("%Y-%m-%d"):
+        return now, SETTLEMENT_DAY_BOUNDARY
+    return stamp, None
+
+
+def _apply_settlements_locked(now: str | None = None, *,
+                              skip_markets: frozenset[str] | None = None) -> dict[str, Any]:
     """Issue #126 (Task CG): book a settlement row for every open leg of a market with a confirmed settlement.
+
+    Issue #347: the caller holds ``<PAPER_PATH>.commit.lock`` (``apply_settlements`` or ``_commit_locked``).
 
     Idempotent (the row's fill_id is derived from the settlement; a booked one is never booked again). A ledger
     that does not verify is left to load_state (invalid_risk_state, as before) and nothing is booked here.
@@ -571,14 +638,21 @@ def _invalid_payout_market_halts() -> list[str]:
         return [f"settlement_market_halt_failed:-:{type(exc).__name__}"]
 
 
-def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
-    """Task DD (#237, Codex P1): the whole load_state -> RiskGate -> book path runs under one cross-process
-    mutex on ``<PAPER_PATH>.commit.lock``, so two interleaved commits (e.g. YES and NO of one market) cannot both read
-    a state without the other's fill. A mutex that cannot be taken refuses the order (fail closed)."""
+def _commit_lock() -> Any:
+    """The commit mutex ``<PAPER_PATH>.commit.lock`` (Task DD), shared by commit_if_allowed and (issue #347)
+    apply_settlements; maker.py builds the same path."""
     from src import halt_store
 
     lock = halt_store.StateLock(PAPER_PATH)
     lock.path = Path(str(PAPER_PATH) + ".commit.lock")  # not ledger_store's <ledger>.lock (taken inside book)
+    return lock
+
+
+def commit_if_allowed(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
+    """Task DD (#237, Codex P1): the whole load_state -> RiskGate -> book path runs under one cross-process
+    mutex on ``<PAPER_PATH>.commit.lock``, so two interleaved commits (e.g. YES and NO of one market) cannot both read
+    a state without the other's fill. A mutex that cannot be taken refuses the order (fail closed)."""
+    lock = _commit_lock()
     if not lock.acquire(timeout_s=COMMIT_LOCK_TIMEOUT_S):
         summary = {"forecast_id": intent.forecast_id, "strategy": intent.strategy,
                    "reasons": [STRUCTURAL_ARB_DISABLED, "commit_lock_unavailable"],
@@ -602,7 +676,8 @@ def _commit_locked(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: b
     bus message, allow False, nothing booked); a failed write leaves the old ledger intact.
     """
     # Issue #126 (Task CG): settle resolved legs first, so a settled loss is realized once and the leg is gone.
-    settled = apply_settlements()
+    # Issue #347 (A2): already inside the commit lock, so the lock-free kernel (the public entry would self-lock).
+    settled = _apply_settlements_locked()
     if settled["problems"]:
         problems = [str(p) for p in settled["problems"]]
         summary = {"forecast_id": intent.forecast_id, "strategy": intent.strategy, "reasons": ["invalid_risk_state"],
