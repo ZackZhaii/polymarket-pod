@@ -1,10 +1,18 @@
-"""PR #342 r2: the #349 fail-closed overflow rule and the #353 keyset contract hold on the write-off path too.
+"""PR #483 (replaces #342): tests for the two post-merge fixes of src/market_close and the ledger overflow path.
 
-(1) A ledger row carrying an int too large for a float (10**400) in ANY field is reported by ``ledger_store.verify``
-    as ``ledger_verify_failed:OverflowError`` (the #349 / #360 fail-closed name), on top of the field's own problem
-    (``invalid_settlement`` / ``invalid_writeoff``): problems are never empty, so the commit path vetoes and halts.
-(2) ``market_close`` reads a held market through ``/markets/keyset?id=<id>[&closed=true]`` (#353), accepts only the
-    strict ``{"markets": [row-of-this-id]}`` answer and sends no request for a non-numeric id.
+Written AFTER the source change (a TDD gap, stated in the PR); dev's own #349 / #353 / #345 tests were the ones that
+were red first. They pin what the code does now:
+
+(1) Overflow (#349). A settlement row whose ``settlement_payout`` is an int too large for a float (10**400) makes
+    ``ledger_store.verify`` raise ``OverflowError`` (as on dev); ``paper_ledger.load_state`` reports it as
+    ``ledger_verify_failed:OverflowError`` and ``apply_writeoffs`` returns it as a problem: nothing is booked,
+    the ledger bytes are unchanged and nothing is raised into the runner. The market halt for that payout is
+    covered by dev's tests/test_349_settlement_blocking_prefixes.py, not here. A 10**400 in a WRITE-OFF row is a
+    plain ``invalid_writeoff`` problem and ``verify`` does not raise.
+(2) Keyset reads (#353). ``market_close.gamma_url`` is the allowlisted ``/markets/keyset?id=<id>[&closed=true]``;
+    ``gamma_read`` accepts only ``{"markets": [row(s) of that id]}``, reports any other shape as
+    ``gamma_bad_response`` (``gamma_duplicate_market`` for two rows of the id), and sends no request for a
+    non-numeric id (``gamma_bad_id``). A read problem is an unknown read, not a close.
 No network, no order; every file is in the test's folder.
 """
 from __future__ import annotations
@@ -32,7 +40,7 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", refuse)
 
 
-# ------------------------------------------------------------------ (1) fail-closed overflow
+# ------------------------------------------------------------------ (1) overflow (#349)
 
 def _ledger_with(tmp_path, name, value, kind="writeoff"):
     path = tmp_path / "paper.jsonl"
@@ -67,7 +75,7 @@ HUGE = [10 ** 400, -(10 ** 400)]
 
 @pytest.mark.parametrize("huge", HUGE, ids=["huge", "neg-huge"])
 def test_a_huge_settlement_payout_is_never_an_empty_problem_list_in_load_state(paths, huge):
-    """#349: the row's payout does not verify; load_state reports ledger_verify_failed (the commit path vetoes)."""
+    """verify raises on the huge payout; load_state turns that into ledger_verify_failed:OverflowError and no state."""
     _ledger_with(paths, "settlement_payout", huge, kind="settlement").replace(paper_ledger.PAPER_PATH)
     state = paper_ledger.load_state("x", "t")
     assert OVERFLOW in state["ledger_problems"], state["ledger_problems"]
@@ -76,7 +84,7 @@ def test_a_huge_settlement_payout_is_never_an_empty_problem_list_in_load_state(p
 
 @pytest.mark.parametrize("huge", HUGE, ids=["huge", "neg-huge"])
 def test_a_huge_settlement_payout_is_a_problem_of_apply_writeoffs_not_a_crash(paths, huge):
-    """The write-off step reads the same ledger: it books nothing and reports ledger_verify_failed, never raises."""
+    """apply_writeoffs reads the same ledger: it books nothing, returns ledger_verify_failed as a problem, never raises."""
     _ledger_with(paths, "settlement_payout", huge, kind="settlement").replace(paper_ledger.PAPER_PATH)
     before = paper_ledger.PAPER_PATH.read_bytes()
     out = paper_ledger.apply_writeoffs([close("m")], DAY1)

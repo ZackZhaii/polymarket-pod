@@ -1,21 +1,27 @@
-"""PR #342 r2: #342's REAL write-off hook against every combination of a settlement GET failure and a write-off
-read failure, with an exact read count per tick.
+"""PR #483 (replaces #342): #342's REAL write-off hook against every combination of a settlement GET failure and a
+write-off read failure, with the exact id-read count of each tick.
+
+These tests PIN EXISTING BEHAVIOUR (they were not written red first); they were checked by mutation instead:
+ignoring ``step.halts``, or skipping the write-off hook after a settlement failure, turns them red.
 
 Why this file exists: #345's tests (tests/test_m2_runner_settlement_get_failures.py) count the settlement collector's
-reads and failures only, so they run with the write-off hook stubbed (an autouse fixture there). This file restores
-the coverage that stub removes: nothing here stubs ``m2_runner._writeoff_hook``.
+reads and failures only, so that file runs with the write-off hook stubbed by an autouse fixture. This file covers
+the real hook that stub bypasses; nothing here stubs ``m2_runner._writeoff_hook``.
 
 One tick of a held market that Gamma lists closed makes these id reads, in this order (src/resolution_watch.read_market
 reads closed=true first and stops at a failure, then the default view; src/market_close.gamma_read does the same):
     settlement: closed=true, default view   (1 read when the closed=true read fails)
     write-off:  closed=true, default view   (1 read when the closed=true read fails)
-so the total is 4 reads, minus one for each phase whose first (closed=true) read fails.
+so a tick makes 4 reads, minus one for each phase whose first (closed=true) read fails.
 
-What "fail closed" means for a read failure (#197 rulings, src/market_close): nothing is booked off a read that
-failed (no write-off, no settlement), a pending close confirmation is dropped (the next qualifying read starts it
-again), the failure is reported as an event, and it is NOT a halt by itself (the leg keeps its #124 worst-case mark).
-A contradiction read (the written-off market reads open again after the grace) IS a halt of that market, whether or
-not the settlement GET of the same tick failed; a failed write-off read hides it for one tick only, never for good.
+What the tests assert (#197 rulings, src/market_close), not a halt on read failure:
+  * A read failure (settlement GET or write-off read) is NOT a halt. It books nothing from the failed read, is reported
+    as an event (``settlement_skipped`` / ``close_read_skipped``), a failed write-off read drops the pending close
+    confirmation, and the ledger bytes stay unchanged. A settlement GET failure does not stop a write-off whose own
+    reads succeed: the two phases are independent.
+  * Only a CONTRADICTION halts: a written-off market that reads open again after the grace halts that market
+    (``closed_flag_contradiction_after_writeoff``, its settlement blocked), also when the same tick's settlement GET
+    failed. A failed write-off read hides it for that tick only; the next good read halts.
 No network; every file is in the test's folder.
 """
 from __future__ import annotations
@@ -125,7 +131,7 @@ def test_a_confirming_tick_with_every_combination_of_read_failures(env, settle, 
     if writeoff is None:  # the write-off read worked: confirmed and written off once, whatever the settlement GET did
         assert close_skipped == [] and len(_writeoffs(env)) == 1
         assert env["paper"].read_bytes() != before
-    else:  # fail closed: nothing booked off a failed read, ledger byte for byte unchanged, failure reported
+    else:  # a failed read: nothing booked from it, ledger byte for byte unchanged, failure reported
         assert len(close_skipped) == 1 and close_skipped[0]["markets"] == {ID: FAILED}
         assert _writeoffs(env) == [] and env["paper"].read_bytes() == before
         assert ID not in env["state"].close_tracker.first  # the pending confirmation was dropped
