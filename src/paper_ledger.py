@@ -343,7 +343,7 @@ def settlement_blocked_markets() -> frozenset[str]:
     itself (src/settlement.blocks_settlement). Other market halts do not block settlement."""
     from src import halt_store, settlement
 
-    return frozenset(str(record.get("market")) for record in halt_store.active_halts()
+    return frozenset(str(record.get("market")) for record in halt_store.settlement_halts()
                      if record.get("scope") == halt_store.SCOPE_MARKET and record.get("market")
                      and settlement.blocks_settlement(record.get("reason")))
 
@@ -360,12 +360,6 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
     from src import settlement
 
     out: dict[str, Any] = {"booked": [], "unsettled_closed_legs": [], "problems": []}
-    if skip_markets is None:  # PR #211: the commit path honours the same blocking market halts as the runner
-        try:
-            skip_markets = settlement_blocked_markets()
-        except Exception as exc:  # noqa: BLE001 - an unreadable halt state: settle nothing (the caller halts)
-            out["problems"] = [f"settlement_halt_state_unreadable:{type(exc).__name__}"]
-            return out
     snaps, problems = read_settlements()
     if problems:
         out["problems"] = problems
@@ -373,6 +367,11 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
     if not snaps:
         return out  # nothing can settle: the ledger is not even read (commit_if_allowed's invalid_risk_state halt
         # adds the invalid-payout market halts itself: PR #360 review 6215585310)
+    try:  # a caller's snapshot can add blocks, never erase newer retained market evidence
+        skip_markets = (skip_markets or frozenset()) | settlement_blocked_markets()
+    except Exception as exc:  # noqa: BLE001 - an unreadable halt state: settle nothing (the caller halts)
+        out["problems"] = [f"settlement_halt_state_unreadable:{type(exc).__name__}"]
+        return out
     _, ledger = ledger_store.read_ledger(PAPER_PATH)
     # PR #360 review 6214147426 (P1): verify itself may raise (10**400 in settlement_payout with prices 0/1; the
     # verify fix is #350/EF). A raise is a ledger that does not verify: veto (a problem) AND the market halts.

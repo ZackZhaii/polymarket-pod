@@ -1117,10 +1117,18 @@ def _writeoff_hook(state: RunnerState, now: datetime, gamma: GuardedGetter,
     if unread:
         event(state, "close_read_skipped", now, markets=unread)  # no write-off this tick, no halt
     if step.halts:
+        failed = []
         for halt in step.halts:  # PR #211: this market's settlement stays blocked until the Operator resumes it
             reason, _, market = halt.rpartition(":")
-            halt_store.record_halt(scope=halt_store.SCOPE_MARKET, market=market, reason=reason, source="m2_runner")
-        return step.halts
+            record = halt_store.record_halt(scope=halt_store.SCOPE_MARKET, market=market,
+                                            reason=reason, source="m2_runner")
+            if record["persisted"] != halt_store.PERSISTED_STATE:
+                failed.append(f"writeoff_market_halt_failed:{market}:{record['persisted']}")
+                if record["persisted"] == halt_store.PERSISTED_NONE:
+                    retained = halt_store.retain_market_halt(record)
+                    if retained["persisted"] == halt_store.PERSISTED_NONE:
+                        raise WriteFailed(f"market_halt_recovery_failed:{market}")
+        return step.halts + failed
     if step.closes:
         # PR #342 review (Codex 6184412258 P1): THIS tick's clock, never the previous tick's. Not checked (no
         # clock step given) or failed: clock_ok False, so a day's first snapshot is late and the write-off is
