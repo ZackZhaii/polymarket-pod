@@ -33,6 +33,22 @@ is not buy/sell, or whose shares, notional or fee is not a finite number >= 0 (r
 invalid (``problems`` non-empty). load_state then gives ``daily_loss_usd = None``, RiskGate vetoes
 ``invalid_risk_state`` and paper_ledger escalates that to a global halt (Task AL).
 
+Write-offs (issue #197, Task CK, KEY-approved "close-then-write-off"): a ``kind`` "writeoff" row
+(src/ledger_store.py (f)) on an open leg of a confirmed closed market books the leg's whole worst-case
+loss as realized, once, on the row's own UTC day: a long's average cost (``basis``), a short's
+``shares x 1 - basis`` (the buy-back at 1). RiskGate's correction (issuecomment-6109537257, tightening only):
+shares held since the start of the UTC day are written off at max(cost, start-of-day mark), shares bought today
+at cost, so the write-off day's loss is never below the #124 loss just before it (src/market_close.plan_writeoffs
+computes it from the day's snapshot). The row books ``writeoff_cost_usd`` (must be the replayed cost above) and
+``writeoff_sod_uplift_usd`` (>= 0); ``writeoff_usd`` must be exactly their sum and at most the leg's worst case
+on any mark (``shares x 1``). A row without both fields must be the cost exactly. ``writeoff_usd`` is what is
+realized. Its ``writeoff_shares`` must be the whole open leg; anything else is ``daily_loss_invalid_writeoff``
+(invalid_risk_state). From
+then on the leg is written off until it is flat: a later close (the settlement) books no further loss
+(a losing leg's settlement pnl is the loss already written off; it is reported as
+``writeoff_settled_loss_usd`` only), a winning leg's gain is reported as a gain and never offsets
+anything, and a fill that would grow or flip a written-off leg is ``daily_loss_writeoff_leg_grew``.
+
 Pure: no clock (``today`` is passed in), no file, no bus. No new threshold.
 """
 from __future__ import annotations
@@ -42,7 +58,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from src.book_staleness import parse_book_ts
-from src.ledger_store import counts, leg_key
+from src.ledger_store import FILL_ID_FIELD, counts, is_writeoff, leg_key
 from src.thresholds import LEDGER_OPEN_EPS
 
 SIDES = ("buy", "sell")
@@ -57,6 +73,10 @@ class DailyLoss:
     realized_loss_usd: float = 0.0
     realized_gain_usd: float = 0.0
     closing_fills_today: int = 0
+    writeoff_usd: float = 0.0              # issue #197: today's write-offs (already in realized_loss_usd)
+    writeoffs_today: int = 0
+    writeoff_settled_loss_usd: float = 0.0  # today's closes of written-off legs: not counted again
+    legs: dict[tuple[str, str], dict[str, float]] = field(default_factory=dict)  # final average-cost state
     problems: list[str] = field(default_factory=list)
 
     @property
@@ -70,7 +90,7 @@ def _number(value: object) -> float | None:
     """The ledger's own number rule (ledger_store.non_finite_ledger_rows / _apply use float())."""
     try:
         number = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # PR #342 (Codex 6192635798): 10**400 is invalid
         return None
     return number if math.isfinite(number) else None
 
@@ -121,15 +141,81 @@ def daily_loss(rows: Iterable[dict[str, Any]], today: str, ids: Iterable[str] | 
             usd = qty * 1.0 if side == "buy" else 0.0
         if is_today:
             result.fees_usd += fee
-        pnl = _apply(legs.setdefault(leg_key(row.get("market"), row.get("token_id")), {"shares": 0.0, "basis": 0.0}),
-                     side, qty, usd)
+        leg = legs.setdefault(leg_key(row.get("market"), row.get("token_id")),
+                              {"shares": 0.0, "basis": 0.0, "written_off": 0.0})
+        if is_writeoff(row):  # issue #197: the leg's whole worst-case loss, realized once
+            amount = writeoff_amount(leg)
+            booked = _number(row.get("writeoff_usd"))
+            shares = _number(row.get("writeoff_shares"))
+            # PR #342 review (Codex 6185588835 P1): a write-off without its fill_id never clears a leg
+            if (amount is None or leg["written_off"] or booked is None or shares is None or FILL_ID_FIELD not in row
+                    or abs(shares - abs(leg["shares"])) > LEDGER_OPEN_EPS
+                    or not _writeoff_amount_ok(row, booked, amount, abs(leg["shares"]))):
+                result.problems.append(f"daily_loss_invalid_writeoff:{label}")
+                continue
+            leg["written_off"] = 1.0
+            if is_today:
+                result.writeoff_usd += booked
+                result.writeoffs_today += 1
+                result.realized_loss_usd += booked
+            continue
+        held = leg["shares"]
+        if leg["written_off"] and qty > 0 and (side == "buy") == (held > 0):
+            result.problems.append(f"daily_loss_writeoff_leg_grew:{label}")
+            continue
+        before = writeoff_amount(leg) if leg["written_off"] else None
+        pnl = _apply(leg, side, qty, usd)
+        if leg["written_off"] and abs(leg["shares"]) > LEDGER_OPEN_EPS and (leg["shares"] > 0) != (held > 0):
+            result.problems.append(f"daily_loss_writeoff_leg_grew:{label}")  # flipped through flat
+            continue
+        written_off = bool(leg["written_off"])
+        if abs(leg["shares"]) <= LEDGER_OPEN_EPS:
+            leg["written_off"] = 0.0
         if pnl is not None and is_today:
             result.closing_fills_today += 1
-            if pnl < 0:
+            if written_off:
+                # issue #197 (INV-3): the written-off cost is realized already. Measured from the write-off, the
+                # close is a gain of what it returns (a long: its proceeds, the payout; a short: shares - buy-back
+                # cost), never a second loss, and it offsets nothing.
+                after = writeoff_amount(leg) or 0.0
+                released = max(0.0, (before or 0.0) - after)
+                if pnl < 0:
+                    result.writeoff_settled_loss_usd += -pnl  # already realized by the write-off: never twice
+                outcome = pnl + released
+                if outcome >= 0:
+                    result.realized_gain_usd += outcome
+                else:  # cannot happen for a payout in [0, 1]; counted as a loss rather than lost
+                    result.realized_loss_usd += -outcome
+            elif pnl < 0:
                 result.realized_loss_usd += -pnl
             else:
                 result.realized_gain_usd += pnl
+    result.legs = legs
     return result
+
+
+def _writeoff_amount_ok(row: dict[str, Any], booked: float, cost: float, shares: float) -> bool:
+    """A write-off row's amount against the replayed cost (see the module docstring, #197 correction)."""
+    cost_field, uplift_field = row.get("writeoff_cost_usd"), row.get("writeoff_sod_uplift_usd")
+    if cost_field is None and uplift_field is None:  # a row from before the correction: the cost exactly
+        return abs(booked - cost) <= LEDGER_OPEN_EPS
+    booked_cost, uplift = _number(cost_field), _number(uplift_field)
+    if booked_cost is None or uplift is None or uplift < 0:
+        return False
+    return (abs(booked_cost - cost) <= LEDGER_OPEN_EPS and abs(booked - (cost + uplift)) <= LEDGER_OPEN_EPS
+            and booked <= max(cost, shares * 1.0) + LEDGER_OPEN_EPS)
+
+
+def writeoff_amount(leg: dict[str, float]) -> float | None:
+    """Issue #197: an open leg's whole worst-case loss at average cost (None: the leg is flat).
+
+    A long is worth 0 at worst: its cost. A short costs 1 per share to buy back: shares - proceeds.
+    """
+    held = leg.get("shares", 0.0)
+    if abs(held) <= LEDGER_OPEN_EPS:
+        return None
+    basis = leg.get("basis", 0.0)
+    return max(0.0, basis) if held > 0 else max(0.0, abs(held) * 1.0 - basis)
 
 
 def _apply(leg: dict[str, float], side: str, qty: float, usd: float) -> float | None:

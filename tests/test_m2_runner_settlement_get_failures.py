@@ -23,6 +23,14 @@ URL = resolution_watch.gamma_url(rig.MARKET_ID, closed=True)
 
 
 @pytest.fixture(autouse=True)
+def writeoff_hook_is_not_under_test(monkeypatch):
+    """#345 counts the COLLECTOR's reads and failures only (every count below is that of the settlement step). The
+    close-then-write-off hook (#342) reads Gamma too, on its own, and is covered by tests/test_writeoff.py: here it
+    is the dev stub (no read, no problem), exactly the body #345 was written against. A test may patch it again."""
+    monkeypatch.setattr(m2_runner, "_writeoff_hook", lambda *args, **kwargs: [])
+
+
+@pytest.fixture(autouse=True)
 def no_network(monkeypatch):
     def refuse(*args, **kwargs):
         raise AssertionError("external network attempted")

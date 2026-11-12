@@ -27,9 +27,17 @@ offsets another leg, the realized loss or the fees. ``ref`` is
   or its cost when the snapshot is late, its mark is 0 or ``mark_invalid``, or it has no mark;
 * for the part opened today: today's cost (notional, fees excluded: they are counted already).
 
+Written-off legs (issue #197, Task CK, KEY-approved): a leg with a write-off row (src/ledger_store.py (f))
+has its whole cost realized already (src/daily_loss.py), once (RiskGate's correction, issuecomment-6109537257:
+its start-of-day part at max(cost, start-of-day mark), ``writeoff_sod_uplift``, the same ``ref`` rule as
+below, so the write-off day's loss never drops below this module's loss). From then until it is flat it adds no
+unrealized loss on any day (``ref_source`` "written_off", ``loss_usd`` 0); it stays an open leg, so it
+still holds every limit until it settles.
 Closed parts retain the same reference through ``closed_loss_topup``: add only the amount by which each
 reference loss exceeds its already-counted average-cost loss. A part closed by settlement keeps its
 conservative (zero) valuation for the rest of the UTC day: a confirmed winner credits nothing back.
+A written-off leg's closed part adds no top-up (issue #197): its write-off, cost + ``writeoff_sod_uplift``, is
+already at least this reference loss, and src/daily_loss.py books no further loss on its close.
 
 Pure: no clock, no file. Any position or snapshot problem is returned in ``problems``; the caller gives
 ``daily_loss_usd = None`` and RiskGate vetoes invalid_risk_state (Task AL: a global halt).
@@ -43,7 +51,7 @@ from typing import Any, Iterable, Mapping
 
 from src.book_staleness import book_age_problem, parse_book_ts
 from src.daily_loss import SIDES, counts_today
-from src.ledger_store import KIND_FIELD, SETTLEMENT_KIND, counts, leg_key
+from src.ledger_store import FILL_ID_FIELD, KIND_FIELD, SETTLEMENT_KIND, counts, is_writeoff, leg_key
 from src.thresholds import LEDGER_OPEN_EPS, MAX_BOOK_AGE_S
 
 SOURCE_BID_LADDER = "bid_ladder"
@@ -76,7 +84,7 @@ def _finite(value: object) -> float | None:
         return None
     try:
         number = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # PR #342 (Codex 6192635798): 10**400 is invalid
         return None
     return number if math.isfinite(number) else None
 
@@ -194,6 +202,7 @@ class LegPosition:
     basis: float = 0.0        # USD paid for a long / received for a short (>= 0)
     carried: float = 0.0      # of abs(shares): held since the start of the day
     new_basis: float = 0.0    # USD of today's part (abs(shares) - carried)
+    written_off: bool = False  # issue #197: its whole cost is realized already (no unrealized loss)
 
 
 @dataclass
@@ -202,6 +211,7 @@ class Closing:
     part: LegPosition
     proceeds_usd: float      # signed: long sale / negative short buy-back
     settlement: bool = False  # closed by a settlement row (a market with no live book)
+    written_off: bool = False  # issue #197: the leg's loss is realized by its write-off already
 
 
 @dataclass
@@ -216,6 +226,7 @@ def _apply(leg: LegPosition, side: str, qty: float, usd: float, today: bool) -> 
     sign = 1.0 if side == "buy" else -1.0
     if abs(leg.shares) <= LEDGER_OPEN_EPS:
         leg.shares = leg.basis = leg.carried = leg.new_basis = 0.0
+        leg.written_off = False
     if qty <= 0:
         return
     held = leg.shares
@@ -272,13 +283,19 @@ def positions(rows: Iterable[dict[str, Any]], today: str, ids: Iterable[str] | N
                 leg.carried, leg.new_basis = abs(leg.shares), 0.0
         key = leg_key(row.get("market"), row.get("token_id"))
         leg = legs.setdefault(key, LegPosition())
+        if is_writeoff(row):  # issue #197: moves nothing; the leg's cost is realized (src/daily_loss.py)
+            if FILL_ID_FIELD not in row:  # PR #342 review (Codex 6185588835 P1): never clears a leg without its id
+                result.problems.append(f"leg_marks_invalid_row:{label}")
+                continue
+            leg.written_off = abs(leg.shares) > LEDGER_OPEN_EPS
+            continue
         if is_today and qty > 0 and abs(leg.shares) > LEDGER_OPEN_EPS and (leg.shares > 0) != (side == "buy"):
             closed = min(qty, abs(leg.shares))
             fraction = closed / abs(leg.shares)
             part = LegPosition(leg.shares * fraction, leg.basis * fraction,
                                leg.carried * fraction, leg.new_basis * fraction)
             proceeds = (1.0 if leg.shares > 0 else -1.0) * usd * closed / qty
-            result.closed.append(Closing(key, part, proceeds, row.get(KIND_FIELD) == SETTLEMENT_KIND))
+            result.closed.append(Closing(key, part, proceeds, row.get(KIND_FIELD) == SETTLEMENT_KIND, leg.written_off))
         _apply(leg, side, qty, usd, bool(is_today))
     if not started:
         result.start = {key: LegPosition(leg.shares, leg.basis, abs(leg.shares), 0.0) for key, leg in legs.items()}
@@ -303,6 +320,117 @@ def snapshot_legs(start: Mapping[tuple[str, str], LegPosition], marks: Mapping[t
     return legs
 
 
+def _snapshot_legs(snapshot: Mapping[str, Any] | None) -> tuple[dict[str, Mapping[str, Any]], bool]:
+    """The snapshot's legs by leg_key and whether it is late (no snapshot counts as late)."""
+    snap_legs: dict[str, Mapping[str, Any]] = {}
+    if snapshot is None:
+        return snap_legs, True
+    for entry in snapshot.get("legs") or []:
+        snap_legs[str(entry.get("leg_key"))] = entry
+    return snap_legs, snapshot.get("late") is not False
+
+
+def _usable_start_mark(entry: Mapping[str, Any] | None, late: bool) -> float | None:
+    """A start-of-day mark usable as the carried part's ``ref`` (on time, valid, not 0), else None (cost)."""
+    snap_mark = None if entry is None else _finite(entry.get("mark_usd"))
+    usable = (not late and entry is not None and entry.get("mark_invalid") is False
+              and snap_mark is not None and snap_mark != 0.0)
+    return snap_mark if usable else None
+
+
+def _prev_day_mark(entry: Mapping[str, Any] | None, late: bool) -> float | None:
+    """Task CX (#225, D3): a late snapshot's previous-UTC-day last valid mark (valid, not 0), else None."""
+    snap_mark = None if entry is None else _finite(entry.get("mark_usd"))
+    usable = (late and entry is not None and entry.get("mark_source") == SOURCE_PREV_DAY_LAST
+              and entry.get("mark_invalid") is False and snap_mark is not None and snap_mark != 0.0)
+    return snap_mark if usable else None
+
+
+def _start_reference_mark(entry: Mapping[str, Any] | None, late: bool) -> float | None:
+    """The start-of-day mark ``_reference`` compares with the cost: on time -> the snapshot mark; late -> the
+    previous day's last valid mark (#225). Used by ``writeoff_sod_uplift`` too (one rule for #124 and #197)."""
+    mark = _usable_start_mark(entry, late)
+    return mark if mark is not None else _prev_day_mark(entry, late)
+
+
+def snapshot_problems(pos: Positions, snapshot: Mapping[str, Any] | None) -> list[str]:
+    """The snapshot must describe the same start-of-day legs (none: no problem)."""
+    if snapshot is None:
+        return []
+    snap_legs, _ = _snapshot_legs(snapshot)
+    problems = []
+    for key, start in pos.start.items():
+        entry = snap_legs.get(leg_id(key))
+        if (entry is None or _finite(entry.get("shares")) is None
+                or abs(float(entry["shares"]) - start.shares) > LEDGER_OPEN_EPS):
+            problems.append(f"daily_marks_leg_mismatch:{leg_id(key)}")
+    if len(snap_legs) != len(pos.start):
+        problems.append("daily_marks_leg_count_mismatch")
+    return problems
+
+
+def writeoff_sod_uplift(pos: Positions, snapshot: Mapping[str, Any] | None, key: tuple[str, str]) -> float:
+    """Issue #197, RiskGate's correction (issuecomment-6109537257): the start-of-day mark above cost, in USD.
+
+    A leg's write-off is ``cost + uplift``: its part held since the start of the UTC day at max(cost, start-of-day
+    mark), today's part at cost. The start mark is used exactly when ``unrealized_loss`` uses it as ``ref`` (an on
+    time snapshot's valid mark, or a late snapshot's previous-day last valid mark, #225; not 0, the same side); otherwise, or with no snapshot yet today, 0 (the cost, as
+    ``ref`` is then). A long: max(0, mark - cost) of the carried shares. A short (M2 opens none): max(0, proceeds -
+    start-of-day buy-back cost) of the carried shares. Call ``snapshot_problems`` first.
+    """
+    leg, start = pos.now.get(key), pos.start.get(key)
+    if (leg is None or start is None or leg.written_off or leg.carried <= LEDGER_OPEN_EPS
+            or abs(start.shares) <= LEDGER_OPEN_EPS or (start.shares > 0) != (leg.shares > 0)):
+        return 0.0
+    snap_legs, late = _snapshot_legs(snapshot)
+    snap_mark = _start_reference_mark(snap_legs.get(leg_id(key)), late)
+    if snap_mark is None:
+        return 0.0
+    carried_cost = start.basis / abs(start.shares) * leg.carried
+    carried_mark = abs(snap_mark) / abs(start.shares) * leg.carried
+    return max(0.0, carried_mark - carried_cost) if leg.shares > 0 else max(0.0, carried_cost - carried_mark)
+
+
+def writeoff_uplift_problems(rows: list[dict[str, Any]], ids: list[str] | None, today: str,
+                             snapshot: Mapping[str, Any] | None) -> list[str]:
+    """Issue #255: recompute each write-off-today row's ``writeoff_sod_uplift_usd`` from the day's snapshot.
+
+    Fail closed: a different uplift is ``writeoff_sod_uplift_mismatch``; a leg with shares held since the start of
+    the day written off before the day's snapshot existed is ``writeoff_before_daily_marks``; a missing snapshot is
+    ``writeoff_daily_marks_missing``; a ``writeoff_sod_late`` that is not the snapshot's ``late`` (missing included) is
+    ``writeoff_sod_late_mismatch`` (#197 option A). Write-offs of earlier days are checked on their own day only.
+    """
+    labels = list(ids) if ids is not None else [str(i) for i in range(len(rows))]
+    problems: list[str] = []
+    for index, row in enumerate(rows):
+        if not is_writeoff(row) or not counts(row) or counts_today(row.get("ts"), today) is not True:
+            continue
+        label = labels[index]
+        key = leg_key(row.get("market"), row.get("token_id"))
+        pos = positions(rows[:index], today, labels[:index])
+        leg, start = pos.now.get(key), pos.start.get(key)
+        carried = leg is not None and start is not None and leg.carried > LEDGER_OPEN_EPS
+        if snapshot is None:
+            problems.append(f"writeoff_daily_marks_missing:{label}")
+            continue
+        created, booked_at = parse_book_ts(snapshot.get("created_at")), parse_book_ts(row.get("ts"))
+        if created is None or booked_at is None:  # PR #342 (Codex 6193266276): unreadable/out-of-range stamp
+            problems.append(f"writeoff_stamp_invalid:{label}")
+            continue
+        if carried and (created is None or booked_at is None or created > booked_at):
+            problems.append(f"writeoff_before_daily_marks:{label}")
+            continue
+        # #197 option A (Poly风控 tightening 1): the row's writeoff_sod_late must be the snapshot's lateness
+        if row.get("writeoff_sod_late") is not (snapshot.get("late") is True):
+            problems.append(f"writeoff_sod_late_mismatch:{label}")
+            continue
+        expected = writeoff_sod_uplift(pos, snapshot, key)
+        booked = _finite(row.get("writeoff_sod_uplift_usd") if row.get("writeoff_sod_uplift_usd") is not None else 0.0)
+        if booked is None or abs(booked - expected) > LEDGER_OPEN_EPS:
+            problems.append(f"writeoff_sod_uplift_mismatch:{label}")
+    return problems
+
+
 @dataclass
 class Unrealized:
     loss_usd: float = 0.0
@@ -315,19 +443,16 @@ def _reference(leg: LegPosition, start: LegPosition | None, entry: Mapping[str, 
     carried_ref = 0.0
     source = "cost"
     if leg.carried > LEDGER_OPEN_EPS and start is not None and (start.shares > 0) == (leg.shares > 0):
-        snap_mark = None if entry is None else _finite(entry.get("mark_usd"))
-        usable = (not late and entry is not None and entry.get("mark_invalid") is False
-                  and snap_mark is not None and snap_mark != 0.0)
-        if usable:
+        snap_mark = _usable_start_mark(entry, late)  # the same rule as writeoff_sod_uplift (issue #197)
+        if snap_mark is not None:
             carried_ref = abs(snap_mark) / abs(start.shares) * leg.carried
             source = "start_mark"
         else:
             carried_ref = start.basis / abs(start.shares) * leg.carried
             # Task CX (#225, D3): a late snapshot carrying the previous UTC day's last valid mark uses
             # max(cost, that mark) in signed terms: the larger value for a long, the smaller buy-back for a short.
-            prev_ok = (late and entry is not None and entry.get("mark_source") == SOURCE_PREV_DAY_LAST
-                       and entry.get("mark_invalid") is False and snap_mark is not None and snap_mark != 0.0)
-            if prev_ok:
+            snap_mark = _prev_day_mark(entry, late)
+            if snap_mark is not None:
                 prev_ref = abs(snap_mark) / abs(start.shares) * leg.carried
                 tighter = prev_ref > carried_ref if leg.shares > 0 else prev_ref < carried_ref
                 if tighter:
@@ -344,6 +469,8 @@ def closed_loss_topup(pos: Positions, snapshot: Mapping[str, Any] | None) -> flo
     late = snapshot is None or snapshot.get("late") is not False
     total = 0.0
     for close in pos.closed:
+        if close.written_off:  # issue #197: the write-off (>= this reference loss) is realized; never twice
+            continue
         ref, _ = _reference(close.part, pos.start.get(close.key), entries.get(leg_id(close.key)), late)
         cost = (1.0 if close.part.shares > 0 else -1.0) * close.part.basis
         # Codex回迁 (Owner 2026-10-13, tightening only): a part closed by a settlement row had no live book, so
@@ -364,24 +491,17 @@ def unrealized_loss(
 ) -> Unrealized:
     """Σ over open legs of max(0, ref - value); no leg's gain offsets anything. See the module docstring."""
     result = Unrealized()
-    snap_legs: dict[str, Mapping[str, Any]] = {}
-    late = True
-    if snapshot is not None:
-        late = snapshot.get("late") is not False
-        for entry in snapshot.get("legs") or []:
-            snap_legs[str(entry.get("leg_key"))] = entry
-    for key, start in pos.start.items():  # the snapshot must describe the same start-of-day legs
-        entry = snap_legs.get(leg_id(key))
-        if snapshot is not None and (entry is None or _finite(entry.get("shares")) is None
-                                     or abs(float(entry["shares"]) - start.shares) > LEDGER_OPEN_EPS):
-            result.problems.append(f"daily_marks_leg_mismatch:{leg_id(key)}")
-    if snapshot is not None and len(snap_legs) != len(pos.start):
-        result.problems.append("daily_marks_leg_count_mismatch")
+    snap_legs, late = _snapshot_legs(snapshot)
+    result.problems = snapshot_problems(pos, snapshot)
     if result.problems:
         return result
     for key in sorted(pos.now):
         leg = pos.now[key]
         mark = marks[key]
+        if leg.written_off:  # issue #197: realized once by the write-off; never an unrealized loss again
+            result.legs.append(dict(asdict(mark), leg_key=leg_id(key), shares=leg.shares, ref_usd=0.0,
+                                    ref_source="written_off", loss_usd=0.0))
+            continue
         ref, ref_source = _reference(leg, pos.start.get(key), snap_legs.get(leg_id(key)), late)
         loss = max(0.0, ref - mark.value_usd)
         result.loss_usd += loss
