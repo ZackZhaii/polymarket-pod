@@ -35,6 +35,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 import math
@@ -46,7 +47,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.podlib import LOG_DIR, bus, canonical_role, utc_now  # noqa: E402
+from src.podlib import LOG_DIR, append_lock, bus, canonical_role, utc_now  # noqa: E402
 from src.thresholds import HALT_STATE_LOCK_POLL_S, HALT_STATE_LOCK_TIMEOUT_S  # noqa: E402
 
 HALT_STATE_PATH = LOG_DIR / "halt_state.json"
@@ -406,10 +407,15 @@ def write_fallback(line: str, fallback: Path | None = None) -> bool:
     try:
         target = fallback_path(fallback)
         target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("a", encoding="utf-8") as handle:
-            handle.write(" ".join(str(line).split()) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        with append_lock(target):  # same existing mutex used when resume archives this fallback
+            with target.open("a+b") as handle:
+                if handle.tell():
+                    handle.seek(-1, os.SEEK_END)
+                    if handle.read(1) != b"\n":
+                        return False  # preserve an interrupted record, never join a new halt onto it
+                handle.write((" ".join(str(line).split()) + "\n").encode("utf-8"))
+                handle.flush()
+                os.fsync(handle.fileno())
         return True
     except Exception:  # noqa: BLE001
         return False
@@ -479,6 +485,81 @@ def record_halt(
     line = f"{stamp} halt id={record['id']} scope={scope} market={market or '-'} source={source} reason={reason}"
     persisted = PERSISTED_FALLBACK if write_fallback(line, fallback) else PERSISTED_NONE
     return dict(record, persisted=persisted)
+
+
+# A failed market write must not become a market-less global recovery. Keep its
+# original id and content in the existing global halt record / fallback stream.
+PENDING_MARKET_PREFIX = "pending_market_halt:"
+
+
+def retain_market_halt(record: dict[str, Any]) -> dict[str, Any]:
+    pending = {key: record[key] for key in ("id", "scope", "market", "reason", "source", "ts", "active")}
+    return record_halt(scope=SCOPE_GLOBAL, source=record["source"],
+                       reason=PENDING_MARKET_PREFIX + json.dumps(pending, sort_keys=True), ts=record["ts"])
+
+
+def _pending_market(reason: str) -> list[dict[str, Any]]:
+    if not reason.startswith(PENDING_MARKET_PREFIX):
+        return []
+    record = json.loads(reason[len(PENDING_MARKET_PREFIX):])
+    if not _valid_record(record) or record["scope"] != SCOPE_MARKET or not record["active"]:
+        raise ValueError("invalid pending market halt")
+    return [record]
+
+
+def _fallback_market_halts(fallback: Path | None = None) -> list[dict[str, Any]]:
+    from src.settlement import blocks_settlement
+
+    try:
+        lines = fallback_path(fallback).read_text(encoding="utf-8").splitlines(keepends=True)
+    except FileNotFoundError:
+        return []
+    pending: list[dict[str, Any]] = []
+    for raw in lines:
+        if not raw.endswith("\n"):
+            raise ValueError("incomplete fallback halt record")
+        line = raw.rstrip("\r\n")
+        match = re.fullmatch(r"(\S+) halt id=(\S+) scope=(global|market) market=(.*?) source=(\S+) reason=(.*)", line)
+        if not match:
+            if " halt id=" in line and ("scope=market" in line or PENDING_MARKET_PREFIX in line):
+                raise ValueError("unreadable fallback market halt")
+            continue
+        ts, rid, scope, market, source, reason = match.groups()
+        if scope == SCOPE_GLOBAL:
+            pending.extend(_pending_market(reason))
+        else:
+            record = dict(id=rid, scope=scope, market=market, source=source, ts=ts,
+                          reason=reason.split(" failures=", 1)[0], active=True)
+            if not _valid_record(record):
+                raise ValueError("invalid fallback market halt")
+            if blocks_settlement(record["reason"]):
+                pending.append(record)
+    return pending
+
+
+def settlement_halts() -> list[dict[str, Any]]:
+    """Read fallback before state: resume persists the markets before archiving fallback."""
+    with append_lock(fallback_path()):
+        pending = _fallback_market_halts()
+    records, problem = read_state()  # include resolved records to recognize an explicit market resume
+    if problem is not None:
+        raise ValueError(problem)  # never turn unreadable retained evidence into an empty market set
+    for record in records:
+        if record["active"] and record["scope"] == SCOPE_GLOBAL:
+            pending.extend(_pending_market(record["reason"]))
+    return [record for record in _restore_market_halts(records, pending) if record["active"]]
+
+
+def _restore_market_halts(records: list[dict[str, Any]], pending: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    restored = list(records)
+    for record in pending:
+        existing = next((r for r in restored if r["id"] == record["id"]), None)
+        if existing is not None:
+            if any(existing[k] != record[k] for k in ("scope", "market", "reason", "source", "ts")):
+                raise ValueError("conflicting pending market halt")
+            continue  # the same event is already durable, including an explicit market resume
+        restored.append(record)
+    return restored
 
 
 # ---------------------------------------------------------------- resume (Operator only)
@@ -565,8 +646,16 @@ def resume(
     try:
         try:
             if halt_id == FALLBACK_ID:
-                src = fallback_path(fallback)
-                os.replace(src, src.with_name(f"{src.name}.resolved-{stamp.replace(':', '')}"))
+                with append_lock(fallback_path(fallback)):
+                    records, problem = read_state(target)
+                    if problem is not None:
+                        raise ResumeRejected("halt_state_problem", str(problem))
+                    pending = _fallback_market_halts(fallback)
+                    restored = _restore_market_halts(records, pending)
+                    if restored != records:
+                        _atomic_write(target, restored)  # retain each market before archiving the global fallback
+                    src = fallback_path(fallback)
+                    os.replace(src, src.with_name(f"{src.name}.resolved-{stamp.replace(':', '')}"))
             elif halt_id == STATE_PROBLEM_ID:
                 if target.exists():
                     os.replace(target, target.with_name(f"{target.name}.bad-{stamp.replace(':', '')}"))
@@ -587,7 +676,8 @@ def resume(
                     raise ResumeRejected("scope_mismatch", f"halt is {current['scope']}, resume is {scope}")
                 if scope == SCOPE_MARKET and market and market != current["market"]:
                     raise ResumeRejected("market_mismatch", f"halt is {current['market']!r}")
-                updated = [dict(r, active=False, resolved=resolved) if r["id"] == halt_id else r for r in records]
+                restored = _restore_market_halts(records, _pending_market(current["reason"]))
+                updated = [dict(r, active=False, resolved=resolved) if r["id"] == halt_id else r for r in restored]
                 _atomic_write(target, updated)
         except ResumeRejected:
             raise  # a doubt about the halt itself, not a write failure

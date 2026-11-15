@@ -483,8 +483,9 @@ def test_a_bus_fill_with_a_settlements_fill_id_fails(tmp_path, capsys):
 
 
 def test_a_settlement_row_without_a_fill_id_is_a_named_problem(tmp_path, capsys):
-    """NEW-3b: 结算行仍需有 fill_id，缺失照样报 problem. Both rows below are pre-Task-AF legacy
-    rows (no fill_id), so ledger_store.verify passes and the audit itself must name the defect."""
+    """NEW-3b: 结算行仍需有 fill_id，缺失照样报 problem. Both rows below sit in the legacy prefix (no fill_id).
+    PR #342 review (Codex 6185588835 P1): a kind row is never a legacy row, so ledger_store.verify itself now
+    refuses it (missing_fill_id) and the audit refuses to join: verdict fail, exit 1."""
     ledger = tmp_path / "paper.jsonl"
     legacy_buy = {"ts": "2026-10-11T00:00:00Z", "market": "m1", "token_id": "t1", "side": "buy",
                   "shares": 10.0, "notional_usd": 5.0, "fee_rate": 0.0, "fee_usd": 0.0,
@@ -496,7 +497,8 @@ def test_a_settlement_row_without_a_fill_id_is_a_named_problem(tmp_path, capsys)
     code = paper_audit.main(argv_for(ledger, bus))
     report = json.loads(capsys.readouterr().out)
     assert code == paper_audit.EXIT_MISMATCH == 1 and report["verdict"] == "fail"
-    assert "ledger:settlement_without_fill_id" in report["problems"]
+    assert any(p.startswith("ledger:verify:missing_fill_id:legacy:2:") for p in report["problems"])
+    assert report["ledger_verified"] is False
 
 
 # --- acceptance 5: hypothetical copies join; legacy rows are UNKNOWN, never guessed --------------
@@ -597,6 +599,46 @@ def test_all_empty_inputs_are_unknown_not_a_full_pass(tmp_path, capsys):
     assert report["ledger"]["sha256"] == hashlib.sha256(b"").hexdigest()
     assert report["bus"]["sha256"] == hashlib.sha256(b"").hexdigest()
     assert report["unknown_checks"] == ["riskgate_allow_attribution", "mark_to_market"]
+
+
+def _writeoff_row(ledger, market="m1", token="t1"):
+    from datetime import datetime, timezone
+
+    from src import market_close
+    rows, ids = ledger_store.read_ledger(ledger)[1].rows, ledger_store.read_ledger(ledger)[1].ids
+    when = datetime(2026, 10, 12, 0, 0, tzinfo=timezone.utc)
+    close = market_close.Close(market, when, when, when, market_close.BY_REREAD)
+    plan = market_close.plan_writeoffs(rows, list(ids), [close], rows[-1]["ts"])
+    assert plan.problems == [] and len(plan.rows) == 1
+    return ledger_store.book(ledger, plan.rows[0])
+
+
+def test_writeoff_rows_are_counted_separately_and_are_not_orphans(tmp_path, capsys):
+    """#197 (PR #342 review 6183015083 item 4): a write-off row is ledger-only (its bus message is a
+    ``writeoff`` event, never a fill), so it is counted apart and never read as ledger_only."""
+    ledger = tmp_path / "paper.jsonl"
+    row = book_fill(ledger, market="m1", token="t1")
+    _writeoff_row(ledger)
+    bus = tmp_path / "bus.jsonl"
+    write_jsonl(bus, [bus_fill(row)])
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    # #346 (merged from dev): a fully cross-checked matched fill is a pass; the write-off never makes it ledger_only
+    assert code == paper_audit.EXIT_OK == 0 and report["verdict"] == "pass" and report["problems"] == []
+    assert report["ledger"]["writeoffs"] == 1 and report["ledger"]["fills"] == 1 and report["matched"] == 1
+    assert report["ledger_only"] == [] and report["bus_only"] == []
+
+
+def test_a_bus_fill_with_a_writeoffs_fill_id_fails(tmp_path, capsys):
+    ledger = tmp_path / "paper.jsonl"
+    row = book_fill(ledger, market="m1", token="t1")
+    written = _writeoff_row(ledger)
+    bus = tmp_path / "bus.jsonl"
+    write_jsonl(bus, [bus_fill(row), bus_fill(written)])
+    code = paper_audit.main(argv_for(ledger, bus))
+    report = json.loads(capsys.readouterr().out)
+    assert code == paper_audit.EXIT_MISMATCH and report["verdict"] == "fail"
+    assert f"writeoff_with_bus_fill:{written['fill_id']}" in report["problems"]
 
 
 # --- acceptance 7: the audit against records written by the real commit_if_allowed ----------------

@@ -46,7 +46,7 @@ def parse_book_ts(value: object) -> datetime | None:
     if isinstance(value, datetime):
         if value.tzinfo is None or value.utcoffset() is None:
             return None
-        return value.astimezone(timezone.utc)
+        return _utc(value)
     if isinstance(value, (int, float)):
         number = _finite_number(value)
         if number is None:
@@ -67,8 +67,17 @@ def parse_book_ts(value: object) -> datetime | None:
             return None
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             return None
-        return parsed.astimezone(timezone.utc)
+        return _utc(parsed)
     return None
+
+
+def _utc(value: datetime) -> datetime | None:
+    """PR #342 review (Codex 6193266276 P2): an aware time whose UTC reading is out of range (0001-01-01T00:00:00+01:00,
+    9999-12-31T23:59:59-01:00) is not a usable timestamp: None (fail closed), never an OverflowError."""
+    try:
+        return value.astimezone(timezone.utc)
+    except (OverflowError, ValueError):
+        return None
 
 
 def book_age_problem(

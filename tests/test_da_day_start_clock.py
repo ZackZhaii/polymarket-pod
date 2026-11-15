@@ -98,3 +98,18 @@ def test_d11_load_state_defaults_to_an_unverified_clock(leg):
     leg["clock"]["now"] = ROLL_0001
     state = paper_ledger.load_state("x", "t")
     assert state["daily_marks_late"] is True and _snap(leg)["late"] is True
+
+
+# --- #197/#255 write-off path (Task CK): the same day_boundary rule, with the runner's clock state ----------
+
+@pytest.mark.parametrize("clock_ok,late", [(False, True), (True, False)])
+def test_d7_writeoff_first_snapshot_uses_day_boundary_with_clock(leg, monkeypatch, clock_ok, late):
+    from src import day_boundary
+
+    calls = []
+    real = day_boundary.day_start_late
+    monkeypatch.setattr(day_boundary, "day_start_late",
+                        lambda now, **kw: calls.append(kw.get("clock_ok")) or real(now, **kw))
+    out = paper_ledger.apply_writeoffs([], ROLL_0001, clock_ok=clock_ok)
+    assert not out["problems"]
+    assert calls == [clock_ok] and _snap(leg)["late"] is late
