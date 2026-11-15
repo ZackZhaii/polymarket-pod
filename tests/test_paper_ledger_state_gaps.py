@@ -118,7 +118,8 @@ def test_a_quote_history_the_pair_check_cannot_read_is_quote_type_error(offline,
 
 def test_settlement_problems_halt_the_commit_and_book_nothing(offline, monkeypatch):
     problems = ["settlement_not_closing:fill-1", "invalid_settlement:fill-2"]
-    monkeypatch.setattr(paper_ledger, "apply_settlements", lambda *a, **k: {"problems": problems})
+    # Issue #347: the commit path (already inside the commit lock) calls the lock-free settlement kernel
+    monkeypatch.setattr(paper_ledger, "_apply_settlements_locked", lambda *a, **k: {"problems": problems})
     result = paper_ledger._commit_locked(_intent(), load_risk())
     assert result["allow"] is False and result["halted"] is True
     assert result["halt_reason"] == "invalid_risk_state"
