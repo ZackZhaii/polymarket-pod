@@ -906,6 +906,13 @@
       "done_at": "2026-11-05T09:22:55Z"
     },
     {
+      "id": "FH",
+      "status": "todo",
+      "title": "Issue #347: serialize runner settlement under the paper ledger commit lock.",
+      "finish": "A separate reviewed implementation uses the existing paper ledger commit lock for read/plan/write. Lock contention defers without writing or halting; checks at the write boundary prevent booking after UTC midnight under the prior day. Verify cross-process contention, restart and partial-write idempotence, and settlement/write-off interleaving on a candidate tree that contains both implementations. Complete only after accepted integration and queue release.",
+      "note": "Owner approved priority registration ahead of FF on 2026-11-13 JST. See #347 and its acceptance review (#issuecomment-6298876207). FH is the same task proposed by #486; its existing code candidate stays HOLD pending the cross-midnight P1, writer handoff, and implementation review. This registration does not claim, assign a writer, adopt #486, change a risk value, or authorize runtime. FF is preserved unchanged."
+    },
+    {
       "id": "FF",
       "status": "todo",
       "title": "Issue362-R2: same-read full parsed boot batch canonical declaration; staged tests-only RED first.",
