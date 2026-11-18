@@ -339,6 +339,10 @@ SETTLEMENT_LOCK_UNAVAILABLE = "settlement_deferred_commit_lock"
 SETTLEMENT_DAY_BOUNDARY = "settlement_deferred_day_boundary"
 
 
+class _SettlementDeferred(Exception):
+    """Issue #486 (PR #486 P1): abort a pending atomic settlement write and carry its deferral reason."""
+
+
 def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | None = None,
                       clock: Callable[[], Any] | None = None) -> dict[str, Any]:
     """Issue #347 (Task FH): the public settlement entry (the M2 runner's ``_settle_tick``). The whole read ->
@@ -353,6 +357,9 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
     - ``clock`` (with ``now``) is read again inside the lock and is on a later UTC day than ``now``:
       ``deferred: SETTLEMENT_DAY_BOUNDARY`` (a row stamped with yesterday would leave today's daily loss short).
       The same UTC day stamps the rows max(now, clock); an unusable clock keeps ``now`` (never later).
+      Issue #486 (P1): the same check is repeated inside the kernel before every persisted write (and
+      again under the write mutex), so a boundary crossed mid-batch keeps the rows already booked and
+      defers the rest instead of stamping them with yesterday.
     The commit path (already inside the lock) calls ``_apply_settlements_locked`` directly: no self-lock (A2).
     The runner's ``settled`` event is at-most-once (written after the rows are fsynced); the ledger is the truth.
     """
@@ -374,7 +381,7 @@ def apply_settlements(now: str | None = None, *, skip_markets: frozenset[str] | 
             except Exception as exc:  # noqa: BLE001 - an unreadable halt state: settle nothing (the caller halts)
                 return {"booked": [], "unsettled_closed_legs": [],
                         "problems": [f"settlement_halt_state_unreadable:{type(exc).__name__}"]}
-        return _apply_settlements_locked(now, skip_markets=skip_markets)
+        return _apply_settlements_locked(now, skip_markets=skip_markets, clock=clock)
     finally:
         lock.release()
 
@@ -397,8 +404,17 @@ def _settlement_write_time(now: str, clock: Callable[[], Any]) -> tuple[str, str
     return stamp, None
 
 
+def _settlement_wall_clock() -> datetime | None:
+    """Issue #486 (PR #486 P1): the wall clock the commit path feeds the kernel's per-write day recheck:
+    this module's ``utc_now``, parsed. None (an utc_now that does not parse) is an unusable clock, which
+    keeps the planned stamp per the #486 original rule — never a deferral reason by itself. Tests inject
+    the boundary by patching ``paper_ledger.utc_now``; both reads (plan stamp and recheck) see it."""
+    return parse_book_ts(utc_now())
+
+
 def _apply_settlements_locked(now: str | None = None, *,
-                              skip_markets: frozenset[str] | None = None) -> dict[str, Any]:
+                              skip_markets: frozenset[str] | None = None,
+                              clock: Callable[[], Any] | None = None) -> dict[str, Any]:
     """Issue #126 (Task CG): book a settlement row for every open leg of a market with a confirmed settlement.
 
     Issue #347: the caller holds ``<PAPER_PATH>.commit.lock`` (``apply_settlements`` or ``_commit_locked``).
@@ -408,6 +424,12 @@ def _apply_settlements_locked(now: str | None = None, *,
     Returns {"booked": [fill rows], "unsettled_closed_legs": [...], "problems": [...]}; any problem (an
     unreadable resolutions file, two confirmed snapshots that disagree, a failed or refused write) must stop the
     caller from booking anything else.
+    Issue #486 (PR #486 P1): with a ``clock``, every persisted write rechecks the UTC day first — at the
+    loop head and again under the write mutex before each atomic replacement (``ledger_store.book(...,
+    before_replace=...)``), so a boundary crossed after planning or between rows of one batch defers the
+    remaining rows (``deferred: SETTLEMENT_DAY_BOUNDARY``, rows already booked kept, no problem, no halt)
+    instead of persisting a row stamped with yesterday. An unusable clock keeps the planned stamp (#486
+    original rule); the commit path passes ``_settlement_wall_clock`` so the same guard covers it.
     """
     from src import settlement
 
@@ -445,7 +467,8 @@ def _apply_settlements_locked(now: str | None = None, *,
         if failed or raised:
             out["problems"] = ([raised] if raised else []) + failed
         return out
-    planned = settlement.plan(ledger.rows, list(ledger.ids), snaps or [], now or utc_now())
+    stamp = now or utc_now()
+    planned = settlement.plan(ledger.rows, list(ledger.ids), snaps or [], stamp)
     out["unsettled_closed_legs"] = planned.unsettled_closed_legs
     if planned.problems:
         # Issue #349 (Task EG): the contradiction is also a market halt of the markets it is about (the caller's
@@ -458,8 +481,27 @@ def _apply_settlements_locked(now: str | None = None, *,
             # PR #211: the market's own close / settlement data is under a market halt (settlement.blocks_settlement)
             out.setdefault("skipped_markets", []).append(str(row.get("market")))
             continue
+        hook = None
+        if clock is not None:
+            # #486: planning and earlier rows can consume the rest of this UTC day. Recheck at each write
+            # boundary, keeping already committed rows on a partial batch; same-day later clock restamps.
+            written_at, deferred = _settlement_write_time(stamp, clock)
+            if deferred:
+                out["deferred"] = deferred
+                return out
+            row = dict(row, ts=written_at)
+
+            def before_replace() -> None:
+                _, reason = _settlement_write_time(stamp, clock)  # again inside the write mutex, per retry
+                if reason:
+                    raise _SettlementDeferred(reason)
+
+            hook = before_replace
         try:
-            out["booked"].append(ledger_store.book(PAPER_PATH, row))
+            out["booked"].append(ledger_store.book(PAPER_PATH, row, before_replace=hook))
+        except _SettlementDeferred as exc:
+            out["deferred"] = str(exc)
+            return out
         except LedgerIntegrityError as exc:
             out["problems"] = [f"settlement_refused:{problem}" for problem in exc.problems]
             return out
@@ -677,7 +719,9 @@ def _commit_locked(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: b
     """
     # Issue #126 (Task CG): settle resolved legs first, so a settled loss is realized once and the leg is gone.
     # Issue #347 (A2): already inside the commit lock, so the lock-free kernel (the public entry would self-lock).
-    settled = _apply_settlements_locked()
+    # Issue #486 (P1): the kernel now gets the wall clock, so its per-write UTC-day guard covers this path
+    # too; a deferral is reported on the result, never a problem and never a halt.
+    settled = _apply_settlements_locked(clock=_settlement_wall_clock)
     if settled["problems"]:
         problems = [str(p) for p in settled["problems"]]
         summary = {"forecast_id": intent.forecast_id, "strategy": intent.strategy, "reasons": ["invalid_risk_state"],
@@ -713,6 +757,20 @@ def _commit_locked(intent: Intent, cfg: dict[str, Any], *, unique_decision_id: b
         veto: dict[str, Any] = {"allow": False, "decision": summary}
         # Issue #56: a quotes file that could not be read in full shows up as wash_input_invalid.
         # Name its per-line problems on the veto too (diagnosis only; nothing is booked either way).
+        if state.get("quote_problems"):
+            veto["quote_problems"] = list(state["quote_problems"])
+        if settled.get("deferred"):
+            veto["settlement_deferred"] = str(settled["deferred"])
+        return veto
+    if settled.get("deferred"):
+        # Issue #486 (PR #486 P1, REPORT-C): the settlement deferred on the UTC day boundary, so this
+        # tick's daily loss is understated — the realized loss is planned but not on the ledger, and a
+        # row stamped yesterday would keep the write day's max_daily_loss blind to it. RiskGate evaluated
+        # the pre-booking ledger as always; the Executor does not book a fill against that margin this
+        # tick. No halt, no problem: the next tick retries the settlement and decides on a complete day.
+        summary = dict(summary, decision="veto", reasons=[str(settled["deferred"])])
+        bus("RiskGate", "Executor", "veto", intent.market, summary)
+        veto = {"allow": False, "decision": summary, "settlement_deferred": str(settled["deferred"])}
         if state.get("quote_problems"):
             veto["quote_problems"] = list(state["quote_problems"])
         return veto
