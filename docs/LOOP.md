@@ -2231,9 +2231,27 @@ Status: todo. Offline research note `docs/research/btc-updown-window-backtest.md
 - Limits: price history is not an executable ask, no historical books, short sample; after-the-bell entry not testable with this data.
 - Docs only: the analysis script is embedded in the doc; no `src/`, `scripts/`, `tests/` or config change. risk.toml unchanged, `live_enabled=false`.
 
+## Task FJ — Issue #209: seal/forecast review append-only records
+
+Status: todo. Owner approved enqueue on 2026-11-17 (D2=A; #209 first, #240 after). Registered by DSH (`dsh`) via this PR; claim null at registration.
+
+- Append-only review file `logs/forecast_reviews.jsonl` (name negotiable per issue) with `review` | `supplement` | `seal_commit` rows; sealed rows are never rewritten; `sealed_content_sha256` must match the referenced row; same `(forecast_id, record_type, trigger|field)` keeps the latest by `ts`, old rows retained.
+- `seal_commit` batch hash before any price read; anchored rows gain `price_seen_at_utc` / `price_seen_source` (missing → `anchored_unverifiable` count); blind rows with |p−q| ≥ 0.5 or < 0.01 without a review row are reported as `review_missing` — report only, never sample removal.
+- Acceptance: writer function (O_APPEND + fsync + file lock, no half lines), seal-file byte-identity tests, `seal_audit` report section, two thresholds (0.5 / 0.01) into `src/thresholds.py` marked M3-pending, full offline pytest + guard. No ledger/risk.toml/pins/config change; offline only. Spec: [#209](https://github.com/ZackZhaii/polymarket-pod/issues/209).
+
+## Task FK — Issue #240: M3 anchored/blind unified rules ①–⑥
+
+Status: todo. Owner approved enqueue on 2026-11-17 (D2=A; after FJ, whose review records are the write side of rule ⑥). Registered by DSH (`dsh`) via this PR; claim null at registration.
+
+- Unified rules ①–⑥ supersede the conflicting parts of #84/#161 and are stricter than both: strict input validation (schema_version int 1, sealed_before_book_read bool, else CorruptInput exit 3); fail-closed `is_anchored` (missing/non-bool flags count as anchored); anchored rows never take the per-condition blind slot nor re-entry quota; report gains `all` (observation_only) / `blind` / `anchored` groups; Reflector reads blind subsets only (own 30/20/5 minimums); review flags (`exclude_from_calibration`, `hindsight_p`) never change scoring.
+- Scope: `src/calibration.py`, `src/calibration_ids.py` (optional `price_seen_before_forecast`, Task-BF-style old-row compatibility; inbox seal path writes explicit `false`), `src/reflector_proposals.py`, tests, `docs/M3_CALIBRATION.md`. No RiskGate/ledger/forecaster write logic/risk.toml/pins/config change; no new numeric threshold. Spec: [#240](https://github.com/ZackZhaii/polymarket-pod/issues/240).
+
 ## Latest
 
+- 2026-11-17: Owner approved (D2=A) enqueueing #209 then #240 as Task FJ and Task FK (first unused letters after dev/main/open PRs; FJ is the write-side prerequisite of FK rule ⑥). Registration PR by DSH (`dsh`) appends both to LOOP and state only, status todo, claim null. FH/FF and all history unchanged. A DSH-side implementation design pack for FK exists locally (`.dsh/designs/240/`, not committed); FJ/FK implementation still requires normal claim + review per queue discipline.
+
 - 2026-11-13 JST: Owner-authorized FH/#347 priority registration before FF proposed in LOOP and state only. Claim remains null; FF and previous history are preserved. FH becomes the first todo after this registration is integrated to `dev`.
+
 - 2026-11-10 JST: Task FI (BTC 5m/15m Up/Down time-window paper backtest) registered with its docs-only PR to dev ([HOLD], open only, not merged). Claim not reproduced on 1335 15m / 1152 5m markets. No threshold, risk.toml pin unchanged, `live_enabled=false`. FF unchanged, claim null.
 
 - 2026-11-05 UTC: FF pure-kernel local-WIP normal --todo release proposed after genuine PRODUCT HOLD: Root finalreview/publication/merge/targetreadback missed original S4=14:45:17Z despite earlier metadata gate. No explicit OPEN, zero Source kernel engineering, no retrospective S5/remaining-time exception; Root closure overrun is not Source product failure.
