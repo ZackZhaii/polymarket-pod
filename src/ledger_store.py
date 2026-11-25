@@ -87,7 +87,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.atomic_replace import replace_with_retry  # issue #268: bounded Windows PermissionError retry
 from src.fees import booked_fee_usd, ledger_fee
@@ -430,7 +430,8 @@ def _fsync_dir(directory: Path) -> None:
         os.close(fd)
 
 
-def atomic_append(path: Path, expected: bytes, line: bytes) -> None:
+def atomic_append(path: Path, expected: bytes, line: bytes, *,
+                  before_replace: Callable[[], None] | None = None) -> None:
     """Replace ``path`` (whose bytes must still be ``expected``) with ``expected + line``, atomically.
 
     Temp file in the same directory, flush + fsync, os.replace. On any failure the temp file is
@@ -441,6 +442,9 @@ def atomic_append(path: Path, expected: bytes, line: bytes) -> None:
     OSError before anything is written (fail closed). Issue #268: the replace retries a Windows
     PermissionError a bounded number of times (src/atomic_replace.py); exhausted, it raises and the temp
     file is removed as for any other failure.
+    Issue #486 (PR #486): an optional ``before_replace`` hook runs under this mutex before each
+    replacement attempt; an exception aborts before any replace, the temp file is cleaned here, and the
+    ledger is left exactly as it was.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
@@ -456,7 +460,10 @@ def atomic_append(path: Path, expected: bytes, line: bytes) -> None:
             current = path.read_bytes() if path.exists() else b""
             if current != expected:
                 raise LedgerIntegrityError(["ledger_changed_during_write"])
-            replace_with_retry(tmp, path)
+            if before_replace is None:
+                replace_with_retry(tmp, path)
+            else:
+                replace_with_retry(tmp, path, before_replace=before_replace)
         finally:
             mutex.release()
     except BaseException:
@@ -468,7 +475,8 @@ def atomic_append(path: Path, expected: bytes, line: bytes) -> None:
     _fsync_dir(path.parent)
 
 
-def book(path: Path, fill: dict[str, Any], *, unique_decision_id: bool = False) -> dict[str, Any]:
+def book(path: Path, fill: dict[str, Any], *, unique_decision_id: bool = False,
+         before_replace: Callable[[], None] | None = None) -> dict[str, Any]:
     """Verify the ledger, stamp the fill's id and post-fill state, write it atomically, re-verify.
 
     Raises LedgerIntegrityError (halt; nothing booked unless the problem is post_write) or OSError
@@ -479,6 +487,8 @@ def book(path: Path, fill: dict[str, Any], *, unique_decision_id: bool = False) 
     ``{"already_booked": True, "fill": <existing row>}`` without writing and without raising. A missing
     or blank ``decision_id`` is refused (M2 fills must be joinable). Default False keeps every older
     call path and the e2e golden unchanged.
+    Issue #486 (PR #486): optional ``before_replace`` runs under the write mutex before each replacement
+    attempt; an exception aborts before replacement and leaves the existing ledger intact.
     """
     data, current = read_ledger(path)
     problems = verify(current)
@@ -515,7 +525,10 @@ def book(path: Path, fill: dict[str, Any], *, unique_decision_id: bool = False) 
         problems = [f"not_appended:{row[FILL_ID_FIELD]}"]
     if problems:
         raise LedgerIntegrityError(["pre_write:" + problem for problem in problems])
-    atomic_append(path, data, line)
+    if before_replace is None:
+        atomic_append(path, data, line)
+    else:
+        atomic_append(path, data, line, before_replace=before_replace)
     _, after = read_ledger(path)
     problems = verify(after)
     if not problems:
