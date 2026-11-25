@@ -398,7 +398,8 @@ def test_resume_of_the_fallback_file_keeps_it_as_evidence(tmp_path):
     _resume(halt_store.FALLBACK_ID, "global", tmp_path)
     assert not halt_store.HALT_FALLBACK_PATH.exists()
     assert [p.name.startswith("HALT.resolved-") for p in halt_store.HALT_FALLBACK_PATH.parent.iterdir()
-            if p.name.startswith("HALT")] == [True]
+            if p.name.startswith("HALT") and p.name != "HALT.lock"] == [True]
+    assert halt_store.state_lock_path(halt_store.HALT_FALLBACK_PATH).is_file()
     assert _veto("m1") == []
 
 

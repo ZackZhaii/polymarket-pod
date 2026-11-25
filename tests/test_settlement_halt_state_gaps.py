@@ -154,16 +154,17 @@ def test_an_unreadable_halt_state_settles_nothing_fail_closed(env, monkeypatch):
     assert legs == {(M1, "yes"): 100.0} and settlements == []
 
 
-def test_a_corrupt_halt_state_file_is_a_global_halt_not_a_per_market_block(env):
-    """A corrupt state file is a *global* synthetic halt (m2_runner preflight pauses the tick), so the
-    per-market block set is empty: an empty set here is not a fail-open, the global halt stops the caller."""
+def test_a_corrupt_halt_state_file_blocks_the_direct_settlement_entry(env):
+    """#483: a caller may reach settlement before RiskGate; unreadable market evidence is not an empty set."""
     _book(env["ledger"], [fill(market=M1, token="yes")])
     _snaps(env["res"], snap())
     env["halts"].write_text("{not json", encoding="utf-8")
 
-    assert paper_ledger.settlement_blocked_markets() == frozenset()
+    with pytest.raises(ValueError, match="halt_state_corrupt"):
+        paper_ledger.settlement_blocked_markets()
     assert halt_store.global_halt_active(), "a corrupt state file must halt globally"
-    assert [row["market"] for row in paper_ledger.apply_settlements(NOW)["booked"]] == [M1]
+    out = paper_ledger.apply_settlements(NOW)
+    assert out["booked"] == [] and out["problems"]
 
 
 def test_an_operator_resume_releases_the_market_for_settlement(env):
