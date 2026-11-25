@@ -925,6 +925,20 @@
       "title": "M2 #122 NoisePC readonly preflight (docs only).",
       "finish": "Docs PR merged to dev with docs/M2_NOISEPC_PREFLIGHT.md recording the 2026-11-10 12:13-12:17 JST readonly NoisePC check (clock, disk, Python, M1 run-dir integrity). No runner, no host-clock change, no install, no #366 comment. #122 7-day run stays KEY and is not approved by this task. risk.toml pin 0aea23af1e938d330b5b4fab2c6abdec9f475f16807d177a5860a4da32aebc04 unchanged, live_enabled=false.",
       "note": "Next unused letter after FF (dev/main/open PRs). Observed: NTP phase 0.0287s; C 423.7GB / D 293.1GB free; accepted M1 PASS at D:/AI_Workspace/pod-m1-20261011T0313Z/polymarket-pod/data/m1-runs/m1-20261011T0313Z; current checkout has no data/m1-runs; PATH python is 3.14.3 websockets 15.0.1 vs venv312 3.12.10 / 17.2. FF remains todo, claim null. Items for 家伟 listed in the doc, not decided here."
+    },
+    {
+      "id": "FJ",
+      "status": "todo",
+      "title": "Issue #209: append-only seal/forecast review records (review/supplement/seal_commit), seal-before-price proof, anchored price-seen fields, extreme |p-q| review flags (report only).",
+      "finish": "Append-only logs/forecast_reviews.jsonl (name negotiable per issue) with strict row schemas; sealed rows never rewritten; sealed_content_sha256 must match; latest-by-ts per (forecast_id, record_type, trigger|field). seal_commit batch sha256 written before any price read; anchored rows carry price_seen_at_utc/price_seen_source (missing -> anchored_unverifiable count); blind |p-q| >= 0.5 or < 0.01 without a review row reported as review_missing (report only, never sample removal). Writer uses O_APPEND + fsync + file lock, no half lines on failure. Calibration report gains seal_audit section. Two thresholds (0.5, 0.01) added to src/thresholds.py marked M3-pending and docs/THRESHOLDS.md. Full offline pytest + guard pass. No ledger/risk.toml/pins/config change. Offline only.",
+      "note": "Owner approved enqueue 2026-11-17 (D2=A; #209 first, #240 after). lane:dsh per issue labels; registered by DSH (dsh) via registration PR, claim null. Write side of FK rule 6. Spec https://github.com/ZackZhaii/polymarket-pod/issues/209"
+    },
+    {
+      "id": "FK",
+      "status": "todo",
+      "title": "Issue #240: M3 calibration anchored/blind unified rules (1)-(6), superseding the conflicting parts of #84/#161, stricter than both.",
+      "finish": "Strict input validation (schema_version int 1, sealed_before_book_read bool, else CorruptInput exit 3). Fail-closed is_anchored (sealed false, price_seen true, or missing/non-bool flags -> anchored). Anchored rows never take the per-condition blind slot nor re-entry quota; report gains all (observation_only true) / blind / anchored groups; Reflector evidence reads blind subsets only with own 30/20/5 minimums else insufficient; review flags (exclude_from_calibration, hindsight_p) never change scoring, reported as review_flags_ignored. Optional FORECAST_ROW_FIELDS gain price_seen_before_forecast (Task-BF-style old-row compatibility, old rows count as anchored; inbox seal path writes explicit false). Scope src/calibration.py, src/calibration_ids.py, src/reflector_proposals.py, tests, docs/M3_CALIBRATION.md only. Acceptance checklist and test matrix in the issue. No RiskGate/ledger/forecaster write logic/risk.toml/pins/config change; no new numeric threshold. Full offline pytest + guard pass.",
+      "note": "Owner approved enqueue 2026-11-17 (D2=A; after FJ, whose review records are the write side of rule 6). lane:dsh per issue labels; registered by DSH (dsh) via registration PR, claim null. Supersedes conflicting parts of #84/#161 only; unconflicted parts stay. A local DSH design pack (.dsh/designs/240/, not committed) maps rules to dev line anchors; implementation still requires normal claim + review. Spec https://github.com/ZackZhaii/polymarket-pod/issues/240"
     }
   ]
 }
