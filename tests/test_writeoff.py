@@ -6,6 +6,7 @@ rows; every file lives in the test's folder. Paper only: no network, no order.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import json
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -1436,6 +1437,13 @@ def _stamp_s(moment):
 
 # --- PR #342 review 6192147305 (Codex 6192075048 P1): the write time is read again inside the commit lock -----
 
+def _writeoff_is_acquiring() -> bool:
+    """Issue #347: ``apply_settlements`` and ``apply_writeoffs`` each take ``_commit_lock`` in one tick.
+    These fixtures simulate a wait / a clock that breaks for the write-off acquire only (settlement's
+    uncontended acquire is instant and must not move or break the clock)."""
+    return any(frame.function == "apply_writeoffs" for frame in inspect.stack())
+
+
 def _lock_wait_runner(runner, monkeypatch, start, wait_s):
     """Verified clock; the commit lock is held by a commit that releases it ``wait_s`` (fake) seconds after the
     write-off starts waiting: the fake clock advances while the write-off waits."""
@@ -1449,7 +1457,8 @@ def _lock_wait_runner(runner, monkeypatch, start, wait_s):
         acquire = lock.acquire
 
         def acquire_after_wait(*args, **kwargs):
-            clock.advance(wait_s)  # the commit holding the lock finishes wait_s later
+            if _writeoff_is_acquiring():
+                clock.advance(wait_s)  # the commit holding the lock finishes wait_s later
             return acquire(*args, **kwargs)
         lock.acquire = acquire_after_wait
         return lock
@@ -1597,8 +1606,9 @@ def test_matrix_writeoff_row_an_unusable_clock_inside_the_lock_books_nothing_and
         acquire = lock.acquire
 
         def acquire_then_clock_breaks(*args, **kwargs):
-            clock.advance(3.0)
-            broken["on"] = True  # the same clock is unusable when read again inside the lock
+            if _writeoff_is_acquiring():
+                clock.advance(3.0)
+                broken["on"] = True  # the same clock is unusable when read again inside the lock
             return acquire(*args, **kwargs)
         lock.acquire = acquire_then_clock_breaks
         return lock
