@@ -18,6 +18,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Callable
 
 REPLACE_ATTEMPTS = 5
 REPLACE_BACKOFF_S = 0.02
@@ -29,10 +30,17 @@ def _retry_platform() -> bool:
     return os.name == "nt" or sys.platform == "win32"
 
 
-def replace_with_retry(src: Path | str, dst: Path | str) -> None:
-    """``os.replace(src, dst)``; on Windows only, a ``PermissionError`` is retried, bounded (see module doc)."""
+def replace_with_retry(src: Path | str, dst: Path | str, *,
+                       before_replace: Callable[[], None] | None = None) -> None:
+    """``os.replace(src, dst)``; on Windows only, a ``PermissionError`` is retried, bounded (see module doc).
+
+    Issue #486 (PR #486): an optional ``before_replace`` hook runs immediately before every replacement
+    attempt, including each retry after a sharing-violation backoff. An exception it raises aborts the
+    replace and propagates unchanged, so that attempt never touches the target."""
     attempts = max(1, int(REPLACE_ATTEMPTS))
     for attempt in range(attempts):
+        if before_replace is not None:
+            before_replace()  # checked again after every sharing-violation backoff
         try:
             os.replace(src, dst)
             return
